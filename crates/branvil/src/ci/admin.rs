@@ -166,8 +166,13 @@ async fn view(app: &Shared) -> AppResult<View> {
 }
 
 async fn get_settings(State(app): State<Shared>, c: Caller) -> AppResult<Response> {
+    Ok(axum::Json(data_settings(&app, &c).await?).into_response())
+}
+
+/// The CI settings and the operation in progress, for the owner.
+pub(crate) async fn data_settings(app: &Shared, c: &Caller) -> AppResult<serde_json::Value> {
     c.require_owner()?;
-    Ok(axum::Json(view(&app).await?).into_response())
+    serde_json::to_value(view(app).await?).map_err(AppError::internal)
 }
 
 #[derive(Deserialize)]
@@ -227,8 +232,21 @@ struct LoadInput {
 }
 
 async fn load(State(app): State<Shared>, c: Caller, J(input): J<LoadInput>) -> AppResult<Response> {
+    Ok((
+        StatusCode::ACCEPTED,
+        axum::Json(data_load(&app, &c, &input.path).await?),
+    )
+        .into_response())
+}
+
+/// Starts loading an archive on this machine into the automatic runner.
+pub(crate) async fn data_load(
+    app: &Shared,
+    c: &Caller,
+    path: &str,
+) -> AppResult<serde_json::Value> {
     c.require_owner()?;
-    let path = PathBuf::from(input.path.trim());
+    let path = PathBuf::from(path.trim());
     if !path.is_absolute() {
         return Err(AppError::invalid(
             "Give the absolute path of the archive on the Branvil machine.",
@@ -256,7 +274,7 @@ async fn load(State(app): State<Shared>, c: Caller, J(input): J<LoadInput>) -> A
         let ms = settings.microsandbox(AUTO_RUNNER).await;
         settings.end(load_archive(&ms, path).await);
     });
-    Ok((StatusCode::ACCEPTED, axum::Json(view(&app).await?)).into_response())
+    data_settings(app, c).await
 }
 
 /// Loads the image archive at `path` into the cache (see [`transfer`]). An

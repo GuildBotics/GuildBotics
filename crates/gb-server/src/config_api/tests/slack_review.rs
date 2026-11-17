@@ -69,7 +69,6 @@ async fn slack_diagnosis_missing_bot_avoids_calls_and_errors_name_the_method() {
         human: false,
         account_info: BTreeMap::new(),
         secrets: BTreeMap::new(),
-        avatar: None,
     };
     for lang in ["en", "ja"] {
         let checks = registry

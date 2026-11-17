@@ -134,22 +134,11 @@ impl Session<'_> {
             }
             "context" => {
                 let mut context = self.context.clone();
-                if p.flag("check-credentials") {
-                    if r.services.code_configured() {
-                        let identity = r.services.code()?.identity(true).await?;
-                        context
-                            .as_object_mut()
-                            .ok_or_else(|| invalid("cli.member.context_invalid"))?
-                            .extend(identity.into_iter().map(|(k, v)| (k, v.into())));
-                        context["credential_status"] = "ok".into();
-                    } else {
-                        context["credential_status"] = "unchecked".into();
-                    }
-                    if let Some(chat) = &self.chat
-                        && let Ok(status) = chat.check_credentials().await
-                    {
-                        context["chat_credentials"] = status;
-                    }
+                if p.flag("check-credentials")
+                    && let Some(chat) = &self.chat
+                    && let Ok(status) = chat.check_credentials().await
+                {
+                    context["chat_credentials"] = status;
                 }
                 context
             }

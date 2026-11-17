@@ -265,13 +265,6 @@ async fn workspace_checks(api: &Shared, workspace: &Path, active: &[String], che
         }
     }
     for provider in providers {
-        for key in Registry::identity_secret_keys(provider) {
-            let set = matches!(
-                crate::host_window::host_secret_in(&host, workspace, key, &*api.keychain),
-                Ok(Some(_))
-            );
-            checks.key("provider_secret", key, set, json!({ "provider": provider }));
-        }
         for (person, member) in &members {
             let subscribed =
                 std::fs::read_to_string(config.join(format!("team/members/{person}/member.yml")))

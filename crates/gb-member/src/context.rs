@@ -1,6 +1,5 @@
 //! Public member context and the canonical data-file reference.
 use crate::{MemberError, Result};
-use gb_ports::CodeHostingService;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -126,28 +125,14 @@ fn strings(value: &Value) -> Vec<&str> {
         .filter(|s| !s.is_empty())
         .collect()
 }
-pub async fn member_context(
+pub fn member_context(
     member: &PublicMember,
     roster: &[PublicMember],
     providers: &[String],
     memory: Value,
-    code: Option<&dyn CodeHostingService>,
-    check_credentials: bool,
-) -> Result<Value> {
-    let mut result = json!({"person_id":member.person_id,"name":member.name,"person_type":member.person_type,
+) -> Value {
+    json!({"person_id":member.person_id,"name":member.name,"person_type":member.person_type,
         "is_active":member.is_active,"roles":member.roles,"profile":member.profile,"speaking_style":member.speaking_style,
-        "communication_style":member.communication_style(),"credential_status":"unchecked",
-        "roster":roster.iter().map(|m|m.roster_entry(providers)).collect::<Vec<_>>(),"memory":memory,"capabilities":help()});
-    if let Some(code) = code {
-        result.as_object_mut().unwrap().extend(
-            code.identity(check_credentials)
-                .await?
-                .into_iter()
-                .map(|(k, v)| (k, v.into())),
-        );
-        if check_credentials {
-            result["credential_status"] = "ok".into();
-        }
-    }
-    Ok(result)
+        "communication_style":member.communication_style(),
+        "roster":roster.iter().map(|m|m.roster_entry(providers)).collect::<Vec<_>>(),"memory":memory,"capabilities":help()})
 }

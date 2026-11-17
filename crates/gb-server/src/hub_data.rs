@@ -1,6 +1,10 @@
 //! Offline data boundary for Hub updates. Archive paths never select live roots.
 
-use gb_base::{files, home, host_path, shared_writes::IdentityLock};
+use gb_base::{
+    files, home, host_path,
+    shared_writes::{IdentityLock, SharedWrites},
+};
+use gb_config::secrets::{DeviceKey, Scope, SecretStore, SystemKeychain, read_secret_index};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -45,18 +49,103 @@ pub fn execute(
         }
         Operation::Check | Operation::Upgrade => {
             anyhow::ensure!(to.is_none(), "--to is only valid for backup");
-            // No conversion is necessary for the additive schemas through version 4.
-            // A future incompatible version adds its immediate-predecessor conversion here.
-            if let Some(archive) = archive {
-                check_archive(archive)
-            } else {
-                for root in roots()? {
-                    check_root(&root)?;
+            let roots = match archive {
+                Some(archive) => archive_roots(archive)?,
+                None => roots()?,
+            };
+            if let Operation::Upgrade = operation {
+                let device = DeviceKey {
+                    machine_root: home::machine_root()?,
+                    keychain: &SystemKeychain,
+                };
+                for root in &roots {
+                    upgrade_root(root, &device)?;
                 }
-                Ok(())
             }
+            for root in &roots {
+                check_root(root, files::SHARED_RECORD_SCHEMA_VERSION)?;
+            }
+            Ok(())
         }
     }
+}
+
+/// Where a converted root records the version of its data, so that the
+/// check of a build that reads only older versions stops on it.
+const SCHEMA_RECORD: &str = ".guildbotics/state/schema.json";
+
+/// 4 → 5 (versions 1–4 only added fields): GuildBotics no longer keeps a
+/// connection, an owner token, or member tokens and user names of its own for
+/// the built-in code host. Repeating it changes nothing more, and nothing
+/// changes before every file it reads and the secret store have been read.
+fn upgrade_root(root: &Path, device: &DeviceKey) -> anyhow::Result<()> {
+    let writes = SharedWrites::new(root.to_path_buf(), None);
+    let config = root.join(".guildbotics/config");
+    let connections = config.join("connections");
+    let connection = connections.join("branvil.yml");
+    writes.transaction(|writer| {
+        let mut secrets = vec!["BRANVIL_ADMIN_TOKEN".to_owned()];
+        let mut identities = Vec::new();
+        let members = match fs::read_dir(config.join("team/members")) {
+            Ok(entries) => entries.collect::<Result<Vec<_>, _>>()?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+        for member in members {
+            if !member.file_type()?.is_dir() {
+                continue;
+            }
+            let file = member.path().join("identity.yml");
+            let Some(bytes) = files::read_if_present(&file)? else {
+                continue;
+            };
+            // Every member's keys go, so a prefix two members share needs no check.
+            let id = member.file_name().to_string_lossy().into_owned();
+            for name in ["BRANVIL_TOKEN", "BRANVIL_TOKEN_ID"] {
+                secrets.push(gb_config::team::person_secret_name(&id, name));
+            }
+            let invalid = || anyhow::anyhow!("invalid data file: {}", file.display());
+            let mut identity = std::str::from_utf8(&bytes)
+                .ok()
+                .and_then(|text| gb_config::yaml_value(text).ok())
+                .ok_or_else(invalid)?;
+            let fields = identity.as_object_mut().ok_or_else(invalid)?;
+            let Some(info) = fields
+                .get_mut("account_info")
+                .and_then(Value::as_object_mut)
+            else {
+                continue;
+            };
+            if info.remove("branvil_username").is_some() {
+                if info.is_empty() {
+                    fields.remove("account_info");
+                }
+                identities.push((file, identity));
+            }
+        }
+        let index = read_secret_index(&config)?;
+        secrets.retain(|name| index.contains(name));
+        if secrets.is_empty() && identities.is_empty() && !connection.exists() {
+            return Ok(());
+        }
+        // Decrypting the store is the last read; its first write the first change.
+        if !secrets.is_empty() {
+            SecretStore::new(&writes, Scope::Identity, device.clone())?
+                .delete_many_with(writer, &secrets)?;
+        }
+        writer.write_json(
+            &root.join(SCHEMA_RECORD),
+            &json!({"schema_version": files::SHARED_RECORD_SCHEMA_VERSION}),
+        )?;
+        for (file, identity) in identities {
+            writer.write_json(&file, &identity)?;
+        }
+        writer.delete(&connection)?;
+        if connections.is_dir() && fs::read_dir(&connections)?.next().is_none() {
+            writer.remove_tree(&connections)?;
+        }
+        Ok(())
+    })
 }
 
 fn excluded(relative: &Path) -> bool {
@@ -187,7 +276,8 @@ fn backup_with(
     Ok(())
 }
 
-fn check_archive(archive: &Path) -> anyhow::Result<()> {
+/// The numbered copies of a backup, never the roots its manifest names.
+fn archive_roots(archive: &Path) -> anyhow::Result<Vec<PathBuf>> {
     host_path::directory(archive, false)?;
     let bytes = host_path::read_file_if_present(&archive.join("manifest.json"))?
         .ok_or_else(|| anyhow::anyhow!("backup manifest is missing"))?;
@@ -198,15 +288,18 @@ fn check_archive(archive: &Path) -> anyhow::Result<()> {
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("invalid backup roots"))?;
     anyhow::ensure!(!roots.is_empty(), "backup has no identity root");
-    for index in 0..roots.len() {
-        let root = archive.join(index.to_string());
-        anyhow::ensure!(root.join(".guildbotics").is_dir(), "backup root is missing");
-        check_root(&root)?;
-    }
-    Ok(())
+    (0..roots.len())
+        .map(|index| {
+            let root = archive.join(index.to_string());
+            anyhow::ensure!(root.join(".guildbotics").is_dir(), "backup root is missing");
+            Ok(root)
+        })
+        .collect()
 }
 
-fn check_root(root: &Path) -> anyhow::Result<()> {
+/// Checks the records under `root` against `newest`, the latest version a
+/// build reads.
+fn check_root(root: &Path, newest: u64) -> anyhow::Result<()> {
     each(root, &mut |path, relative| {
         if path.is_dir() {
             return Ok(());
@@ -237,9 +330,7 @@ fn check_root(root: &Path) -> anyhow::Result<()> {
         for value in values {
             if let Some(version) = value.get("schema_version") {
                 anyhow::ensure!(
-                    version
-                        .as_u64()
-                        .is_some_and(|v| (1..=files::SHARED_RECORD_SCHEMA_VERSION).contains(&v)),
+                    version.as_u64().is_some_and(|v| (1..=newest).contains(&v)),
                     "unsupported record schema: {}",
                     path.display()
                 );
@@ -257,6 +348,198 @@ mod tests {
         let file = root.join(".guildbotics").join(name);
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(file, bytes).unwrap();
+    }
+
+    fn check(root: &Path) -> anyhow::Result<()> {
+        check_root(root, files::SHARED_RECORD_SCHEMA_VERSION)
+    }
+
+    fn check_archive(archive: &Path) -> anyhow::Result<()> {
+        execute(Operation::Check, Some(archive), None)
+    }
+
+    /// A keychain holding the device key in memory, never the machine's.
+    #[derive(Default)]
+    struct Keys(std::sync::Mutex<Option<String>>);
+    impl gb_config::secrets::Keychain for Keys {
+        fn read(&self) -> anyhow::Result<Option<String>> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+        fn create(&self, encoded_key: &str) -> anyhow::Result<()> {
+            *self.0.lock().unwrap() = Some(encoded_key.into());
+            Ok(())
+        }
+    }
+
+    /// A keychain no conversion may reach.
+    struct Untouchable;
+    impl gb_config::secrets::Keychain for Untouchable {
+        fn read(&self) -> anyhow::Result<Option<String>> {
+            panic!("the keychain was reached")
+        }
+        fn create(&self, _: &str) -> anyhow::Result<()> {
+            panic!("the keychain was reached")
+        }
+    }
+
+    fn device<'a>(machine: &Path, keychain: &'a dyn gb_config::secrets::Keychain) -> DeviceKey<'a> {
+        DeviceKey {
+            machine_root: machine.into(),
+            keychain,
+        }
+    }
+
+    fn store<'a>(writes: &'a SharedWrites, device: DeviceKey<'a>) -> SecretStore<'a> {
+        SecretStore::new(writes, Scope::Identity, device).unwrap()
+    }
+
+    /// Every file under `root`, by path, as bytes.
+    fn snapshot(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+        let mut out = std::collections::BTreeMap::new();
+        for entry in fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                out.extend(snapshot(&path));
+            } else {
+                out.insert(path.clone(), fs::read(&path).unwrap());
+            }
+        }
+        out
+    }
+
+    fn yaml(path: &Path) -> Value {
+        gb_config::yaml_value(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// An identity root as version 4 left it: the code host's connection and
+    /// owner token, and members' tokens and user names, beside other data.
+    fn version_4_identity(root: &Path, keys: &Keys) {
+        write(
+            root,
+            "config/connections/branvil.yml",
+            "base_url: http://127.0.0.1:8866\n",
+        );
+        write(
+            root,
+            "config/team/members/alice/identity.yml",
+            "person_id: alice\naccount_info:\n  git_user: Alice\n  branvil_username: alice-bot\n",
+        );
+        write(
+            root,
+            "config/team/members/aiko-bot/identity.yml",
+            r#"{"person_id":"aiko-bot","account_info":{"branvil_username":"aiko"}}"#,
+        );
+        write(
+            root,
+            "config/team/members/ken/identity.yml",
+            "person_id: ken\n",
+        );
+        // A stray file beside the member directories is not a member.
+        write(root, "config/team/members/.DS_Store", "");
+        write(root, "state/item.json", r#"{"schema_version":4}"#);
+        let writes = SharedWrites::new(root.into(), None);
+        store(&writes, device(root, keys))
+            .set_many(
+                &[
+                    ("BRANVIL_ADMIN_TOKEN", "bvt_owner"),
+                    ("ALICE_BRANVIL_TOKEN", "bvt_alice"),
+                    ("ALICE_BRANVIL_TOKEN_ID", "tok_alice"),
+                    ("AIKO_BOT_BRANVIL_TOKEN", "bvt_aiko"),
+                    ("ALICE_SLACK_BOT_TOKEN", "xoxb-synthetic"),
+                    ("branvil_upstream_github", "upstream-synthetic"),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn upgrade_of_a_backup_converts_only_its_copies_once_and_stops_an_older_check() {
+        let temp = tempfile::tempdir().unwrap();
+        let keys = Keys::default();
+        let identity = temp.path().join("identity");
+        let workspace = temp.path().join("workspace");
+        version_4_identity(&identity, &keys);
+        write(&workspace, "config/project.yml", "name: test");
+        let archive = temp.path().join("backup");
+        backup(&identity, &[identity.clone(), workspace.clone()], &archive).unwrap();
+        let originals = [snapshot(&identity), snapshot(&workspace)];
+
+        let roots = archive_roots(&archive).unwrap();
+        for root in &roots {
+            upgrade_root(root, &device(temp.path(), &keys)).unwrap();
+        }
+        check_archive(&archive).unwrap();
+        assert_eq!([snapshot(&identity), snapshot(&workspace)], originals);
+
+        let copy = archive.join("0");
+        let config = copy.join(".guildbotics/config");
+        assert!(!config.join("connections").exists());
+        assert_eq!(
+            yaml(&config.join("team/members/alice/identity.yml")),
+            json!({"person_id":"alice","account_info":{"git_user":"Alice"}})
+        );
+        assert_eq!(
+            yaml(&config.join("team/members/aiko-bot/identity.yml")),
+            json!({"person_id":"aiko-bot"})
+        );
+        assert_eq!(
+            fs::read_to_string(config.join("team/members/ken/identity.yml")).unwrap(),
+            "person_id: ken\n"
+        );
+        let writes = SharedWrites::new(copy.clone(), None);
+        assert_eq!(
+            store(&writes, device(temp.path(), &keys))
+                .values()
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>(),
+            [
+                ("ALICE_SLACK_BOT_TOKEN".into(), "xoxb-synthetic".into()),
+                (
+                    "branvil_upstream_github".into(),
+                    "upstream-synthetic".into()
+                ),
+            ]
+        );
+        assert_eq!(
+            read_secret_index(&config).unwrap(),
+            ["ALICE_SLACK_BOT_TOKEN", "branvil_upstream_github"]
+        );
+        // Only the converted root is marked, and a build that reads only
+        // version 4 stops on it.
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(copy.join(SCHEMA_RECORD)).unwrap()).unwrap(),
+            json!({"schema_version": 5})
+        );
+        assert!(!archive.join("1").join(SCHEMA_RECORD).exists());
+        let older = check_root(&copy, 4).unwrap_err().to_string();
+        assert!(older.contains("schema.json"), "{older}");
+        check_root(&archive.join("1"), 4).unwrap();
+
+        // Repeating it neither changes anything nor reads the keychain.
+        let converted = snapshot(&archive);
+        for root in &roots {
+            upgrade_root(root, &device(temp.path(), &Untouchable)).unwrap();
+        }
+        assert_eq!(snapshot(&archive), converted);
+    }
+
+    #[test]
+    fn an_upgrade_that_cannot_read_the_secret_store_changes_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity = temp.path().join("identity");
+        version_4_identity(&identity, &Keys::default());
+        let before = snapshot(&identity);
+        // Another machine's keychain does not hold this store's key.
+        let error = upgrade_root(&identity, &device(temp.path(), &Keys::default()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("device key missing"), "{error}");
+        assert_eq!(snapshot(&identity), before);
+        check_root(&identity, 4).unwrap();
     }
 
     #[test]
@@ -291,7 +574,7 @@ mod tests {
         .unwrap();
         write(&source, "state/run.json", r#"{"schema_version":99}"#);
         check_archive(&archive).unwrap();
-        assert!(check_root(&source).is_err());
+        assert!(check(&source).is_err());
         assert!(archive.join("0/.guildbotics/config/empty").is_dir());
         #[cfg(unix)]
         {
@@ -384,22 +667,22 @@ mod tests {
     fn checks_record_versions_and_all_serialized_formats() {
         let temp = tempfile::tempdir().unwrap();
         for (name, text) in [
-            ("state/item.json", r#"{"schema_version":5}"#),
+            ("state/item.json", r#"{"schema_version":6}"#),
             ("config/item.yml", "key: ["),
             ("state/item.json", r#"{"schema_version":0}"#),
             ("state/item.json", r#"{"schema_version":"4"}"#),
         ] {
             write(temp.path(), name, text);
-            assert!(check_root(temp.path()).is_err(), "{name}");
+            assert!(check(temp.path()).is_err(), "{name}");
             fs::remove_file(temp.path().join(".guildbotics").join(name)).unwrap();
         }
-        for version in 1..=4 {
+        for version in 1..=5 {
             write(
                 temp.path(),
                 "state/item.jsonl",
                 &format!("{{\"schema_version\":{version}}}\n"),
             );
-            check_root(temp.path()).unwrap();
+            check(temp.path()).unwrap();
         }
     }
 
@@ -418,22 +701,22 @@ mod tests {
                 "\n[]\nnull\n42\n",
             ] {
                 write(temp.path(), name, content);
-                check_root(temp.path()).unwrap();
+                check(temp.path()).unwrap();
             }
-            for version in ["5", "0", "-1", "1.5", "null", "\"4\""] {
+            for version in ["6", "0", "-1", "1.5", "null", "\"4\""] {
                 write(
                     temp.path(),
                     name,
                     &format!("{{bad}}\n{{\"schema_version\":{version}}}\n{{bad}}"),
                 );
-                assert!(check_root(temp.path()).is_err(), "{name}: {version}");
+                assert!(check(temp.path()).is_err(), "{name}: {version}");
             }
             // A torn UTF-8 sequence must not hide a readable future-version row.
             let path = temp.path().join(".guildbotics").join(name);
             fs::write(&path, b"{\"schema_version\":4}\n{\"text\":\"\xe3").unwrap();
-            check_root(temp.path()).unwrap();
-            fs::write(&path, b"{\"schema_version\":5,\"text\":\"\xe3\"}\n").unwrap();
-            assert!(check_root(temp.path()).is_err());
+            check(temp.path()).unwrap();
+            fs::write(&path, b"{\"schema_version\":6,\"text\":\"\xe3\"}\n").unwrap();
+            assert!(check(temp.path()).is_err());
             fs::remove_file(path).unwrap();
         }
     }
@@ -447,7 +730,7 @@ mod tests {
         let root = temp.path().join("root");
         fs::create_dir_all(root.join(".guildbotics")).unwrap();
         std::os::unix::fs::symlink(&outside, root.join(".guildbotics/config")).unwrap();
-        assert!(check_root(&root).is_err());
+        assert!(check(&root).is_err());
         fs::write(
             temp.path().join("manifest.json"),
             r#"{"version":1,"roots":["/never/read"]}"#,

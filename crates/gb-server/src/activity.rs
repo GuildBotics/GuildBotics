@@ -387,7 +387,7 @@ async fn sync(
         .iter()
         .map(|m| {
             resolved_guest::member(&roots, &api.identity_root, &m.person_id)
-                .map(|v| crate::member::native::public(&v))
+                .map(|v| crate::member::native::public(&v, api.branvil.get()))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     let mut tickets = None;
@@ -399,16 +399,10 @@ async fn sync(
             person,
             &roster,
         );
-        if !crate::member::native::service_workspace(&project, "ticket_service").is_empty() {
-            let prefix =
-                gb_config::team::person_secret_prefix(&api.identity_root, &person.person_id)?;
-            if secrets
-                .get(&(prefix + "BRANVIL_TOKEN"))?
-                .is_none_or(|v| v.is_empty())
-            {
-                continue;
-            }
-        } else {
+        if person.person_type != "agent"
+            || !person.is_active
+            || crate::member::native::service_workspace(&project, "ticket_service").is_empty()
+        {
             continue;
         }
         tickets = Some(

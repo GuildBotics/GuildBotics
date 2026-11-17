@@ -25,21 +25,11 @@ impl Fixture {
                 .await
                 .unwrap();
         }
-        owner
-            .members_create(decode(json!({"name":"agent1","kind":"agent"})).unwrap())
-            .await
-            .unwrap();
-        let issued = owner
-            .members_issue_token("agent1".into(), decode(json!({"label":"parity"})).unwrap())
-            .await
-            .unwrap();
         let service = BranvilService::new(
             running.data(),
-            issued.token,
-            "agent1".into(),
             "test".into(),
-            "aiko".into(),
-            std::sync::Arc::new(|_| {}),
+            "agent1".into(),
+            "agent1".into(),
         );
         Self {
             running,
@@ -185,7 +175,7 @@ async fn ready_and_working_triggers_observe_member_words_and_assignment() {
             task.provider.as_str(),
             task.assignee.as_deref()
         ),
-        ("#1", "branvil", Some("aiko"))
+        ("#1", "branvil", Some("agent1"))
     );
     c["comments"] = json!([comment("agent1", "Already answered")]);
     assert_eq!(reason(&f.service, &c).await, None);

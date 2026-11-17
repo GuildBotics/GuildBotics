@@ -209,7 +209,7 @@ pub(crate) async fn scenario(
             if names.contains(&"branvil") {
                 checks.extend(
                     registry
-                        .diagnose_branvil(&saved, &project["services"], lang)
+                        .diagnose_branvil(&project["services"], lang)
                         .await
                         .into_iter()
                         .map(|c| serde_json::to_value(c).unwrap()),

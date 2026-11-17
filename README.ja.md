@@ -91,7 +91,7 @@ Hub で `guildbotics open` を実行して画面を開きます。ブラウザ�
 **Branvil / Slack と連携する場合は、設定を始める前にサービス側の準備が必要です。** どの連携も任意で、あとから **設定 → 連携** で有効にできます。まず動かしてみたい場合は、連携を使わずに進めてください。
 
 - **Slack**: メンバーが Slack で依頼を受けるには、Socket Mode の Slack App と bot / app トークンが必要です。準備する内容は [Slack で作業を依頼する](#slack-で作業を依頼する)を参照してください
-- **Branvil**: すべてのマシンから同じベース URL で届く Branvil が必要です。GuildBotics はオーナーの同意で一度だけ Branvil に接続し、メンバーごとの Branvil のエージェントとトークンは GuildBotics が用意します。自分のチェックアウトの `origin` にも使えます。[Branvil 連携ガイド](docs/branvil_integration.ja.md)を参照してください
+- **Branvil**: すべてのマシンから同じベース URL で届く Branvil が必要です。接続の手順はありません。各 AI メンバーは、最初にチケット・pull request・git を使うときに GuildBotics が自動で用意します。自分のチェックアウトの `origin` にも使えます。[Branvil 連携ガイド](docs/branvil_integration.ja.md)を参照してください
 
 GuildBotics では、プロジェクトの設定と状態を置くフォルダを **ワークスペース** と呼びます。ワークスペースには、以下のようなプレーンテキストの設定ファイルが書き出されます。
 
@@ -109,7 +109,7 @@ API キーやアカウントトークンの値は、暗号化したローカル�
 - **LLM・AI CLIツール**: デフォルトの LLM、AI CLI ツールの選択、LLM API キーの設定
 - **エージェント実行環境**: **ビルド** でこのマシンに環境を作り、表示されるコマンドで選んだツールへログインします。どちらもマシンごとの作業です
 - **連携**: コードホスト、チケット、チャットのサービスを選んで設定します。各サービスは任意です。
-- **メンバー**: チームメンバーの追加と設定。名前・人格・アイコン・各サービスのアカウントはすべてのワークスペースで共通で、役割・巡回・チャット・AI 設定はこのワークスペースだけの設定です。メンバー ID は保存後に変更できません。**既存のメンバーを追加** は、ほかのワークスペースにいるメンバーをこのワークスペースに追加します。**このワークスペースから外す** は、このワークスペースからだけメンバーを外します（アイデンティティ・認証情報・各サービスのトークンは残ります）。**削除** は、メンバーをこのワークスペースから外してアイデンティティと認証情報を削除し、Branvil などのサービスで GuildBotics が発行したトークンを無効にします。そのメンバーがまだいるほかのワークスペースでは、そこから外すまでそのメンバーだけが使えません
+- **メンバー**: チームメンバーの追加と設定。名前・人格・アイコン・各サービスのアカウントはすべてのワークスペースで共通で、役割・巡回・チャット・AI 設定はこのワークスペースだけの設定です。メンバー ID は保存後に変更できません。**既存のメンバーを追加** は、ほかのワークスペースにいるメンバーをこのワークスペースに追加します。**このワークスペースから外す** は、このワークスペースからだけメンバーを外します（アイデンティティ・認証情報・各サービスのトークンは残ります）。**削除** は、メンバーをこのワークスペースから外してアイデンティティと認証情報を削除します。そのメンバーがまだいるほかのワークスペースでは、そこから外すまでそのメンバーだけが使えません
 - **検証**: **設定を検証** を押すと、LLM、AI CLI ツール、連携先、Git を読み取り専用でチェックします。連携先のデータは更新しません
 
 ### クイックスタート
@@ -174,7 +174,7 @@ macOS では、**システム設定 → プライバシーとセキュリティ 
 
 ## Branvil チケットを任せる
 
-Branvilのチケットをメンバーに渡すと、既定の `ticket_driven_workflow` が調査、実装、プルリクエストの作成を進めます。**設定 → 連携** でコードホストとチケットにBranvilを選び、対象のワークスペースを指定します。Branvilの接続とアカウント、ボードの準備は [Branvil連携ガイド](docs/branvil_integration.ja.md) を参照してください。
+Branvilのチケットをメンバーに渡すと、既定の `ticket_driven_workflow` が調査、実装、プルリクエストの作成を進めます。**設定 → 連携** でコードホストとチケットにBranvilを選び、対象のワークスペースを指定します。リポジトリとボードの準備は [Branvil連携ガイド](docs/branvil_integration.ja.md) を参照してください。
 
 **設定 → エージェント実行環境** で環境が準備済みで、AI CLIにログイン済みかを確認します。端末では `guildbotics environment status` で同じ状態を確認できます。
 
@@ -356,7 +356,7 @@ commands:
 GuildBotics は、シークレット（LLM API キーおよびアカウントトークン類）を可能な限りプレーンテキストファイルの外に保存します。
 
 - **暗号化ストア**。値は各ルートの `.guildbotics/local/secrets.enc.json` に保存します。macOSキーチェーンが暗号化鍵を保持し、`.guildbotics/config/secrets.yml` にはキー名だけを記録します。
-- **2 つのストア:** メンバーの認証情報（`{PERSON_ID}_...`）とサービスへの接続（`BRANVIL_ADMIN_TOKEN`）は、マシン内のすべてのワークスペースで共有するアイデンティティのストアに保存します（インデックスは `~/.guildbotics/identity/.guildbotics/config/secrets.yml`）。LLM API キーなどそれ以外のキーは、ワークスペースのストアに保存します。プロセスはアイデンティティのストア、ワークスペースのストアの順に読み込みます。
+- **2 つのストア:** メンバーの認証情報（`{PERSON_ID}_...`）は、マシン内のすべてのワークスペースで共有するアイデンティティのストアに保存します（インデックスは `~/.guildbotics/identity/.guildbotics/config/secrets.yml`）。LLM API キーなどそれ以外のキーは、ワークスペースのストアに保存します。プロセスはアイデンティティのストア、ワークスペースのストアの順に読み込みます。
 
 - **優先順位:** 実環境変数 > 暗号化ストア。GuildBotics はワークスペースの `.env` を読みません。
 - **交換形式:** `guildbotics secrets export` / `import` は dotenv を転送ファイルとしてだけ使います。`secrets set --from-file` は PEM などのファイルを暗号化ストアへ取り込みます。
@@ -530,7 +530,7 @@ guildbotics open
 - `OPENAI_API_KEY`: OpenAI API
 - `ANTHROPIC_API_KEY`: Anthropic Claude API
 
-以下のメンバーのキー（`{PERSON_ID}_...`）と `BRANVIL_ADMIN_TOKEN` は、すべてのワークスペースで共有するアイデンティティのストアに、LLM API キーはワークスペースのストアに保存されます。
+以下のメンバーのキー（`{PERSON_ID}_...`）は、すべてのワークスペースで共有するアイデンティティのストアに、LLM API キーはワークスペースのストアに保存されます。
 
 **Slack アクセス**（メンバー毎、形式: `{PERSON_ID}_...`）:
 
@@ -539,8 +539,7 @@ guildbotics open
 
 **Branvil アクセス**:
 
-- `BRANVIL_ADMIN_TOKEN`: オーナーが接続を許可したときに Branvil が GuildBotics に発行するトークン。すべてのワークスペースで 1 つです。ホストがメンバーの用意と Branvil の GUI を開くのに使います
-- `{PERSON_ID}_BRANVIL_TOKEN`: メンバーの Branvil トークン。メンバーを保存したときに GuildBotics が発行し、すべてのワークスペースで使います（Branvil での名前はメンバーの `identity.yml` の `account_info.branvil_username`）
+- メンバーの git のトークン: メンバーが git で push・fetch する実行ごとにサーバーが発行し（ラベル `guildbotics-git`）、その実行が終わると取り消します。どのストアにも保存しません
 - 自分の git の Branvil トークン: マシンごとに 1 つのオーナーのトークン。自分の git が `guildbotics git-credential` に最初に求めたときに起動中の GuildBotics サーバーが発行し、そのマシンの OS キーチェーンにだけ保存して共有しません（→ [自分のチェックアウトで Branvil を使う](docs/branvil_integration.ja.md#自分のチェックアウトで-branvil-を使う)）
 
 GuildBoticsは暗号化ストアを自動で読み込みます。GuildBotics はワークスペースの `.env` を読みません。
@@ -580,7 +579,7 @@ GuildBotics が保存するローカルデータは、次の 3 種類です。
 - `language`: プロジェクト言語
 - `services.ticket_service`: チケットサービスの設定
 - `services.code_hosting_service`: コードホスティングサービス設定（リポジトリ操作に使うBranvilワークスペース）
-- Branvil では、どちらのサービスも `name: branvil` で、`workspace`（メンバーはそのリポジトリにだけ書き込み、そのボードからチケットを取ります）を持ちます。Branvil に届く URL は、すべてのワークスペースで共通の接続の設定です（→ [Branvil 連携ガイド](docs/branvil_integration.ja.md)）
+- Branvil では、どちらのサービスも `name: branvil` で、`workspace`（メンバーはそのリポジトリにだけ書き込み、そのボードからチケットを取ります）を持ちます。届く URL はワークスペースごとには設定しません（→ [Branvil 連携ガイド](docs/branvil_integration.ja.md)）
 - `services.chat_service`: チャットサービス設定（`name: slack`。プロキシ経由で Slack に届く場合だけ `base_url`）
 
 **メンバーのアイデンティティ** (`~/.guildbotics/identity/.guildbotics/config/team/members/<person_id>/identity.yml`。すべてのワークスペースで共通で、アイコンも同じディレクトリに置きます):
@@ -588,7 +587,7 @@ GuildBotics が保存するローカルデータは、次の 3 種類です。
 - `person_id`: 一意な識別子（英数字小文字、`-`、`_` のみ）。変更できません
 - `name`: 表示名
 - `person_type`: 人間のメンバーは `human`、AI メンバーは `agent`
-- `account_info`: 各サービスのアカウント名（`git_user`、`git_email`、`github_*`、`slack_user_id`、`branvil_username`）
+- `account_info`: 各サービスのアカウント名（`git_user`、`git_email`、`slack_user_id`）
 - `profile.character`: 興味・嗜好・会話参加方針などのプロフィール
 - `speaking_style`、`relationships`
 

@@ -3,7 +3,6 @@ use crate::*;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -261,7 +260,6 @@ pub trait CodeHostingService: Send + Sync {
         parameters: Option<&'a Value>,
         continuation: &'a str,
     ) -> ServiceFuture<'a, ReadPage>;
-    fn identity(&self, check: bool) -> ServiceFuture<'_, BTreeMap<String, String>>;
     fn comment<'a>(
         &'a self,
         url: &'a str,

@@ -3,7 +3,7 @@
 The Rust host embeds Branvil. Branvil starts Git child processes and a
 separate CI runner process (`guildbotics branvil runner`) that executes jobs in microVMs. It
 listens on loopback only; other machines reach it through OpenSSH port forwarding
-managed by an OS service (see `README.md`). The authenticated data API is the
+managed by an OS service (see `README.md`). The data API is the
 boundary into the data. The GUI and CLI use HTTP; an embedded provider uses
 `api::DataApi` directly in the service process. Both call the same domain
 operations, with the same member permissions, locks, events and CI triggers.
@@ -14,8 +14,11 @@ its router, `DataApi`, and shutdown methods. It never binds. The host installs a
 then mounts that router behind its own routes on one listener (7878 by default).
 The origin is used for public links, hook callbacks and runner supervision.
 `api::Running` remains a standalone test host using the configured `listen`.
-Authenticate each member through `DataApi::authenticate`; every operation
-checks the token again so revocation takes effect. Smart HTTP and Git hook
+The host shares the process, so it acts without a token: `DataApi::owner()`
+acts as the owner, and `DataApi::agent(name, display_name)` as the agent
+`name`, which it creates with that display name when missing (GuildBotics
+names each AI member's agent by its person_id). Every operation reads the
+member again, so it acts with the member's current permissions. Smart HTTP and Git hook
 callbacks continue to use loopback HTTP. On shutdown the host refuses new GuildBotics requests and waits for its work,
 while still serving Branvil (including Git pushes and runner reports). It calls
 `Embedded::drain`, closes events, stops the shared listener with a five-second
@@ -535,35 +538,13 @@ entry link:
 
 `POST /api/v1/session/links` is the only way a GUI session starts, for every
 client present and future. On the Hub machine the client is `guildbotics branvil open`.
-Agents never enter the GUI; they use their own tokens with the API and Git.
+Agents never enter the GUI. An agent outside GuildBotics uses its own token
+with the API and Git; GuildBotics acts as its agents in-process and, for
+member Git, issues the agent a token for the run (labelled `guildbotics-git`)
+and revokes it afterwards.
 
-### Local apps: an owner token through a consent screen
-
-Other machines reach Branvil at the same base URL through OpenSSH forwarding but
-cannot read `owner.token`. A local app there (for example GuildBotics Desktop,
-which sets Branvil up for its members and opens the GUI) gets an owner token of
-its own instead, through the consent screen (`docs/api.md`, "Local apps"):
-
-1. The app opens the browser at `{base}/-/authorize` with its name, a loopback
-   `redirect_uri`, a `state`, and a PKCE `S256` challenge.
-2. The owner, in the GUI (entering first with `guildbotics branvil open` when the browser
-   has no session; the page is returned to afterwards), allows it. Branvil
-   makes a single-use 60-second code bound to the app's name, the
-   `redirect_uri`, and the challenge (kept in memory as a hash, like entry-link
-   codes) and sends the browser to the app's loopback address with it.
-3. The app exchanges the code and its verifier at `POST /api/v1/apps/token`
-   for an owner token labelled `app:<client>`; a previous token of that label
-   is revoked in the same write.
-
-With that token the app uses the admin API (members, tokens, accounts,
-workspaces) and, to open the GUI, the entry-link endpoint above, exactly as
-`guildbotics branvil open` does. Branvil knows nothing of the app beyond its display
-name; where the app keeps the token is its own matter. The owner revokes it
-under Settings → Members → owner → Tokens, like any token; replacing
-`owner.token` does not revoke it.
-
-An app shows the GUI in its own top-level window or the system browser, never
-in an iframe: Branvil forbids framing (`X-Frame-Options: DENY`,
+The GUI is shown in a top-level window or the system browser, never in an
+iframe: Branvil forbids framing (`X-Frame-Options: DENY`,
 `frame-ancestors 'none'`), and its `SameSite=Strict` cookie would not be sent
 from a cross-site frame.
 

@@ -271,14 +271,6 @@ async fn the_device_and_the_default_tool_are_checked_by_their_own_refusals() {
     assert!(check(&answer, "agent_environment").is_some());
 }
 
-/// A member's Branvil account, as its identity holds it.
-fn branvil_account(f: &Fixture, person: &str, username: &str) {
-    let path = f.identities().join(format!("{person}/identity.yml"));
-    let mut identity = f.read(&path);
-    identity["account_info"] = json!({ "branvil_username": username });
-    f.write(&path, &identity.to_string());
-}
-
 #[tokio::test]
 async fn only_the_providers_the_services_name_are_verified_with_each_members_checks() {
     let f = fixture();
@@ -294,56 +286,15 @@ async fn only_the_providers_the_services_name_are_verified_with_each_members_che
     let answer = verified(&f).await;
     assert!(check(&answer, "provider_secret").is_none());
     assert!(check(&answer, "branvil_credential").is_none());
+    // Branvil runs in this server: it asks no member or connection for a secret.
     set_project(
         &f,
         "services",
         json!({"ticket_service": {"name": "branvil", "workspace": "acme"}}),
     );
     let answer = verified(&f).await;
-    assert_eq!(
-        check(&answer, "provider_secret").unwrap(),
-        &json!({"code": "provider_secret", "status": "error",
-            "message": verify_sentence("key.error", &[("key", "BRANVIL_ADMIN_TOKEN")]),
-            "target": "BRANVIL_ADMIN_TOKEN", "context": {"provider": "branvil"}})
-    );
-    let targets: Vec<_> = answer["errors"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|c| c["code"] == "branvil_credential")
-        .map(|c| c["target"].as_str().unwrap().to_owned())
-        .collect();
-    let token = gb_config::team::person_secret_name("alice", "BRANVIL_TOKEN");
-    assert_eq!(
-        targets,
-        [
-            "account_info.branvil_username".to_owned(),
-            token.clone(),
-            "account_info.branvil_username".to_owned()
-        ],
-        "the human is not asked for a token"
-    );
-    f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", "admin");
-    branvil_account(&f, "alice", "alice");
-    f.seed_identity_secret(&token, "token");
-    let answer = verified(&f).await;
-    assert_eq!(check(&answer, "provider_secret").unwrap()["status"], "ok");
-    let alice: Vec<_> = answer["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|c| c["code"] == "branvil_credential" && c["context"]["person_id"] == "alice")
-        .map(|c| c["status"].clone())
-        .collect();
-    assert_eq!(alice, [json!("ok"), json!("ok")]);
-    let fields: Vec<_> = check(&answer, "branvil_credential")
-        .unwrap()
-        .as_object()
-        .unwrap()
-        .keys()
-        .cloned()
-        .collect();
-    assert_eq!(fields, ["code", "status", "message", "target", "context"]);
+    assert!(check(&answer, "provider_secret").is_none());
+    assert!(check(&answer, "branvil_credential").is_none());
     // Slack asks a subscribed agent for its tokens, never a subscribed human.
     owner["message_channels"] = json!([{"name": "general", "chat": {"channel_id": "C1"}}]);
     f.write(&participation, &owner.to_string());
@@ -369,7 +320,7 @@ async fn a_member_whose_secrets_cannot_be_read_is_an_error_of_its_own() {
         json!({"ticket_service": {"name": "branvil", "workspace": "acme"}}),
     );
     // The keychain answers, but the identity store's encrypted file is broken.
-    f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", "admin");
+    f.seed_identity_secret("OPENAI_API_KEY", "synthetic-llm-key");
     f.write(
         &f.root.join("identity/.guildbotics/local/secrets.enc.json"),
         "{\"version\": 1}",

@@ -48,16 +48,6 @@ const FILES: &[(&str, &str, &str)] = &[
         include_str!("../../../guildbotics/templates/locales/observability/trace_title.ja.yml"),
     ),
     (
-        "integrations.branvil.setup",
-        "en",
-        include_str!("../../../guildbotics/templates/locales/integrations/branvil/setup.en.yml"),
-    ),
-    (
-        "integrations.branvil.setup",
-        "ja",
-        include_str!("../../../guildbotics/templates/locales/integrations/branvil/setup.ja.yml"),
-    ),
-    (
         "integrations.branvil.provider",
         "en",
         include_str!("../../../guildbotics/templates/locales/integrations/branvil/provider.en.yml"),

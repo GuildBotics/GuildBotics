@@ -5,7 +5,7 @@ async fn preparing_one_heads_result_keeps_other_heads_pending() {
     let f = Fixture::new("owner").await;
     f.workspace("fixture").await;
     f.repository("fixture/repo").await;
-    let (agent, _) = f.member("agent").await;
+    let agent = f.member("agent").await;
     let base = f.commit("fixture/repo", "main", None, "README.md", "base");
     for (branch, conclusion) in [("pending", None), ("success", Some("success"))] {
         let head = f.commit("fixture/repo", branch, Some(&base), branch, branch);
@@ -32,7 +32,7 @@ async fn checks_and_merge_use_real_heads_and_queue_states() {
         let f = Fixture::new("owner").await;
         f.workspace("fixture").await;
         f.repository("fixture/repo").await;
-        let (agent, _) = f.member("agent").await;
+        let agent = f.member("agent").await;
         let ticket = f
             .ticket(
                 "fixture/repo",
@@ -160,7 +160,7 @@ async fn target_results_ignore_other_heads_priority_class() {
             let f = Fixture::new("owner").await;
             f.workspace("fixture").await;
             f.repository("fixture/repo").await;
-            let (agent, _) = f.member("agent").await;
+            let agent = f.member("agent").await;
             let base = f.commit("fixture/repo", "main", None, "README.md", "base");
             f.check("fixture/repo", "main", &base, None).await;
             let head = f.commit(
@@ -209,7 +209,7 @@ async fn a_failed_check_can_be_retried_on_the_same_head() {
     let f = Fixture::new("owner").await;
     f.workspace("fixture").await;
     f.repository("fixture/repo").await;
-    let (agent, _) = f.member("agent").await;
+    let agent = f.member("agent").await;
     let base = f.commit("fixture/repo", "main", None, "README.md", "base");
     let head = f.commit(
         "fixture/repo",

@@ -2,7 +2,6 @@
 //! what the caller's kind may do, reads and writes the store in short
 //! transactions (never across Git), and returns the API view.
 
-pub mod apps;
 pub mod attachments;
 pub mod markdown;
 pub mod members;

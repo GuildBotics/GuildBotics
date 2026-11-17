@@ -11,7 +11,10 @@ and the callers in `capabilities/member_repository.py`, `capabilities/member_git
 
 The provider is `guildbotics/integrations/branvil/` in GuildBotics. It translates
 port calls into the API of [`api.md`](api.md) and the answers into the port's
-models. Branvil keeps the data; the provider keeps none. Selection rules that are
+models. The Rust provider (`crates/gb-integrations/src/factory/branvil/`) calls
+the same operations in-process, without a token: `DataApi::agent(person_id,
+display_name)` acts as the member, whose Branvil agent is named by its
+person_id and created on first use, and `DataApi::owner()` acts as the owner. Branvil keeps the data; the provider keeps none. Selection rules that are
 GuildBotics' own (workflow status, mentions, the review limit) are applied by the
 provider to the raw activity Branvil returns, as the GitHub provider applies them
 to GitHub's.
@@ -40,7 +43,7 @@ README); "provider unit tests on the double" are GuildBotics'
 | Write scope | provider | The scope is the configured workspace (`project.services.*.workspace`). Every write (and `check_push`) calls `repository_scope.check_path(workspace, <repo path>, provider="branvil")` before any request. The repository of a ticket or a pull request is parsed from its URL. |
 | URL ownership | provider | A URL is Branvil's only when it starts with the configured `base_url` and matches the web URL shapes of `api.md`. A ticket URL of a pull request (and the reverse) is `ServiceNotFound`; a URL of another service is `ServiceNotFound` for item operations and `ServiceUnsupported` for `ticket_pull_requests`. |
 | Entry ids | service | Endpoints take the item path and the entry id; an id of another item is `404`. |
-| Author type | provider | `Message.ASSISTANT` when the entry's `author` equals the member's `branvil_username` (case-insensitive), `Message.USER` otherwise, `""` without an author. |
+| Author type | provider | `Message.ASSISTANT` when the entry's `author` equals the member's person_id, its Branvil name (case-insensitive), `Message.USER` otherwise, `""` without an author. |
 | Workflow status | provider + service | `comment(status=...)` sends `meta = status.payload()`; reads give `meta` back and `WorkflowStatus.from_payload(meta)` restores it. Branvil stores `meta` opaquely (4 KiB cap). |
 | Reactions | service | Only `ack`/`agree`/`celebrate`/`support`; the provider refuses others with `ServiceUnsupported` before any request. |
 | Pagination | provider + service | Port `continuation` is Branvil's `next_cursor` passed through; the service verifies it is bound to the same collection and conditions. Port `page_size` → `limit`. |
@@ -57,7 +60,6 @@ README); "provider unit tests on the double" are GuildBotics'
 | `read(pull_request_readiness)` | → `Readiness` | as `readiness` | — | — | — | — | contract | done |
 | `read(ticket_pull_requests)` | ticket URL → `TicketPullRequest` page; foreign → `ServiceUnsupported`; PR URL → `ServiceNotFound` | ticket→PR links | — | `ticket_pulls(ticket, pull)` | — | `GET repos/{r}/tickets/{n}` (`pull_requests` via cards) / `GET repos/{r}/tickets/{n}/pulls` | contract | done: smoke |
 | `read(dependency_alerts)` | repository path → `DependencyAlert` page, or one alert by `id`; the upstream host's alerts, read with the upstream's reader (Branvil keeps none); no upstream → `ServiceUnsupported`; a refusal, a missing account, or an unreachable host → `ServiceError` (never an empty page) | upstream setting, reader's credential | — | — | each page read from the host at request time; the cursor carries the host's, bound to the upstream | `GET repos/{r}/upstream/dependency-alerts[/{id}]` | contract + provider unit | done |
-| `identity(check)` | → `{"branvil_username": ...}`; with `check`, `GET /me` and raise on `401` | member | — | — | — | `GET /me` | provider unit | done: provider unit tests on the double |
 | `comment(url, body, status)` | → `CommentWritten` | PR | comment | `comments` | one write txn | `POST pulls/{n}/comments` | contract | done |
 | `create_pull_request` | → `PullRequestCreated`; existing open (head, base) returned unchanged; foreign ticket + `closes` → `ServiceUnsupported`; ticket of another repository + `closes` → `ServiceUnsupported`; missing Branvil ticket → `ServiceNotFound` | head branch tip, open PR index, ticket | PR, ticket links | `open_pulls(repo, head, base)` (unique), `ticket_pulls` | lookup + insert in one write txn (single writer ⇒ no double create) | `POST repos/{r}/pulls` | contract + service test | done: smoke |
 | `update_pull_request` | body/title; links kept unless `drop_ticket_links` | PR | PR | — | one txn; optional revision | `PATCH pulls/{n}` | contract (indirect) + service test | done: provider unit tests on the double |
@@ -71,7 +73,7 @@ README); "provider unit tests on the double" are GuildBotics'
 | `clone_url(repo)` | → `{base}/git/{repo}.git` (no credential; must round-trip through `git remote get-url`) | repo | — | — | — | `GET repos/{r}` | contract | done: smoke |
 | `default_branch` | → branch | repo | — | — | — | `GET repos/{r}` | contract | done |
 | `pull_request_head` | → `PullRequestHead(head_repository, head)` | PR | — | — | — | `GET pulls/{n}` | contract | done |
-| `git_credential()` | → `GitCredential(username=branvil_username, password=token)` (never `None`) | member secret | — | — | — | — | provider unit | done: provider unit tests on the double; smoke |
+| `git_credential()` | → `GitCredential(username=person_id, password=token)` (never `None`); the token (label `guildbotics-git`) is issued once per service and revoked when the run releases the service | member | token | — | issued as the owner in one write | `POST members/{name}/tokens`, `DELETE members/{name}/tokens/{id}` | provider unit | done: smoke |
 | `check_push(repo)` | `check_path(workspace, repo)` | — | — | — | — | — | contract | done |
 | `commit_url` | → `{base}/{repo}/-/commits/{sha}` | — | — | — | — | — | provider unit | done: provider unit tests on the double |
 | `repository_from_remote` | `{base}/git/{repo}.git` (also without `.git`) of the same scheme/host/port → repo; else `None` | — | — | — | — | — | contract | done |
@@ -111,7 +113,7 @@ Repository creation, a repository's labels, board order, the ticket's assignee, 
 resolution, merge, CI retry/cancel, required checks, the upstream, publishing: reached by
 the GUI and the `branvil` CLI only. Workspaces, members, tokens, and members' accounts are
 not in the ports either; they are Branvil's public admin API (`api.md`, "Members and tokens
-(admin API)"), which a local app holding an owner token from the consent screen may use to
-set Branvil up. A pull request merged on the upstream host reads as merged here, the host's
+(admin API)"); GuildBotics uses the same operations as the owner through `DataApi::owner()`
+(workspaces, the member's Git token). A pull request merged on the upstream host reads as merged here, the host's
 checks of a published head are among its checks, and the host's dependency alerts are the
 repository's.

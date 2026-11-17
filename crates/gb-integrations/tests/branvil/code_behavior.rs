@@ -108,7 +108,7 @@ impl Fixture<'_> {
     }
     async fn request(&self, pull: &Pull) {
         self.owner
-            .pulls_set_reviewer(REPOSITORY, pull.number, "aiko-service", true)
+            .pulls_set_reviewer(REPOSITORY, pull.number, "aiko", true)
             .await
             .unwrap();
     }
@@ -785,7 +785,7 @@ async fn outside_scope_pull_requests_are_not_patrolled(f: &mut Fixture<'_>) {
         .await
         .unwrap();
     f.owner
-        .pulls_set_reviewer("outside/repo", pull.pull.number, "aiko-service", true)
+        .pulls_set_reviewer("outside/repo", pull.pull.number, "aiko", true)
         .await
         .unwrap();
     let p = Pull {

@@ -1,8 +1,10 @@
 # Branvil HTTP API (v1)
 
-This is the contract between the Branvil service and its clients: the GuildBotics
-`branvil` provider, the browser GUI, the CI runner, and local apps that
-administer Branvil through its admin API ("Members and tokens (admin API)"). The Python double in
+This is the contract between the Branvil service and its clients: the browser
+GUI, the `branvil` CLI, and the CI runner. The GuildBotics `branvil` provider
+calls the same operations in-process through `api::DataApi`, without a token:
+`DataApi::owner()` acts as the owner and `DataApi::agent(name, display_name)`
+as the agent `name`, created with that display name when missing. The Python double in
 GuildBotics (`tests/guildbotics/integrations/contracts/providers.py`) and the
 integration tests in this repository both follow it. When the service changes
 an endpoint, this file changes in the same commit.
@@ -44,7 +46,7 @@ The standalone server retains the session endpoints described below.
 - `POST` requests that create something accept an optional
   `Idempotency-Key` header (1-128 printable ASCII); requests whose response
   holds a credential or a code ignore it (token issuance, entry links,
-  sessions, and the local-app endpoints under `/apps/`), and the read-only
+  and sessions), and the read-only
   Markdown resolver, so the service never
   keeps one; an attachment's upload, whose body is an image, ignores it too.
   A repeated key from the same
@@ -54,7 +56,7 @@ The standalone server retains the session endpoints described below.
   another (the second gets the first's response); other keys are not held
   up. Keys are kept for 24 hours.
 - Status codes: a create answers `201` (members, tokens, entry links,
-  local-app authorizations and tokens, workspaces, repositories, tickets, attachments, comments, reviews, inline comments, replies;
+  workspaces, repositories, tickets, attachments, comments, reviews, inline comments, replies;
   pull requests as described there); reactions answer `200`; a
   `DELETE` that leaves nothing to show (token) answers `204`; every other
   success is `200`.
@@ -127,9 +129,7 @@ repository, and upstream events, including changes in another repository.
 - API clients send `Authorization: Bearer <token>`. A token belongs to one
   member and is shown once when it is issued (`guildbotics branvil member token`), stored
   only as a SHA-256 hash. The owner's token is kept in
-  `<data dir>/secrets/owner.token` for the CLI on the Hub machine. A local app
-  gets an owner token of its own through the consent screen ("Local apps"),
-  never by copying that file.
+  `<data dir>/secrets/owner.token` for the CLI on the Hub machine.
 - Git over Smart HTTP uses HTTP Basic: the username is the member's name and
   the password is one of the member's tokens. Both fetch (`git-upload-pack`) and
   push (`git-receive-pack`) require it. A username that is not the token's
@@ -228,54 +228,11 @@ bad token.
 
 There is no sign-out: `docs/security.md` says how to end every session.
 
-### Local apps (consent screen)
-
-A local app (for example GuildBotics Desktop) that reaches Branvil at its base
-URL gets an owner token of its own, without the owner copying
-`owner.token`, through a consent screen and PKCE (RFC 7636, `S256`):
-
-1. The app makes a verifier (43-128 characters of `[A-Za-z0-9-._~]`), listens
-   on a loopback address, and opens the browser at the GUI page
-   `{base}/-/authorize?client=<name>&redirect_uri=<uri>&state=<s>&code_challenge=<c>&code_challenge_method=S256`.
-   - `client`: the app's display name, `[A-Za-z0-9 ._-]{1,64}`, not blank.
-   - `redirect_uri`: `http://127.0.0.1[:port]/...`, `http://localhost[:port]/...`,
-     or `http://[::1][:port]/...`; no userinfo, no fragment.
-   - `state`: 1-512 bytes, returned unchanged.
-   - `code_challenge`: base64url (unpadded) SHA-256 of the verifier.
-2. With the owner's GUI session the page asks "Allow <client> to manage
-   Branvil?". Deny sends the browser to `redirect_uri` with
-   `error=access_denied&state=<s>` added to its query. Without a session the
-   page says to run `guildbotics branvil open` on the Hub machine; it remembers its own
-   address in the browser for 10 minutes, and `/-/enter` returns there
-   instead of the board.
-3. Allow calls `POST /api/v1/apps/authorizations` and sends the browser to its
-   `redirect`; the app receives `code` and `state` there.
-4. The app calls `POST /api/v1/apps/token` and keeps the token.
-
-- `POST /api/v1/apps/authorizations` (owner: GUI session with the CSRF header,
-  or an owner Bearer token) `{"client","redirect_uri","state","code_challenge"}`
-  → `201 {"redirect": "<redirect_uri with code=<code>&state=<s> added to its query>"}`.
-  The code is 32 random bytes, works once, and expires after 60 seconds; only
-  its hash is kept, in memory (a restart invalidates it), bound to the client,
-  the `redirect_uri` as sent, and the challenge. A value outside the rules
-  above is `400 invalid`.
-- `POST /api/v1/apps/token` (no authentication; the `Host` and `Origin` checks
-  apply) `{"code","redirect_uri","code_verifier"}` →
-  `201 {"id","label": "app:<client>","token","created_at","member": "<owner>"}`.
-  The token is the owner's, labelled `app:<client>`; the owner's previous token
-  of that label is revoked in the same write, so each app holds one. A used,
-  expired, or unknown code, another `redirect_uri`, or a verifier whose
-  SHA-256 is not the challenge is `400 invalid`; the code is spent either way.
-- The token is listed with the owner's tokens under its label and revoked
-  there like any token (`DELETE /api/v1/members/{owner}/tokens/{id}`).
-
-Neither endpoint's response is replayed for an `Idempotency-Key`.
-
 ### Members and tokens (admin API)
 
 The members, tokens, accounts ("Upstream"), and workspaces endpoints are
 Branvil's admin API: any client holding an owner token may use them (the
-`branvil` CLI, the GUI, a local app with its `app:` token). They are as stable
+`branvil` CLI, the GUI). They are as stable
 as the rest of this file.
 
 - `GET /api/v1/members` (owner) → items of `{"name","display_name","kind","accounts","reviewers","avatar_url"}`;
@@ -308,8 +265,7 @@ as the rest of this file.
   `replace: true` the member's tokens of that label are revoked in the same
   write as the issue, so a retried call leaves exactly one. The labels Branvil
   issues itself are refused with `400 invalid`: `owner-file` (the owner's
-  token file), `auto` (the automatic runner), and every label starting with
-  `app:` (issued only by `POST /api/v1/apps/token`).
+  token file) and `auto` (the automatic runner).
 - `GET /api/v1/members/{name}/tokens` → items of `{"id","label","created_at","last_used_at"}`
 - `DELETE /api/v1/members/{name}/tokens/{id}` revokes. To revoke by label, list
   and delete each token of it.
@@ -320,7 +276,7 @@ the writes of the endpoints below that carry no mark: tickets, comments,
 reactions, reviews, pull requests, CI retries and cancels, and pushes of
 unprotected branches. Endpoints marked "(owner)" (creating workspaces and
 repositories, repository settings and upstreams, members and their accounts,
-backups, diagnostics, entry links, allowing local apps), merging, publishing, and marking a pull
+backups, diagnostics, entry links), merging, publishing, and marking a pull
 request ready for review are the owner's (`403 forbidden` for an agent). A runner uses only the runner API (`403 forbidden` elsewhere,
 except `/me`, its own member record, and its own tokens).
 

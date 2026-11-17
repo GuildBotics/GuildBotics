@@ -46,7 +46,7 @@ base64 の nonce / ciphertext と `version: 1` は Rust の
 人の git トークンは各マシンの OS の資格情報ストア（service `GuildBotics/branvil-git`、
 account は取得元の接続先 URL）に保存する。Rust の credential helper はこの場所を読み、
 identity store の `BRANVIL_GIT_TOKEN_*` は読まない。Hub の identity store にもこのキーはない。
-新規発行は起動中の GuildBotics サーバーが行い、CLI は管理者トークンを持たない。
+新規発行は起動中の GuildBotics サーバーが行う。
 
 ## 中断した場合
 

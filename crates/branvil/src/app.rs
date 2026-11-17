@@ -68,8 +68,6 @@ pub struct App {
     pub token_touched: Mutex<HashMap<String, std::time::Instant>>,
     /// Unused entry-link codes, in memory only: a restart invalidates them.
     pub entry_codes: Mutex<loopback_auth::Codes<String>>,
-    /// Unused codes of local apps the owner allowed, in memory only.
-    pub app_codes: Mutex<loopback_auth::Codes<crate::domain::apps::Grant>>,
     /// (repo dir, base, head) → changed file count.
     pub changed_files: Mutex<HashMap<(String, String, String), u64>>,
     /// Test-only crash point (`BRANVIL_FAILPOINT`).
@@ -184,7 +182,6 @@ impl App {
             accounts: KeyedLocks::default(),
             token_touched: Mutex::new(HashMap::new()),
             entry_codes: Mutex::default(),
-            app_codes: Mutex::default(),
             changed_files: Mutex::new(HashMap::new()),
             failpoint: std::env::var("BRANVIL_FAILPOINT")
                 .ok()

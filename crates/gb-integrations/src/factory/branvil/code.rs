@@ -1,7 +1,6 @@
 use super::patrol::{array, fold};
 use super::*;
 use branvil::api::{pulls, tickets};
-use std::collections::BTreeMap;
 impl BranvilService {
     pub(in crate::factory) fn commit_url_for(
         api: &::branvil::api::DataApi,
@@ -282,20 +281,6 @@ impl CodeHostingService for BranvilService {
                 _ => return Err(ServiceError::InvalidResource),
             };
             ReadPage::of(resource, items, next, None)
-        })
-    }
-    fn identity(&self, check: bool) -> ServiceFuture<'_, BTreeMap<String, String>> {
-        Box::pin(async move {
-            if check {
-                let m = self.member().await?;
-                m.members_get(self.username.clone())
-                    .await
-                    .map_err(|e| error(e, "members_get"))?;
-            }
-            Ok(BTreeMap::from([(
-                "branvil_username".into(),
-                self.username.clone(),
-            )]))
         })
     }
     fn comment<'a>(
@@ -580,10 +565,27 @@ impl CodeHostingService for BranvilService {
     }
     fn git_credential(&self) -> ServiceFuture<'_, Option<GitCredential>> {
         Box::pin(async move {
-            self.member().await?;
+            let mut lent = self.git_token.lock().await;
+            if lent.is_none() {
+                self.member().await?;
+                *lent = Some(
+                    self.api
+                        .owner()
+                        .members_issue_token(
+                            self.person_id.clone(),
+                            branvil::api::members::NewToken {
+                                label: super::GIT_TOKEN_LABEL.into(),
+                                replace: false,
+                            },
+                        )
+                        .await
+                        .map_err(|e| error(e, "members_issue_token"))?,
+                );
+            }
+            let issued = lent.as_ref().expect("lent above");
             Ok(Some(GitCredential {
-                username: self.username.clone(),
-                password: self.token.clone(),
+                username: self.person_id.clone(),
+                password: issued.token.clone(),
             }))
         })
     }
@@ -618,7 +620,7 @@ impl CodeHostingService for BranvilService {
                     .map_err(|e| error(e, "pulls_patrol"))?;
                 for pull in page.items {
                     let pull = value(pull)?;
-                    if fold(text(&pull, "author")) == fold(&self.username)
+                    if fold(text(&pull, "author")) == fold(&self.person_id)
                         && self.scope.authorize(text(&pull, "repository")).is_ok()
                         && !self.pull_interactive(&pull).await?
                     {
@@ -645,8 +647,27 @@ impl CodeHostingService for BranvilService {
     fn can_receive_work<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, bool> {
         Box::pin(self.pull_can_receive(url))
     }
+    /// Revokes the token lent for this run's git transfers. A token this
+    /// cannot revoke is revoked when the server next starts, so the run's
+    /// outcome stands.
     fn aclose(&self) -> ServiceFuture<'_, ()> {
-        Box::pin(async { Ok(()) })
+        Box::pin(async {
+            if let Some(issued) = self.git_token.lock().await.take()
+                && let Err(e) = self
+                    .api
+                    .owner()
+                    .members_revoke_token(self.person_id.clone(), issued.id)
+                    .await
+                && e.status.as_u16() != 404
+            {
+                tracing::warn!(
+                    provider = "branvil",
+                    code = e.code,
+                    "the git token was not revoked"
+                );
+            }
+            Ok(())
+        })
     }
 }
 impl BranvilService {

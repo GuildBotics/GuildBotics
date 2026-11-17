@@ -52,26 +52,9 @@ pub(crate) async fn issue(
     let _held = held
         .map_err(|_| unavailable(&headers))?
         .map_err(|_| unavailable(&headers))?;
-    let registry = crate::setup_providers::Registry(Some(api));
-    let Some((data, admin)) = registry.admin().await.map_err(|e| {
-        let message = crate::setup_providers::accounts::render(
-            e,
-            crate::i18n::language(
-                headers
-                    .get("x-guildbotics-language")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or(""),
-            ),
-        );
-        ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "git_credentials", &headers).reason(message)
-    })?
-    else {
-        return Ok(Json(Value::Null));
-    };
     let credential = gb_integrations::factory::human_git_credential(
         &request.origin,
-        &data,
-        &admin,
+        data,
         &request.device_id,
         &request.display_name,
     )
@@ -93,14 +76,14 @@ pub(crate) async fn issue(
 }
 fn unavailable(headers: &HeaderMap) -> ApiError {
     ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "git_credentials", headers)
-        .locale("integrations.branvil.api.admin_refused", vec![])
+        .locale("app_api.errors.internal_error", vec![])
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     #[tokio::test]
     async fn owner_api_issues_for_requesting_device_and_rejects_other_origins() {
-        use gb_config::secrets::{DeviceKey, Keychain, Scope, SecretStore};
+        use gb_config::secrets::Keychain;
         use std::sync::{Arc, Mutex};
         use tower::ServiceExt;
         #[derive(Default)]
@@ -118,7 +101,6 @@ mod tests {
         let data = dir.path().join("data");
         let identity = dir.path().join("identity");
         let fixture = branvil::test_support::Fixture::new("owner").await;
-        let token = fixture.owner_token.clone();
         let running = &fixture.running;
         let origin = running.data.base_url().to_owned();
         let mut api = crate::api::Api::new(
@@ -128,22 +110,8 @@ mod tests {
             "fixture".into(),
             data,
         );
-        api.identity_root = identity.clone();
+        api.identity_root = identity;
         api.keychain = Arc::new(Keys::default());
-        let writes = gb_base::shared_writes::SharedWrites::new(identity.clone(), None);
-        let store = SecretStore::new(
-            &writes,
-            Scope::Identity,
-            DeviceKey {
-                machine_root: dir.path().to_path_buf(),
-                keychain: &*api.keychain,
-            },
-        )
-        .unwrap();
-        store.set("BRANVIL_ADMIN_TOKEN", &token).unwrap();
-        let config = identity.join(".guildbotics/config/connections/branvil.yml");
-        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-        std::fs::write(config, format!("base_url: {origin}\n")).unwrap();
         assert!(api.branvil.set(running.data.clone()).is_ok());
         let link = api.auth.entry_link("/");
         let (cookie, csrf) = api
@@ -208,18 +176,21 @@ mod tests {
                     if origin == "http://127.0.0.1:1" {
                         assert!(body.is_null());
                     } else {
-                        assert!(
-                            running
-                                .data
-                                .authenticate(body["password"].as_str().unwrap().into())
-                                .await
-                                .is_ok()
+                        assert_eq!(body["username"], "owner");
+                        assert_eq!(
+                            branvil::test_support::token_member(
+                                &running.data,
+                                body["password"].as_str().unwrap()
+                            )
+                            .await
+                            .as_deref(),
+                            Some("owner")
                         );
                     }
                 }
             }
         }
-        let admin = running.data.authenticate(token).await.unwrap();
+        let admin = running.data.owner();
         let tokens = admin
             .members_list_tokens(
                 "owner".into(),

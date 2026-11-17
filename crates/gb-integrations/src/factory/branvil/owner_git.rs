@@ -1,22 +1,20 @@
 //! Server-side issuance through the provider that owns the requested origin.
-use branvil::api::{DataApi, MemberApi, members};
+use branvil::api::{DataApi, members};
 use gb_ports::GitCredential;
 
 pub(in crate::factory) async fn credential(
     origin: &str,
     data: &DataApi,
-    admin: &MemberApi,
     device_id: &str,
     display_name: &str,
 ) -> anyhow::Result<Option<GitCredential>> {
     if !origin.eq_ignore_ascii_case(data.base_url().trim_end_matches('/')) {
         return Ok(None);
     }
-    let owner = admin
-        .identity()
-        .await
-        .map_err(|e| super::error(e, "identity"))?
-        .name;
+    let admin = data.owner();
+    let owner = data
+        .owner_name()
+        .map_err(|e| super::error(e, "owner_name"))?;
     let suffix = format!("({})", &device_id[device_id.len() - 8..]);
     let mut cursor = None;
     let mut expired = Vec::new();
@@ -73,34 +71,36 @@ mod tests {
     async fn issuing_for_two_devices_preserves_the_other_devices_token() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("branvil");
-        let token = branvil::api::initialize(&root, "owner").unwrap();
+        branvil::api::initialize(&root, "owner").unwrap();
         let running = branvil::api::Running::start(
             &root,
             std::sync::Arc::new(branvil::vault::Memory::default()),
         )
         .await
         .unwrap();
-        let admin = running.data.authenticate(token).await.unwrap();
+        let admin = running.data.owner();
         let origin = running.data.base_url();
         let first = "019691c2-8dc0-7654-8000-0000abc01234";
         let second = "019691c2-8dc0-7654-8000-0000deadbeef";
-        let a = credential(origin, &running.data, &admin, first, "First")
+        let a = credential(origin, &running.data, first, "First")
             .await
             .unwrap()
             .unwrap();
-        let b = credential(origin, &running.data, &admin, second, "Second")
+        let b = credential(origin, &running.data, second, "Second")
             .await
             .unwrap()
             .unwrap();
-        let renewed = credential(origin, &running.data, &admin, first, "Renamed")
+        let renewed = credential(origin, &running.data, first, "Renamed")
             .await
             .unwrap()
             .unwrap();
-        assert!(running.data.authenticate(a.password).await.is_err());
-        assert!(running.data.authenticate(b.password).await.is_ok());
-        assert!(running.data.authenticate(renewed.password).await.is_ok());
+        let member = |token| branvil::test_support::token_member(&running.data, token);
+        assert_eq!(a.username, "owner");
+        assert_eq!(member(&a.password).await, None);
+        assert_eq!(member(&b.password).await.as_deref(), Some("owner"));
+        assert_eq!(member(&renewed.password).await.as_deref(), Some("owner"));
         assert!(
-            credential("http://127.0.0.1:1", &running.data, &admin, first, "First")
+            credential("http://127.0.0.1:1", &running.data, first, "First")
                 .await
                 .unwrap()
                 .is_none()

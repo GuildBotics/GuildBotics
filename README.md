@@ -92,7 +92,7 @@ Open the screens with `guildbotics open` on the Hub. The browser opens on **Proj
 **Integrating with Branvil or Slack requires preparation on the service side before you start configuring.** Every integration is optional and can be enabled later under **Setup → Integrations**. If you just want to see GuildBotics run, leave them unused and move on.
 
 - **Slack**: for members to take requests in Slack, you need a Socket Mode Slack App and its bot / app tokens. See [Ask for Work in Slack](#ask-for-work-in-slack) for what to prepare
-- **Branvil**: a running Branvil, reachable at the same base URL on every machine. GuildBotics connects to it once on the owner's consent and sets up each member's Branvil agent and token itself. Your own checkouts can use it as their `origin` too. See the [Branvil Integration Guide](docs/branvil_integration.en.md)
+- **Branvil**: a running Branvil, reachable at the same base URL on every machine. There is no connection step: GuildBotics sets up each AI member automatically the first time it uses tickets, pull requests, or git. Your own checkouts can use it as their `origin` too. See the [Branvil Integration Guide](docs/branvil_integration.en.md)
 
 In GuildBotics, the folder that holds a project's settings and state is called the **workspace**. Plain text configuration files are written there:
 
@@ -110,7 +110,7 @@ After project setup, configure the following on the screens:
 - **LLM / AI CLI tools**: default LLM, AI CLI tool selection, and LLM API keys
 - **Agent execution environment**: build the environment on this machine with **Build**, and log in to the selected tool with the command it shows. Both are per machine
 - **Integrations**: choose and configure the services for code hosting, tickets, and chat. Each is optional.
-- **Members**: add and configure team members (service accounts are configured on the member’s service tab). The name, character, avatar, and service accounts are common to every workspace; roles, patrol, chat, and AI settings are for this workspace only. A member's ID cannot be changed once saved. **Add an existing member** adds a member another workspace already has. **Remove from this workspace** takes the member out of this workspace only (its identity, credentials, and service tokens stay). **Delete** removes the member from this workspace, deletes its identity and credentials, and revokes the tokens GuildBotics issued it on services such as Branvil; another workspace that still has the member leaves it out until it is removed there too
+- **Members**: add and configure team members (service accounts are configured on the member’s service tab). The name, character, avatar, and service accounts are common to every workspace; roles, patrol, chat, and AI settings are for this workspace only. A member's ID cannot be changed once saved. **Add an existing member** adds a member another workspace already has. **Remove from this workspace** takes the member out of this workspace only (its identity, credentials, and service tokens stay). **Delete** removes the member from this workspace and deletes its identity and credentials; another workspace that still has the member leaves it out until it is removed there too
 - **Verification**: press **Validate settings** to run a read-only check across LLM, AI CLI tool, the integrated services, and Git. It does not update the integrated services' data
 
 ### Quick Start
@@ -175,7 +175,7 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
 
 ## Delegate Branvil Tickets
 
-The default `ticket_driven_workflow` investigates a Branvil ticket, implements the change, and opens a pull request. In **Setup → Integrations**, choose Branvil for code hosting and tickets, and select the workspace. For the connection, member accounts, and board setup, see the [Branvil integration guide](docs/branvil_integration.en.md).
+The default `ticket_driven_workflow` investigates a Branvil ticket, implements the change, and opens a pull request. In **Setup → Integrations**, choose Branvil for code hosting and tickets, and select the workspace. For the repositories and the board, see the [Branvil integration guide](docs/branvil_integration.en.md).
 
 Under **Setup → Agent execution environment**, confirm that the environment is ready and that the AI CLI login is saved. From a terminal, run `guildbotics environment status`.
 
@@ -356,7 +356,7 @@ For all front matter options, context injection, and command composition, see th
 GuildBotics keeps secrets (LLM API keys and account tokens) out of plain text files whenever it can.
 
 - **Encrypted store:** the OS keychain holds the encryption key. Values live in encrypted `.guildbotics/local/secrets.enc.json` files for the workspace and identities. The workspace only keeps a non-secret index, `.guildbotics/config/secrets.yml`, listing key names. This machine's keychain namespace is in `.guildbotics/local/secrets.json`. There is no `.env` secret backend.
-- **Two stores:** the members' credentials (`{PERSON_ID}_...`) and the services' connections (`BRANVIL_ADMIN_TOKEN`) are kept in the identities' store, shared by every workspace on the machine (its index is `~/.guildbotics/identity/.guildbotics/config/secrets.yml`). The workspace's store keeps the other keys, such as LLM API keys. A process reads the identities' store first, then the workspace's.
+- **Two stores:** the members' credentials (`{PERSON_ID}_...`) are kept in the identities' store, shared by every workspace on the machine (its index is `~/.guildbotics/identity/.guildbotics/config/secrets.yml`). The workspace's store keeps the other keys, such as LLM API keys. A process reads the identities' store first, then the workspace's.
 
 - **Precedence:** real environment variables > encrypted store. GuildBotics does not read a workspace `.env`.
 - **Exchange format:** `guildbotics secrets export` / `import` use dotenv only as a transfer file. `secrets set --from-file` absorbs a file (for example a PEM) into the encrypted store.
@@ -531,7 +531,7 @@ What the screens do with files and folders:
 - `OPENAI_API_KEY`: OpenAI API
 - `ANTHROPIC_API_KEY`: Anthropic Claude API
 
-The member keys below (`{PERSON_ID}_...`) and `BRANVIL_ADMIN_TOKEN` are kept in the identities' store, shared by every workspace; the LLM API keys are kept in the workspace's store.
+The member keys below (`{PERSON_ID}_...`) are kept in the identities' store, shared by every workspace; the LLM API keys are kept in the workspace's store.
 
 **Slack access** (per member, format: `{PERSON_ID}_...`):
 
@@ -541,8 +541,7 @@ The member keys below (`{PERSON_ID}_...`) and `BRANVIL_ADMIN_TOKEN` are kept in 
 
 **Branvil access**:
 
-- `BRANVIL_ADMIN_TOKEN`: the token Branvil issues GuildBotics when its owner allows the connection, one for every workspace; the host uses it to set up members and to open Branvil's GUI
-- `{PERSON_ID}_BRANVIL_TOKEN`: the member's Branvil token, issued by GuildBotics when the member is saved and used in every workspace (its Branvil name is `account_info.branvil_username` in the member's `identity.yml`)
+- A member's git token: issued by the server for each run in which the member pushes or fetches with git (labelled `guildbotics-git`) and revoked when that run ends; it is kept in no store
 - Your own git's Branvil token: one owner token per machine, issued by the running GuildBotics server the first time your own git asks `guildbotics git-credential` for one and kept in that machine's OS keychain only, never shared (→ [Use Branvil from your own checkouts](docs/branvil_integration.en.md#use-branvil-from-your-own-checkouts))
 
 GuildBotics reads the encrypted stores automatically. GuildBotics does not read a workspace `.env`.
@@ -582,7 +581,7 @@ GuildBotics stores three kinds of local data:
 - `language`: project language
 - `services.ticket_service`: ticket service settings
 - `services.code_hosting_service`: code hosting service settings (the Branvil workspace used for repository operations)
-- With Branvil, both services are `name: branvil` with a `workspace` (members write only to its repositories and take tickets from its board). Where Branvil is reached is part of the connection, shared by every workspace (→ [Branvil Integration Guide](docs/branvil_integration.en.md))
+- With Branvil, both services are `name: branvil` with a `workspace` (members write only to its repositories and take tickets from its board). No workspace sets the URL it is reached at (→ [Branvil Integration Guide](docs/branvil_integration.en.md))
 - `services.chat_service`: chat service settings (`name: slack`; `base_url` only when Slack is reached through a proxy)
 
 **Member identity** (`~/.guildbotics/identity/.guildbotics/config/team/members/<person_id>/identity.yml`, the same in every workspace; the avatar sits beside it):
@@ -590,7 +589,7 @@ GuildBotics stores three kinds of local data:
 - `person_id`: unique identifier (lowercase alphanumerics, `-`, `_` only). It cannot be changed
 - `name`: display name
 - `person_type`: `human` for the human member, `agent` for an AI member
-- `account_info`: account names with each service (`git_user`, `git_email`, `slack_user_id`, `branvil_username`)
+- `account_info`: account names with each service (`git_user`, `git_email`, `slack_user_id`)
 - `profile.character`: profile such as interests, preferences, and conversation participation policy
 - `speaking_style`, `relationships`
 

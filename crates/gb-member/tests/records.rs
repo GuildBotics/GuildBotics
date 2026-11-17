@@ -316,8 +316,8 @@ fn member(kind: &str) -> PublicMember {
         accounts: BTreeMap::new(),
     }
 }
-#[tokio::test]
-async fn context_roster_exposes_all_members_and_only_public_configured_accounts() {
+#[test]
+fn context_roster_exposes_all_members_and_only_public_configured_accounts() {
     for kind in ["human", "agent"] {
         for configured in [false, true] {
             for provider in ["branvil", "slack", "local"] {
@@ -335,14 +335,10 @@ async fn context_roster_exposes_all_members_and_only_public_configured_accounts(
                     }],
                     &[provider.into()],
                     json!({"digest":[],"pinned":[]}),
-                    None,
-                    false,
-                )
-                .await
-                .unwrap();
+                );
                 assert_eq!(result["roster"].as_array().unwrap().len(), 2);
                 assert_eq!(result["roster"][1]["person_id"], "owner");
-                assert_eq!(result["credential_status"], "unchecked");
+                assert!(result.get("credential_status").is_none());
                 assert_eq!(result["capabilities"], context::help());
                 assert_eq!(result["roster"][0]["person_type"], kind);
                 let services = &result["roster"][0]["services"];

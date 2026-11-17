@@ -288,7 +288,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                "{{\n  \"created_at\": \"{}\",\n  \"schema_version\": 4,\n  \"workspace_id\": \"{}\"\n}}\n",
+                "{{\n  \"created_at\": \"{}\",\n  \"schema_version\": 5,\n  \"workspace_id\": \"{}\"\n}}\n",
                 created.created_at, created.workspace_id
             )
         );
@@ -353,7 +353,7 @@ mod tests {
             r#"{"workspace_id": "x", "created_at": "2026-01-01T00:00:00Z"}"#.to_string(),
             format!(r#"{{"workspace_id": "{id}", "created_at": "yesterday"}}"#),
             format!(
-                r#"{{"schema_version": 5, "workspace_id": "{id}", "created_at": "2026-01-01T00:00:00Z"}}"#
+                r#"{{"schema_version": 6, "workspace_id": "{id}", "created_at": "2026-01-01T00:00:00Z"}}"#
             ),
             "not json".to_string(),
         ] {
@@ -367,7 +367,7 @@ mod tests {
         let older = format!(r#"{{"workspace_id": "{id}", "created_at": "2026-01-01T00:00:00"}}"#);
         std::fs::write(&path, older).unwrap();
         let read = ensure_workspace_identity(workspace.path()).unwrap();
-        assert_eq!((read.schema_version, read.workspace_id.as_str()), (4, id));
+        assert_eq!((read.schema_version, read.workspace_id.as_str()), (5, id));
     }
 
     #[test]

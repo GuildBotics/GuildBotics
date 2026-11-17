@@ -248,7 +248,12 @@ Shared contracts live in `gb-ports`:
 `branvil` (`gb-integrations/src/factory/branvil/`) is a code host and tickets of a
 [Branvil](branvil_integration.en.md) service that every machine reaches at the same
 base URL. Its API answers raw data (comments with an opaque `meta` carrying a workflow
-status, reviews, threads, checks); the provider applies the rules above to it.
+status, reviews, threads, checks); the provider applies the rules above to it. The
+provider calls the embedded service in the server's process, without a token:
+`DataApi::owner()` acts as the owner and `DataApi::agent(person_id, display_name)` as an
+AI member, whose member there is named by its person_id and created on first use. For
+member git, the provider issues a token labelled `guildbotics-git` for the run, hands it
+to git with the person_id, and revokes it when the run releases the service.
 
 ## 4. Workflow Invocation
 
@@ -719,7 +724,7 @@ the process cwd or a member working clone.
 | Root               | Location                                                                                         | Holds                                                                                                                                                          |
 | ------------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Machine state root | `$HOME/.guildbotics/data` (fixed)                                                                | `active-workspace.json`, `device.json` (this device's ID and display name), `run/app-api.lock`, `run/service.lock` — state needed _before_ a workspace is chosen                  |
-| Identity root      | `$HOME/.guildbotics/identity` (`GUILDBOTICS_IDENTITY_ROOT` inside a command's environment)      | The members' identities, shared by every workspace, laid out like a workspace root: `config/team/members/<person_id>/identity.yml` and the avatar beside it, `config/secrets.yml` (the index of the store of members' credentials and connection Secrets such as `BRANVIL_ADMIN_TOKEN`), `config/connections/branvil.yml` |
+| Identity root      | `$HOME/.guildbotics/identity` (`GUILDBOTICS_IDENTITY_ROOT` inside a command's environment)      | The members' identities, shared by every workspace, laid out like a workspace root: `config/team/members/<person_id>/identity.yml` and the avatar beside it, `config/secrets.yml` (the index of the store of members' credentials) |
 | Workspace root     | `--workspace`, `GUILDBOTICS_WORKSPACE_ROOT`, or the persisted active workspace                   | GuildBotics-only directory. `.guildbotics/config`, `.guildbotics/state`, `.guildbotics/local` live here                                                        |
 | Config             | `<workspace>/.guildbotics/config`                                                                | project YAML, each member's participation (`team/members/<person_id>/member.yml`), `secrets.yml` (key names), transcript settings                                                                 |
 | Workspace state    | `<workspace>/.guildbotics/state`                                                                 | memory documents, chat control state, task-run records, interactive session records, activity events                                                          |
@@ -823,8 +828,7 @@ guildbotics secrets --identities list
 ```
 
 The first command prompts for a workspace key. The second lists the names of the
-keys shared by all workspaces, including member credentials and the Branvil
-connection. A workspace store refuses member credential keys. The member key
+keys shared by all workspaces, including member credentials. A workspace store refuses member credential keys. The member key
 prefix uppercases the member ID, changes hyphens to underscores and appends
 `_`. It must be unique across the identity store.
 
@@ -1025,7 +1029,7 @@ Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
     health answer is no evidence.
   - Remaining limits: a port the genuine server leaves after a client's proof can be
     taken before the client's next connection (later requests usually reuse the proved
-    connection). A browser redirected back by Branvil's consent reaches the port even after the server exited, carrying a one-time code.
+    connection).
 - **Runtime lifecycle**: `guildbotics server start` runs one foreground process.
   It owns one listener and `app-api.lock` until both services exit. Branvil's
   `prepare_embedded` returns a router and data/shutdown handles without binding;
@@ -1104,8 +1108,8 @@ Two Person distinctions matter architecturally:
 
 - **AI members** are execution subjects: active members get a scheduler worker, Slack
   subscriptions, credentials, and an intelligence (brain) configuration.
-- **Human members** are _references to real people_ (roles, Slack user id, Branvil
-  username, avatar) used for handoff candidates and assignee mapping. They are saved
+- **Human members** are _references to real people_ (roles, Slack user id,
+  avatar) used for handoff candidates and assignee mapping. They are saved
   with `is_active: false`, are never scheduled, hold no bot/app credentials, and the
   desktop settings UI intentionally hides all agent-execution fields for them. Treat
   any path that would execute a human member as a boundary bug, not a feature. The

@@ -122,7 +122,7 @@ impl BranvilService {
         card: &Value,
         finish: bool,
     ) -> Result<Option<Task>, ServiceError> {
-        let me = fold(&self.username);
+        let me = fold(&self.person_id);
         let assigned = fold(text(&card["assignee"], "name")) == me;
         let lane = text(card, "lane");
         if me.is_empty()
@@ -441,7 +441,7 @@ impl BranvilService {
         if text(p, "head_sha").is_empty() || self.scope.authorize(text(p, "repository")).is_err() {
             return Ok(None);
         }
-        let me = fold(&self.username);
+        let me = fold(&self.person_id);
         let task = crate::patrol(
             self,
             &self.snapshot(p, a),
@@ -512,7 +512,7 @@ impl BranvilService {
             return Ok(false);
         }
         let p = self.pull(url).await?;
-        let me = fold(&self.username);
+        let me = fold(&self.person_id);
         if text(&p, "head_sha").is_empty()
             || fold(text(&p, "author")) == me && self.pull_interactive(&p).await?
         {

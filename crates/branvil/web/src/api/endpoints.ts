@@ -82,14 +82,6 @@ export const members = {
 
 export const me = () => get<Member>("/me");
 
-// Local apps ------------------------------------------------------------------
-
-export const apps = {
-  /** The owner allows a local app; the answer is where to send the browser with its code. */
-  authorize: (body: { client: string; redirect_uri: string; state: string; code_challenge: string }) =>
-    request<{ redirect: string }>("POST", "/apps/authorizations", { body }),
-};
-
 // Repositories ---------------------------------------------------------------
 
 export interface RepoPatch {

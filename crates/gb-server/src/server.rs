@@ -323,6 +323,14 @@ impl Server {
             };
             let embedded = prepare.await?;
             let data_api = embedded.data_api();
+            // No run holds a git token yet: those still there were lent to
+            // runs that ended without returning them.
+            if let Err(error) = data_api
+                .revoke_labelled(gb_integrations::factory::GIT_TOKEN_LABEL)
+                .await
+            {
+                tracing::warn!("cannot revoke the git tokens left by earlier runs: {error}");
+            }
             startup_api
                 .branvil
                 .set(data_api.clone())

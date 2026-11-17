@@ -54,8 +54,8 @@ test("first-run setup happy path writes project.yml and enters the service view"
     await page.getByRole("combobox", { name: kind, exact: true }).click();
     await page.getByRole("option", { name: provider, exact: true }).click();
   };
-  // Hosted GitHub integration was removed; Branvil consent is covered by
-  // its integration tests. Keep this journey offline with Slack selected.
+  // Hosted GitHub integration was removed. Keep this journey offline with
+  // Slack selected.
   await choose("Chat", "Slack");
 
   // Members section: add one active member so the section is complete; its
@@ -194,7 +194,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
   expect(modelYaml).not.toContain("'4096'");
 });
 
-test("one entry opens both screens, APIs and consent pages", async ({ page, context }) => {
+test("one entry opens both screens, APIs and the consent page", async ({ page, context }) => {
   await expect.poll(async () => (await page.request.get("/api/v1/session")).status()).toBe(200);
   const result = await page.evaluate(async () => {
     const gb = await fetch("/-/guildbotics/api/session").then((r) => r.json());
@@ -239,10 +239,8 @@ test("one entry opens both screens, APIs and consent pages", async ({ page, cont
     code_challenge: "a".repeat(43),
     code_challenge_method: "S256",
   });
-  for (const path of ["/-/authorize", "/-/guildbotics/-/authorize"]) {
-    await page.goto(`${path}?${query}`);
-    await expect(page.getByRole("button", { name: /^(Allow|許可する|許可)$/ })).toBeVisible();
-  }
+  await page.goto(`/-/guildbotics/-/authorize?${query}`);
+  await expect(page.getByRole("button", { name: /^(Allow|許可する|許可)$/ })).toBeVisible();
   await page.goto("/-/guildbotics/");
   expect((await page.request.get("/-/guildbotics/api/session")).status()).toBe(200);
   expect(
@@ -250,10 +248,7 @@ test("one entry opens both screens, APIs and consent pages", async ({ page, cont
   ).toBe(405);
 });
 
-test("unsigned consent resumes through the common entry for both screens", async ({
-  page,
-  context,
-}) => {
+test("unsigned consent resumes through the common entry", async ({ page, context }) => {
   const query = new URLSearchParams({
     client: "test-app",
     redirect_uri: "http://127.0.0.1:12345/callback",
@@ -261,21 +256,20 @@ test("unsigned consent resumes through the common entry for both screens", async
     code_challenge: "a".repeat(43),
     code_challenge_method: "S256",
   });
-  for (const path of ["/-/authorize", "/-/guildbotics/-/authorize"]) {
-    await context.clearCookies();
-    await page.goto(`${path}?${query}`);
-    await expect(page.getByRole("button", { name: /^(Allow|許可する|許可)$/ })).toHaveCount(0);
-    await expect
-      .poll(() => page.evaluate(() => localStorage.getItem("guildbotics.entryReturn")))
-      .not.toBeNull();
-    const response = await ownerApi(readStackContext("setup"), "/session/links", {
-      method: "POST",
-      body: JSON.stringify({ next: "/" }),
-    });
-    const { url } = await response.json();
-    await page.goto(url);
-    await expect(page).toHaveURL(new RegExp(path.replaceAll("/", "\\/") + "\\?"));
-    await expect(page.getByRole("button", { name: /^(Allow|許可する|許可)$/ })).toBeVisible();
-    expect(await page.evaluate(() => localStorage.getItem("guildbotics.entryReturn"))).toBeNull();
-  }
+  const path = "/-/guildbotics/-/authorize";
+  await context.clearCookies();
+  await page.goto(`${path}?${query}`);
+  await expect(page.getByRole("button", { name: /^(Allow|許可する|許可)$/ })).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("guildbotics.entryReturn")))
+    .not.toBeNull();
+  const response = await ownerApi(readStackContext("setup"), "/session/links", {
+    method: "POST",
+    body: JSON.stringify({ next: "/" }),
+  });
+  const { url } = await response.json();
+  await page.goto(url);
+  await expect(page).toHaveURL(new RegExp(path.replaceAll("/", "\\/") + "\\?"));
+  await expect(page.getByRole("button", { name: /^(Allow|許可する|許可)$/ })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("guildbotics.entryReturn"))).toBeNull();
 });

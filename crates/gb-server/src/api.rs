@@ -51,8 +51,6 @@ pub struct Api {
     /// The code host the server runs, which the selected workspace's member
     /// backend and service reach in process.
     pub branvil: std::sync::OnceLock<branvil::api::DataApi>,
-    pub(crate) consents:
-        tokio::sync::Mutex<std::collections::BTreeMap<String, crate::provider_api::Consent>>,
     pub events: Arc<crate::events::EventBus>,
     /// The one manual run that writes, by its trace, while it runs.
     pub(crate) command_results: crate::commands::Results,
@@ -126,7 +124,6 @@ impl Api {
             selection: std::sync::RwLock::new(Arc::new(selected)),
             switching: Arc::default(),
             branvil: std::sync::OnceLock::new(),
-            consents: Default::default(),
             events,
             manual: Arc::default(),
             command_results: Default::default(),
@@ -364,18 +361,6 @@ routes!(
     (
         OwnerSession,
         post,
-        "/config/providers/branvil/connect",
-        crate::provider_api::connect
-    ),
-    (
-        OwnerSession,
-        post,
-        "/config/providers/branvil/connection",
-        crate::provider_api::connection
-    ),
-    (
-        OwnerSession,
-        post,
         "/config/providers/branvil/workspaces",
         crate::provider_api::workspaces
     ),
@@ -388,14 +373,8 @@ routes!(
     (
         OwnerSession,
         post,
-        "/config/providers/branvil/agents",
-        crate::provider_api::agents
-    ),
-    (
-        OwnerSession,
-        post,
-        "/config/providers/branvil/entry",
-        crate::provider_api::entry
+        "/config/providers/branvil/git_config",
+        crate::provider_api::git_config
     ),
     (OwnerOrConsent, get, "/health", health),
     (OwnerOrConsent, get, "/clients/{target}", client_manifest),
@@ -516,6 +495,18 @@ routes!(
         get,
         "/intelligences/agent-environment/images",
         crate::environment::images
+    ),
+    (
+        OwnerSession,
+        post,
+        "/intelligences/agent-environment/ci-images",
+        crate::environment::load_ci_image
+    ),
+    (
+        OwnerSession,
+        post,
+        "/intelligences/agent-environment/ci-images/state",
+        crate::environment::ci_images_state
     ),
     (
         OwnerSession,
@@ -829,12 +820,6 @@ routes!(
     OUTER_ROUTES,
     OUTER_CLASSIFIED,
     (Public, get, "/-/guildbotics", redirect_to_ui),
-    (
-        Public,
-        get,
-        crate::provider_api::CALLBACK_PATH,
-        crate::provider_api::connected
-    ),
     (Public, any, "/-/guildbotics/{*path}", reserved_not_found),
 );
 async fn redirect_to_ui() -> axum::response::Redirect {
@@ -1643,7 +1628,6 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
         }
-        assert_eq!(crate::provider_api::CALLBACK_PATH, OUTER_CLASSIFIED[1].path);
     }
 
     #[tokio::test]
@@ -1664,7 +1648,6 @@ mod tests {
             "/-/enter".into(),
             "/-/authorize".into(),
             "/assets/app.js".into(),
-            "/providers/branvil/pages/connected".into(),
         ];
         paths.extend(
             OWNER_ROUTES
@@ -1921,14 +1904,6 @@ mod tests {
                 "probes Slack",
             ),
             (
-                ("post", "/config/providers/branvil/connect"),
-                "a consent in memory",
-            ),
-            (
-                ("post", "/config/providers/branvil/connection"),
-                "reads a connection",
-            ),
-            (
                 ("post", "/config/providers/branvil/workspaces"),
                 "reads Branvil",
             ),
@@ -1937,10 +1912,17 @@ mod tests {
                 "creates a Branvil workspace",
             ),
             (
-                ("post", "/config/providers/branvil/agents"),
+                ("post", "/config/providers/branvil/git_config"),
+                "builds a git configuration",
+            ),
+            (
+                ("post", "/intelligences/agent-environment/ci-images"),
+                "Branvil loads the archive",
+            ),
+            (
+                ("post", "/intelligences/agent-environment/ci-images/state"),
                 "reads Branvil",
             ),
-            (("post", "/config/providers/branvil/entry"), "an entry code"),
         ];
         let refused: BTreeSet<_> = REFUSED_WHILE_STOPPING.iter().copied().collect();
         let routes: BTreeSet<_> = OWNER_ROUTES.iter().chain(PUBLIC_ROUTES).copied().collect();
@@ -2079,14 +2061,6 @@ mod tests {
                 "writes device-local debug settings",
             ),
             (
-                ("post", "/config/providers/branvil/connect"),
-                "holds an in-memory PKCE consent",
-            ),
-            (
-                ("post", "/config/providers/branvil/connection"),
-                "reads the identity connection and consumes a completed consent",
-            ),
-            (
                 ("post", "/config/providers/branvil/workspaces"),
                 "reads Branvil workspaces",
             ),
@@ -2095,12 +2069,16 @@ mod tests {
                 "creates a Branvil workspace, without GuildBotics config writes",
             ),
             (
-                ("post", "/config/providers/branvil/agents"),
-                "reads Branvil agents",
+                ("post", "/config/providers/branvil/git_config"),
+                "returns a git configuration snippet without writing",
             ),
             (
-                ("post", "/config/providers/branvil/entry"),
-                "issues a Branvil browser entry code",
+                ("post", "/intelligences/agent-environment/ci-images"),
+                "loads an image archive into Branvil's runner, without config writes",
+            ),
+            (
+                ("post", "/intelligences/agent-environment/ci-images/state"),
+                "reads Branvil's CI settings",
             ),
             (
                 ("post", "/config/providers/slack/app-registrations"),

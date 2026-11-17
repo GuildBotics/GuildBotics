@@ -12,7 +12,7 @@ describe("entering without a sign-in screen", () => {
     renderApp("/-/enter", language);
     expect(await screen.findByText("guildbotics branvil open --print")).toBeInTheDocument();
     expect(screen.getByText(language === "en" ? /Paste the printed URL into the address bar of this same browser/ : /表示されたURLを、この画面と同じブラウザのアドレスバーに貼り付けて/)).toBeInTheDocument();
-    expect(screen.getByText(language === "en" ? /browser showing its consent page/ : /同意画面を開いているブラウザ/)).toBeInTheDocument();
+    expect(screen.queryByText(language === "en" ? /consent page/ : /同意画面/)).not.toBeInTheDocument();
   });
 
   it("exchanges the link's code once, drops it from the address bar, and keeps the CSRF value", async () => {

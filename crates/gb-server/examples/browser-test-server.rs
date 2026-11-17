@@ -100,13 +100,7 @@ async fn main() -> anyhow::Result<()> {
 async fn controls(data: branvil::api::DataApi) -> anyhow::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
     let root = std::path::PathBuf::from(std::env::var_os("BRANVIL_DATA_DIR").unwrap());
-    let owner = data
-        .authenticate(
-            std::fs::read_to_string(root.join("secrets/owner.token"))?
-                .trim()
-                .into(),
-        )
-        .await?;
+    let owner = data.owner();
     let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await? {
         let request: serde_json::Value = serde_json::from_str(&line)?;

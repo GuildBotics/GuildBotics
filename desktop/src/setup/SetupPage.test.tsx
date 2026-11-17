@@ -316,19 +316,15 @@ vi.mock("./providers/slack/api", async (importOriginal) => {
     })),
   };
 });
+const BRANVIL_GIT_CONFIG = vi.hoisted(
+  () => '[credential "http://127.0.0.1:8866"]\n\thelper = "!guildbotics git-credential"',
+);
 vi.mock("./providers/branvil/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./providers/branvil/api")>();
   return {
     ...actual,
-    getConnection: vi.fn(async () => ({
-      status: "connected",
-      base_url: "http://127.0.0.1:7878",
-      owner: "owner1",
-      message: "",
-      git_config: "",
-    })),
+    getGitConfig: vi.fn(async () => ({ git_config: BRANVIL_GIT_CONFIG })),
     listWorkspaces: vi.fn(async () => ({ workspaces: ["acme", "other"] })),
-    listAgents: vi.fn(async () => ({ agents: [] })),
   };
 });
 vi.mock("../openExternal", () => ({ openExternal: vi.fn(async () => {}) }));
@@ -966,7 +962,7 @@ describe("SetupPage", () => {
     expect(screen.getAllByRole("combobox", { name: t("setup.branvil.workspace") })).toHaveLength(1);
   });
 
-  it("names one Branvil connection for every kind, outside the services", async () => {
+  it("shows the owner's git configuration once for every kind, outside the services", async () => {
     const user = userEvent.setup();
     vi.mocked(getProviders).mockResolvedValue(PROVIDERS);
     const branvil = { name: "branvil", workspace: "acme" };
@@ -978,14 +974,11 @@ describe("SetupPage", () => {
     const description = await screen.findByLabelText("Project description");
     await waitFor(() => expect(description).toHaveValue("Existing project"));
     await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
-    // The connection is the identities': its base URL is shown once, and the
-    // services keep only the workspace.
-    expect(
-      screen.queryByRole("textbox", { name: t("setup.branvil.baseUrl") }),
-    ).not.toBeInTheDocument();
-    expect(
-      await screen.findByText(`${t("setup.branvil.baseUrl")}: http://127.0.0.1:7878`),
-    ).toBeVisible();
+    // The git configuration is the same for every kind: it is shown once, and
+    // the services keep only the workspace.
+    const config = await screen.findAllByLabelText(t("setup.branvil.git.title"));
+    expect(config).toHaveLength(1);
+    expect(config[0]).toHaveTextContent('helper = "!guildbotics git-credential"');
     await saveSection(user);
 
     await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
@@ -2245,7 +2238,9 @@ describe("MembersSection", () => {
     vi.mocked(getMemberConfig).mockResolvedValue(memberConfigDetail({ person_name: "" }));
     renderSetupPage("/setup?section=members");
     await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
-    await user.click(await screen.findByRole("tab", { name: "Branvil" }));
+    await user.click(
+      await screen.findByRole("tab", { name: t("setup.members.tabs.intelligence") }),
+    );
     const save = screen.getByRole("button", { name: t("setup.members.saveButton") });
     expect(save).toBeDisabled();
     const summary = within(save.closest(".form-footer") as HTMLElement).getByRole("note");
@@ -2253,18 +2248,16 @@ describe("MembersSection", () => {
     expect(summary).toHaveTextContent(t("setup.validation.memberNameRequired"));
   });
 
-  it("explains missing Slack tokens beside Save while editing the Branvil tab", async () => {
+  it("explains missing Slack tokens beside Save while editing another tab", async () => {
     const user = userEvent.setup();
     vi.mocked(getMemberConfig).mockResolvedValue(
-      memberConfigDetail({
-        chat_channels: ["general"],
-        accounts: { branvil: { username: "alice", has_token: true } },
-      }),
+      memberConfigDetail({ chat_channels: ["general"] }),
     );
     renderSetupPage("/setup?section=members");
     await user.click(await screen.findByRole("button", { name: t("setup.members.editButton") }));
-    await user.click(await screen.findByRole("tab", { name: "Branvil" }));
-    await user.click(await screen.findByLabelText(t("setup.branvil.member.reissue")));
+    await user.click(
+      await screen.findByRole("tab", { name: t("setup.members.tabs.intelligence") }),
+    );
 
     const save = screen.getByRole("button", { name: t("setup.members.saveButton") });
     expect(save).toBeDisabled();
@@ -2282,7 +2275,7 @@ describe("MembersSection", () => {
       "xoxb-testtoken",
     );
     await fill(user, screen.getByLabelText(t("setup.members.slackAppToken")), "xapp-testtoken");
-    await user.click(screen.getByRole("tab", { name: "Branvil" }));
+    await user.click(screen.getByRole("tab", { name: t("setup.members.tabs.intelligence") }));
     expect(within(footer).queryByRole("note")).not.toBeInTheDocument();
     expect(save).toBeEnabled();
   });
@@ -2812,11 +2805,8 @@ describe("MembersSection", () => {
       chat_channel_participation: {},
     });
     // The default add form links the agent to no provider: each account is
-    // sent empty, with no credential.
-    expect(request.accounts).toEqual({
-      branvil: { username: "", reissue: false },
-      slack: { bot_token: "", app_token: "" },
-    });
+    // sent empty, with no credential. Branvil has no member account.
+    expect(request.accounts).toEqual({ slack: { bot_token: "", app_token: "" } });
   });
 
   it("sends each provider's account and the neutral chat channels of a new agent", async () => {
@@ -2866,7 +2856,7 @@ describe("MembersSection", () => {
     expect(screen.queryByRole("tab", { name: "GitHub" })).not.toBeInTheDocument();
   });
 
-  it("offers Branvil without a GitHub credential panel", async () => {
+  it("offers no account tab for Branvil", async () => {
     vi.mocked(getProviders).mockResolvedValue(PROVIDERS);
     vi.mocked(getProjectConfig).mockResolvedValue(
       projectConfig({ services: { ticket_service: { name: "branvil", workspace: "acme" } } }),
@@ -2878,14 +2868,17 @@ describe("MembersSection", () => {
     });
     renderSetupPage("/setup?section=members");
 
-    expect(await screen.findByRole("tab", { name: "Branvil" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("tab", { name: t("setup.members.tabs.basic") }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Branvil" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "GitHub" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Slack" })).not.toBeInTheDocument();
   });
 
   it("offers the account tabs of the integrations once they are saved", async () => {
     const user = userEvent.setup();
-    const saved = projectConfig({ services: { chat_service: { name: "slack" } } });
+    const saved = projectConfig({ services: {} });
     vi.mocked(getProjectConfig).mockResolvedValue(saved);
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },
@@ -2893,14 +2886,14 @@ describe("MembersSection", () => {
       members: [],
     });
     renderSetupPage("/setup?section=integrations");
-    await chooseProvider(user, "code_hosting_service", "Branvil");
-    await user.click(screen.getByRole("combobox", { name: t("setup.branvil.workspace") }));
-    await user.click(await screen.findByRole("option", { name: "acme" }));
+    await chooseProvider(user, "chat_service", "Slack");
 
-    // Chosen but not saved: a member's save would not reach GitHub yet.
+    // Chosen but not saved: a member's save would not reach Slack yet.
     await user.click(screen.getByRole("button", { name: t("setup.nav.members") }));
-    expect(await screen.findByRole("tab", { name: "Slack" })).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Branvil" })).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole("tab", { name: t("setup.members.tabs.basic") }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Slack" })).not.toBeInTheDocument();
 
     // Stand in for the project file the save changes.
     vi.mocked(updateProjectConfig).mockImplementation(async (request) => {
@@ -2911,7 +2904,7 @@ describe("MembersSection", () => {
     await saveSection(user);
     await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
     await user.click(screen.getByRole("button", { name: t("setup.nav.members") }));
-    expect(await screen.findByRole("tab", { name: "Branvil" })).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "Slack" })).toBeInTheDocument();
   });
 
   it("keeps the chat channels in a tab of their own for a chat without an account", async () => {

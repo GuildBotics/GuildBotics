@@ -193,7 +193,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_34_upgrade_preserves_records_and_adds_hold_setting() {
+async fn schema_35_upgrade_preserves_records() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -259,13 +259,13 @@ async fn schema_34_upgrade_preserves_records_and_adds_hold_setting() {
     let repos = records(&db, "repos");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let prior_runs = records(&db, "ci_runs");
-    as_schema_34(&db);
+    as_schema_35(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
     assert!(admin("check").1.contains("branvil admin upgrade"));
     let (code, output) = admin("upgrade");
     assert_eq!(code, 3, "{output}");
-    assert!(output.contains("from schema version 34 to 35"), "{output}");
+    assert!(output.contains("from schema version 35 to 36"), "{output}");
     assert_eq!(
         tables(&db).get("ix_repair_unnotified"),
         before.get("ix_repair_unnotified")
@@ -296,7 +296,7 @@ async fn schema_34_upgrade_preserves_records_and_adds_hold_setting() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-34-")
+                .starts_with("branvil-schema-35-")
         })
         .unwrap();
     assert_eq!(tables(&backup), before);
@@ -1034,7 +1034,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
             .iter()
             .any(|a| a["cache_refresh"] == refresh_id)
     );
-    as_schema_34(&db);
+    as_schema_35(&db);
     for (command, expected) in [("upgrade", 3), ("check", 0)] {
         let out = branvil_command()
             .args(["admin", command, "--data-dir"])

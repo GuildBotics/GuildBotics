@@ -310,7 +310,7 @@ async fn upgrade_preserves_landing_conflicts_and_notice_history() {
     .await;
     w.server.stop();
     let db = w.server.data.join("branvil.redb");
-    as_schema_34(&db);
+    as_schema_35(&db);
     let out = branvil_command()
         .args(["admin", "upgrade", "--data-dir"])
         .arg(&w.server.data)
@@ -357,7 +357,7 @@ async fn upgrade_preserves_landing_conflicts_and_notice_history() {
             .any(|b| b["code"] == "conflict")
     );
     w.server.stop();
-    as_schema_34(&db);
+    as_schema_35(&db);
     let out = branvil_command()
         .args(["admin", "upgrade", "--data-dir"])
         .arg(&w.server.data)

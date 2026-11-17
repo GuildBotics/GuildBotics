@@ -40,10 +40,7 @@ fn slack_accounts_store_only_the_human_id_or_nonblank_agent_tokens() {
         json!({"user_id":"U01234567","has_bot_token":true,"has_app_token":false})
     );
     assert_eq!(registry.account_info_keys("slack"), vec!["slack_user_id"]);
-    assert_eq!(
-        registry.account_info_keys("branvil"),
-        vec!["branvil_username"]
-    );
+    assert!(registry.account_info_keys("branvil").is_empty());
 }
 
 #[test]
@@ -77,13 +74,6 @@ fn provider_models_validate_items_and_keep_local_unmodelled_items() {
             .unwrap(),
         json!({"name":"slack","base_url":"http://127.0.0.1/api"})
     );
-    for name in ["bad name", "a/b", &"a".repeat(65)] {
-        assert!(
-            registry
-                .account("branvil", &json!({"username":name}))
-                .is_err()
-        );
-    }
 }
 
 #[test]
@@ -124,15 +114,10 @@ fn only_slack_channels_are_stored_as_ids() {
 #[test]
 fn registry_declares_exact_provider_accounts_secrets_and_service_models() {
     let registry = Registry(None);
-    assert_eq!(registry.member_providers(), ["branvil", "slack"]);
+    assert_eq!(registry.member_providers(), ["slack"]);
     assert_eq!(
         registry.member_secret_names(),
-        [
-            "BRANVIL_TOKEN",
-            "BRANVIL_TOKEN_ID",
-            "SLACK_BOT_TOKEN",
-            "SLACK_APP_TOKEN"
-        ]
+        ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"]
     );
     assert_eq!(
         registry
@@ -143,7 +128,7 @@ fn registry_declares_exact_provider_accounts_secrets_and_service_models() {
             .unwrap(),
         json!({"name":"local","anything":[1,2]})
     );
-    for provider in ["local", "github", "unknown"] {
+    for provider in ["branvil", "local", "github", "unknown"] {
         assert!(registry.account(provider, &json!({})).is_err());
     }
     for kind in [ServiceKind::CodeHostingService, ServiceKind::TicketService] {
@@ -220,22 +205,7 @@ fn registry_declares_exact_provider_accounts_secrets_and_service_models() {
             .collect::<Vec<_>>(),
         ["SLACK_BOT_TOKEN"]
     );
-    for provider in ["branvil", "slack"] {
-        assert!(
-            registry
-                .account(provider, &json!({"unknown":true}))
-                .is_err()
-        );
-    }
-    assert_eq!(
-        registry
-            .account("branvil", &json!({"username":" agent1 "}))
-            .unwrap()
-            .stored("agent1", false)
-            .unwrap()
-            .account_info["branvil_username"],
-        "agent1"
-    );
+    assert!(registry.account("slack", &json!({"unknown":true})).is_err());
     assert_eq!(
         registry
             .account(
@@ -248,13 +218,6 @@ fn registry_declares_exact_provider_accounts_secrets_and_service_models() {
             .secrets,
         [("SLACK_BOT_TOKEN".into(), "xoxb-synthetic".into())].into()
     );
-    let blank = registry
-        .account("branvil", &json!({}))
-        .unwrap()
-        .stored("agent1", false)
-        .unwrap();
-    assert!(blank.account_info.is_empty());
-    assert!(blank.secrets.is_empty());
 }
 
 #[test]

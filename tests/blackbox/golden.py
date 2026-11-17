@@ -48,11 +48,6 @@ def copy(workspace_root: Path, identity_root: Path, destination: Path) -> None:
     _update(workspace / "local/service.yml", start_with_server=False)
     # Nothing expires: a server prunes transcripts older than the retention.
     _update(workspace / "config/transcripts.yml", retention_days=36500)
-    # Branvil is unreachable whether or not a server honors the dead proxy.
-    _update(
-        destination / "identity/.guildbotics/config/connections/branvil.yml",
-        base_url="http://127.0.0.1:1",
-    )
     (destination / "copied_at").write_text(
         datetime.now(UTC).isoformat(timespec="seconds"), encoding="utf-8"
     )

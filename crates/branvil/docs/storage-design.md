@@ -59,7 +59,7 @@ to remain unchanged when the version stays at the verified version. It skips
 the comparison when no verified commit exists, it is not an ancestor of the
 checkout, or it predates the guard script.
 
-`meta["schema_version"]` is written on creation (currently `35`). The current
+`meta["schema_version"]` is written on creation (currently `36`). The current
 format includes per-pull landing conditions, each merged pull request's original
 reviewed head distinct from its merge commit, and per-head notification and
 automatic failure state. CI runs hold their commit's pipeline and tree;
@@ -274,3 +274,6 @@ fields and `ix_ci_unnotified` / `ix_ci_recovered`. Existing repair tickets get
 `notice: null`; the new `ix_repair_unnotified` starts empty.
 
 The 34 → 35 upgrade adds `hold_while_failing: false` to every repository.
+
+The 35 → 36 upgrade revokes the tokens GuildBotics kept: those labelled
+`guildbotics` and those labelled `app:<client>`.

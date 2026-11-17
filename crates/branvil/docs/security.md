@@ -22,7 +22,7 @@ browser / GuildBotics / git ─ 127.0.0.1:7878 ─ ssh -L ═══ sshd ─ 127
 | Who | Can | Branvil's defence |
 | --- | --- | --- |
 | A web page in the user's browser | Send requests to `127.0.0.1:7878` (CSRF), or to an attacker name that resolves to 127.0.0.1 (DNS rebinding) | Host check, Origin check, `SameSite=Strict` cookie, CSRF header, no CORS |
-| Another process or OS user on the Hub or a forwarding client | Connect to the loopback port | Every request authenticates (token or session); there is no anonymous access except `GET /api/v1/health`, exchanging a single-use entry code for a session, and exchanging a local app's single-use code with its PKCE verifier for its token |
+| Another process or OS user on the Hub or a forwarding client | Connect to the loopback port | Every request authenticates (token or session); there is no anonymous access except `GET /api/v1/health` and exchanging a single-use entry code for a session |
 | A member (an AI agent) | Use its token within what its kind may do | Fixed rights per member kind (owner-only settings, merges, and administration), protected branches, server-side hooks, path and name validation, entry ids bound to their item |
 | Repository content | Contain hooks, Markdown, odd ref names | Repository hooks never run; Markdown is sanitized by the GUI; only `refs/heads/*` and `refs/tags/*` can be pushed |
 | An external Git host | Diverge, refuse, or be unreachable | Branvil never force-pushes, never deletes there, never overwrites local refs from it |
@@ -73,8 +73,8 @@ reads `x-branvil-csrf` on writes and returns that same CSRF value from its sessi
 endpoint. A valid host session maps only to Branvil's owner. Bearer credentials
 continue to identify their original Branvil members, and invalid Bearer values
 never fall back to a browser session. Old Branvil cookies and code exchange at
-`POST /api/v1/session` are refused in integrated mode. Both consent screens use
-the shared session. Host/Origin checks still apply to all routes.
+`POST /api/v1/session` are refused in integrated mode. GuildBotics' consent
+screen uses the shared session. Host/Origin checks still apply to all routes.
 
 The remainder of the session lifecycle description below applies to standalone
 `guildbotics branvil serve`.
@@ -109,34 +109,19 @@ The remainder of the session lifecycle description below applies to standalone
   `entry_codes_work_once_and_expire`].
 - A member's tokens of one label can be replaced in one write
   (`"replace": true`), so a retried issue leaves exactly one. The labels
-  Branvil issues itself (`owner-file`, `auto`, and every `app:` label) are
+  Branvil issues itself (`owner-file` and `auto`) are
   refused by the tokens endpoint, so no client mints or rotates the owner's
-  file token, the automatic runner's, or an app's through it
+  file token or the automatic runner's through it
   [`tests/security.rs`
   `replacing_a_label_leaves_one_token_of_it_and_reserved_labels_are_refused`].
-- A local app on a machine that reaches Branvil (a forwarding client) gets an
-  owner token without `owner.token` through a consent screen (`docs/api.md`,
-  "Local apps"): the owner allows it on the GUI page `/-/authorize` with the
-  owner's session and CSRF header (or an owner Bearer token), and the app
-  exchanges a code for an owner token labelled `app:<client>` at
-  `POST /api/v1/apps/token`. The code is 32 random bytes, single use, 60
-  seconds, kept in memory as a SHA-256 only, and bound to the app's name, the
-  exact `redirect_uri`, and a PKCE `S256` challenge: whoever sees the code in
-  the redirect (the browser's history, another local process) cannot use it
-  without the verifier, which never leaves the app; a wrong `redirect_uri` or
-  verifier spends the code. The `redirect_uri` must be `http` on
-  `127.0.0.1`, `localhost`, or `[::1]` without userinfo or fragment, so the
-  code never leaves the machine of the browser; the Deny redirect is built by
-  the page only after the same check. The token is in the response body of
-  the exchange only, never in a URL; neither endpoint's response is kept for
-  `Idempotency-Key`. A second consent of the same app revokes its previous
-  token in the same write. The owner revokes an app's token in Settings →
-  Members → owner → Tokens like any other [`tests/security.rs`
-  `a_local_app_gets_an_owner_token_through_the_consent_exchange`,
-  `the_consent_exchange_refuses_what_does_not_match_the_code`, units
-  `codes_work_once_and_expire`, `redirects_are_loopback_http_only`,
-  `verifiers_match_their_s256_challenge` of `loopback-auth`,
-  `web/src/__tests__/authorize.test.tsx`].
+- The embedding host (the GuildBotics server) shares Branvil's process and
+  OS user, so `api::DataApi` trusts it without a token: `DataApi::owner()`
+  acts as the owner and `DataApi::agent(name, display_name)` as an agent,
+  creating it when missing and refusing a member of that name that is not an
+  agent. Each operation reads the member again, so it acts with the member's
+  current kind. For an agent's Git transfers the host issues a token of that
+  agent for the run (label `guildbotics-git`) and revokes it when the run
+  releases the service.
 - A session is a 32-byte random id in a `branvil_session_<port>` cookie, named
   by the base URL's port (a browser sends a cookie to every port of a host) (`HttpOnly`,
   `SameSite=Strict`, `Path=/`, `Max-Age` of `limits.session_hours`, default
@@ -153,7 +138,7 @@ The remainder of the session lifecycle description below applies to standalone
   CI retries and cancels, and unprotected branches. Owner-only operations
   (creating workspaces and repositories, repository settings, members,
   diagnostics, upstreams and members' accounts, the notification webhook,
-  backup, entry links, allowing local apps, merging,
+  backup, entry links, merging,
   publishing, marking a pull request ready, the first push of a protected branch, moving or deleting a
   tag) refuse an agent with `403`. A runner gets `403` everywhere outside the
   runner API except `/me`, its own member record, and its own tokens, and
@@ -384,17 +369,11 @@ service log for the tokens].
   720). To end every GUI session, or to recover from a leaked owner token or
   session cookie, stop the service, delete `<data>/secrets/owner.token`, and
   start it again: it writes a new owner token, revokes the old one, and ends
-  every session. Replacing the file does not revoke tokens the owner gave
-  local apps (`app:` labels); revoke those in Settings → Members → owner →
-  Tokens. Revoking a token takes effect at the next request.
+  every session. Revoking a token takes effect at the next request.
 - **`guildbotics branvil open` hands the URL to the OS through argv** (`open`, `xdg-open`,
   or `rundll32`), so on a Hub shared with other OS users the code can be read
   with `ps` during its 60 seconds. There, use `guildbotics branvil open --print` and paste
   the link into the browser.
-- **A local app's name is what the app says.** The consent screen shows the
-  `client` the request carries; allow only an app you just started yourself.
-  The redirect stays on loopback, and PKCE keeps the code useless to anyone
-  but the app that asked.
 - **No rate limit** on failed authentication. Tokens carry 256 bits of
   randomness, so guessing is not practical, but failed attempts are not
   counted or logged.

@@ -22,7 +22,7 @@ use serde_json::json;
 use crate::api::{attachments, members, pulls, repos, tickets};
 use crate::app::Shared;
 use crate::auth::{self, Caller};
-use crate::domain::{self, PageReq, apps};
+use crate::domain::{self, PageReq};
 use crate::error::{AppError, AppResult};
 use crate::model::IdempotencyRecord;
 use crate::store::{self, Key, Rd};
@@ -296,21 +296,6 @@ async fn token_delete(
 ) -> R {
     members::revoke_token(&app, &c, name, id).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
-}
-
-async fn app_authorize(
-    State(app): State<Shared>,
-    c: Caller,
-    J(input): J<apps::NewAuthorization>,
-) -> R {
-    Ok(created(apps::authorize(&app, &c, input)?))
-}
-
-/// Exchanges a local app's code for its owner token. Unauthenticated (the
-/// code and the PKCE verifier are the proof); the Host and Origin checks
-/// apply as everywhere.
-async fn app_token(State(app): State<Shared>, J(input): J<apps::TokenRequest>) -> R {
-    Ok(created(apps::exchange(&app, input).await?))
 }
 
 // ---------------------------------------------------------------- workspaces, repositories
@@ -1160,7 +1145,6 @@ async fn idempotency(State(app): State<Shared>, req: Request, next: Next) -> Res
     let path = req.uri().path();
     if req.method() != Method::POST
         || path.starts_with("/session")
-        || path.starts_with("/apps/")
         || path.ends_with("/tokens")
         || path.ends_with("/markdown")
         || path.ends_with("/attachments")
@@ -1300,8 +1284,6 @@ loopback_auth::classified_routes!(pub fn api_routes() -> Router<Shared>, API_ROU
     ("/members/{name}/tokens", (get, tokens_list, MemberSession), (post, tokens_create, MemberSession)),
     ("/members/{name}/reviewers/{reviewer}", (put, member_reviewer_put, OwnerSession), (delete, member_reviewer_delete, OwnerSession)),
     ("/members/{name}/tokens/{id}", (delete, token_delete, MemberSession)),
-    ("/apps/authorizations", (post, app_authorize, OwnerSession)),
-    ("/apps/token", (post, app_token, Public)),
     ("/workspaces", (get, workspaces_list, MemberSession), (post, workspaces_create, OwnerSession)),
     ("/workspaces/{workspace}", (get, workspace_get, MemberSession)),
     ("/workspaces/{workspace}/board/cards", (get, board_cards, MemberSession)),

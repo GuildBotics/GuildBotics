@@ -390,7 +390,7 @@ impl AwaitedFixture {
         let fixture = Fixture::new("owner").await;
         fixture.workspace("acme").await;
         fixture.repository("acme/repo").await;
-        let (actor, token) = fixture.member(ME).await;
+        let actor = fixture.member(ME).await;
         let base = fixture.commit("acme/repo", "main", None, "a.txt", "base");
         let head = fixture.commit("acme/repo", "feature", Some(&base), "a.txt", "feature");
         let root = fixture.root();
@@ -405,14 +405,13 @@ impl AwaitedFixture {
             },
         )
         .unwrap();
-        secrets.set("AIKO_BRANVIL_TOKEN", &token).unwrap();
         let factory = ServiceIntegrationFactory::new(
             IntegrationConfig {
                 local_root: root.join("services"),
                 identity_root: root.join("identity"),
-                person_id: "aiko".into(),
+                person_id: ME.into(),
                 display_name: "Aiko".into(),
-                accounts: [("branvil".into(), ActorName(ME.into()))].into(),
+                accounts: Default::default(),
                 branvil_members: Default::default(),
                 chat_provider: "local".into(),
                 slack_base_url: String::new(),

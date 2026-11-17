@@ -1,9 +1,10 @@
 //! Setup HTTP contracts against temporary identity and Branvil services.
 use super::*;
 const SLACK_PICTURE: &[u8] = b"\x89PNG\r\n\x1a\nfixture";
-async fn branvil(f: &Fixture) -> (branvil::api::Running, branvil::api::MemberApi, String) {
+/// The embedded service, without any connection setup.
+async fn branvil(f: &Fixture) -> branvil::api::Running {
     let path = f.root.join("branvil");
-    let token = branvil::api::initialize(&path, "owner1").unwrap();
+    branvil::api::initialize(&path, "owner1").unwrap();
     let running = branvil::api::Running::start(
         &path,
         std::sync::Arc::new(branvil::vault::Memory::default()),
@@ -11,14 +12,7 @@ async fn branvil(f: &Fixture) -> (branvil::api::Running, branvil::api::MemberApi
     .await
     .unwrap();
     f.api.branvil.set(running.data.clone()).ok().unwrap();
-    f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", &token);
-    f.write(
-        &f.root
-            .join("identity/.guildbotics/config/connections/branvil.yml"),
-        &json!({"base_url":running.data.base_url()}).to_string(),
-    );
-    let owner = running.data.authenticate(token.clone()).await.unwrap();
-    (running, owner, token)
+    running
 }
 #[tokio::test]
 async fn provider_listing_validation_localization_and_public_page() {
@@ -57,147 +51,31 @@ async fn provider_listing_validation_localization_and_public_page() {
         .0,
         StatusCode::UNPROCESSABLE_ENTITY
     );
-    let response = f
-        .respond(
-            Request::builder()
-                .uri("/-/guildbotics/providers/branvil/pages/connected?state=forged")
-                .header("host", "127.0.0.1:8765")
-                .body(HttpBody::empty())
-                .unwrap(),
-        )
-        .await;
-    let (status, page) = answer(response).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(page.as_str().unwrap().contains(&crate::i18n::t(
-        "en",
-        "integrations.branvil.setup.expired",
-        &[]
-    )));
 }
 #[tokio::test]
-async fn member_save_issues_keeps_replaces_and_removes_only_its_tokens() {
+async fn members_have_no_branvil_account_and_save_and_delete_without_branvil() {
     let f = fixture();
-    let (running, owner, _) = branvil(&f).await;
-    f.init_with(json!({"language":"en","services":{"ticket_service":{"name":"branvil","workspace":"acme"}}})).await;
+    f.init().await;
     let mut form = agent("agent1");
-    form["accounts"] =
-        json!({"branvil":{},"slack":{"bot_token":"xoxb-synthetic","app_token":"xapp-synthetic"}});
-    f.add(form.clone()).await;
-    let first = f.identity_secrets()["AGENT1_BRANVIL_TOKEN"].clone();
+    form["accounts"] = json!({"branvil":{}});
     assert_eq!(
-        running
-            .data
-            .authenticate(first.clone())
-            .await
-            .unwrap()
-            .identity()
-            .await
-            .unwrap()
-            .name,
-        "agent1"
+        f.save("POST", "/config/members", form).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY
     );
-    let read = f.get("/config/members/agent1").await;
-    assert_eq!(
-        read["accounts"]["branvil"],
-        json!({"username":"agent1","has_token":true})
+    assert!(!f.identities().join("agent1").exists());
+    // No Branvil runs here: saving, reading and deleting ask nothing of it.
+    f.add(agent("agent1")).await;
+    assert!(
+        f.get("/config/members/agent1").await["accounts"]
+            .get("branvil")
+            .is_none()
     );
-    assert_eq!(
-        read["accounts"]["slack"],
-        json!({"user_id":"","has_bot_token":true,"has_app_token":true})
-    );
-    form["accounts"]["branvil"] = json!({"username":"agent1"});
-    form["accounts"]["slack"] = json!({});
-    form["expected_revisions"] = read["revisions"].clone();
-    assert_eq!(
-        f.save("PUT", "/config/members/agent1", form.clone())
-            .await
-            .0,
-        StatusCode::OK
-    );
-    assert_eq!(f.identity_secrets()["AGENT1_BRANVIL_TOKEN"], first);
-    let current = f.get("/config/members/agent1").await;
-    form["accounts"]["branvil"]["reissue"] = true.into();
-    assert_eq!(
-        f.save("PUT", "/config/members/agent1", form.clone())
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
-    assert_eq!(
-        running
-            .data
-            .authenticate(first.clone())
-            .await
-            .unwrap()
-            .identity()
-            .await
-            .unwrap()
-            .name,
-        "agent1"
-    );
-    let tokens = owner
-        .members_list_tokens(
-            "agent1".into(),
-            owner.page("tokens".into(), Some(100), None).unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(tokens.items.len(), 1);
-    form["expected_revisions"] = current["revisions"].clone();
-    assert_eq!(
-        f.save("PUT", "/config/members/agent1", form).await.0,
-        StatusCode::OK
-    );
-    let last = f.identity_secrets()["AGENT1_BRANVIL_TOKEN"].clone();
-    assert_ne!(last, first);
-    assert!(running.data.authenticate(first).await.is_err());
-    assert_eq!(
-        f.call("DELETE", "/config/members/agent1", Value::Null)
-            .await
-            .0,
-        StatusCode::OK
-    );
-    assert!(running.data.authenticate(last.clone()).await.is_ok());
-    assert!(f.identities().join("agent1").is_dir());
     assert_eq!(
         f.call("DELETE", "/identities/agent1", Value::Null).await.0,
         StatusCode::OK
     );
-    assert!(running.data.authenticate(last).await.is_err());
     assert!(!f.identities().join("agent1").exists());
-    running.stop().await.unwrap();
 }
-#[tokio::test]
-async fn disconnected_accounts_keep_input_humans_use_owner_and_wrong_kind_is_refused() {
-    let f = fixture();
-    f.init().await;
-    let mut form = agent("agent1");
-    form["accounts"] = json!({"branvil":{"username":"chosen"}});
-    f.add(form.clone()).await;
-    assert_eq!(
-        f.get("/config/members/agent1").await["accounts"]["branvil"],
-        json!({"username":"chosen","has_token":false})
-    );
-    let (running, _, _) = branvil(&f).await;
-    let mut human = agent("human1");
-    human["person_type"] = "human".into();
-    human["accounts"] = json!({"branvil":{}});
-    f.add(human).await;
-    assert_eq!(
-        f.get("/config/members/human1").await["accounts"]["branvil"]["username"],
-        "owner1"
-    );
-    assert!(!f.identity_secrets().contains_key("HUMAN1_BRANVIL_TOKEN"));
-    let mut wrong = agent("agent2");
-    wrong["accounts"] = json!({"branvil":{"username":"owner1"}});
-    assert_eq!(
-        f.save("POST", "/config/members", wrong).await.0,
-        StatusCode::BAD_REQUEST
-    );
-    assert!(!f.identities().join("agent2").exists());
-    running.stop().await.unwrap();
-}
-
 type Calls = Arc<Mutex<Vec<(String, String, BTreeMap<String, String>)>>>;
 pub(super) struct SlackDouble {
     pub(super) base: String,
@@ -547,89 +425,26 @@ async fn slack_manifest_name_limits_scopes_events_and_url_roundtrip() {
     }
 }
 
-async fn consent(
-    f: &Fixture,
-    running: &branvil::api::Running,
-    owner_token: &str,
-) -> (Value, String) {
-    let (status, started) = f
-        .call("POST", "/config/providers/branvil/connect", json!({}))
-        .await;
-    assert_eq!(status, StatusCode::OK, "{started}");
-    let url = url::Url::parse(started["url"].as_str().unwrap()).unwrap();
-    let query: BTreeMap<_, _> = url.query_pairs().into_owned().collect();
-    assert_eq!(query["client"], "GuildBotics");
-    assert_eq!(query["code_challenge_method"], "S256");
-    let value:Value=reqwest::Client::new().post(format!("{}/api/v1/apps/authorizations",running.data.base_url())).bearer_auth(owner_token).json(&json!({"client":query["client"],"redirect_uri":query["redirect_uri"],"state":query["state"],"code_challenge":query["code_challenge"]})).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
-    (started, value["redirect"].as_str().unwrap().to_owned())
-}
-async fn callback(f: &Fixture, url: &str) -> (StatusCode, Value) {
-    let url = url::Url::parse(url).unwrap();
-    answer(
-        f.respond(
-            Request::builder()
-                .uri(format!("{}?{}", url.path(), url.query().unwrap_or("")))
-                .header("host", "127.0.0.1:8765")
-                .body(HttpBody::empty())
-                .unwrap(),
-        )
-        .await,
-    )
-    .await
-}
 #[tokio::test]
-async fn consent_pkce_callback_is_single_use_and_shared_across_workspaces() {
+async fn branvil_workspaces_and_git_config_need_no_connection() {
     let f = fixture();
-    let (running, _, owner_token) = branvil(&f).await;
-    let (started, redirect) = consent(&f, &running, &owner_token).await;
-    let (_, pending) = f
-        .call(
-            "POST",
-            "/config/providers/branvil/connection",
-            json!({"state":started["state"]}),
-        )
+    for route in [
+        "/config/providers/branvil/workspaces",
+        "/config/providers/branvil/git_config",
+    ] {
+        let (_, v) = f.call("POST", route, json!({})).await;
+        assert_eq!(
+            v["message"],
+            crate::i18n::t("en", "integrations.branvil.api.stopped", &[]),
+            "{route}"
+        );
+    }
+    let running = branvil(&f).await;
+    let (status, v) = f
+        .call("POST", "/config/providers/branvil/workspaces", json!({}))
         .await;
-    assert_eq!(pending["status"], "pending");
-    let (status, page) = callback(&f, &redirect).await;
-    assert_eq!(status, StatusCode::OK, "{page}");
-    assert!(page.as_str().unwrap().contains(&crate::i18n::t(
-        "en",
-        "integrations.branvil.setup.connected",
-        &[]
-    )));
-    let held = f.identity_secrets()["BRANVIL_ADMIN_TOKEN"].clone();
-    assert_ne!(held, owner_token);
-    assert_eq!(callback(&f, &redirect).await.0, StatusCode::OK);
-    assert_eq!(f.identity_secrets()["BRANVIL_ADMIN_TOKEN"], held);
-    let (_, connected) = f
-        .call(
-            "POST",
-            "/config/providers/branvil/connection",
-            json!({"state":started["state"]}),
-        )
-        .await;
-    assert_eq!(connected["status"], "connected");
-    assert_eq!(connected["owner"], "owner1");
-    assert_eq!(connected["base_url"], running.data.base_url());
-    let helper = f.api.home.join(".guildbotics/bin/guildbotics");
-    let quoted = gb_base::shell::managed_cli_command(&helper, &["git-credential"])
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
-    assert_eq!(
-        connected["git_config"],
-        format!(
-            "[credential \"{}\"]\n\thelper =\n\thelper = \"!{quoted}\"\n",
-            running.data.base_url()
-        )
-    );
-    assert_eq!(
-        f.read(
-            &f.root
-                .join("identity/.guildbotics/config/connections/branvil.yml")
-        ),
-        json!({"base_url":running.data.base_url()})
-    );
-    assert_eq!(callback(&f, &redirect).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v, json!({"workspaces":[]}));
     for name in ["acme", "other"] {
         let (status, v) = f
             .call(
@@ -651,125 +466,23 @@ async fn consent_pkce_callback_is_single_use_and_shared_across_workspaces() {
         .0,
         StatusCode::BAD_REQUEST
     );
-    let (_, link) = f
-        .call("POST", "/config/providers/branvil/entry", json!({}))
+    let (status, v) = f
+        .call("POST", "/config/providers/branvil/git_config", json!({}))
         .await;
-    assert!(
-        link["url"]
-            .as_str()
-            .unwrap()
-            .starts_with(&format!("{}/-/enter#", running.data.base_url()))
-    );
-    f.init().await;
-    let mut form = agent("agent1");
-    form["accounts"] = json!({"branvil":{}});
-    f.add(form.clone()).await;
-    let token = f.identity_secrets()["AGENT1_BRANVIL_TOKEN"].clone();
-    let (_, agents) = f
-        .call("POST", "/config/providers/branvil/agents", json!({}))
-        .await;
-    assert_eq!(agents["agents"], json!(["agent1"]));
-    let other = f.root.join("other");
-    std::fs::create_dir(&other).unwrap();
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let helper = f.api.home.join(".guildbotics/bin/guildbotics");
+    let quoted = gb_base::shell::managed_cli_command(&helper, &["git-credential"])
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
     assert_eq!(
-        f.call("POST", "/workspace", json!({"workspace_dir":other}))
-            .await
-            .0,
-        StatusCode::OK
+        v,
+        json!({"git_config": format!(
+            "[credential \"{}\"]\n\thelper =\n\thelper = \"!{quoted}\"\n",
+            running.data.base_url()
+        )})
     );
-    let config = other.join(".guildbotics/config");
-    assert_eq!(
-        f.call(
-            "POST",
-            "/config/init",
-            json!({"config_dir":config,"language":"en"})
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    let read = f.get("/config/members/agent1").await;
-    assert_eq!(read["participating"], false);
-    form["accounts"]["branvil"] = json!({"username":"agent1"});
-    form["expected_revisions"] = read["revisions"].clone();
-    form["config_dir"] = json!(config);
-    assert_eq!(
-        f.call("POST", "/config/members", form).await.0,
-        StatusCode::OK
-    );
-    assert_eq!(f.identity_secrets()["AGENT1_BRANVIL_TOKEN"], token);
-    assert_eq!(f.identity_secrets()["BRANVIL_ADMIN_TOKEN"], held);
     running.stop().await.unwrap();
 }
-#[tokio::test]
-async fn denied_forged_spent_and_unkept_consents_do_not_connect() {
-    let f = fixture();
-    let (running, _, owner_token) = branvil(&f).await;
-    for mode in ["denied", "forged", "spent", "locked"] {
-        let (started, redirect) = consent(&f, &running, &owner_token).await;
-        let old = f.identity_secrets()["BRANVIL_ADMIN_TOKEN"].clone();
-        let redirect = match mode {
-            "denied" => format!(
-                "http://127.0.0.1:8765/-/guildbotics/providers/branvil/pages/connected?state={}&error=denied",
-                started["state"].as_str().unwrap()
-            ),
-            "forged" => redirect.replace(started["state"].as_str().unwrap(), "forged"),
-            "spent" => {
-                let u = url::Url::parse(&redirect).unwrap();
-                let q: BTreeMap<_, _> = u.query_pairs().into_owned().collect();
-                assert!(
-                    running
-                        .data
-                        .exchange(branvil::api::TokenRequest {
-                            code: q["code"].clone(),
-                            redirect_uri: "http://127.0.0.1:8765/-/guildbotics/providers/branvil/pages/connected"
-                                .into(),
-                            code_verifier: "wrong".into()
-                        })
-                        .await
-                        .is_err()
-                );
-                redirect
-            }
-            _ => redirect,
-        };
-        if mode == "locked" {
-            f.keys(Keys::Locked);
-        }
-        let (status, page) = callback(&f, &redirect).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{mode}: {page}");
-        f.keys(Keys::Fixed);
-        assert_eq!(f.identity_secrets()["BRANVIL_ADMIN_TOKEN"], old);
-        if mode != "forged" {
-            let (_, connection) = f
-                .call(
-                    "POST",
-                    "/config/providers/branvil/connection",
-                    json!({"state":started["state"]}),
-                )
-                .await;
-            assert_eq!(connection["status"], "disconnected");
-            let key = match mode {
-                "denied" => "denied",
-                "locked" => "not_kept",
-                _ => "expired",
-            };
-            if mode != "spent" {
-                let expected =
-                    crate::i18n::t("en", &format!("integrations.branvil.setup.{key}"), &[]);
-                assert_eq!(connection["message"], expected);
-                assert!(page.as_str().unwrap().contains(&expected));
-            }
-            assert!(page.as_str().unwrap().contains(&crate::i18n::t(
-                "en",
-                "integrations.branvil.setup.retry",
-                &[]
-            )));
-        }
-    }
-    running.stop().await.unwrap();
-}
-
 #[tokio::test]
 async fn slack_avatar_import_uses_the_members_identity_bounds_downloads_and_sanitizes_failures() {
     let (f, double) = slack_fixture().await;
@@ -911,41 +624,39 @@ async fn avatar_import_answers_both_config_locks_with_503() {
     }
 }
 #[tokio::test]
-async fn provider_verify_and_diagnose_keep_credential_and_workspace_boundaries() {
+async fn provider_verify_requires_only_the_slack_tokens_of_subscribed_agents() {
     let f = fixture();
-    let (running, owner, _) = branvil(&f).await;
-    owner
-        .repos_create_workspace(branvil::api::repos::NewWorkspace {
-            name: "acme".into(),
-        })
-        .await
-        .unwrap();
     f.init().await;
-    let mut form = agent("agent1");
-    form["accounts"] = json!({"branvil":{}});
-    f.add(form).await;
+    f.add(agent("agent1")).await;
     let registry = crate::setup_providers::Registry(Some(f.api.clone()));
-    let id = "agent1".to_owned();
-    let member = with_setup(&f.api, f.workspace(), move |s| s.saved_member(&id))
+    let member = with_setup(&f.api, f.workspace(), |s| s.saved_member("agent1"))
         .await
         .unwrap();
-    let mut human = gb_setup::SavedMember {
+    let human = gb_setup::SavedMember {
         person_id: "human1".into(),
         name: "Human".into(),
         human: true,
-        account_info: [("branvil_username".into(), "owner1".into())].into(),
+        account_info: BTreeMap::new(),
         secrets: BTreeMap::new(),
-        avatar: None,
     };
     for language in ["en", "ja"] {
-        let checks = registry.verify("branvil", &member, false, language);
-        assert_eq!(
-            checks.iter().map(|c| c.target.as_str()).collect::<Vec<_>>(),
-            ["account_info.branvil_username", "AGENT1_BRANVIL_TOKEN"]
-        );
-        assert!(checks.iter().all(|c| c.status == "ok" && !c.credential));
-        assert_eq!(registry.verify("branvil", &human, false, language).len(), 1);
-        assert!(registry.verify("slack", &human, true, language).is_empty());
+        for subscribed in [false, true] {
+            assert!(
+                registry
+                    .verify("branvil", &member, subscribed, language)
+                    .is_empty()
+            );
+            assert!(
+                registry
+                    .verify("branvil", &human, subscribed, language)
+                    .is_empty()
+            );
+            assert!(
+                registry
+                    .verify("slack", &human, subscribed, language)
+                    .is_empty()
+            );
+        }
         assert!(
             registry
                 .verify("slack", &member, false, language)
@@ -960,308 +671,7 @@ async fn provider_verify_and_diagnose_keep_credential_and_workspace_boundaries()
             ["error", "error"]
         );
     }
-    let mut unnamed = member.clone();
-    unnamed.account_info.clear();
-    assert_eq!(
-        registry
-            .verify("branvil", &unnamed, false, "en")
-            .iter()
-            .map(|c| c.status.as_str())
-            .collect::<Vec<_>>(),
-        ["error", "ok"]
-    );
-    assert!(
-        registry
-            .diagnose_branvil(std::slice::from_ref(&member), &json!({}), "en")
-            .await
-            .is_empty()
-    );
-    let both = json!({"code_hosting_service":{"name":"branvil","workspace":"acme"},"ticket_service":{"name":"branvil","workspace":"acme"}});
-    let checks = registry
-        .diagnose_branvil(&[member.clone(), member.clone()], &both, "en")
-        .await;
-    assert_eq!(
-        checks
-            .iter()
-            .filter(|c| c.code == "branvil_workspace")
-            .count(),
-        1
-    );
-    let mut refused = member.clone();
-    refused
-        .secrets
-        .insert("BRANVIL_TOKEN".into(), "refused".into());
-    let checks = registry
-        .diagnose_branvil(&[refused, human.clone()], &both, "en")
-        .await;
-    assert_eq!(
-        checks
-            .iter()
-            .map(|c| (c.code.as_str(), c.status.as_str()))
-            .collect::<Vec<_>>(),
-        [
-            ("branvil_reachable", "ok"),
-            ("branvil_access", "error"),
-            ("branvil_owner", "ok")
-        ]
-    );
-    let held = f.identity_secrets()["BRANVIL_ADMIN_TOKEN"].clone();
-    for (token, key) in [
-        ("", "not_connected"),
-        ("refused", "admin_refused"),
-        (member.secret("BRANVIL_TOKEN"), "admin_refused"),
-    ] {
-        f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", token);
-        let checks = registry
-            .diagnose_branvil(&[human.clone()], &both, "ja")
-            .await;
-        assert_eq!(checks[1].status, "error");
-        assert!(checks[1].credential);
-        assert_eq!(checks[1].person_id, "human1");
-        assert_eq!(
-            checks[1].message,
-            crate::i18n::t("ja", &format!("integrations.branvil.api.{key}"), &[])
-        );
-    }
-    f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", &held);
-    let services = json!({"code_hosting_service":{"name":"branvil","workspace":"missing"},"ticket_service":{"name":"branvil","workspace":"acme"}});
-    let checks = registry
-        .diagnose_branvil(&[member, human], &services, "en")
-        .await;
-    assert_eq!(
-        checks
-            .iter()
-            .map(|c| (c.code.as_str(), c.status.as_str(), c.credential))
-            .collect::<Vec<_>>(),
-        [
-            ("branvil_reachable", "ok", false),
-            ("branvil_access", "ok", true),
-            ("branvil_workspace", "error", false),
-            ("branvil_workspace", "ok", false),
-            ("branvil_owner", "ok", true)
-        ]
-    );
-    human = gb_setup::SavedMember {
-        person_id: "human1".into(),
-        name: "Human".into(),
-        human: true,
-        account_info: [("branvil_username".into(), "someone".into())].into(),
-        secrets: BTreeMap::new(),
-        avatar: None,
-    };
-    assert_eq!(
-        registry.diagnose_branvil(&[human], &services, "en").await[1].status,
-        "error"
-    );
-    running.stop().await.unwrap();
-    let stopped = registry.diagnose_branvil(&[], &services, "ja").await;
-    assert_eq!(stopped.len(), 1);
-    assert_eq!(
-        stopped[0].message,
-        crate::i18n::t("ja", "integrations.branvil.api.stopped", &[])
-    );
-    assert!(!stopped[0].credential);
 }
-
-#[tokio::test]
-async fn account_settlement_preserves_later_saves_and_unrelated_tokens_and_shares_pictures() {
-    use gb_setup::ProviderModels;
-    let f = fixture();
-    let (running, owner, _) = branvil(&f).await;
-    f.init().await;
-    let mut form = agent("agent1");
-    form["accounts"] = json!({"branvil":{}});
-    f.add(form).await;
-    let registry = crate::setup_providers::Registry(Some(f.api.clone()));
-    let mut member = with_setup(&f.api, f.workspace(), |s| s.saved_member("agent1"))
-        .await
-        .unwrap();
-    let initial = member.secret("BRANVIL_TOKEN").to_owned();
-    assert!(
-        owner
-            .members_get("agent1".into())
-            .await
-            .unwrap()
-            .avatar_url
-            .is_none()
-    );
-    let unrelated = owner
-        .members_issue_token(
-            "agent1".into(),
-            branvil::api::members::NewToken {
-                label: "cli".into(),
-                replace: false,
-            },
-        )
-        .await
-        .unwrap();
-    let mut unavailable = registry
-        .account("branvil", &json!({"username":"agent1","reissue":true}))
-        .unwrap();
-    unavailable.prepare(&member).await.unwrap();
-    let unrevoked = unavailable.stored("agent1", false).unwrap().secrets["BRANVIL_TOKEN"].clone();
-    f.keys(Keys::Locked);
-    unavailable.settled(false).await;
-    f.keys(Keys::Fixed);
-    assert!(running.data.authenticate(unrevoked).await.is_ok());
-    let mut a = registry
-        .account("branvil", &json!({"username":"agent1","reissue":true}))
-        .unwrap();
-    a.prepare(&member).await.unwrap();
-    let stored_a = a.stored("agent1", false).unwrap();
-    assert_eq!(
-        running
-            .data
-            .authenticate(initial.clone())
-            .await
-            .unwrap()
-            .identity()
-            .await
-            .unwrap()
-            .name,
-        "agent1"
-    );
-    let token_a = stored_a.secrets["BRANVIL_TOKEN"].clone();
-    member.secrets.extend(stored_a.secrets);
-    let mut b = registry
-        .account("branvil", &json!({"username":"agent1","reissue":true}))
-        .unwrap();
-    b.prepare(&member).await.unwrap();
-    let stored_b = b.stored("agent1", false).unwrap();
-    let kept = stored_b.secrets["BRANVIL_TOKEN"].clone();
-    b.settled(true).await;
-    a.settled(true).await;
-    assert!(running.data.authenticate(token_a).await.is_err());
-    assert!(running.data.authenticate(initial).await.is_err());
-    assert!(running.data.authenticate(kept.clone()).await.is_ok());
-    assert!(
-        running
-            .data
-            .authenticate(unrelated.token.clone())
-            .await
-            .is_ok()
-    );
-    member.secrets.extend(stored_b.secrets);
-    let mut refused = registry
-        .account("branvil", &json!({"username":"agent1","reissue":true}))
-        .unwrap();
-    refused.prepare(&member).await.unwrap();
-    let refused_token = refused.stored("agent1", false).unwrap().secrets["BRANVIL_TOKEN"].clone();
-    refused.settled(false).await;
-    assert!(running.data.authenticate(refused_token).await.is_err());
-    assert!(running.data.authenticate(kept.clone()).await.is_ok());
-    let directory = f.identities().join("agent1");
-    f.write(&directory.join("avatar.png"), "invalid image");
-    member.avatar = Some(directory.join("avatar.png"));
-    let mut failed = registry
-        .account("branvil", &json!({"username":"agent1","reissue":true}))
-        .unwrap();
-    assert!(failed.prepare(&member).await.is_err());
-    let issued = failed.stored("agent1", false).unwrap().secrets["BRANVIL_TOKEN"].clone();
-    failed.settled(false).await;
-    assert!(running.data.authenticate(issued).await.is_err());
-    let png = b"\x89PNG\r\n\x1a\nfixture";
-    std::fs::write(directory.join("avatar.png"), png).unwrap();
-    let (status, _) = f.upload("agent1", "picture.png", png).await;
-    assert_eq!(status, StatusCode::OK);
-    registry.avatar_changed("branvil", &member).await.unwrap();
-    let bytes = reqwest::Client::new()
-        .get(format!(
-            "{}/api/v1/members/agent1/avatar",
-            running.data.base_url()
-        ))
-        .bearer_auth(&unrelated.token)
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .bytes()
-        .await
-        .unwrap();
-    assert_eq!(bytes.as_ref(), png);
-    let mut chosen = registry
-        .account("branvil", &json!({"username":"agent1"}))
-        .unwrap();
-    chosen.prepare(&member).await.unwrap();
-    assert!(chosen.stored("other-id", false).unwrap().secrets.is_empty());
-    chosen.settled(true).await;
-    // Revocation of one token elsewhere never prevents removal of the rest.
-    owner
-        .members_revoke_token("agent1".into(), member.secret("BRANVIL_TOKEN_ID").into())
-        .await
-        .unwrap();
-    registry.removed("branvil", &member).await.unwrap();
-    assert!(
-        running
-            .data
-            .authenticate(unrelated.token.clone())
-            .await
-            .is_ok()
-    );
-    assert!(owner.members_get("agent1".into()).await.is_ok());
-    let tokens = owner
-        .members_list_tokens(
-            "agent1".into(),
-            owner.page("tokens".into(), Some(100), None).unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        tokens
-            .items
-            .iter()
-            .map(|t| t.label.as_str())
-            .collect::<Vec<_>>(),
-        ["cli"]
-    );
-    member.human = true;
-    registry.removed("branvil", &member).await.unwrap();
-    assert!(running.data.authenticate(unrelated.token).await.is_ok());
-    running.stop().await.unwrap();
-}
-
-#[tokio::test]
-async fn failed_writes_keep_any_token_already_stored_and_failed_preparation_rolls_back() {
-    let f = fixture();
-    let (running, owner, _) = branvil(&f).await;
-    f.init().await;
-    let mut form = agent("agent1");
-    form["accounts"] = json!({"branvil":{}});
-    f.add(form.clone()).await;
-    let initial = f.identity_secrets()["AGENT1_BRANVIL_TOKEN"].clone();
-    form["accounts"]["branvil"] = json!({"username":"agent1","reissue":true});
-    f.write(&f.identities().join("agent1/avatar.png"), "bad image");
-    assert_eq!(
-        f.save("PUT", "/config/members/agent1", form.clone())
-            .await
-            .0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(f.identity_secrets()["AGENT1_BRANVIL_TOKEN"], initial);
-    let tokens = owner
-        .members_list_tokens(
-            "agent1".into(),
-            owner.page("tokens".into(), Some(100), None).unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(tokens.items.len(), 1);
-    std::fs::remove_file(f.identities().join("agent1/avatar.png")).unwrap();
-    let path = f.config().join("team/members/agent1/member.yml");
-    std::fs::remove_file(&path).unwrap();
-    std::fs::create_dir(&path).unwrap();
-    // No revision was sent: the failure is after secret storage began.
-    assert_eq!(
-        f.save("PUT", "/config/members/agent1", form).await.0,
-        StatusCode::INTERNAL_SERVER_ERROR
-    );
-    let stored = f.identity_secrets()["AGENT1_BRANVIL_TOKEN"].clone();
-    assert_ne!(stored, initial);
-    assert!(running.data.authenticate(stored).await.is_ok());
-    running.stop().await.unwrap();
-}
-
 #[tokio::test]
 async fn slack_diagnosis_distinguishes_humans_subscriptions_credentials_and_unjoined_channels() {
     let (f, double) = slack_fixture().await;
@@ -1343,7 +753,6 @@ async fn slack_diagnosis_distinguishes_humans_subscriptions_credentials_and_unjo
         human: true,
         account_info: BTreeMap::new(),
         secrets: BTreeMap::new(),
-        avatar: None,
     };
     for (id, status) in [("", "warning"), ("U01234567", "ok"), ("invalid", "error")] {
         human.account_info.insert("slack_user_id".into(), id.into());
@@ -1357,102 +766,14 @@ async fn slack_diagnosis_distinguishes_humans_subscriptions_credentials_and_unjo
 }
 
 #[tokio::test]
-async fn absent_or_refused_connection_cannot_administer_save_or_delete_members() {
-    let f = fixture();
-    assert_eq!(
-        f.call("POST", "/config/providers/branvil/connection", json!({}))
-            .await
-            .1["status"],
-        "disconnected"
-    );
-    assert_eq!(
-        f.call("POST", "/config/providers/branvil/workspaces", json!({}))
-            .await
-            .0,
-        StatusCode::BAD_REQUEST
-    );
-    let (running, owner, _) = branvil(&f).await;
-    f.init().await;
-    let mut form = agent("agent1");
-    form["accounts"] = json!({"branvil":{}});
-    f.add(form).await;
-    let held = f.identity_secrets()["BRANVIL_ADMIN_TOKEN"].clone();
-    let agent_token = f.identity_secrets()["AGENT1_BRANVIL_TOKEN"].clone();
-    for token in ["", "invalid", agent_token.as_str()] {
-        f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", token);
-        let (_, v) = f
-            .call("POST", "/config/providers/branvil/connection", json!({}))
-            .await;
-        assert_eq!(v["status"], "disconnected");
-        let key = if token.is_empty() {
-            "not_connected"
-        } else {
-            "admin_refused"
-        };
-        assert_eq!(
-            v["message"],
-            crate::i18n::t("en", &format!("integrations.branvil.api.{key}"), &[])
-        );
-        for lang in ["en", "ja"] {
-            let (status, body) = f
-                .call_in(lang, "POST", "/config/providers/branvil/agents", json!({}))
-                .await;
-            assert_eq!(status, StatusCode::BAD_REQUEST);
-            assert_eq!(
-                body["message"],
-                crate::i18n::t(lang, &format!("integrations.branvil.api.{key}"), &[])
-            );
-            let mut input = agent("rejected");
-            input["accounts"] = json!({"branvil":{}});
-            input["config_dir"] = json!(f.config());
-            let (_, body) = f.call_in(lang, "POST", "/config/members", input).await;
-            assert_eq!(
-                body["message"],
-                crate::i18n::t(lang, &format!("integrations.branvil.api.{key}"), &[])
-            );
-        }
-        assert_eq!(
-            f.call("POST", "/config/providers/branvil/agents", json!({}))
-                .await
-                .0,
-            StatusCode::BAD_REQUEST
-        );
-        let mut form = agent("new_agent");
-        form["accounts"] = json!({"branvil":{}});
-        assert_eq!(
-            f.save("POST", "/config/members", form).await.0,
-            StatusCode::BAD_REQUEST
-        );
-        assert!(!f.identities().join("new_agent").exists());
-        assert_eq!(
-            f.call("DELETE", "/identities/agent1", Value::Null).await.0,
-            StatusCode::BAD_REQUEST
-        );
-        assert!(f.identities().join("agent1").exists());
-        assert!(f.config().join("team/members/agent1/member.yml").is_file());
-        assert_eq!(f.identity_secrets()["AGENT1_BRANVIL_TOKEN"], agent_token);
-        assert!(running.data.authenticate(agent_token.clone()).await.is_ok());
-    }
-    f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", &held);
-    let mut chosen = agent("other_id");
-    chosen["accounts"] = json!({"branvil":{"username":"agent1"}});
-    f.add(chosen).await;
-    assert!(owner.members_get("other_id".into()).await.is_err());
-    let view = f.get("/config/members/other_id").await;
-    assert_eq!(view["accounts"]["branvil"]["username"], "agent1");
-    running.stop().await.unwrap();
-}
-
-#[tokio::test]
 async fn every_provider_operation_requires_owner_authentication() {
     let f = fixture();
     for path in [
-        "/config/providers/branvil/connect",
-        "/config/providers/branvil/connection",
         "/config/providers/branvil/workspaces",
         "/config/providers/branvil/workspaces/create",
-        "/config/providers/branvil/agents",
-        "/config/providers/branvil/entry",
+        "/config/providers/branvil/git_config",
+        "/intelligences/agent-environment/ci-images",
+        "/intelligences/agent-environment/ci-images/state",
         "/config/providers/slack/app-registrations",
         "/config/providers/slack/verify-tokens",
         "/config/members/agent1/avatar/slack",
@@ -1553,129 +874,6 @@ async fn slack_accounts_are_identity_scoped_blank_fields_keep_secrets_and_anothe
 }
 
 #[tokio::test]
-async fn consent_exchange_and_storage_finish_after_the_browser_request_is_dropped() {
-    let mut f = fixture();
-    Arc::get_mut(&mut f.api).unwrap().write_timeout = Duration::from_secs(2);
-    let (running, _, owner_token) = branvil(&f).await;
-    let (_, redirect) = consent(&f, &running, &owner_token).await;
-    let held = IdentityLock::acquire(&f.root.join("identity"), Duration::from_secs(1)).unwrap();
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), callback(&f, &redirect))
-            .await
-            .is_err()
-    );
-    assert_eq!(f.api.work.len(), 1);
-    drop(held);
-    f.api.work.close();
-    f.api.work.wait().await;
-    let token = f.identity_secrets()["BRANVIL_ADMIN_TOKEN"].clone();
-    assert_ne!(token, owner_token);
-    assert!(running.data.authenticate(token).await.is_ok());
-    assert_eq!(callback(&f, &redirect).await.0, StatusCode::OK);
-    running.stop().await.unwrap();
-}
-
-#[tokio::test]
-async fn account_hooks_preserve_each_reissue_settlement_picture_and_removal_branch() {
-    use gb_setup::ProviderModels;
-    let f = fixture();
-    let (running, owner, admin_token) = branvil(&f).await;
-    f.init().await;
-    let mut form = agent("agent1");
-    form["accounts"] = json!({"branvil":{}});
-    f.add(form).await;
-    let registry = crate::setup_providers::Registry(Some(f.api.clone()));
-    let member = with_setup(&f.api, f.workspace(), |s| s.saved_member("agent1"))
-        .await
-        .unwrap();
-    let mut other = registry
-        .account("branvil", &json!({"username":"agent2"}))
-        .unwrap();
-    other.prepare(&member).await.unwrap();
-    let other_token = other.stored("agent2", false).unwrap().secrets["BRANVIL_TOKEN"].clone();
-    other.settled(true).await;
-    // Revoked, another member's token, and explicit reissue all issue beside a held token.
-    for (held, reissue) in [
-        ("revoked", false),
-        (other_token.as_str(), false),
-        (member.secret("BRANVIL_TOKEN"), true),
-    ] {
-        let mut input = member.clone();
-        input.secrets.insert("BRANVIL_TOKEN".into(), held.into());
-        let mut account = registry
-            .account("branvil", &json!({"username":"agent1","reissue":reissue}))
-            .unwrap();
-        account.prepare(&input).await.unwrap();
-        let issued = account.stored("agent1", false).unwrap().secrets["BRANVIL_TOKEN"].clone();
-        assert_ne!(issued, held);
-        assert!(running.data.authenticate(issued.clone()).await.is_ok());
-        account.settled(false).await;
-        assert!(running.data.authenticate(issued).await.is_err());
-    }
-    for later_first in [false, true] {
-        let mut earlier = registry
-            .account("branvil", &json!({"username":"agent1","reissue":true}))
-            .unwrap();
-        earlier.prepare(&member).await.unwrap();
-        let mut input = member.clone();
-        input
-            .secrets
-            .extend(earlier.stored("agent1", false).unwrap().secrets);
-        let mut later = registry
-            .account("branvil", &json!({"username":"agent1","reissue":true}))
-            .unwrap();
-        later.prepare(&input).await.unwrap();
-        let held = later.stored("agent1", false).unwrap().secrets["BRANVIL_TOKEN"].clone();
-        if later_first {
-            later.settled(true).await;
-            earlier.settled(true).await;
-        } else {
-            earlier.settled(true).await;
-            later.settled(true).await;
-        }
-        assert!(running.data.authenticate(held).await.is_ok());
-    }
-    let png = b"\x89PNG\r\n\x1a\nfixture";
-    let path = f.root.join("picture.png");
-    std::fs::write(&path, png).unwrap();
-    for human in [false, true] {
-        let mut input = member.clone();
-        input.human = human;
-        input.avatar = Some(path.clone());
-        let mut account = registry.account("branvil", &json!({})).unwrap();
-        account.prepare(&input).await.unwrap();
-        let name = if human { "owner1" } else { "agent1" };
-        assert!(
-            owner
-                .members_get(name.into())
-                .await
-                .unwrap()
-                .avatar_url
-                .is_some()
-        );
-        account.settled(false).await;
-    }
-    let mut unnamed = member.clone();
-    unnamed.account_info.clear();
-    f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", "refused");
-    registry.avatar_changed("branvil", &unnamed).await.unwrap();
-    registry.removed("branvil", &unnamed).await.unwrap();
-    let disconnected = crate::setup_providers::Registry(None);
-    disconnected
-        .avatar_changed("branvil", &member)
-        .await
-        .unwrap();
-    disconnected.removed("branvil", &member).await.unwrap();
-    // Missing members are already removed; this does not turn deletion into an error.
-    f.seed_identity_secret("BRANVIL_ADMIN_TOKEN", &admin_token);
-    unnamed
-        .account_info
-        .insert("branvil_username".into(), "already_gone".into());
-    registry.removed("branvil", &unnamed).await.unwrap();
-    running.stop().await.unwrap();
-}
-
-#[tokio::test]
 async fn avatar_import_finishes_in_the_workspace_it_started_reading() {
     let (f, double) = slack_fixture().await;
     *double.mode.lock().unwrap() = "wait".into();
@@ -1705,226 +903,4 @@ async fn avatar_import_finishes_in_the_workspace_it_started_reading() {
         std::fs::read(f.identities().join("agent1/avatar.png")).unwrap(),
         SLACK_PICTURE
     );
-}
-
-#[tokio::test]
-async fn provider_and_uploaded_avatars_are_given_to_the_named_branvil_member() {
-    let (f, _double) = slack_fixture().await;
-    let (running, _, _) = branvil(&f).await;
-    let mut form = agent("agent1");
-    form["accounts"] = json!({"branvil":{},"slack":{}});
-    assert_eq!(
-        f.save("PUT", "/config/members/agent1", form).await.0,
-        StatusCode::OK
-    );
-    let token = f.identity_secrets()["AGENT1_BRANVIL_TOKEN"].clone();
-    assert_eq!(
-        f.call("POST", "/config/members/agent1/avatar/slack", Value::Null)
-            .await
-            .0,
-        StatusCode::OK
-    );
-    let remote = format!("{}/api/v1/members/agent1/avatar", running.data.base_url());
-    let http = reqwest::Client::new();
-    assert_eq!(
-        http.get(&remote)
-            .bearer_auth(&token)
-            .send()
-            .await
-            .unwrap()
-            .error_for_status()
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap()
-            .as_ref(),
-        SLACK_PICTURE
-    );
-    let changed = b"\x89PNG\r\n\x1a\nchanged";
-    assert_eq!(
-        f.upload("agent1", "changed.png", changed).await.0,
-        StatusCode::OK
-    );
-    assert_eq!(
-        http.get(&remote)
-            .bearer_auth(&token)
-            .send()
-            .await
-            .unwrap()
-            .error_for_status()
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap()
-            .as_ref(),
-        changed
-    );
-    running.stop().await.unwrap();
-}
-
-#[tokio::test]
-async fn callback_keeps_the_initiating_language_and_retry_in_browser_and_poll() {
-    let f = fixture();
-    let (running, _, _) = branvil(&f).await;
-    for lang in ["en", "ja"] {
-        let (status, started) = f
-            .call_in(lang, "POST", "/config/providers/branvil/connect", json!({}))
-            .await;
-        assert_eq!(status, StatusCode::OK);
-        let redirect = format!(
-            "http://127.0.0.1:8765/-/guildbotics/providers/branvil/pages/connected?state={}&error=denied",
-            started["state"].as_str().unwrap()
-        );
-        let (status, page) = callback(&f, &redirect).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        for key in ["failed", "denied", "retry"] {
-            assert!(page.as_str().unwrap().contains(&crate::i18n::t(
-                lang,
-                &format!("integrations.branvil.setup.{key}"),
-                &[]
-            )));
-        }
-        let (_, polled) = f
-            .call(
-                "POST",
-                "/config/providers/branvil/connection",
-                json!({"state":started["state"]}),
-            )
-            .await;
-        assert_eq!(
-            polled["message"],
-            crate::i18n::t(lang, "integrations.branvil.setup.denied", &[])
-        );
-    }
-    running.stop().await.unwrap();
-}
-
-#[tokio::test]
-async fn expired_consents_cannot_poll_or_exchange_without_another_connect() {
-    let f = fixture();
-    let (running, _, _) = branvil(&f).await;
-    let held = f.identity_secrets()["BRANVIL_ADMIN_TOKEN"].clone();
-    for poll_first in [false, true] {
-        let (_, started) = f
-            .call_in("ja", "POST", "/config/providers/branvil/connect", json!({}))
-            .await;
-        let state = started["state"].as_str().unwrap();
-        f.api.consents.lock().await.get_mut(state).unwrap().created -= Duration::from_secs(601);
-        let expired = crate::i18n::t("ja", "integrations.branvil.setup.expired", &[]);
-        if poll_first {
-            let (_, polled) = f
-                .call(
-                    "POST",
-                    "/config/providers/branvil/connection",
-                    json!({"state":state}),
-                )
-                .await;
-            assert_eq!(polled["status"], "disconnected");
-            assert_eq!(polled["message"], expired);
-        } else {
-            let url = format!(
-                "http://127.0.0.1:8765/-/guildbotics/providers/branvil/pages/connected?state={state}&error=denied"
-            );
-            let (status, page) = callback(&f, &url).await;
-            assert_eq!(status, StatusCode::BAD_REQUEST);
-            assert!(page.as_str().unwrap().contains(&expired));
-        }
-        assert_eq!(f.identity_secrets()["BRANVIL_ADMIN_TOKEN"], held);
-    }
-    running.stop().await.unwrap();
-}
-
-#[tokio::test]
-async fn completed_consents_keep_their_outcomes_after_the_pending_deadline() {
-    let f = fixture();
-    let (running, _, owner) = branvil(&f).await;
-    for mode in ["connected", "denied", "not_kept"] {
-        let (started, redirect) = consent(&f, &running, &owner).await;
-        let state = started["state"].as_str().unwrap();
-        let redirect = if mode == "denied" {
-            format!(
-                "http://127.0.0.1:8765/-/guildbotics/providers/branvil/pages/connected?state={state}&error=denied"
-            )
-        } else {
-            redirect
-        };
-        if mode == "not_kept" {
-            f.keys(Keys::Locked);
-        }
-        let initial = callback(&f, &redirect).await;
-        f.keys(Keys::Fixed);
-        assert_eq!(
-            initial.0,
-            if mode == "connected" {
-                StatusCode::OK
-            } else {
-                StatusCode::BAD_REQUEST
-            }
-        );
-        assert!(initial.1.as_str().unwrap().contains(&crate::i18n::t(
-            "en",
-            &format!("integrations.branvil.setup.{mode}"),
-            &[]
-        )));
-        let stored = f.identity_secrets();
-        f.api.consents.lock().await.get_mut(state).unwrap().created -= Duration::from_secs(601);
-        assert_eq!(
-            callback(&f, &redirect).await,
-            initial,
-            "{mode}: completed page"
-        );
-        assert_eq!(
-            f.identity_secrets(),
-            stored,
-            "replay must not exchange or store again"
-        );
-        let (_, polled) = f
-            .call(
-                "POST",
-                "/config/providers/branvil/connection",
-                json!({"state":state}),
-            )
-            .await;
-        assert_eq!(
-            polled["status"],
-            if mode == "connected" {
-                "connected"
-            } else {
-                "disconnected"
-            }
-        );
-        assert_eq!(
-            polled["message"],
-            if mode == "connected" {
-                String::new()
-            } else {
-                crate::i18n::t("en", &format!("integrations.branvil.setup.{mode}"), &[])
-            }
-        );
-        assert!(
-            !f.api.consents.lock().await.contains_key(state),
-            "poll consumes the result"
-        );
-    }
-    // Starting another consent still discards old completed entries, as the frozen start does.
-    let (_, old) = consent(&f, &running, &owner).await;
-    let old_url = url::Url::parse(&old).unwrap();
-    let state = old_url
-        .query_pairs()
-        .find(|(key, _)| key == "state")
-        .unwrap()
-        .1
-        .into_owned();
-    callback(
-        &f,
-        &format!(
-            "http://127.0.0.1:8765/-/guildbotics/providers/branvil/pages/connected?state={state}&error=denied"
-        ),
-    )
-    .await;
-    f.api.consents.lock().await.get_mut(&state).unwrap().created -= Duration::from_secs(601);
-    f.call("POST", "/config/providers/branvil/connect", json!({}))
-        .await;
-    assert!(!f.api.consents.lock().await.contains_key(&state));
-    running.stop().await.unwrap();
 }

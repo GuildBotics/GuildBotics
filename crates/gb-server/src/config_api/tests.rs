@@ -971,7 +971,7 @@ async fn a_member_is_read_saved_taken_out_of_the_workspace_and_deleted() {
         "chat_channel_participation": {"C01234567": "social"}}))
         .await;
     // A secret the member holds with a provider stays with its identity.
-    f.seed_identity_secret("ALICE_BRANVIL_TOKEN", "t-synthetic");
+    f.seed_identity_secret("ALICE_SLACK_BOT_TOKEN", "t-synthetic");
     let read = f.get("/config/members/alice").await;
     assert!(!read.to_string().contains("t-synthetic"));
     assert_eq!(read["person_id"], "alice");
@@ -986,7 +986,7 @@ async fn a_member_is_read_saved_taken_out_of_the_workspace_and_deleted() {
     );
     assert_eq!(
         read["accounts"],
-        json!({"branvil":{"username":"","has_token":true},"slack":{"user_id":"","has_bot_token":false,"has_app_token":false}})
+        json!({"slack":{"user_id":"","has_bot_token":true,"has_app_token":false}})
     );
     let (status, _) = f
         .save(
@@ -1027,7 +1027,7 @@ async fn a_member_is_read_saved_taken_out_of_the_workspace_and_deleted() {
     assert_eq!(status, StatusCode::OK);
     assert!(!f.config().join("team/members/alice").exists());
     assert!(f.identities().join("alice/identity.yml").is_file());
-    assert_eq!(f.identity_secrets()["ALICE_BRANVIL_TOKEN"], "t-synthetic");
+    assert_eq!(f.identity_secrets()["ALICE_SLACK_BOT_TOKEN"], "t-synthetic");
     assert!(
         f.workspace_secrets()
             .keys()
@@ -1036,7 +1036,7 @@ async fn a_member_is_read_saved_taken_out_of_the_workspace_and_deleted() {
     let (status, _) = f.call("DELETE", "/identities/alice", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     assert!(!f.identities().join("alice").exists());
-    assert!(!f.identity_secrets().contains_key("ALICE_BRANVIL_TOKEN"));
+    assert!(!f.identity_secrets().contains_key("ALICE_SLACK_BOT_TOKEN"));
 }
 
 #[tokio::test]
@@ -1085,12 +1085,12 @@ async fn a_roles_only_save_keeps_the_accounts_no_model_shows() {
     let path = f.identities().join("alice/identity.yml");
     f.write(
         &path,
-        "person_id: alice\nname: Test\nperson_type: agent\naccount_info:\n  git_user: Test\n  branvil_username: alice-bot\n  slack_user_id: U0ALICE\n",
+        "person_id: alice\nname: Test\nperson_type: agent\naccount_info:\n  git_user: Test\n  example_username: alice-bot\n  slack_user_id: U0ALICE\n",
     );
     let read = f.get("/config/members/alice").await;
     assert_eq!(
         read["accounts"],
-        json!({"branvil":{"username":"alice-bot","has_token":false},"slack":{"user_id":"U0ALICE","has_bot_token":false,"has_app_token":false}})
+        json!({"slack":{"user_id":"U0ALICE","has_bot_token":false,"has_app_token":false}})
     );
     let mut form = agent("alice");
     form["roles"] = json!(["reviewer"]);
@@ -1098,7 +1098,7 @@ async fn a_roles_only_save_keeps_the_accounts_no_model_shows() {
     let (status, body) = f.save("PUT", "/config/members/alice", form).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let account_info = &f.read(&path)["account_info"];
-    assert_eq!(account_info["branvil_username"], "alice-bot");
+    assert_eq!(account_info["example_username"], "alice-bot");
     assert_eq!(account_info["slack_user_id"], "U0ALICE");
 }
 
@@ -1579,14 +1579,13 @@ async fn colliding_identities_are_removed_without_touching_shared_secrets() {
         &f.identities().join("alice_bak/identity.yml"),
         "person_id: alice_bak\nname: Other\n",
     );
-    f.seed_identity_secret("ALICE_BAK_BRANVIL_TOKEN", "shared");
+    f.seed_identity_secret("ALICE_BAK_SLACK_BOT_TOKEN", "shared");
     let sealed = f.root.join("identity/.guildbotics/local/secrets.enc.json");
     let before = std::fs::read(&sealed).unwrap();
     f.keys(Keys::Untouchable);
     let read = f.get("/config/members/alice-bak").await;
     assert!(
-        read["accounts"]["branvil"]["has_token"] == false
-            && read["accounts"]["slack"]["has_bot_token"] == false,
+        read["accounts"]["slack"]["has_bot_token"] == false,
         "{read}"
     );
     let (status, body) = f.call("DELETE", "/identities/alice_bak", Value::Null).await;
@@ -1594,7 +1593,7 @@ async fn colliding_identities_are_removed_without_touching_shared_secrets() {
     assert_eq!(std::fs::read(&sealed).unwrap(), before);
     assert!(f.identities().join("alice-bak").exists());
     f.keys(Keys::Fixed);
-    assert_eq!(f.identity_secrets()["ALICE_BAK_BRANVIL_TOKEN"], "shared");
+    assert_eq!(f.identity_secrets()["ALICE_BAK_SLACK_BOT_TOKEN"], "shared");
     assert_eq!(f.get("/team").await["problem"], "");
 }
 

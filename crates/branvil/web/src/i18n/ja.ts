@@ -58,15 +58,7 @@ export const ja: Record<MessageKey, string> = {
 
   "enter.expired": "このリンクは期限切れか、すでに使われています。",
   "guide.run": "Hubマシンで次のコマンドを実行して、入口のURLを表示します：",
-  "guide.why": "表示されたURLを、この画面と同じブラウザのアドレスバーに貼り付けて開いてください。アプリを接続する場合は、同意画面を開いているブラウザを使ってください。リンクは60秒間に1回だけ使え、入ったことはそのブラウザでだけ有効です。",
-  "authorize.title": "{client} に Branvil の管理を許可しますか？",
-  "authorize.rights": "オーナーの権限を得て、Branvil であなたにできることをすべて行えるようになります。",
-  "authorize.revoke": "設定 → メンバー → {owner} → トークン で app:{client} を削除すると取り消せます。",
-  "authorize.returns": "許可しても拒否しても {address} に戻ります。",
-  "authorize.allow": "許可",
-  "authorize.deny": "拒否",
-  "authorize.invalid": "アプリからのこの要求は正しくありません（{fields}）。アプリからやり直してください。",
-  "authorize.enterFirst": "{client} を許可するには、まず Branvil を開いてください。開いたあと（10分以内なら）このページに戻ります。",
+  "guide.why": "表示されたURLを、この画面と同じブラウザのアドレスバーに貼り付けて開いてください。リンクは60秒間に1回だけ使え、入ったことはそのブラウザでだけ有効です。",
 
   "lane.new": "新規",
   "lane.ready": "着手可",

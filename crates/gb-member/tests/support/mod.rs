@@ -169,9 +169,6 @@ impl CodeHostingService for Probe {
                 .unwrap_or_else(|| Err(self.error.clone().expect("unexpected provider access")))
         })
     }
-    fn identity(&self, _check: bool) -> ServiceFuture<'_, BTreeMap<String, String>> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
-    }
     fn comment<'a>(
         &'a self,
         _url: &'a str,
