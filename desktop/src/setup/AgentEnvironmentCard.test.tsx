@@ -122,6 +122,28 @@ function renderCard(focusElement?: string) {
 }
 
 describe("AgentEnvironmentCard", () => {
+  it("shows when a failed snapshot will automatically rebuild", async () => {
+    const at = Date.parse("2026-11-17T12:00:00Z");
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
+      status({
+        snapshot: {
+          state: "failed",
+          name: "recipe",
+          detail: "temporary failure",
+          output: [],
+          next_retry_at: at,
+        },
+      }),
+    );
+    renderCard();
+    expect(
+      await screen.findByText(
+        t("setup.intelligence.environment.nextRetry", {
+          time: new Date(at).toLocaleString("en"),
+        }),
+      ),
+    ).toBeInTheDocument();
+  });
   beforeEach(() => {
     vi.mocked(getAgentEnvironmentStatus).mockReset();
     vi.mocked(buildAgentEnvironment).mockReset();

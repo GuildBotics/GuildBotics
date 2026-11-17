@@ -139,3 +139,35 @@ async fn status_preserves_the_declared_network_and_dns_wire_fields() {
         );
     }
 }
+
+#[tokio::test]
+async fn failed_snapshot_exposes_its_deadline_and_only_becomes_buildable_when_due() {
+    let (_d, host, workspace) = fixture();
+    let name = Recipe::load(&host.package.join("templates"))
+        .unwrap()
+        .name(None);
+    assert!(
+        snapshot::build(&workspace, &name, "timeout".into(), |_, _| async {
+            Err("outage".into())
+        })
+        .await
+        .is_err()
+    );
+    let waiting = device::read(&host, &workspace).await;
+    assert_eq!(waiting.view["snapshot"]["state"], "failed");
+    assert!(waiting.view["snapshot"]["next_retry_at"].as_u64().is_some());
+    assert_eq!(waiting.view["snapshot"]["build_due"], false);
+    let marker = snapshot::snapshots_dir(&workspace).join(format!("{name}.failed"));
+    std::fs::File::options()
+        .write(true)
+        .open(marker)
+        .unwrap()
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(601)),
+        )
+        .unwrap();
+    let due = device::read(&host, &workspace).await;
+    assert_eq!(due.view["snapshot"]["build_due"], true);
+    assert_eq!(due.view["snapshot"]["detail"], "outage");
+}

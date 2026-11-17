@@ -3,10 +3,12 @@
 use crate::Sentence;
 use gb_base::files::FileLock;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 const PREFIX: &str = "guildbotics-";
 pub(crate) const LOCK_FILE: &str = "build.lock";
 const FAILED_SUFFIX: &str = ".failed";
+const RETRY_SUFFIX: &str = ".retry";
 
 static BUILD_TASKS: std::sync::LazyLock<tokio_util::task::TaskTracker> =
     std::sync::LazyLock::new(tokio_util::task::TaskTracker::new);
@@ -30,6 +32,7 @@ pub enum State {
 pub struct Status {
     pub path: PathBuf,
     pub state: State,
+    pub next_retry_at: Option<SystemTime>,
 }
 
 pub fn snapshots_dir(workspace: &Path) -> PathBuf {
@@ -60,6 +63,7 @@ pub fn status(workspace: &Path, name: &str) -> std::io::Result<Status> {
                 return Ok(Status {
                     path,
                     state: State::Building,
+                    next_retry_at: None,
                 });
             }
             Err(std::fs::TryLockError::Error(error)) => return Err(error),
@@ -94,7 +98,18 @@ pub fn status(workspace: &Path, name: &str) -> std::io::Result<Status> {
         }
         Err(e) => return Err(e),
     };
-    Ok(Status { path, state })
+    let next_retry_at = if matches!(state, State::Failed(_)) {
+        Some(
+            std::fs::metadata(&failed)?.modified()? + retry_delay(failure_count(&directory, name)?),
+        )
+    } else {
+        None
+    };
+    Ok(Status {
+        path,
+        state,
+        next_retry_at,
+    })
 }
 
 impl Status {
@@ -121,9 +136,28 @@ pub fn ready(workspace: &Path, name: &str) -> Result<PathBuf, Sentence> {
         .require_ready()
 }
 
-/// Whether automatic upkeep may build: never retry the current failed recipe.
-pub fn needs_build(state: &State) -> bool {
-    matches!(state, State::Missing | State::Stale)
+/// A marker without a counter is the first failure. Its mtime starts the delay.
+fn failure_count(directory: &Path, name: &str) -> std::io::Result<u32> {
+    match std::fs::read_to_string(directory.join(format!("{name}{RETRY_SUFFIX}"))) {
+        Ok(value) => value
+            .trim()
+            .parse::<u32>()
+            .map(|count| count.max(1))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(1),
+        Err(e) => Err(e),
+    }
+}
+
+fn retry_delay(failures: u32) -> Duration {
+    Duration::from_secs((600u64 * (1u64 << failures.saturating_sub(1).min(6))).min(6 * 3600))
+}
+
+/// Missing and changed recipes build immediately; failed recipes wait.
+pub fn needs_build(status: &Status, now: SystemTime) -> bool {
+    matches!(status.state, State::Missing | State::Stale)
+        || matches!(status.state, State::Failed(_))
+            && status.next_retry_at.is_some_and(|at| at <= now)
 }
 
 /// Remove only environment snapshots and their failure markers under the build
@@ -148,7 +182,8 @@ where
         if kind.is_dir() {
             perform(entry.path()).await?;
             removed.push(name);
-        } else if kind.is_file() && name.ends_with(FAILED_SUFFIX) {
+        } else if kind.is_file() && (name.ends_with(FAILED_SUFFIX) || name.ends_with(RETRY_SUFFIX))
+        {
             std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
         }
     }
@@ -196,7 +231,9 @@ where
                 continue;
             }
             removed.push(other);
-        } else if kind.is_file() && other.ends_with(FAILED_SUFFIX) {
+        } else if kind.is_file()
+            && (other.ends_with(FAILED_SUFFIX) || other.ends_with(RETRY_SUFFIX))
+        {
             std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
         }
     }
@@ -278,11 +315,14 @@ where
         .map_err(|e| e.to_string())?
         .ok_or("An environment build is already running")?;
     let marker = directory.join(format!("{name}{FAILED_SUFFIX}"));
-    match std::fs::remove_file(&marker) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e.to_string()),
-    }
+    let failures = if marker.try_exists().map_err(|e| e.to_string())? {
+        failure_count(&directory, name)
+            .map_err(|e| e.to_string())?
+            .saturating_add(1)
+    } else {
+        1
+    };
+    let retry = directory.join(format!("{name}{RETRY_SUFFIX}"));
     enum End {
         Cancelled,
         TimedOut,
@@ -300,6 +340,7 @@ where
         Ok(Status {
             path,
             state: State::Ready,
+            next_retry_at: None,
         })
     };
     let deadline = tokio::time::Instant::now() + timeout;
@@ -315,9 +356,20 @@ where
             cancelled.cancel();
             timeout_detail
         }
-        End::Finished(Ok(status)) => return Ok(status),
+        End::Finished(Ok(status)) => {
+            for file in [&marker, &retry] {
+                match std::fs::remove_file(file) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+            return Ok(status);
+        }
         End::Finished(Err(reason)) => reason,
     };
+    gb_base::files::atomic_write(&retry, failures.to_string().as_bytes())
+        .map_err(|e| e.to_string())?;
     gb_base::files::atomic_write(&marker, format!("{reason}\n").as_bytes())
         .map_err(|e| e.to_string())?;
     Err(reason)
@@ -406,7 +458,10 @@ mod tests {
                 .unwrap();
                 let state = status(root.path(), name).unwrap().state;
                 if abort {
-                    assert!(needs_build(&state));
+                    assert!(needs_build(
+                        &status(root.path(), name).unwrap(),
+                        SystemTime::now()
+                    ));
                     assert!(!directory.join(format!("{name}{FAILED_SUFFIX}")).exists());
                 } else {
                     assert_eq!(state, State::Failed("localized timeout".into()));

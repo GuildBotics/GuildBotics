@@ -947,8 +947,11 @@ pub async fn load_ci(
 fn upkeep_decision(view: &Value, last_problem: &mut String) -> (bool, Option<String>) {
     let state = view["snapshot"]["state"].as_str().unwrap_or_default();
     let setting = view["problem_setting"].as_str().unwrap_or_default();
-    let build = ["missing", "stale"].contains(&state) && ["snapshot", ""].contains(&setting);
-    let problem = if build || ["ready", "building"].contains(&state) && setting.is_empty() {
+    let build = view["snapshot"]["build_due"] == true && ["snapshot", ""].contains(&setting);
+    let problem = if state == "building" {
+        last_problem.clone()
+    } else if ["missing", "stale", "ready"].contains(&state) && ["snapshot", ""].contains(&setting)
+    {
         String::new()
     } else {
         view["problem"].as_str().unwrap_or_default().to_owned()
@@ -1009,8 +1012,8 @@ pub(crate) async fn upkeep(api: Shared) {
             })
             .await
         {
-            tracing::error!("Environment upkeep failed: {e}");
-            output(&workspace, &format!("Build failed: {e}"));
+            // The next status reading reports a changed failure reason once.
+            tracing::debug!("Environment upkeep build ended: {e}");
         }
     })
     .await;
@@ -1652,26 +1655,48 @@ mod tests {
     }
 
     #[test]
+    fn retrying_the_same_failure_only_notifies_when_the_reason_changes() {
+        let mut last = String::new();
+        let mut view = serde_json::json!({"snapshot":{"state":"failed","build_due":false},"problem_setting":"snapshot","problem":"outage"});
+        assert_eq!(
+            super::upkeep_decision(&view, &mut last),
+            (false, Some("outage".into()))
+        );
+        view["snapshot"]["build_due"] = true.into();
+        assert_eq!(super::upkeep_decision(&view, &mut last), (true, None));
+        view["snapshot"]["state"] = "building".into();
+        assert_eq!(super::upkeep_decision(&view, &mut last).1, None);
+        view["snapshot"]["state"] = "failed".into();
+        view["snapshot"]["build_due"] = false.into();
+        assert_eq!(super::upkeep_decision(&view, &mut last), (false, None));
+        view["problem"] = "different outage".into();
+        assert_eq!(
+            super::upkeep_decision(&view, &mut last),
+            (false, Some("different outage".into()))
+        );
+    }
+
+    #[test]
     fn upkeep_builds_only_missing_or_stale_snapshots_and_reports_a_blocker_once() {
         let mut last = String::new();
         for state in ["missing", "stale"] {
             assert_eq!(
                 super::upkeep_decision(
-                    &serde_json::json!({"snapshot":{"state":state},"problem_setting":"snapshot","problem":"build it"}),
+                    &serde_json::json!({"snapshot":{"state":state,"build_due":(["missing","stale"].contains(&state))},"problem_setting":"snapshot","problem":"build it"}),
                     &mut last
                 ),
                 (true, None)
             );
         }
         for state in ["ready", "building", "failed"] {
-            assert!(!super::upkeep_decision(&serde_json::json!({"snapshot":{"state":state},"problem_setting":"","problem":""}),&mut last).0);
+            assert!(!super::upkeep_decision(&serde_json::json!({"snapshot":{"state":state,"build_due":(["missing","stale"].contains(&state))},"problem_setting":"","problem":""}),&mut last).0);
         }
         for (setting, problem) in [
             ("runtime", "no hypervisor"),
             ("image", "load custom image"),
             ("declaration", "invalid DNS"),
         ] {
-            let view = serde_json::json!({"snapshot":{"state":"missing"},"problem_setting":setting,"problem":problem});
+            let view = serde_json::json!({"snapshot":{"state":"missing","build_due":true},"problem_setting":setting,"problem":problem});
             assert_eq!(
                 super::upkeep_decision(&view, &mut last),
                 (false, Some(problem.into()))
@@ -1682,7 +1707,7 @@ mod tests {
             serde_json::json!({"snapshot":{"state":"ready"},"problem_setting":"","problem":""});
         assert_eq!(super::upkeep_decision(&ready, &mut last), (false, None));
         assert_eq!(last, "");
-        let missing = serde_json::json!({"snapshot":{"state":"missing"},"problem_setting":"snapshot","problem":"build"});
+        let missing = serde_json::json!({"snapshot":{"state":"missing","build_due":true},"problem_setting":"snapshot","problem":"build"});
         assert!(super::upkeep_decision(&missing, &mut last).0);
     }
 

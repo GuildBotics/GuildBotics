@@ -236,9 +236,10 @@ async fn failed_builds_are_remembered_and_preserve_old_snapshots() {
         State::Failed("broken".into())
     );
     assert!(old.exists());
-    assert!(!gb_environment::snapshot::needs_build(&State::Failed(
-        "broken".into()
-    )));
+    assert!(!gb_environment::snapshot::needs_build(
+        &status(root.path(), NAME).unwrap(),
+        std::time::SystemTime::now()
+    ));
 }
 
 #[test]
@@ -291,4 +292,70 @@ async fn removing_snapshots_uses_metadata_callback_and_keeps_login_files() {
             .is_err()
     );
     drop(held);
+}
+
+#[tokio::test]
+async fn automatic_retry_persists_backs_off_caps_and_resets_after_success() {
+    use gb_environment::snapshot::{build, needs_build};
+    use std::time::{Duration, SystemTime};
+    let root = tempfile::tempdir().unwrap();
+    let directory = snapshots_dir(root.path());
+    for delay in [600, 1200, 2400, 4800, 9600, 19200, 21600, 21600] {
+        assert!(
+            build(root.path(), NAME, "timeout".into(), |_, _| async {
+                Err("temporary outage".into())
+            })
+            .await
+            .is_err()
+        );
+        let marker = directory.join(format!("{NAME}.failed"));
+        let ended = std::fs::metadata(&marker).unwrap().modified().unwrap();
+        // Every reading reloads the persisted counter and deadline.
+        let failed = status(root.path(), NAME).unwrap();
+        let at = ended + Duration::from_secs(delay);
+        assert_eq!(failed.next_retry_at, Some(at));
+        assert!(!needs_build(&failed, at - Duration::from_nanos(1)));
+        assert!(needs_build(&status(root.path(), NAME).unwrap(), at));
+        assert!(needs_build(
+            &status(root.path(), OTHER).unwrap(),
+            SystemTime::now()
+        ));
+    }
+    build(
+        root.path(),
+        NAME,
+        "timeout".into(),
+        |directory, _| async move {
+            let path = directory.join(NAME);
+            std::fs::create_dir(&path).unwrap();
+            Ok(path)
+        },
+    )
+    .await
+    .unwrap();
+    let ready = status(root.path(), NAME).unwrap();
+    assert_eq!(ready.next_retry_at, None);
+    assert!(!needs_build(&ready, SystemTime::now()));
+    assert!(!directory.join(format!("{NAME}.retry")).exists());
+    assert!(
+        build(root.path(), NAME, "timeout".into(), |_, _| async {
+            Err("new outage".into())
+        })
+        .await
+        .is_err()
+    );
+    let ended = std::fs::metadata(directory.join(format!("{NAME}.failed")))
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert_eq!(
+        status(root.path(), NAME).unwrap().next_retry_at,
+        Some(ended + Duration::from_secs(600))
+    );
+    gb_environment::snapshot::remove(root.path(), |path| async move {
+        std::fs::remove_dir_all(path).map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap();
+    assert!(!directory.join(format!("{NAME}.retry")).exists());
 }

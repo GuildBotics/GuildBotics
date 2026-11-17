@@ -41,7 +41,7 @@ pub async fn read(host: &Host, workspace: &Path) -> Device {
     let mut device = Device {
         view: json!({"platform":std::env::consts::OS,
             "runtime":{"available":health.is_none(),"reason":"","version":runtime::RUNTIME_VERSION,"home":home},
-            "resources":null,"snapshot":{"state":"missing","name":"","path":"","detail":"","output":[]},
+            "resources":null,"snapshot":{"state":"missing","name":"","path":"","detail":"","next_retry_at":null,"output":[]},
             "image":{"default":"","architecture":image::device_architecture(),"reference":"","digest":"","digests":{},"present":true,"held":"","problem":"","warning":"","load_command":""},
             "network":null,"dns":{"declared":"","nameservers":[],"problem":""},
             "tools":[],"problem":"","problem_setting":"","warning":"",
@@ -142,8 +142,7 @@ pub async fn read(host: &Host, workspace: &Path) -> Device {
                 snapshot::State::Building => ("building", ""),
                 snapshot::State::Failed(detail) => ("failed", detail.as_str()),
             };
-            device.view["snapshot"] =
-                json!({"state":state,"name":name,"path":snapshot.path,"detail":detail,"output":[]});
+            device.view["snapshot"] = json!({"state":state,"name":name,"path":snapshot.path,"detail":detail,"next_retry_at":snapshot.next_retry_at.map(|at| at.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64),"build_due":snapshot::needs_build(&snapshot, std::time::SystemTime::now()),"output":[]});
             match snapshot.require_ready() {
                 Ok(path) => device.snapshot = Some(path),
                 Err(refusal) if device.refusal.is_none() => {

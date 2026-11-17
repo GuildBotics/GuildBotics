@@ -66,6 +66,7 @@ en:
     no_ci_runner: "The workspace's code host has no CI runner GuildBotics loads images into; there is nothing to load."
     loading_ci: "Waiting for the CI runner to load %{archive}..."
   snapshot:
+    next_retry: "Next automatic build: %{time}"
     missing: "The agent environment is missing on this device."
     stale: "The agent environment on this device is older than the declaration."
     building: "The agent environment is being built on this device; try again when it is ready."

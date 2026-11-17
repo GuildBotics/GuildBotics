@@ -692,6 +692,7 @@ export const resources = {
             resourceValues: "{{memory}} MiB · {{cpus}} vCPU",
             resourcesUnavailable: "The declaration could not be read",
             snapshot: "Environment",
+            nextRetry: "Next automatic build: {{time}}",
             snapshotStates: {
               missing: "Not built",
               stale: "Older than the declaration",
@@ -1822,6 +1823,7 @@ export const resources = {
             resourceValues: "{{memory}} MiB・{{cpus}} vCPU",
             resourcesUnavailable: "宣言を読み取れません",
             snapshot: "環境",
+            nextRetry: "次の自動作成: {{time}}",
             snapshotStates: {
               missing: "未ビルド",
               stale: "宣言より古い",
