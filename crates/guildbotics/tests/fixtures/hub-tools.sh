@@ -170,6 +170,9 @@ case "$name" in
             server:hub-auto-update|server:hub-prune) exec "$GUILDBOTICS_TEST_BINARY" "$@" ;;
             server:hub-migration) printf '{"manual_update_version":0,"instructions":null}\n' ;;
             server:hub-notify)
+                if [ -f "$FAKE_ROOT/fail-intent-save" ]; then
+                    rmdir "$HOME/Library/Application Support/GuildBotics/Hub/auto-update.json.new" 2>/dev/null || :
+                fi
                 [ ! -f "$FAKE_ROOT/fail-notify" ] || exit 1
                 printf '%s\n' "${GUILDBOTICS_IDENTITY_ROOT:-}" >"$FAKE_ROOT/notify-identity-root"
                 cat >>"$FAKE_ROOT/notifications"
@@ -188,14 +191,27 @@ case "$name" in
             service:start) touch "$FAKE_ROOT/service-running" ;;
             service:stop) rm -f "$FAKE_ROOT/service-running" ;;
             environment:prune)
+                case "$*" in
+                    *--workspace*)
+                        if [ -f "$FAKE_ROOT/block-cleanup-unlock" ]; then
+                            touch "$HOME/Library/Application Support/GuildBotics/Hub/operation/held"
+                        fi ;;
+                esac
                 [ ! -f "$HOME/Library/Application Support/GuildBotics/Hub${GUILDBOTICS_HUB_INSTANCE:+-$GUILDBOTICS_HUB_INSTANCE}/builds/update-from" ] || exit 1
                 [ ! -f "$FAKE_ROOT/fail-prune" ] || exit 1
                 rm -rf "$FAKE_ROOT/obsolete-snapshot"
                 ;;
             workspace:current)
+                [ ! -f "$FAKE_ROOT/fail-workspace" ] || exit 1
+                if [ -f "$FAKE_ROOT/fail-intent-save" ]; then
+                    mkdir "$HOME/Library/Application Support/GuildBotics/Hub/auto-update.json.new"
+                fi
                 printf '{"workspace":"%s/workspace"}\n' "$FAKE_ROOT"
                 ;;
             environment:status)
+                case "$*" in
+                    *--workspace*) [ ! -f "$FAKE_ROOT/fail-status" ] || exit 1 ;;
+                esac
                 if [ -f "$FAKE_ROOT/environment" ]; then cat "$FAKE_ROOT/environment"
                 else printf '{"image":{"reference":null},"snapshot":{"state":"ready"}}\n'; fi
                 ;;

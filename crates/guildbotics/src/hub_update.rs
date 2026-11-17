@@ -214,6 +214,10 @@ impl Hub {
     }
 
     fn save(&self) -> anyhow::Result<()> {
+        self.save_state(&self.state)
+    }
+
+    fn save_state(&self, state: &Map<String, Value>) -> anyhow::Result<()> {
         let path = self.state_dir.join("auto-update.json");
         let pending = self.state_dir.join("auto-update.json.new");
         std::fs::OpenOptions::new()
@@ -222,7 +226,7 @@ impl Hub {
             .truncate(true)
             .mode(0o600)
             .open(&pending)?
-            .write_all(Value::Object(self.state.clone()).to_string().as_bytes())?;
+            .write_all(Value::Object(state.clone()).to_string().as_bytes())?;
         std::fs::rename(pending, path)?;
         Ok(())
     }
@@ -413,7 +417,21 @@ impl Hub {
 
     /// Finish only the activation we recorded, under the script's operation lock.
     /// Upkeep builds snapshots but never owns this post-activation cleanup.
-    fn finish_snapshot(&mut self) -> anyhow::Result<()> {
+    fn finish_snapshot(&mut self, sha: &str) {
+        match self.try_finish_snapshot() {
+            Ok(()) => self.clear_blocker("snapshot"),
+            Err(error) => self.blocker(
+                sha,
+                "snapshot",
+                &format!("Snapshot cleanup failed: {error}"),
+                "inspect environment status and environment prune; cleanup will retry automatically while update checks continue",
+                None,
+                0,
+            ),
+        }
+    }
+
+    fn try_finish_snapshot(&mut self) -> anyhow::Result<()> {
         let Some(request) = self.state.get("snapshotCleanup").cloned() else {
             return Ok(());
         };
@@ -526,7 +544,11 @@ impl Hub {
         }
         self.clear_blocker("recovery");
         self.restore_service()?;
-        self.finish_snapshot()?;
+        self.finish_snapshot(sha);
+        // A cleanup that could not release the shared operation lock is still active.
+        if operation.try_exists()? {
+            return Ok(());
+        }
         self.git(&["fetch", "origin", "main"])?;
         let head = self.git(&["rev-parse", "--verify", "HEAD^{commit}"])?;
         let repo = self.checkout.to_string_lossy().into_owned();
@@ -705,21 +727,23 @@ impl Hub {
             return Ok(());
         }
         self.clear_blocker(stage);
-        // Persist intent before moving HEAD: a terminated update must not retry.
-        self.state.insert("attempt".into(), sha.as_str().into());
-        self.state.insert("result".into(), "updating".into());
         let workspace = self.cli(&["workspace", "current", "--format", "json"])?;
         let workspace = workspace["workspace"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Workspace is unavailable"))?;
-        self.state.insert(
+        let previous_failure = self.failure_record()?;
+        let subject = self.git(&["show", "-s", "--format=%s", sha])?;
+        // Do not expose an unstarted attempt to blocker persistence on save failure.
+        let mut intent = self.state.clone();
+        intent.insert("attempt".into(), sha.as_str().into());
+        intent.insert("result".into(), "updating".into());
+        intent.insert(
             "snapshotCleanup".into(),
             json!({"sha":sha,"workspace":workspace}),
         );
-        self.save()?;
+        self.save_state(&intent)?;
+        self.state = intent;
         *stage = "update";
-        let previous_failure = self.failure_record()?;
-        let subject = self.git(&["show", "-s", "--format=%s", sha])?;
         if let Err(error) = self.run(
             &current,
             &[
@@ -780,7 +804,7 @@ impl Hub {
         }
         if self.state.get("result").and_then(Value::as_str) == Some("success") {
             *stage = "snapshot";
-            self.finish_snapshot()?;
+            self.finish_snapshot(sha);
         }
         Ok(())
     }

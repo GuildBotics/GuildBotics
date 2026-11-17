@@ -1515,6 +1515,105 @@ fn auto_update_finishes_snapshot_cleanup_on_a_later_pass() {
 }
 
 #[test]
+fn auto_cleanup_errors_never_prevent_a_new_verified_update() {
+    for failure in ["prune", "status", "state"] {
+        let hub = Hub::new();
+        hub.install();
+        hub.auto_candidate();
+        hub.mark("fail-prune");
+        hub.run("auto-once", None, true);
+        assert!(hub.auto_state()["blockers"]["snapshot"].is_object());
+        fs::remove_file(hub.root().join("fail-prune")).unwrap();
+        match failure {
+            "prune" => hub.mark("fail-prune"),
+            "status" => hub.mark("fail-status"),
+            "state" => {
+                fs::write(
+                    hub.root().join("environment"),
+                    r#"{"snapshot":{"state":"unknown"}}"#,
+                )
+                .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        hub.commit("newer");
+        hub.git(&["push", "origin", "main"]);
+        hub.git(&["reset", "--hard", "HEAD^"]);
+        hub.run("auto-once", None, true);
+        hub.assert_runs_signed("newer");
+        assert!(
+            hub.lines("notifications")
+                .contains("snapshot: Snapshot cleanup failed")
+        );
+        assert!(!hub.lines("notifications").contains("preflight:"));
+        for marker in ["fail-prune", "fail-status", "environment"] {
+            let path = hub.root().join(marker);
+            if path.exists() {
+                fs::remove_file(path).unwrap();
+            }
+        }
+        hub.run("auto-once", None, true);
+        assert!(hub.auto_state()["blockers"].get("snapshot").is_none());
+        assert!(hub.auto_state().get("snapshotCleanup").is_none());
+    }
+}
+
+#[test]
+fn a_cleanup_lock_that_cannot_be_released_keeps_the_update_retryable() {
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    hub.mark("fail-prune");
+    hub.run("auto-once", None, true);
+    fs::remove_file(hub.root().join("fail-prune")).unwrap();
+    hub.mark("block-cleanup-unlock");
+    hub.commit("newer");
+    hub.git(&["push", "origin", "main"]);
+    hub.git(&["reset", "--hard", "HEAD^"]);
+    let attempt = hub.auto_state()["attempt"].clone();
+    hub.run("auto-once", None, true);
+    hub.assert_runs_signed("new");
+    assert_eq!(hub.auto_state()["attempt"], attempt);
+    let operation = hub.builds().parent().unwrap().join("operation");
+    fs::remove_file(operation.join("held")).unwrap();
+    fs::remove_dir(operation).unwrap();
+    fs::remove_file(hub.root().join("block-cleanup-unlock")).unwrap();
+    hub.run("auto-once", None, true);
+    hub.assert_runs_signed("newer");
+}
+
+#[test]
+fn failed_pre_update_reads_leave_the_same_revision_retryable() {
+    for failure in ["workspace", "failure-record", "intent-save"] {
+        let hub = Hub::new();
+        hub.install();
+        hub.auto_candidate();
+        let last_failure = hub.builds().parent().unwrap().join("last-failure");
+        if failure == "workspace" {
+            hub.mark("fail-workspace");
+        } else if failure == "intent-save" {
+            hub.mark("fail-intent-save");
+        } else {
+            fs::create_dir(&last_failure).unwrap();
+        }
+        hub.run("auto-once", None, true);
+        hub.assert_runs_signed("old");
+        assert!(hub.auto_state().get("attempt").is_none());
+        assert!(hub.auto_state().get("result").is_none());
+        if failure == "workspace" {
+            fs::remove_file(hub.root().join("fail-workspace")).unwrap();
+        } else if failure == "intent-save" {
+            fs::remove_file(hub.root().join("fail-intent-save")).unwrap();
+        } else {
+            fs::remove_dir(last_failure).unwrap();
+        }
+        hub.run("auto-once", None, true);
+        hub.assert_runs_signed("new");
+        assert_eq!(hub.auto_state()["result"], "success");
+    }
+}
+
+#[test]
 fn auto_update_notifies_when_a_running_snapshot_build_fails() {
     let hub = Hub::new();
     hub.install();
