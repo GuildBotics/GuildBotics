@@ -801,7 +801,7 @@ configuration and credential helpers. They are one test crate,
 Branvil browser journeys and fixture layouts run in Desktop E2E:
 `cd desktop && npm run e2e -- --project=branvil`. The stack owns a disposable
 embedded service and uses the host browser session. Set `BRANVIL_E2E_PERF=1`
-only for board timing investigations.
+only for one-card fixture timing investigations; these are not large-board benchmarks.
 
 ### GitHub Actions
 

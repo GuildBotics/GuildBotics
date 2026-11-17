@@ -1,6 +1,9 @@
 /// <reference lib="dom" />
 
-// Board render timing against a live, seeded Branvil (docs/performance.md, "GUI").
+// Small-fixture board timing only: the disposable acme workspace has one card.
+// It cannot reproduce the historical 1,695-card benchmark in crates/branvil/docs/performance.md.
+// The harness accepts neither a seeded data directory nor a workspace override;
+// use these timings only to investigate this fixture, never as large-board results.
 // Not part of the smoke run: it runs only with BRANVIL_E2E_PERF=1.
 //
 // Run from desktop with BRANVIL_E2E_PERF=1 npm run e2e -- --project=branvil.
@@ -107,7 +110,14 @@ test("time to a rendered board", async ({ browser }) => {
         heapBytes: memory?.usedJSHeapSize ?? null,
       };
     });
-    console.log(JSON.stringify({ run, ...metrics }));
+    console.log(
+      JSON.stringify({
+        workload: "disposable-acme-one-card",
+        comparableToHistoricalBenchmark: false,
+        run,
+        ...metrics,
+      }),
+    );
     await context.close();
   }
 });

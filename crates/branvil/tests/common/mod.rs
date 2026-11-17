@@ -26,9 +26,7 @@ fn process_entry() {
         });
     }
     let args: Vec<_> = std::env::args_os().collect();
-    if std::env::var_os("BRANVIL_TEST_PROCESS").is_some()
-        || args.get(1).is_some_and(|a| a == "hook" || a == "runner")
-    {
+    if std::env::var_os("BRANVIL_TEST_PROCESS").is_some() {
         let vault = std::env::var_os("BRANVIL_TEST_VAULT")
             .map(|p| branvil::vault::Sealed::new(Path::new(&p), &[7; 32]).unwrap());
         let vault: std::sync::Arc<dyn branvil::vault::Vault> =
@@ -59,6 +57,26 @@ impl branvil::vault::Vault for NoVault {
     }
     fn delete(&self, _: &str) -> anyhow::Result<()> {
         anyhow::bail!("test host has no vault")
+    }
+}
+
+#[test]
+fn cli_command_names_remain_libtest_filters_without_the_process_marker() {
+    let home = tempfile::tempdir().unwrap();
+    for subcommand in branvil::cli_command().get_subcommands() {
+        let name = subcommand.get_name();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .env_clear()
+            .env("HOME", home.path())
+            .current_dir(home.path())
+            .args([name, "--list"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "filter {name}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("benchmarks"),
+            "filter {name}: {output:?}"
+        );
     }
 }
 

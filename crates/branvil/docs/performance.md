@@ -251,12 +251,21 @@ The bundle (`web/dist`, Vite production build): `index.html` 0.4 kB, CSS 6.4
 kB (2.0 kB gzip), JavaScript 431 kB (129.2 kB gzip). The service sends the
 files uncompressed (`Cache-Control: public, max-age=3600`).
 
-Time to a rendered board, `desktop/e2e/branvil-perf.spec.ts` in Google Chrome
-(`BRANVIL_E2E_CHANNEL=chrome`, a new browser context per run, Playwright
-tracing off), board `acme/board-0` of the fixture (now the board of workspace
-`acme-0`, `BRANVIL_E2E_WORKSPACE`): 1,695 open cards (the
-board's default view), fetched in 17 pages. The spec enters the GUI with a
-`guildbotics branvil open --print` link and counts from the board page's own navigation.
+The current Desktop harness (`desktop/e2e/branvil-perf.spec.ts`) measures only
+its disposable `acme` workspace with one card. Run it from `desktop` with
+`BRANVIL_E2E_PERF=1 npm run e2e -- --project=branvil --trace off`.
+It accepts neither a pre-seeded data directory nor `BRANVIL_E2E_WORKSPACE`;
+its output labels this small fixture and is **not comparable** to the
+large-board results below. Do not use it to validate large-board performance
+until a representative disposable dataset is available in the harness.
+
+The following is a historical measurement, not a procedure supported by the
+current harness. The former perf spec ran in Google Chrome with
+`BRANVIL_E2E_CHANNEL=chrome`, a new browser context per run and tracing off.
+It measured fixture board `acme/board-0` (later workspace `acme-0`, selected
+with `BRANVIL_E2E_WORKSPACE`): 1,695 open cards in the default view, fetched
+in 17 pages. It entered with a `guildbotics branvil open --print` link and
+counted from the board page's navigation.
 Besides the first painted frame it reports *busy until*: a timer on the page
 notes every stretch over 50 ms in which it could not run, and the run waits
 until there was none for 2 s, so work the browser does after that frame
