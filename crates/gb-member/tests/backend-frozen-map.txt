@@ -297,7 +297,7 @@ tests/guildbotics/capabilities/test_waiting_for.py::test_resumed_pr_uses_its_hos
 tests/guildbotics/capabilities/test_waiting_for.py::test_a_ticket_only_project_can_wait_for_its_human_assignee -> crates/gb-member/tests/control.rs::waiting_uses_only_commented_targets_and_validates_every_recipient
 tests/guildbotics/capabilities/test_waiting_for.py::test_human_unknown_and_inactive_recipients_still_notify -> 移さない：通知側 selector の振る舞いは #90 の範囲。
 tests/guildbotics/capabilities/test_waiting_for.py::test_a_diagnostics_failure_does_not_change_the_completed_stop -> crates/gb-member/tests/control.rs::completion_requires_its_own_evidence_and_stores_a_redacted_summary
-tests/guildbotics/integrations/test_branvil_code_hosting.py::test_the_alert_command_shows_the_upstreams_alerts -> crates/gb-integrations/tests/branvil/alerts.rs::member_alert_command_shows_the_upstreams_alerts
+tests/guildbotics/integrations/test_branvil_code_hosting.py::test_the_alert_command_shows_the_upstreams_alerts -> crates/gb-integrations/tests/branvil/alerts.rs::member_alert_command_returns_the_upstreams_alerts + tests/guildbotics/templates/commands/test_security_alerts.py::test_structured_alert_fields_and_next_page + tests/guildbotics/templates/commands/test_security_alerts.py::test_empty_missing_fields_and_no_patch_are_localized
 tests/guildbotics/integrations/contracts/test_code_hosting_contract.py::test_member_show_reads_default_branch_for_every_provider -> crates/gb-integrations/tests/support/contracts.rs::member_show_contract
 
 # レビューで追加した隣接範囲（実機・invocation・broker・credential helper）
