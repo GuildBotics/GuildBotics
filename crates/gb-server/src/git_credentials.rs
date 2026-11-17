@@ -117,12 +117,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let data = dir.path().join("data");
         let identity = dir.path().join("identity");
-        let root = dir.path().join("branvil");
-        let token = branvil::api::initialize(&root, "owner").unwrap();
-        let running =
-            branvil::api::Running::start(&root, Arc::new(branvil::vault::Memory::default()))
-                .await
-                .unwrap();
+        let fixture = branvil::test_support::Fixture::new("owner").await;
+        let token = fixture.owner_token.clone();
+        let running = &fixture.running;
         let origin = running.data.base_url().to_owned();
         let mut api = crate::api::Api::new(
             crate::api::Selected::default(),

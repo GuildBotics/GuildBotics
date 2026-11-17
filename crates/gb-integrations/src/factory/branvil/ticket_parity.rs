@@ -1,25 +1,18 @@
 //! Ticket-specific frozen host assertions at the provider and selection boundaries.
 use super::*;
-use branvil::api::{MemberApi, Running, initialize};
+use branvil::api::MemberApi;
+use branvil::test_support::Fixture as Embedded;
 
 struct Fixture {
-    _temp: tempfile::TempDir,
-    running: Running,
+    running: Embedded,
     owner: MemberApi,
     service: BranvilService,
     sequence: std::cell::Cell<usize>,
 }
 impl Fixture {
     async fn new() -> Self {
-        let temp = tempfile::tempdir().unwrap();
-        let token = initialize(temp.path(), "owner1").unwrap();
-        let running = Running::start(
-            temp.path(),
-            std::sync::Arc::new(::branvil::vault::Memory::default()),
-        )
-        .await
-        .unwrap();
-        let owner = running.data.authenticate(token.clone()).await.unwrap();
+        let running = Embedded::new("owner1").await;
+        let owner = running.owner.clone();
         for workspace in ["test", "other"] {
             owner
                 .repos_create_workspace(decode(json!({"name":workspace})).unwrap())
@@ -41,7 +34,7 @@ impl Fixture {
             .await
             .unwrap();
         let service = BranvilService::new(
-            running.data.clone(),
+            running.data(),
             issued.token,
             "agent1".into(),
             "test".into(),
@@ -49,7 +42,6 @@ impl Fixture {
             std::sync::Arc::new(|_| {}),
         );
         Self {
-            _temp: temp,
             running,
             owner,
             service,
@@ -158,7 +150,7 @@ async fn waiting_eligibility_and_comment_changes_are_reread() {
             .await
             .unwrap()
     );
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[tokio::test]
@@ -199,7 +191,7 @@ async fn ready_and_working_triggers_observe_member_words_and_assignment() {
     assert_eq!(reason(&f.service, &c).await, None);
     c["comments"][0]["created_at"] = json!("2026-01-01T00:00:00Z");
     assert_eq!(reason(&f.service, &c).await.as_deref(), Some("ready_lane"));
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[tokio::test]
@@ -269,7 +261,7 @@ async fn interactive_and_scope_guards_cover_every_trigger() {
             .extend(patch.as_object().unwrap().clone());
         assert_eq!(reason(&f.service, &c).await, None);
     }
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[tokio::test]
@@ -305,7 +297,7 @@ async fn resolved_mentions_and_retained_status_determine_selection() {
             );
         }
     }
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[tokio::test]
@@ -344,7 +336,7 @@ async fn assignment_filters_mentions_without_dropping_visible_comments() {
             }
         }
     }
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[tokio::test]
@@ -456,7 +448,7 @@ async fn creation_assignees_labels_status_and_parent_preserve_contract() {
     assert_eq!(read["title"], "Renamed");
     assert_eq!(read["parent"]["url"], url);
     assert_eq!(read["parent"]["label"], "#1");
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[tokio::test]
@@ -559,7 +551,7 @@ async fn blocked_ready_work_and_cross_workspace_mutations_are_refused() {
             .lane,
         "ready"
     );
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[tokio::test]
@@ -627,7 +619,7 @@ async fn edited_and_deleted_comments_are_reread_before_dispatch() {
             .is_empty()
     );
     assert!(f.service.candidates().await.unwrap()[0].comments.is_empty());
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[tokio::test]
@@ -669,7 +661,7 @@ async fn other_assignee_mentions_preserve_human_assignment_and_lane() {
     let read = f.owner.tickets_get_ticket("test/repo", key).await.unwrap();
     assert_eq!(read.assignee.unwrap().name, "owner1");
     assert_eq!(read.lane, "new");
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[tokio::test]
@@ -817,14 +809,14 @@ async fn interactive_ancestors_block_candidates_and_refresh_for_every_trigger() 
                 .unwrap();
         }
     }
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[tokio::test]
 async fn canonical_ticket_addresses_fail_without_mutation() {
     let f = Fixture::new().await;
     let url = f.create().await;
-    let base = f.running.data.base_url();
+    let base = f.running.running.data.base_url();
     for address in [
         format!("{base}/test/repo/-/tickets/01"),
         format!("{base}/test/repo/-/tickets/0"),
@@ -850,32 +842,12 @@ async fn canonical_ticket_addresses_fail_without_mutation() {
             .items()
             .is_empty()
     );
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 impl Fixture {
     fn git(&self, args: &[&str]) -> String {
-        let result = std::process::Command::new("git")
-            .arg("--git-dir")
-            .arg(self._temp.path().join("repos/test/repo.git"))
-            .args(args)
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", self._temp.path())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", self._temp.path().join("empty-config"))
-            .env("GIT_AUTHOR_NAME", "Fixture")
-            .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
-            .env("GIT_COMMITTER_NAME", "Fixture")
-            .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
-            .output()
-            .unwrap();
-        assert!(
-            result.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-        String::from_utf8(result.stdout).unwrap().trim().into()
+        self.running.git("test/repo", args)
     }
     async fn linked(&self, url: Option<&str>, closes: bool, merged: bool) -> String {
         let sequence = self.sequence.get();
@@ -887,20 +859,13 @@ impl Fixture {
             base = self.git(&["commit-tree", &tree, "-m", "base"]);
             self.git(&["update-ref", "refs/heads/main", &base]);
         }
-        // A linked PR must add real content; empty commits cannot land.
-        let file = self._temp.path().join("feature.txt");
-        std::fs::write(&file, format!("feature {sequence}")).unwrap();
-        let blob = self.git(&["hash-object", "-w", file.to_str().unwrap()]);
-        self.git(&["read-tree", &base]);
-        self.git(&[
-            "update-index",
-            "--add",
-            "--cacheinfo",
-            &format!("100644,{blob},feature-{sequence}.txt"),
-        ]);
-        let tree = self.git(&["write-tree"]);
-        let head = self.git(&["commit-tree", &tree, "-p", &base, "-m", &branch]);
-        self.git(&["update-ref", &format!("refs/heads/{branch}"), &head]);
+        let head = self.running.commit(
+            "test/repo",
+            &branch,
+            Some(&base),
+            &format!("feature-{sequence}.txt"),
+            &format!("feature {sequence}"),
+        );
         let pull = self
             .service
             .create_pull_request(CreatePullRequest {
@@ -1030,7 +995,7 @@ async fn linked_pulls_yield_to_conversations_and_finish_only_after_answer() {
                 .unwrap();
         }
     }
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[tokio::test]
@@ -1124,7 +1089,7 @@ async fn assignment_timing_is_shared_by_candidate_and_refresh_reads() {
             }
         }
     }
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[tokio::test]
@@ -1172,7 +1137,7 @@ async fn closed_items_include_unboarded_pulls_and_only_workspace_tickets() {
         .map(|i| i.url)
         .collect();
     assert_eq!(actual, [pull, closed].into());
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[tokio::test]
@@ -1196,7 +1161,7 @@ async fn ready_candidates_precede_working_and_sort_by_creation() {
         .map(|t| t.url.unwrap())
         .collect();
     assert_eq!(urls, expected);
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[test]
@@ -1246,7 +1211,7 @@ async fn only_member_open_board_work_is_selected_on_both_reads() {
                 .is_none()
         );
     }
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }
 
 #[tokio::test]
@@ -1264,7 +1229,10 @@ async fn repository_ticket_numbers_and_assignee_projection_are_independent() {
     let url = f.create().await;
     assert_eq!(
         url,
-        format!("{}/test/repo/-/tickets/1", f.running.data.base_url())
+        format!(
+            "{}/test/repo/-/tickets/1",
+            f.running.running.data.base_url()
+        )
     );
     assert_eq!(f.read(&url).await["label"], "#1");
     assert_eq!(f.read(&url).await["author"], "agent1");
@@ -1280,5 +1248,5 @@ async fn repository_ticket_numbers_and_assignee_projection_are_independent() {
         assert_eq!(f.read(&url).await["assignees"], expected);
         assert_eq!(f.read(&url).await["author"], "agent1");
     }
-    f.running.stop().await.unwrap();
+    f.running.stop().await;
 }

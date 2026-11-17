@@ -1,4 +1,4 @@
-//! Inject failures at the ticket port while retaining the real local board.
+//! Inject failures at the ticket port while retaining the real embedded Branvil board.
 use gb_ports::*;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};

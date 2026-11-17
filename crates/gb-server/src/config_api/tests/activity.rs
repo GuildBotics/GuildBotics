@@ -318,20 +318,19 @@ async fn service_source_combinations_publish_transitions_once_and_stop_keeps_htt
 
 #[tokio::test]
 async fn history_refresh_imports_closed_board_work_once_without_an_agent_session() {
-    let (f, selected) = running();
+    let (mut f, selected) = running();
+    let native = crate::member::native::tests::fixture(&f.root);
+    let api = Arc::get_mut(&mut f.api).unwrap();
+    api.keychain = native.keychain.clone();
+    assert!(api.branvil.set(native.branvil.clone().unwrap()).is_ok());
     let runtime = selected
         .service
         .workflow("aiko", tokio_util::task::TaskTracker::new())
         .unwrap();
     let tickets = runtime.tickets.unwrap();
-    f.write(
-        &f.workspace()
-            .join(".guildbotics/local/services/tickets/acme%2Fteam/tracker.json"),
-        r#"{"labels":[],"repository":"acme/repo"}"#,
-    );
     let ticket = tickets
         .create_ticket(gb_ports::CreateTicket {
-            tracker: "acme/team".into(),
+            tracker: "acme/demo".into(),
             title: "Closed work".into(),
             body: String::new(),
             labels: vec![],

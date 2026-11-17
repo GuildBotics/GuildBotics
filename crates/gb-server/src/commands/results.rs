@@ -390,8 +390,11 @@ mod tests {
     async fn http_receipts_survive_a_dropped_response_and_never_repeat_work() {
         let root = tempfile::tempdir().unwrap();
         let native = crate::member::native::tests::fixture(root.path());
-        let (seed, bare, _) = crate::member::native::tests::seed_code(&native, root.path());
-        let remote = url::Url::from_file_path(bare).unwrap().to_string();
+        let (seed, _, _) = crate::member::native::tests::seed_code(&native, root.path());
+        let remote = format!(
+            "{}/git/acme/demo.git",
+            native.branvil.as_ref().unwrap().base_url()
+        );
         let workspace = native.workspace.clone();
         let identity = gb_workspace::identity::ensure_workspace_identity(&workspace).unwrap();
         let path = workspace.join(".guildbotics/config/commands/functions/probe.py");
@@ -419,6 +422,7 @@ mod tests {
         );
         api.identity_root = native.identity_root.clone();
         api.keychain = native.keychain.clone();
+        assert!(api.branvil.set(native.branvil.clone().unwrap()).is_ok());
         let consent = api.auth.test_consent();
         let api = Arc::new(api);
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();

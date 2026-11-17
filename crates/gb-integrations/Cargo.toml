@@ -35,6 +35,7 @@ anyhow = "1"
 tracing = "0.1"
 
 [dev-dependencies]
+branvil = { path = "../branvil", features = ["test-support"] }
 axum = { version = "0.8.9", features = ["json"] }
 gb-member = { path = "../gb-member" }
 serde-saphyr = "2.0.0"

@@ -32,6 +32,8 @@ pub mod repair;
 mod runner;
 mod smart_http;
 mod store;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 mod upgrade;
 mod upstream;
 mod util;

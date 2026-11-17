@@ -796,3 +796,42 @@ fn held_approved_work_is_normal_until_main_recovers_or_repair_closes() {
         Ok(())
     }).unwrap();
 }
+
+#[cfg(feature = "test-support")]
+#[test]
+fn fixture_target_is_not_hidden_by_another_reusable_attempt() {
+    let (_d, s) = store();
+    s.write_sync(|w| {
+        enqueue(w, "source", "feature")?;
+        let source = take(w)?;
+        finish(
+            w,
+            &source.attempt.id,
+            &source.lease,
+            "success",
+            None,
+            ResultInfo {
+                image_digest: Some(DIGEST.into()),
+                ..Default::default()
+            },
+            100,
+            T0,
+        )?;
+        enqueue(w, "target", "target")?;
+        let mut registration = reg("reusable", "feature", &["test"]);
+        registration.tree = Some("tree-source".into());
+        register(w, registration, 100, T0)?;
+        assert_eq!(scheduled(w, true)?[0].0.sha, "reusable");
+        let target = claim_fixture(w, ("acme/demo", "target"), T0)?;
+        assert_eq!(target.attempt.sha, "target");
+        assert_eq!(target.attempt.status, "in_progress");
+        assert!(target.reuse.is_none());
+        let remaining = scheduled(w, false)?;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].0.sha, "reusable");
+        assert_eq!(remaining[0].0.status, "queued");
+        assert!(remaining[0].1.is_some());
+        Ok(())
+    })
+    .unwrap();
+}
