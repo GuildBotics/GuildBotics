@@ -801,6 +801,7 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
     )
     .unwrap();
     contracts::code_other_actor_contract(
+        c.as_ref(),
         other_factory
             .create_code_hosting_service()
             .unwrap()

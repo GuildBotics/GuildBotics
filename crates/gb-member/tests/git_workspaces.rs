@@ -1196,7 +1196,7 @@ async fn prepare_dispatch_resolves_ticket_and_fork_heads_and_rejects_invalid_anc
 async fn push_reports_readiness_for_open_prs_without_waiting_for_checks() {
     let mut f = Fixture::new();
     f.services.open = vec!["pr".into()];
-    f.services.checks.insert("pr".into(),serde_json::from_value(json!({"target":{"kind":"pull_request","url":"pr","title":"T","label":"!1"},"base_sha":"base","head_sha":"head","behind_by":0,"out_of_date":false,"current_base_sha":"base","current_head_sha":"head","rollup":"pending","checks":[],"checks_expected":true,"readiness":"blocked","completion_blockers":[{"code":"checks_pending","message":"pending","next_action":"wait"}]})).unwrap());
+    f.services.checks.insert("pr".into(),serde_json::from_value(json!({"target":{"kind":"pull_request","url":"pr","title":"T","label":"!1"},"base_sha":"base","head_sha":"head","behind_by":0,"out_of_date":false,"current_base_sha":"base","current_head_sha":"head","rollup":"pending","checks":[],"checks_expected":true,"readiness":"blocked","feedback":gb_ports::Feedback::default(),"completion_blockers":[{"code":"checks_pending","message":"pending","next_action":"wait"}]})).unwrap());
     let path = f.prepare("one", "topic").await;
     f.stage(&path, "ours");
     let result = f.workspace("one").publish(&path, "ours").await.unwrap();

@@ -3,7 +3,7 @@ use crate::{PatrolComment, PatrolPullRequest, PatrolReview, PatrolThread};
 use ::branvil::api::{pulls, tickets};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, BTreeSet};
-fn array<'a>(v: &'a Value, k: &str) -> &'a [Value] {
+pub(super) fn array<'a>(v: &'a Value, k: &str) -> &'a [Value] {
     v[k].as_array().map(Vec::as_slice).unwrap_or(&[])
 }
 pub(super) fn fold(v: &str) -> String {
@@ -16,7 +16,7 @@ fn reactors(v: &Value) -> BTreeSet<String> {
         .map(|r| fold(text(r, "author")))
         .collect()
 }
-fn status(v: &Value) -> Option<WorkflowStatus> {
+pub(super) fn status(v: &Value) -> Option<WorkflowStatus> {
     WorkflowStatus::from_payload(&v["meta"])
 }
 impl BranvilService {

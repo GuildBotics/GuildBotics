@@ -1178,7 +1178,7 @@ async fn full_shared_code_state_and_link_contracts() {
         "Bob",
         "success",
     );
-    contracts::code_other_actor_contract(&other, &states).await;
+    contracts::code_other_actor_contract(&s, &other, &states).await;
     contracts::code_utf8_files_contract(&s, &states, "設計.md", "日本語の変更").await;
     let artifact = s
         .store

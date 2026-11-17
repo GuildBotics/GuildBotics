@@ -17,6 +17,7 @@ fn run(input: &Value) -> Result<Readiness, ServiceError> {
             requires_up_to_date: f["requires_up_to_date"].as_bool().unwrap(),
             conflicts: serde_json::from_value(f["conflicts"].clone()).unwrap_or_default(),
         }),
+        Feedback::default(),
         serde_json::from_value(input["failed_logs"].clone()).unwrap(),
     )
 }
@@ -26,12 +27,66 @@ fn frozen_python_decisions() {
     let cases: Vec<Value> = serde_json::from_str(include_str!("fixtures/readiness.json")).unwrap();
     assert_eq!(cases.len(), 2435);
     for (i, case) in cases.iter().enumerate() {
+        // The frozen decisions predate feedback, which never changes them.
+        let mut expected = case["expected"].clone();
+        expected["feedback"] = json!(Feedback::default());
         assert_eq!(
             serde_json::to_value(run(&case["input"]).unwrap()).unwrap(),
-            case["expected"],
+            expected,
             "case {i}"
         );
     }
+}
+
+fn said(author: &str, id: &str, at: &str) -> Said {
+    Said {
+        author: author.into(),
+        id: id.into(),
+        at: at.into(),
+        notice: false,
+    }
+}
+
+#[test]
+fn feedback_counts_others_and_names_their_latest_remark_of_each_kind() {
+    let notice = Said {
+        notice: true,
+        ..said("aiko", "notice", "9")
+    };
+    let empty = feedback_of("me", vec![], vec![said("me", "own", "9"), notice], vec![]);
+    assert_eq!(empty, Feedback::default());
+    let remarks = || {
+        vec![
+            said("aiko", "r1", "2026-11-17T10:00:00Z"),
+            said("me", "own", "2026-11-17T12:00:00Z"),
+            said("kenji", "r2", "2026-11-17T11:00:00Z"),
+            said("aiko", "r0", "2026-11-17T09:00:00Z"),
+        ]
+    };
+    let latest = Remarks {
+        count: 3,
+        latest: Some(Remark {
+            id: "r2".into(),
+            at: "2026-11-17T11:00:00Z".into(),
+        }),
+    };
+    assert_eq!(
+        feedback_of("me", remarks(), remarks(), remarks()),
+        Feedback {
+            reviews: latest.clone(),
+            comments: latest.clone(),
+            thread_comments: latest,
+        }
+    );
+    let kinds = feedback_of(
+        "me",
+        vec![said("aiko", "review", "1")],
+        vec![],
+        vec![said("aiko", "first", "2"), said("kenji", "tie", "2")],
+    );
+    assert_eq!(kinds.reviews.count, 1);
+    assert_eq!(kinds.comments, Remarks::default());
+    assert_eq!(kinds.thread_comments.latest.unwrap().id, "tie");
 }
 
 fn log_input(text: &str) -> Value {

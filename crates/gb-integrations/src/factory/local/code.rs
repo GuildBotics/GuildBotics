@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Freshness, readiness_of};
+use crate::{Freshness, Said, feedback_of, readiness_of};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -233,6 +233,12 @@ impl LocalService {
             }],
             false,
             freshness,
+            feedback_of(
+                text(&v, "author"),
+                said(&v, "reviews"),
+                said(&v, "comments"),
+                said(&v, "review_comments"),
+            ),
             failed,
         )
     }
@@ -712,6 +718,17 @@ impl CodeHostingService for LocalService {
     fn aclose(&self) -> ServiceFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
+}
+fn said(v: &Value, key: &str) -> Vec<Said> {
+    array(v, key)
+        .iter()
+        .map(|e| Said {
+            author: text(e, "author").into(),
+            id: text(e, "id").into(),
+            at: text(e, "created_at").into(),
+            notice: WorkflowStatus::from_payload(&e["status"]).is_some(),
+        })
+        .collect()
 }
 fn reactors(v: &Value) -> BTreeSet<String> {
     array(v, "reactions")

@@ -1963,7 +1963,12 @@ pub async fn code_closed_contract(service: &dyn CodeHostingService, url: &str) {
     );
 }
 /// Run as a different member from the PR author. Both restored providers support these verdicts.
-pub async fn code_other_actor_contract(service: &dyn CodeHostingService, url: &str) {
+/// `author` opened the PR at `url`; `service` acts as another actor on it.
+pub async fn code_other_actor_contract(
+    author: &dyn CodeHostingService,
+    service: &dyn CodeHostingService,
+    url: &str,
+) {
     let p = service
         .read(Resource::PullRequests, url, None, "")
         .await
@@ -1976,11 +1981,80 @@ pub async fn code_other_actor_contract(service: &dyn CodeHostingService, url: &s
             .contains(&url.to_owned())
     );
     let head = p.items()[0]["head_sha"].as_str().unwrap();
+    let feedback = || async {
+        let read = author
+            .read(Resource::PullRequestReadiness, url, None, "")
+            .await
+            .unwrap();
+        let ready = author
+            .readiness(url, false, MAX_LOG_TAIL_BYTES)
+            .await
+            .unwrap();
+        assert_eq!(read.items()[0]["feedback"], json!(ready.feedback));
+        ready.feedback
+    };
+    let before = feedback().await;
+    let own = author.comment(url, "own note", None).await.unwrap();
+    assert_eq!(feedback().await, before, "the author's own comment");
+    let status = WorkflowStatus::from_payload(&json!({"kind":"workflow_error","reason":"rate_limited","person_id":"aiko","run_id":"notice-run"})).unwrap();
+    service.comment(url, "notice", Some(&status)).await.unwrap();
+    assert_eq!(feedback().await, before, "another actor's status notice");
+    let comment = service.comment(url, "a remark", None).await.unwrap();
+    let after = feedback().await;
+    assert_eq!(after.comments.count, before.comments.count + 1);
+    assert_eq!(after.comments.latest.unwrap().id, comment.id);
+    assert_ne!(comment.id, own.id);
+    assert_eq!(
+        (&after.reviews, &after.thread_comments),
+        (&before.reviews, &before.thread_comments)
+    );
     for verdict in [ReviewVerdict::Approve, ReviewVerdict::RequestChanges] {
         let r = service.review(url, "verdict", verdict, head).await.unwrap();
         assert_eq!(r.verdict, verdict);
         assert_eq!(r.commit, head);
     }
+    let reviews = service
+        .read(Resource::PullRequestReviews, url, None, "")
+        .await
+        .unwrap();
+    let after = feedback().await;
+    assert_eq!(after.reviews.count, before.reviews.count + 2);
+    assert_eq!(
+        json!(after.reviews.latest.unwrap().id),
+        reviews.items().last().unwrap()["id"]
+    );
+    let files = service
+        .read(Resource::PullRequestFiles, url, None, "")
+        .await
+        .unwrap();
+    let (path, line) = files
+        .items()
+        .iter()
+        .find_map(|f| Some((f["path"].clone(), f["commentable_lines"].get(0)?.clone())))
+        .expect("a commentable line");
+    let inline = service
+        .review_comment(
+            url,
+            ReviewComment {
+                body: "inline remark".into(),
+                head: head.into(),
+                path: path.as_str().unwrap().into(),
+                line: line["line"].as_i64().unwrap(),
+                side: line["side"].as_str().unwrap().into(),
+                start_line: None,
+                start_side: None,
+            },
+        )
+        .await
+        .unwrap();
+    let after = feedback().await;
+    assert_eq!(
+        after.thread_comments.count,
+        before.thread_comments.count + 1
+    );
+    assert_eq!(after.thread_comments.latest.as_ref().unwrap().id, inline.id);
+    author.reply(url, &inline.id, "own reply").await.unwrap();
+    assert_eq!(feedback().await, after, "the author's own reply");
 }
 /// The fixture installs the same ZIP bytes on the PR's current head.
 pub async fn code_artifact_contract(

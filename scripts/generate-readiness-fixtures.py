@@ -22,6 +22,16 @@ source = subprocess.check_output(
     cwd=root,
     text=True,
 )
+# The frozen host never read feedback; its decisions and page budget see an
+# empty one, as a provider passes when nobody else has spoken.
+anchor = '        "completion_blockers": [],\n    }\n'
+assert source.count(anchor) == 1
+source = source.replace(
+    anchor,
+    '        "completion_blockers": [],\n'
+    '        "feedback": {kind: {"count": 0, "latest": None}'
+    ' for kind in ("reviews", "comments", "thread_comments")},\n    }\n',
+)
 spec = importlib.util.spec_from_loader("frozen_readiness", loader=None)
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module

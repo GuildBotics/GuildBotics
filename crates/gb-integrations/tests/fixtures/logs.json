@@ -52,9 +52,23 @@
           "tail_limit_bytes": 65536,
           "truncated": false
         }
-      ]
+      ],
+      "feedback": {
+        "reviews": {
+          "count": 0,
+          "latest": null
+        },
+        "comments": {
+          "count": 0,
+          "latest": null
+        },
+        "thread_comments": {
+          "count": 0,
+          "latest": null
+        }
+      }
     },
-    "page_bytes": 871
+    "page_bytes": 1017
   },
   {
     "text": "",
@@ -109,9 +123,23 @@
           "tail_limit_bytes": 65536,
           "truncated": true
         }
-      ]
+      ],
+      "feedback": {
+        "reviews": {
+          "count": 0,
+          "latest": null
+        },
+        "comments": {
+          "count": 0,
+          "latest": null
+        },
+        "thread_comments": {
+          "count": 0,
+          "latest": null
+        }
+      }
     },
-    "page_bytes": 869
+    "page_bytes": 1015
   },
   {
     "text": "short 🦀\n",
@@ -166,9 +194,23 @@
           "tail_limit_bytes": 65536,
           "truncated": false
         }
-      ]
+      ],
+      "feedback": {
+        "reviews": {
+          "count": 0,
+          "latest": null
+        },
+        "comments": {
+          "count": 0,
+          "latest": null
+        },
+        "thread_comments": {
+          "count": 0,
+          "latest": null
+        }
+      }
     },
-    "page_bytes": 913
+    "page_bytes": 1059
   },
   {
     "text": "short 🦀\n",
@@ -223,17 +265,31 @@
           "tail_limit_bytes": 65536,
           "truncated": true
         }
-      ]
+      ],
+      "feedback": {
+        "reviews": {
+          "count": 0,
+          "latest": null
+        },
+        "comments": {
+          "count": 0,
+          "latest": null
+        },
+        "thread_comments": {
+          "count": 0,
+          "latest": null
+        }
+      }
     },
-    "page_bytes": 911
+    "page_bytes": 1057
   },
   {
     "text": "\"\\\n\u0000日本🦀",
     "repeats": 70000,
     "already_truncated": false,
     "lengths": [
-      62329,
-      62329
+      62315,
+      62315
     ],
     "expected": {
       "target": {
@@ -263,7 +319,7 @@
             "trace 🦀"
           ],
           "log": "",
-          "log_bytes": 116869,
+          "log_bytes": 116845,
           "tail_limit_bytes": 65536,
           "truncated": true
         },
@@ -276,21 +332,35 @@
             "trace 🦀"
           ],
           "log": "",
-          "log_bytes": 116869,
+          "log_bytes": 116845,
           "tail_limit_bytes": 65536,
           "truncated": true
         }
-      ]
+      ],
+      "feedback": {
+        "reviews": {
+          "count": 0,
+          "latest": null
+        },
+        "comments": {
+          "count": 0,
+          "latest": null
+        },
+        "thread_comments": {
+          "count": 0,
+          "latest": null
+        }
+      }
     },
-    "page_bytes": 655347
+    "page_bytes": 655349
   },
   {
     "text": "\"\\\n\u0000日本🦀",
     "repeats": 70000,
     "already_truncated": true,
     "lengths": [
-      62329,
-      62329
+      62315,
+      62315
     ],
     "expected": {
       "target": {
@@ -320,7 +390,7 @@
             "trace 🦀"
           ],
           "log": "",
-          "log_bytes": 116869,
+          "log_bytes": 116845,
           "tail_limit_bytes": 65536,
           "truncated": true
         },
@@ -333,21 +403,35 @@
             "trace 🦀"
           ],
           "log": "",
-          "log_bytes": 116869,
+          "log_bytes": 116845,
           "tail_limit_bytes": 65536,
           "truncated": true
         }
-      ]
+      ],
+      "feedback": {
+        "reviews": {
+          "count": 0,
+          "latest": null
+        },
+        "comments": {
+          "count": 0,
+          "latest": null
+        },
+        "thread_comments": {
+          "count": 0,
+          "latest": null
+        }
+      }
     },
-    "page_bytes": 655347
+    "page_bytes": 655349
   },
   {
     "text": "ascii",
     "repeats": 150000,
     "already_truncated": false,
     "lengths": [
-      327239,
-      327239
+      327166,
+      327166
     ],
     "expected": {
       "target": {
@@ -377,7 +461,7 @@
             "trace 🦀"
           ],
           "log": "",
-          "log_bytes": 327239,
+          "log_bytes": 327166,
           "tail_limit_bytes": 65536,
           "truncated": true
         },
@@ -390,11 +474,25 @@
             "trace 🦀"
           ],
           "log": "",
-          "log_bytes": 327239,
+          "log_bytes": 327166,
           "tail_limit_bytes": 65536,
           "truncated": true
         }
-      ]
+      ],
+      "feedback": {
+        "reviews": {
+          "count": 0,
+          "latest": null
+        },
+        "comments": {
+          "count": 0,
+          "latest": null
+        },
+        "thread_comments": {
+          "count": 0,
+          "latest": null
+        }
+      }
     },
     "page_bytes": 655357
   },
@@ -403,8 +501,8 @@
     "repeats": 150000,
     "already_truncated": true,
     "lengths": [
-      327240,
-      327240
+      327167,
+      327167
     ],
     "expected": {
       "target": {
@@ -434,7 +532,7 @@
             "trace 🦀"
           ],
           "log": "",
-          "log_bytes": 327240,
+          "log_bytes": 327167,
           "tail_limit_bytes": 65536,
           "truncated": true
         },
@@ -447,11 +545,25 @@
             "trace 🦀"
           ],
           "log": "",
-          "log_bytes": 327240,
+          "log_bytes": 327167,
           "tail_limit_bytes": 65536,
           "truncated": true
         }
-      ]
+      ],
+      "feedback": {
+        "reviews": {
+          "count": 0,
+          "latest": null
+        },
+        "comments": {
+          "count": 0,
+          "latest": null
+        },
+        "thread_comments": {
+          "count": 0,
+          "latest": null
+        }
+      }
     },
     "page_bytes": 655359
   }

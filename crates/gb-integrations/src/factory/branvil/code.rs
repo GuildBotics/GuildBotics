@@ -1,4 +1,4 @@
-use super::patrol::fold;
+use super::patrol::{array, fold};
 use super::*;
 use branvil::api::{pulls, tickets};
 use std::collections::BTreeMap;
@@ -748,19 +748,52 @@ impl BranvilService {
                 }
             }
         }
+        let activity = m
+            .pulls_activity(&repo, number(&key)?)
+            .await
+            .map_err(|e| error(e, "pulls_activity"))?;
         let current = m
             .pulls_get(&repo, number(&key)?)
             .await
             .map_err(|e| error(e, "pulls_get"))?;
-        self.readiness_result(report, value(&current)?, logs.then_some(failed))
+        self.readiness_result(
+            report,
+            &value(&activity)?,
+            value(&current)?,
+            logs.then_some(failed),
+        )
     }
 
     pub(super) fn readiness_result(
         &self,
         report: pulls::ChecksView,
+        activity: &Value,
         current: Value,
         failed: Option<Vec<FailedLog>>,
     ) -> Result<Readiness, ServiceError> {
+        let said = |items: Vec<&Value>, at: &str| {
+            items
+                .into_iter()
+                .map(|c| crate::Said {
+                    author: fold(text(c, "author")),
+                    id: text(c, "id").into(),
+                    at: text(c, at).into(),
+                    notice: super::patrol::status(c).is_some(),
+                })
+                .collect()
+        };
+        let feedback = crate::feedback_of(
+            &fold(text(&current, "author")),
+            said(array(activity, "reviews").iter().collect(), "submitted_at"),
+            said(array(activity, "comments").iter().collect(), "created_at"),
+            said(
+                array(activity, "threads")
+                    .iter()
+                    .flat_map(|t| array(t, "comments"))
+                    .collect(),
+                "created_at",
+            ),
+        );
         let checks = report
             .checks
             .iter()
@@ -808,6 +841,7 @@ impl BranvilService {
             checks,
             report.checks_expected,
             freshness,
+            feedback,
             failed,
         )
     }

@@ -46,6 +46,32 @@ class Ticket(res.Ticket):
 
 res.Ticket = Ticket
 res.RESOURCES["tickets"] = Ticket
+
+
+class Remark(res.ReadModel):
+    id: str
+    at: str
+
+
+class Remarks(res.ReadModel):
+    count: int
+    latest: Remark | None
+
+
+class Feedback(res.ReadModel):
+    reviews: Remarks
+    comments: Remarks
+    thread_comments: Remarks
+
+
+class Readiness(res.Readiness):
+    """Extend the frozen readiness with what others said on the pull request."""
+
+    feedback: Feedback
+
+
+res.Readiness = Readiness
+res.RESOURCES["pull_request_readiness"] = Readiness
 extra = {}
 for name in ("ticket_service", "code_hosting_service"):
     tree = ast.parse(source(name))

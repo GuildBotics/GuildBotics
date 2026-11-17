@@ -229,6 +229,34 @@ pub struct FailedLog {
     pub truncated: bool,
 }
 
+/// One remark on a pull request, by its opaque id and when it was made.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Remark {
+    pub id: String,
+    pub at: String,
+}
+
+/// How many remarks of one kind were made, and the latest of them.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Remarks {
+    pub count: i64,
+    #[serde(deserialize_with = "required_nullable")]
+    pub latest: Option<Remark>,
+}
+
+/// What people other than the pull request's author have said on it, leaving
+/// out workflow status notices. A reader that compares two reads sees any
+/// change as new feedback.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Feedback {
+    pub reviews: Remarks,
+    pub comments: Remarks,
+    pub thread_comments: Remarks,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Readiness {
@@ -248,6 +276,7 @@ pub struct Readiness {
     pub checks_expected: bool,
     pub readiness: ReadinessReadiness,
     pub completion_blockers: Vec<CompletionBlocker>,
+    pub feedback: Feedback,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_logs: Option<Vec<FailedLog>>,
 }
