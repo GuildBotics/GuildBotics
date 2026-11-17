@@ -533,6 +533,7 @@ describe("Setup integration (real client + mock server)", () => {
           {
             name: "codex",
             label: "Codex",
+            members: [],
             config_reference: "cli_agents/codex/default.yml",
             provisioned: true,
             credentials_saved: true,

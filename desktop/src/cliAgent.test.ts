@@ -76,6 +76,7 @@ it.each([
     const tool: EnvironmentToolStatus = {
       name: "codex",
       label: "Codex",
+      members: [],
       config_reference: "cli_agents/codex/default.yml",
       provisioned: Boolean(provisioned),
       credentials_saved: Boolean(credentials_saved),

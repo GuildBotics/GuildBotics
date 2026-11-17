@@ -181,6 +181,7 @@ vi.mock("../api/client", async (importOriginal) => {
           {
             name: "codex",
             label: "OpenAI Codex CLI",
+            members: [],
             config_reference: "cli_agents/codex/default.yml",
             provisioned: true,
             credentials_saved: true,
@@ -193,6 +194,7 @@ vi.mock("../api/client", async (importOriginal) => {
           {
             name: "claude",
             label: "Claude Code",
+            members: [],
             config_reference: "cli_agents/claude/default.yml",
             provisioned: true,
             credentials_saved: false,
@@ -897,6 +899,7 @@ describe("SetupPage", () => {
           {
             name: "codex",
             label: "OpenAI Codex CLI",
+            members: [],
             config_reference: "cli_agents/codex/default.yml",
             provisioned: true,
             credentials_saved: true,
@@ -909,6 +912,7 @@ describe("SetupPage", () => {
           {
             name: "grok",
             label: "Grok Build",
+            members: [],
             config_reference: "cli_agents/grok/default.yml",
             provisioned: false,
             credentials_saved: false,
@@ -1039,6 +1043,7 @@ describe("SetupPage", () => {
           {
             name: "codex",
             label: "OpenAI Codex CLI",
+            members: [],
             config_reference: "cli_agents/codex/default.yml",
             provisioned: true,
             credentials_saved: true,
@@ -1474,6 +1479,7 @@ function environmentStatus(
       {
         name: "codex",
         label: "OpenAI Codex CLI",
+        members: [],
         config_reference: "cli_agents/codex/default.yml",
         provisioned: true,
         credentials_saved: true,
@@ -1486,6 +1492,7 @@ function environmentStatus(
       {
         name: "claude",
         label: "Claude Code",
+        members: [],
         config_reference: "cli_agents/claude/default.yml",
         provisioned: true,
         credentials_saved: false,
@@ -4275,6 +4282,7 @@ describe("IntelligenceEditor (team default)", () => {
           {
             name: "codex",
             label: "OpenAI Codex CLI",
+            members: [],
             config_reference: "cli_agents/codex/default.yml",
             provisioned: true,
             credentials_saved: true,
@@ -4889,6 +4897,7 @@ describe("IntelligenceEditor (member override)", () => {
           {
             name: "codex",
             label: "OpenAI Codex CLI",
+            members: [],
             config_reference: "cli_agents/codex/default.yml",
             provisioned: true,
             credentials_saved: true,
@@ -4901,6 +4910,7 @@ describe("IntelligenceEditor (member override)", () => {
           {
             name: "claude",
             label: "Claude Code",
+            members: [],
             config_reference: "cli_agents/claude/default.yml",
             provisioned: true,
             credentials_saved: true,

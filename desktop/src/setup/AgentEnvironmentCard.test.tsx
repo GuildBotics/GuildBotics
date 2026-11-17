@@ -61,6 +61,7 @@ function status(
       {
         name: "codex",
         label: "Codex",
+        members: [],
         config_reference: "cli_agents/codex/default.yml",
         provisioned: true,
         credentials_saved: true,
@@ -73,6 +74,7 @@ function status(
       {
         name: "claude",
         label: "Claude Code",
+        members: [],
         config_reference: "cli_agents/claude/default.yml",
         provisioned: true,
         credentials_saved: false,
@@ -85,6 +87,7 @@ function status(
       {
         name: "grok",
         label: "Grok Build",
+        members: [],
         config_reference: "cli_agents/grok/default.yml",
         provisioned: false,
         credentials_saved: false,
@@ -332,6 +335,35 @@ describe("AgentEnvironmentCard", () => {
     expect(
       screen.queryByRole("button", { name: t("setup.intelligence.environment.build") }),
     ).not.toBeInTheDocument();
+  });
+
+  it.each(["en", "ja"])("shows tool users, slots and unused tools in %s", async (language) => {
+    await i18n.changeLanguage(language);
+    const tr = i18n.getFixedT(language);
+    const data = status();
+    data.tools[0].members = [
+      { person_id: "aiko", name: "Aiko", slot: "default" },
+      { person_id: "aiko", name: "Aiko", slot: "review" },
+    ];
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(data);
+    renderCard();
+    expect(
+      await screen.findByText(
+        tr("setup.intelligence.environment.toolMembers", {
+          members:
+            "Aiko, " +
+            tr("setup.intelligence.environment.toolMemberSlot", { name: "Aiko", slot: "review" }),
+        }),
+      ),
+    ).toBeVisible();
+    const unused = within(document.getElementById("agent-environment-tool-claude")!);
+    expect(unused.getByText(tr("setup.intelligence.environment.toolNoMembers"))).toBeVisible();
+    const badgeText = await unused.findByText(
+      tr("setup.intelligence.environment.toolCredentialsMissing", { machine: "studio" }),
+    );
+    const badge = badgeText.closest(".mantine-Badge-root");
+    expect(badge).toHaveStyle({ "--badge-bg": "var(--mantine-color-gray-light)" });
+    await i18n.changeLanguage("en");
   });
 
   it("keeps an unrestricted network visible on the status card", async () => {

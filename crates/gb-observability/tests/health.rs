@@ -512,6 +512,7 @@ fn test_cli_agent_diagnostics_do_not_create_member_credential_alerts() {
 fn test_dismiss_hides_current_occurrence_and_later_failure_reopens() {
     let f = Fixture::new();
     f.record(event("command.failed"));
+    assert_eq!(f.list()[0]["dismissible"], true);
     let id = f.list()[0]["id"].as_str().unwrap().to_owned();
     f.dismiss(&id);
     assert!(f.list().is_empty());
@@ -528,6 +529,7 @@ fn test_dismiss_hides_current_occurrence_and_later_failure_reopens() {
 fn test_dismissed_failure_is_not_replayed_after_diagnostics_rotation() {
     let f = Fixture::new();
     f.record(event("command.failed"));
+    assert_eq!(f.list()[0]["dismissible"], true);
     let id = f.list()[0]["id"].as_str().unwrap().to_owned();
     f.dismiss(&id);
     let old = std::fs::read_to_string(f.path()).unwrap();
@@ -692,6 +694,7 @@ fn test_environment_problems_open_one_alert_per_thing_to_fix() {
         ),
     ] {
         let a = a.iter().find(|a| a["id"] == id).unwrap();
+        assert_eq!(a["dismissible"], false);
         assert_eq!(a["code"], code);
         assert_eq!(a["severity"], "warning");
         assert_eq!(a["person_id"], person);
@@ -700,11 +703,9 @@ fn test_environment_problems_open_one_alert_per_thing_to_fix() {
         assert_eq!(a["reason"], reason);
         assert_eq!(a["actions"], json!(["setup"]));
     }
-    assert_eq!(
-        f.view(&json!({}), &p, Some("agent-environment:device"))
-            .len(),
-        4
-    );
+    for alert in &a {
+        assert_eq!(f.view(&json!({}), &p, alert["id"].as_str()).len(), 4);
+    }
     assert!(f.list().is_empty());
 }
 #[test]

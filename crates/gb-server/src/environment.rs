@@ -509,6 +509,27 @@ fn member_slots(resolved: &Value, access: &Value, language: &str) -> Vec<Value> 
     }).collect()
 }
 
+/// Project tool users once, from the active agents' resolved slots.
+pub(crate) fn attach_tool_members(view: &mut Value) {
+    let mut users = std::collections::BTreeMap::<String, Vec<Value>>::new();
+    for member in view["members"].as_array().into_iter().flatten() {
+        for slot in member["slots"].as_array().into_iter().flatten() {
+            if let Some(tool) = slot["tool"].as_str().filter(|s| !s.is_empty()) {
+                users.entry(tool.into()).or_default().push(json!({
+                    "person_id":member["person_id"], "name":member["name"], "slot":slot["slot"]
+                }));
+            }
+        }
+    }
+    for tool in view["tools"].as_array_mut().into_iter().flatten() {
+        tool["members"] = json!(
+            users
+                .remove(tool["name"].as_str().unwrap_or_default())
+                .unwrap_or_default()
+        );
+    }
+}
+
 pub async fn status(
     workspace: PathBuf,
     data: PathBuf,
@@ -526,7 +547,6 @@ pub async fn status(
         &workspace,
         language,
         &gb_config::secrets::SystemKeychain,
-        false,
     )
     .await
 }
@@ -536,7 +556,6 @@ pub(crate) async fn status_with(
     workspace: &std::path::Path,
     language: &str,
     keychain: &dyn gb_config::secrets::Keychain,
-    agents_only: bool,
 ) -> anyhow::Result<Value> {
     let device = gb_environment::device::read(host, workspace).await;
     let mut view = device.rendered(|s| crate::commands::say(s, language));
@@ -567,7 +586,7 @@ pub(crate) async fn status_with(
         for member in team
             .members
             .into_iter()
-            .filter(|m| m.is_active && (!agents_only || m.person_type != "human"))
+            .filter(|m| m.is_active && m.person_type != "human")
         {
             let slots = match gb_config::resolved_guest::resolve(
                 &roots,
@@ -580,10 +599,11 @@ pub(crate) async fn status_with(
                     json!({"slot":"default","tool":"","problems":[{"setting":"declaration","reason":error.to_string()}]}),
                 ],
             };
-            members.push(json!({"person_id":member.person_id,"slots":slots}));
+            members.push(json!({"person_id":member.person_id,"name":member.name,"slots":slots}));
         }
     }
     view["members"] = json!(members);
+    attach_tool_members(&mut view);
     Ok(view)
 }
 
@@ -609,7 +629,7 @@ pub(crate) async fn get(State(api): State<Shared>, headers: HeaderMap) -> Respon
         package: gb_base::home::python_package(),
         identity_root: api.identity_root.clone(),
     };
-    match status_with(&host, &workspace, language, api.keychain.as_ref(), false).await {
+    match status_with(&host, &workspace, language, api.keychain.as_ref()).await {
         Ok(view) => Json(view).into_response(),
         Err(error) => ApiError::new(
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,

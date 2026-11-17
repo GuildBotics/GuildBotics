@@ -151,7 +151,7 @@ impl SystemAlerts {
             prefixes.push(prefix);
         }
         this.dismissed.retain(|k| {
-            !(k.starts_with("agent-environment:")
+            !(!dismissible(k)
                 || k == "runtime:scheduler" && runtime["scheduler"]["state"] != "failed"
                 || k == "runtime:events" && runtime["events"]["state"] != "failed"
                 || prefixes.iter().any(|prefix| k.starts_with(prefix))
@@ -251,7 +251,7 @@ impl SystemAlerts {
             this.alerts.remove(id);
             this.dismissed.insert(id.into());
             // Runtime environment problems intentionally reappear immediately.
-            if !id.starts_with("agent-environment:") {
+            if dismissible(id) {
                 visible.remove(id);
             }
         }
@@ -267,6 +267,9 @@ impl SystemAlerts {
                 text(a, "id").to_owned(),
             )
         });
+        for alert in &mut alerts {
+            alert["dismissible"] = json!(dismissible(text(alert, "id")));
+        }
         json!({"alerts":alerts})
     }
     #[allow(clippy::too_many_arguments)]
@@ -591,6 +594,9 @@ impl SystemAlerts {
             }
         }
     }
+}
+fn dismissible(id: &str) -> bool {
+    !id.starts_with("agent-environment:")
 }
 fn execution(k: &str) -> bool {
     k.starts_with("command_failed:") || k.starts_with("rate_limited:")
