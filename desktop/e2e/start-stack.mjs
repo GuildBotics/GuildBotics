@@ -210,7 +210,7 @@ backendEnv = Object.fromEntries(
     ].includes(key.toUpperCase()),
   ),
 );
-if (stackName === "setup" || stackName === "branvil") {
+if (stackName === "setup" || stackName === "branvil" || shouldSeed) {
   backendEnv.GUILDBOTICS_BROWSER_TEST_BRANVIL = "1";
   backendEnv.BRANVIL_DATA_DIR = join(homeDir, "branvil");
 }
@@ -353,11 +353,11 @@ async function seedWorkspace() {
     llm_api_type: "openai",
     cli_agent: "codex",
     openai_api_key: seedWithoutLlmKey ? "" : "sk-e2e-test-key",
-    // The reference provider keeps every kind of service in the workspace, so
-    // nothing reaches a hosted service.
+    // Ticket and code operations use this stack's embedded Branvil.
+    // Chat retains the local provider, so no hosted service is contacted.
     services: {
-      code_hosting_service: { name: "local", owner: "acme" },
-      ticket_service: { name: "local", owner: "acme" },
+      code_hosting_service: { name: "branvil", workspace: "acme" },
+      ticket_service: { name: "branvil", workspace: "acme" },
       chat_service: { name: "local" },
     },
   });
@@ -423,7 +423,7 @@ function startControlServer() {
 
 async function main() {
   await startBackend();
-  if (stackName === "branvil") {
+  if (stackName === "branvil" || shouldSeed) {
     const link = await postJson("/session/links", {});
     const entered = await fetch(`${baseUrl}/-/guildbotics/api/session`, {
       method: "POST",

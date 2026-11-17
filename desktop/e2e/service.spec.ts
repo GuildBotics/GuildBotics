@@ -5,8 +5,8 @@ import { readStackContext, test } from "./stack-context";
 // Journey ③: Service Runtime against the REAL backend.
 //
 // The "configured" harness (`e2e/start-stack.mjs` with GUILDBOTICS_E2E_SEED=1)
-// pre-seeds the temp workspace with a project + one active member, every kind
-// of service on the reference provider, so the app boots already-configured.
+// pre-seeds the temp workspace with a project + one active member, embedded
+// Branvil for tickets/code and local chat, so the app boots already-configured.
 //
 // This journey starts only the event-trigger source (chat handling), observes
 // the UI reach a running state driven by the REAL backend status/websocket
