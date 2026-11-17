@@ -246,6 +246,7 @@ export type ScenarioDiagnosticsResponse = {
 };
 
 export type SystemAlert = {
+  dismissible: boolean;
   id: string;
   code:
     | "credential"
@@ -963,6 +964,7 @@ export type EnvironmentImagesResponse = {
 
 // One AI CLI tool of the catalog as this device can run it.
 export type EnvironmentToolStatus = {
+  members: Array<{ person_id: string; name: string; slot: string }>;
   name: string;
   label: string;
   config_reference: string;

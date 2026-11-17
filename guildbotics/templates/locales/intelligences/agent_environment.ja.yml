@@ -1,4 +1,7 @@
 ja:
+  tool_members: "使っているメンバー: %{members}"
+  tool_member_slot: "%{name}（%{slot}）"
+  tool_no_members: "使っているメンバーはいません"
   runtime:
     sdk_missing: "このプラットフォーム向けの microsandbox SDK がインストールされていません。"
     not_placed: "microsandbox ランタイムを %{home} に配置できませんでした: %{error}"

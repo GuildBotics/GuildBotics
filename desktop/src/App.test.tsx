@@ -1,6 +1,6 @@
 import { createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { TFunction } from "i18next";
 import { HashRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
@@ -268,6 +268,7 @@ describe("App", () => {
           severity: "critical",
           opened_at: "2026-07-11T10:00:00+09:00",
           updated_at: "2026-07-11T10:00:00+09:00",
+          dismissible: true,
           occurrence_count: 1,
           person_id: "alice",
           command: "",
@@ -304,6 +305,33 @@ describe("App", () => {
     vi.mocked(getSystemAlerts).mockResolvedValue({ alerts: [] });
   });
 
+  it("does not offer dismissal for a current environment problem", async () => {
+    vi.mocked(getSystemAlerts).mockResolvedValue({
+      alerts: [
+        {
+          id: "agent-environment:tool:codex",
+          code: "agent_environment_tool_unavailable",
+          severity: "warning",
+          dismissible: false,
+          opened_at: "",
+          updated_at: "",
+          occurrence_count: 1,
+          person_id: "",
+          command: "codex",
+          trace_id: "",
+          provider: "",
+          reason: "Login required",
+          actions: ["setup"],
+        },
+      ],
+    });
+    renderApp();
+    const band = await screen.findByRole("region", { name: "System health alerts" });
+    expect(within(band).queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+    expect(within(band).getByRole("link", { name: "Open setup" })).toBeInTheDocument();
+    vi.mocked(getSystemAlerts).mockResolvedValue({ alerts: [] });
+  });
+
   it("renders reception failure alerts in both languages", () => {
     for (const [language, expected] of [
       ["en", "Chat reception stopped because of an unexpected error."],
@@ -318,6 +346,7 @@ describe("App", () => {
             severity: "critical",
             opened_at: "",
             updated_at: "",
+            dismissible: true,
             occurrence_count: 1,
             person_id: "",
             command: "",
@@ -336,6 +365,7 @@ describe("App", () => {
       severity: "warning" as const,
       opened_at: "",
       updated_at: "",
+      dismissible: true,
       occurrence_count: 1,
       trace_id: "",
       provider: "",
@@ -409,6 +439,7 @@ describe("App", () => {
           severity: "warning",
           opened_at: "",
           updated_at: "",
+          dismissible: true,
           occurrence_count: 1,
           person_id: "",
           command: "",
@@ -449,6 +480,7 @@ describe("App", () => {
         severity: "critical" as const,
         opened_at: "",
         updated_at: "",
+        dismissible: true,
         occurrence_count: 1,
         person_id: "",
         command: provider,
@@ -477,6 +509,7 @@ describe("App", () => {
       severity: "critical" as const,
       opened_at: "2026-07-11T10:00:00+09:00",
       updated_at: "2026-07-11T10:00:00+09:00",
+      dismissible: true,
       occurrence_count: 1,
       person_id: personId,
       command: "",

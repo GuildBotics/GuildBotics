@@ -2,9 +2,24 @@ use super::*;
 #[tokio::test]
 async fn usage_result_is_shared_by_card_and_alerts() {
     for agent in ["codex", "claude", "grok"] {
-        for language in ["en", "ja"] {
+        for (language, used) in ["en", "ja"]
+            .into_iter()
+            .flat_map(|language| [false, true].map(|used| (language, used)))
+        {
             let f = fixture();
             f.init().await;
+            if used {
+                f.add(json!({"person_id":"alice","person_name":"Alice","person_type":"agent","is_active":true})).await;
+                f.write(
+                    &f.config().join("intelligences/brain_mapping.yml"),
+                    "default:\n  kind: ai_cli\n  cli_agent: default\n",
+                );
+                f.write(
+                    &f.config().join("intelligences/cli_agent_mapping.yml"),
+                    &format!("default: cli_agents/{agent}/default.yml\n"),
+                );
+            }
+
             let catalog: Value = serde_json::from_slice(
                 &std::fs::read(
                     gb_base::home::python_package()
@@ -55,15 +70,10 @@ async fn usage_result_is_shared_by_card_and_alerts() {
             };
             let calls = std::sync::atomic::AtomicUsize::new(0);
             let slot = crate::environment::usage_slot(&f.data(), agent);
-            let view = crate::environment::status_with(
-                &host,
-                &f.workspace(),
-                language,
-                f.keys.as_ref(),
-                true,
-            )
-            .await
-            .unwrap();
+            let view =
+                crate::environment::status_with(&host, &f.workspace(), language, f.keys.as_ref())
+                    .await
+                    .unwrap();
             let tool = view["tools"]
                 .as_array()
                 .unwrap()
@@ -113,7 +123,6 @@ async fn usage_result_is_shared_by_card_and_alerts() {
                     &f.workspace(),
                     language,
                     f.keys.as_ref(),
-                    true,
                 )
                 .await
                 .unwrap();
@@ -150,9 +159,11 @@ async fn usage_result_is_shared_by_card_and_alerts() {
                     .iter()
                     .filter(|a| a["setting"] == "tool")
                     .collect();
-                assert_eq!(alerts.len(), 1);
-                assert_eq!(alerts[0]["command"], agent);
-                assert_eq!(alerts[0]["reason"], tool["problem"]);
+                assert_eq!(alerts.len(), usize::from(used));
+                if used {
+                    assert_eq!(alerts[0]["command"], agent);
+                    assert_eq!(alerts[0]["reason"], tool["problem"]);
+                }
             }
             std::fs::remove_file(marker).unwrap();
             let reading = slot
@@ -170,15 +181,10 @@ async fn usage_result_is_shared_by_card_and_alerts() {
                 .await;
             assert_eq!(reading["check"]["status"], "succeeded");
             assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
-            let view = crate::environment::status_with(
-                &host,
-                &f.workspace(),
-                language,
-                f.keys.as_ref(),
-                true,
-            )
-            .await
-            .unwrap();
+            let view =
+                crate::environment::status_with(&host, &f.workspace(), language, f.keys.as_ref())
+                    .await
+                    .unwrap();
             assert_eq!(
                 view["tools"]
                     .as_array()
@@ -209,6 +215,7 @@ async fn environment_tool_authentication_alert_recovers_without_losing_saved_log
         f.add(json!({"person_id":name,"person_name":name,"person_type":"agent","is_active":true}))
             .await;
     }
+    f.add(json!({"person_id":"inactive","person_name":"Inactive","person_type":"agent","is_active":false})).await;
     f.write(
         &f.config().join("intelligences/brain_mapping.yml"),
         "default:\n  kind: ai_cli\n  cli_agent: default\n",
@@ -237,7 +244,7 @@ async fn environment_tool_authentication_alert_recovers_without_losing_saved_log
             std::fs::remove_file(&marker).unwrap();
         }
         let view =
-            crate::environment::status_with(&host, &f.workspace(), language, f.keys.as_ref(), true)
+            crate::environment::status_with(&host, &f.workspace(), language, f.keys.as_ref())
                 .await
                 .unwrap();
         let tool = view["tools"]
@@ -246,6 +253,13 @@ async fn environment_tool_authentication_alert_recovers_without_losing_saved_log
             .iter()
             .find(|t| t["name"] == "claude")
             .unwrap();
+        assert_eq!(
+            tool["members"],
+            json!([
+                {"person_id":"alice","name":"alice","slot":"default"},
+                {"person_id":"bob","name":"bob","slot":"default"}
+            ])
+        );
         assert_eq!(tool["authentication_failed"], failed);
         assert_eq!(tool["credentials_saved"], true);
         let problems = crate::health::environment_problems(&view);
@@ -282,9 +296,18 @@ async fn environment_tool_authentication_alert_recovers_without_losing_saved_log
 
 #[test]
 fn environment_alert_projection_preserves_device_tool_slot_and_usage_scope() {
-    let mut view = json!({"problem_setting":"runtime","problem":"no hypervisor","warning":"image differs","tools":[{"name":"codex","problem":"login","usage_check":null},{"name":"claude","problem":"unused"},{"name":"grok","problem":"probe","usage_check":{"status":"failed"}}],"members":[{"person_id":"aiko","slots":[{"slot":"default","tool":"codex","problems":[]}]},{"person_id":"kenji","slots":[{"slot":"review","tool":"codex","problems":[{"setting":"grants","reason":"missing local path"}]}]}]});
+    let mut view = json!({"problem_setting":"runtime","problem":"no hypervisor","warning":"image differs","tools":[{"name":"codex","problem":"login","usage_check":null},{"name":"claude","problem":"unused"},{"name":"grok","problem":"probe","usage_check":{"status":"failed"}}],"members":[{"person_id":"aiko","name":"Aiko","slots":[{"slot":"default","tool":"codex","problems":[]}]},{"person_id":"kenji","name":"Kenji","slots":[{"slot":"review","tool":"codex","problems":[{"setting":"grants","reason":"missing local path"}]}]}]});
+    crate::environment::attach_tool_members(&mut view);
+    assert_eq!(
+        view["tools"][0]["members"],
+        json!([
+            {"person_id":"aiko","name":"Aiko","slot":"default"},
+            {"person_id":"kenji","name":"Kenji","slot":"review"}
+        ])
+    );
+    assert_eq!(view["tools"][2]["members"], json!([]));
     let p = crate::health::environment_problems(&view);
-    assert_eq!(p,json!([{"person_id":"","slot":"","setting":"runtime","reason":"no hypervisor"},{"person_id":"","slot":"","setting":"image_differs","reason":"image differs"},{"person_id":"","slot":"codex","setting":"tool","reason":"login"},{"person_id":"","slot":"grok","setting":"tool","reason":"probe"},{"person_id":"kenji","slot":"review","setting":"grants","reason":"missing local path"}]).as_array().unwrap().clone());
+    assert_eq!(p,json!([{"person_id":"","slot":"","setting":"runtime","reason":"no hypervisor"},{"person_id":"","slot":"","setting":"image_differs","reason":"image differs"},{"person_id":"","slot":"codex","setting":"tool","reason":"login"},{"person_id":"kenji","slot":"review","setting":"grants","reason":"missing local path"}]).as_array().unwrap().clone());
     view["problem_setting"] = "filesystem".into();
     view["problem"] = "filesystem denied".into();
     assert_eq!(

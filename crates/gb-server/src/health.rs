@@ -42,19 +42,9 @@ pub(crate) fn environment_problems(view: &Value) -> Vec<Value> {
         );
     }
     let members: Vec<_> = view["members"].as_array().into_iter().flatten().collect();
-    let used: std::collections::BTreeSet<_> = members
-        .iter()
-        .flat_map(|m| {
-            m["slots"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|s| text(s, "tool"))
-        })
-        .collect();
     for tool in view["tools"].as_array().into_iter().flatten() {
         if !text(tool, "problem").is_empty()
-            && (used.contains(text(tool, "name")) || tool["usage_check"]["status"] == "failed")
+            && tool["members"].as_array().is_some_and(|m| !m.is_empty())
         {
             problems.push(json!({"person_id":"","slot":tool["name"],"setting":"tool","reason":tool["problem"]}));
         }
@@ -86,7 +76,7 @@ async fn list(api: Shared, headers: HeaderMap, dismiss: Option<String>) -> Respo
         identity_root: api.identity_root.clone(),
     };
     let problems =
-        crate::environment::status_with(&host, workspace, language, api.keychain.as_ref(), true)
+        crate::environment::status_with(&host, workspace, language, api.keychain.as_ref())
             .await
             .map(|v| environment_problems(&v))
             .unwrap_or_default();

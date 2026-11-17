@@ -284,7 +284,10 @@ export function AgentEnvironmentCard({
                   key={tool.name}
                   id={`${AGENT_ENVIRONMENT_CARD_ID}-tool-${tool.name}`}
                   style={{
-                    background: tool.problem ? "var(--mantine-color-yellow-light)" : undefined,
+                    background:
+                      tool.members.length > 0 && tool.problem
+                        ? "var(--mantine-color-yellow-light)"
+                        : undefined,
                     outline:
                       focusElement === `${AGENT_ENVIRONMENT_CARD_ID}-tool-${tool.name}`
                         ? "1px solid var(--mantine-color-teal-6)"
@@ -294,7 +297,25 @@ export function AgentEnvironmentCard({
                 >
                   <Table.Th style={narrow}>{tool.label}</Table.Th>
                   <Table.Td>
-                    <ToolLogin tool={tool} />
+                    <Stack gap="xs">
+                      <Text size="xs" c="dimmed">
+                        {tool.members.length
+                          ? t("setup.intelligence.environment.toolMembers", {
+                              members: tool.members
+                                .map((member) =>
+                                  member.slot === "default"
+                                    ? member.name
+                                    : t("setup.intelligence.environment.toolMemberSlot", {
+                                        name: member.name,
+                                        slot: member.slot,
+                                      }),
+                                )
+                                .join(", "),
+                            })
+                          : t("setup.intelligence.environment.toolNoMembers")}
+                      </Text>
+                      <ToolLogin tool={tool} />
+                    </Stack>
                   </Table.Td>
                 </Table.Tr>
               ))}
@@ -425,15 +446,17 @@ function ToolLogin({ tool }: { tool: EnvironmentToolStatus }) {
       <Group gap="xs">
         <Badge
           color={
-            recheck.isPending
-              ? "info"
-              : tool.authentication_failed
-                ? "danger"
-                : resultKey
-                  ? tool.problem
-                    ? "warning"
-                    : "success"
-                  : cliToolStatusColor(tool)
+            tool.members.length === 0
+              ? "gray"
+              : recheck.isPending
+                ? "info"
+                : tool.authentication_failed
+                  ? "danger"
+                  : resultKey
+                    ? tool.problem
+                      ? "warning"
+                      : "success"
+                    : cliToolStatusColor(tool)
           }
           variant="light"
           size="sm"

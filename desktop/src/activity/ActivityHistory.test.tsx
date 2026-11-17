@@ -254,6 +254,7 @@ beforeEach(() => {
       {
         name: "claude",
         label: "Claude Code",
+        members: [],
         config_reference: "cli_agents/claude/default.yml",
         provisioned: true,
         credentials_saved: true,

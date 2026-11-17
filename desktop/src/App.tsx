@@ -274,7 +274,7 @@ function SystemAlertBand() {
           icon={<TriangleAlert size={18} />}
           key={alert.id}
           title={t(`systemAlerts.severity.${alert.severity}`)}
-          withCloseButton
+          withCloseButton={alert.dismissible}
           onClose={() => {
             if (dismiss.isPending && dismiss.variables === alert.id) {
               return;

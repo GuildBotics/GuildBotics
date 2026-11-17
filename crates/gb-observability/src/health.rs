@@ -267,6 +267,9 @@ impl SystemAlerts {
                 text(a, "id").to_owned(),
             )
         });
+        for alert in &mut alerts {
+            alert["dismissible"] = json!(!text(alert, "id").starts_with("agent-environment:"));
+        }
         json!({"alerts":alerts})
     }
     #[allow(clippy::too_many_arguments)]
