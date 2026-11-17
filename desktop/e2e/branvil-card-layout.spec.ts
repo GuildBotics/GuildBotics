@@ -1,10 +1,7 @@
-// Layout regression coverage of ticket cards with fixture API responses; no
-// service credentials or data are used. Serve the GUI, then set
-// BRANVIL_E2E_BASE_URL and optionally BRANVIL_E2E_CHANNEL as for the other
-// browser tests.
+// Browser layout regression coverage against the Desktop Branvil stack.
 import { expect, test } from "@playwright/test";
 
-test.skip(!process.env.BRANVIL_E2E_BASE_URL, "BRANVIL_E2E_BASE_URL must serve the GUI.");
+
 
 const AT = "2026-10-28T12:00:00Z";
 const REPO = "GuildBotics/Branvil";

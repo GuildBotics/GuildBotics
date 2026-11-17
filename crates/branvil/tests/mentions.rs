@@ -226,7 +226,7 @@ async fn query_deduplicates_pages_and_tracks_each_source_independently() {
         );
     }
     w.server.stop();
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["admin", "check", "--data-dir"])
         .arg(&w.server.data)
         .output()
@@ -256,7 +256,7 @@ async fn upgrade_preserves_resolved_mentions_and_their_index() {
     as_schema_34(&db);
     let old = tables(&db);
     for (command, expected) in [("upgrade", 3), ("check", 0), ("upgrade", 0)] {
-        let out = std::process::Command::new(BIN)
+        let out = branvil_command()
             .args(["admin", command, "--data-dir"])
             .arg(&w.server.data)
             .output()

@@ -1541,8 +1541,8 @@ async fn a_vault_that_cannot_keep_or_open_secrets_stops_them_with_the_reason() {
     );
     assert_eq!(s.secret_files(), ["owner.token"]);
 
-    // No key at all: the same, saying so.
-    w.restart(&[("BRANVIL_VAULT_KEY", "")]);
+    // The embedding host cannot provide a vault: report its reason.
+    w.restart(&[("BRANVIL_TEST_NO_VAULT", "1")]);
     let s = &w.server;
     let (st, v) = s.put(&upstream, &w.owner, setting).await;
     assert_eq!(
@@ -1553,7 +1553,7 @@ async fn a_vault_that_cannot_keep_or_open_secrets_stops_them_with_the_reason() {
         v["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("BRANVIL_VAULT_KEY"),
+            .contains("test host has no vault"),
         "{v}"
     );
     let (st, v) = s.put(account, &w.owner, json!({"token": AIKO_TOKEN})).await;

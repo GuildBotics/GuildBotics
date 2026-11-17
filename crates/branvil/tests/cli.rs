@@ -19,7 +19,7 @@ fn text(out: &std::process::Output) -> String {
 async fn bootstrap_and_admin_commands() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("data");
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args([
             "init",
             "--owner",
@@ -38,7 +38,7 @@ async fn bootstrap_and_admin_commands() {
     assert!(text(&out).contains("secrets/owner.token"), "{}", text(&out));
     assert!(!text(&out).contains("bvt_"), "{}", text(&out));
     // init refuses to run twice.
-    let again = std::process::Command::new(BIN)
+    let again = branvil_command()
         .args(["init", "--listen", "127.0.0.1:0", "--data-dir"])
         .arg(dir.path().join("data"))
         .output()
@@ -55,7 +55,7 @@ async fn bootstrap_and_admin_commands() {
         assert!(out.status.success(), "{args:?}: {}", text(&out));
     }
     // Options also work after the subcommand.
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args([
             "member",
             "token",
@@ -82,7 +82,7 @@ async fn bootstrap_and_admin_commands() {
 
     // On the Hub machine the owner's token file is the default token.
     let on_hub = |args: &[&str]| {
-        std::process::Command::new(BIN)
+        branvil_command()
             .args(args)
             .env_remove("BRANVIL_TOKEN")
             .env("BRANVIL_URL", &server.url)
@@ -118,7 +118,7 @@ async fn bootstrap_and_admin_commands() {
     );
 
     // Offline commands refuse a running service, then work once it stops.
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["admin", "check", "--data-dir"])
         .arg(&server.data)
         .output()
@@ -126,13 +126,13 @@ async fn bootstrap_and_admin_commands() {
     assert!(!out.status.success());
     assert!(text(&out).contains("already open"), "{}", text(&out));
     server.stop();
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["admin", "reindex", "--data-dir"])
         .arg(&server.data)
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", text(&out));
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["admin", "check", "--data-dir"])
         .arg(&server.data)
         .output()
@@ -152,7 +152,7 @@ async fn an_upgraded_database_serves_only_after_a_successful_check() {
     let db = data.join("branvil.redb");
     as_schema_34(&db);
     let admin = |what: &str| {
-        std::process::Command::new(BIN)
+        branvil_command()
             .args(["admin", what, "--data-dir"])
             .arg(&data)
             .output()
@@ -165,7 +165,7 @@ async fn an_upgraded_database_serves_only_after_a_successful_check() {
     assert_eq!(out.status.code(), Some(3), "{}", text(&out));
     assert!(text(&out).contains(unchecked), "{}", text(&out));
     async fn refuses_to_serve(data: &std::path::Path) {
-        let mut serve = tokio::process::Command::new(BIN);
+        let mut serve = async_branvil_command();
         serve
             .args(["serve", "--listen", "127.0.0.1:0", "--data-dir"])
             .arg(data)

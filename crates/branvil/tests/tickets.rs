@@ -1330,7 +1330,7 @@ async fn concurrent_label_changes_are_all_kept_and_indexes_match() {
     // And the offline consistency check finds nothing to repair.
     let mut server = w.server;
     server.stop();
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["admin", "check", "--data-dir"])
         .arg(&server.data)
         .output()
@@ -1772,7 +1772,7 @@ async fn relations_are_shown_from_both_sides_and_never_make_tickets_wait_on_each
     // The offline check finds the relation index as the records imply.
     let mut server = w.server;
     server.stop();
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["admin", "check", "--data-dir"])
         .arg(&server.data)
         .output()

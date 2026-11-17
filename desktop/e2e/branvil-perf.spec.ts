@@ -1,16 +1,14 @@
 /// <reference lib="dom" />
 
-// Board render timing against a live, seeded Branvil (docs/performance.md, "GUI").
+// Small-fixture board timing only: the disposable acme workspace has one card.
+// It cannot reproduce the historical 1,695-card benchmark in crates/branvil/docs/performance.md.
+// The harness accepts neither a seeded data directory nor a workspace override;
+// use these timings only to investigate this fixture, never as large-board results.
 // Not part of the smoke run: it runs only with BRANVIL_E2E_PERF=1.
 //
-// Environment: BRANVIL_E2E_BASE_URL, BRANVIL_E2E_BIN and BRANVIL_E2E_DATA_DIR
-// (entry links, e2e/enter.ts), BRANVIL_E2E_WORKSPACE (a workspace name; its board is timed),
-// BRANVIL_E2E_PERF=1, and optionally BRANVIL_E2E_PERF_RUNS (default 3) and
-// BRANVIL_E2E_CHANNEL=chrome.
-//
-// Run: npx playwright test e2e/perf.spec.ts --trace off
-// (Playwright's trace recorder snapshots the DOM on every step, which takes
-// seconds on a board of thousands of cards and would be measured too.)
+// Run from desktop with BRANVIL_E2E_PERF=1 npm run e2e -- --project=branvil.
+// The stack uses a disposable workspace and the host's shared browser session.
+// Disable tracing when measuring: its DOM snapshots distort board timings.
 //
 // The times come from the page itself (milliseconds since the board page's
 // navigation started), not from Playwright's polling. A timer on the page
@@ -20,17 +18,14 @@
 // after that frame is reported too.
 
 import { devices, test } from "@playwright/test";
-import { enter } from "./enter";
+import { enter, entryEnv } from "./branvil-enter";
 
 const env = {
-  workspace: process.env.BRANVIL_E2E_WORKSPACE,
+  workspace: "acme",
   runs: Number(process.env.BRANVIL_E2E_PERF_RUNS ?? "3"),
 };
 
-test.skip(
-  process.env.BRANVIL_E2E_PERF !== "1",
-  "BRANVIL_E2E_PERF=1 runs the board timing",
-);
+test.skip(process.env.BRANVIL_E2E_PERF !== "1", "BRANVIL_E2E_PERF=1 runs the board timing");
 test.setTimeout(300_000);
 
 declare global {
@@ -42,6 +37,15 @@ declare global {
 }
 
 test("time to a rendered board", async ({ browser }) => {
+  const seed = await browser.newPage({ baseURL: entryEnv.base });
+  await enter(seed);
+  const { csrf } = await (await seed.request.get("/api/v1/session")).json();
+  const response = await seed.request.post("/api/v1/repos/acme%2Fdemo/tickets", {
+    headers: { "X-Branvil-CSRF": csrf },
+    data: { title: "Board timing fixture", lane: "ready" },
+  });
+  if (!response.ok()) throw new Error(`timing fixture: ${response.status()}`);
+  await seed.close();
   for (let run = 0; run < env.runs; run++) {
     // A new browser context each run: a first visit, nothing cached.
     const context = await browser.newContext({
@@ -63,9 +67,7 @@ test("time to a rendered board", async ({ browser }) => {
         if (!document.querySelector("article.card")) return;
         window.__firstCardAt = performance.now();
         // The frame after the cards were inserted: they have been laid out and painted.
-        requestAnimationFrame(() =>
-          setTimeout(() => (window.__paintedAt = performance.now())),
-        );
+        requestAnimationFrame(() => setTimeout(() => (window.__paintedAt = performance.now())));
         observer.disconnect();
       }).observe(document, { childList: true, subtree: true });
     });
@@ -77,27 +79,21 @@ test("time to a rendered board", async ({ browser }) => {
     await page.waitForFunction(
       () => {
         const last = window.__blocked.at(-1);
-        return performance.now() - Math.max(window.__paintedAt ?? 0, last ? last[0] + last[1] : 0) > 2000;
+        return (
+          performance.now() - Math.max(window.__paintedAt ?? 0, last ? last[0] + last[1] : 0) > 2000
+        );
       },
       null,
       { polling: 200, timeout: 240_000 },
     );
     const metrics = await page.evaluate(() => {
-      const resources = performance.getEntriesByType(
-        "resource",
-      ) as PerformanceResourceTiming[];
+      const resources = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
       const cards = resources.filter((r) => r.name.includes("/cards"));
       const checks = resources.filter((r) => r.name.includes("/checks"));
-      const memory = (
-        performance as unknown as { memory?: { usedJSHeapSize: number } }
-      ).memory;
+      const memory = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
       return {
-        firstCardRequestAt: Math.round(
-          Math.min(...cards.map((r) => r.startTime)),
-        ),
-        lastCardResponseAt: Math.round(
-          Math.max(...cards.map((r) => r.responseEnd)),
-        ),
+        firstCardRequestAt: Math.round(Math.min(...cards.map((r) => r.startTime))),
+        lastCardResponseAt: Math.round(Math.max(...cards.map((r) => r.responseEnd))),
         firstCardAt: Math.round(window.__firstCardAt ?? -1),
         paintedAt: Math.round(window.__paintedAt ?? -1),
         // The end of the last stretch over 50 ms in which the page could not
@@ -108,15 +104,20 @@ test("time to a rendered board", async ({ browser }) => {
         cardRequests: cards.length,
         // Checks of the cards' open pull requests (the board loads up to 30).
         checkRequests: checks.length,
-        lastCheckResponseAt: Math.round(
-          Math.max(0, ...checks.map((r) => r.responseEnd)),
-        ),
+        lastCheckResponseAt: Math.round(Math.max(0, ...checks.map((r) => r.responseEnd))),
         cardBytes: cards.reduce((n, r) => n + r.transferSize, 0),
         domNodes: document.getElementsByTagName("*").length,
         heapBytes: memory?.usedJSHeapSize ?? null,
       };
     });
-    console.log(JSON.stringify({ run, ...metrics }));
+    console.log(
+      JSON.stringify({
+        workload: "disposable-acme-one-card",
+        comparableToHistoricalBenchmark: false,
+        run,
+        ...metrics,
+      }),
+    );
     await context.close();
   }
 });

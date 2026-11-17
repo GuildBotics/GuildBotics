@@ -210,7 +210,7 @@ backendEnv = Object.fromEntries(
     ].includes(key.toUpperCase()),
   ),
 );
-if (stackName === "setup") {
+if (stackName === "setup" || stackName === "branvil") {
   backendEnv.GUILDBOTICS_BROWSER_TEST_BRANVIL = "1";
   backendEnv.BRANVIL_DATA_DIR = join(homeDir, "branvil");
 }
@@ -423,6 +423,41 @@ function startControlServer() {
 
 async function main() {
   await startBackend();
+  if (stackName === "branvil") {
+    const link = await postJson("/session/links", {});
+    const entered = await fetch(`${baseUrl}/-/guildbotics/api/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: new URL(link.url).hash.slice(1) }),
+    });
+    if (!entered.ok) throw new Error(`Branvil seed session: ${entered.status}`);
+    const { csrf } = await entered.json();
+    const headers = {
+      "Content-Type": "application/json",
+      Cookie: entered.headers.get("set-cookie").split(";")[0],
+      "X-Branvil-CSRF": csrf,
+    };
+    const deadline = Date.now() + 60_000;
+    while (true) {
+      const ready = await fetch(`${baseUrl}/api/v1/workspaces`, { headers });
+      if (ready.ok) break;
+      if (ready.status !== 503 || Date.now() >= deadline) {
+        throw new Error(`Branvil readiness: ${ready.status}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    for (const [path, body] of [
+      ["/workspaces", { name: "acme" }],
+      ["/repos", { path: "acme/demo" }],
+    ]) {
+      const response = await fetch(`${baseUrl}/api/v1${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw new Error(`Branvil seed ${path}: ${response.status}`);
+    }
+  }
   if (shouldSeed) {
     await seedWorkspace();
   }

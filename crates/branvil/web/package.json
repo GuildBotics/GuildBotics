@@ -10,10 +10,7 @@
     "typecheck": "tsc -b --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "e2e": "npm run build && cargo build --locked -p branvil --bin branvil && playwright test",
-    "e2e:visual": "BRANVIL_E2E_VISUAL=1 playwright test",
-    "e2e:perf": "BRANVIL_E2E_PERF=1 playwright test"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@mantine/core": "^9.5.1",

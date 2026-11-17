@@ -1,14 +1,10 @@
-// Three real-wire journeys against the disposable service owned by start-stack.ts.
+// Three real-wire journeys against the disposable service owned by start-stack.mjs.
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { expect, request, test, type Page } from "@playwright/test";
-import { enter, entryEnv } from "./enter";
+import { enter, entryEnv } from "./branvil-enter";
 
 const env = {
-  base: process.env.BRANVIL_E2E_BASE_URL,
-  member: process.env.BRANVIL_E2E_MEMBER,
-  workspace: process.env.BRANVIL_E2E_WORKSPACE,
+  workspace: "acme",
 };
 
 test.describe.configure({ mode: "serial" });
@@ -20,7 +16,8 @@ test.beforeEach(({ page }) => {
   problems.set(page, list);
   page.on("pageerror", (e) => list.push(`pageerror: ${e.message}`));
   page.on("console", (m) => {
-    if (m.type() === "error" && /Content Security Policy|Refused to/i.test(m.text())) list.push(m.text());
+    if (m.type() === "error" && /Content Security Policy|Refused to/i.test(m.text()))
+      list.push(m.text());
   });
 });
 test.afterEach(({ page }) => {
@@ -41,7 +38,10 @@ async function fromCardMenu(page: Page, ref: RegExp, item: RegExp) {
   await page.getByRole("menuitem", { name: item }).click();
 }
 
-test("enters with a single-use link and keeps the session across reloads", async ({ page, context }) => {
+test("enters with a single-use link and keeps the session across reloads", async ({
+  page,
+  context,
+}) => {
   await enter(page);
   await page.reload();
   await expect(page.getByRole("link", { name: /^(Settings|設定)$/ })).toBeVisible();
@@ -52,14 +52,19 @@ test("enters with a single-use link and keeps the session across reloads", async
   await context.clearCookies();
   await page.goto("/-/settings");
   await expect(page.getByText("guildbotics branvil open --print", { exact: true })).toBeVisible();
-  await expect(page.getByText(/address bar of this same browser|この画面と同じブラウザのアドレスバー/)).toBeVisible();
-  await expect(page.getByText(/browser showing its consent page|同意画面を開いているブラウザ/)).toBeVisible();
+  await expect(
+    page.getByText(/address bar of this same browser|この画面と同じブラウザのアドレスバー/),
+  ).toBeVisible();
   await expect(page.getByRole("textbox")).toHaveCount(0);
-  await page.goto("/-/enter#reused-or-made-up");
-  await expect(page.getByText(/expired or was already used|期限切れか、すでに使われています/)).toBeVisible();
+  await page.goto("/-/guildbotics/-/enter#reused-or-made-up");
+  await expect(
+    page.getByText(/already been used or has expired|使用済みか、期限が切れています/),
+  ).toBeVisible();
 });
 
-test("creates a ticket, moves it with its menu, and persists the move across reloads", async ({ page }) => {
+test("creates a ticket, moves it with its menu, and persists the move across reloads", async ({
+  page,
+}) => {
   await openBoard(page);
   const title = `E2E ticket ${Date.now()}`;
   await page.getByRole("button", { name: /^(Add a ticket to New|新規 にチケットを追加)$/ }).click();
@@ -71,7 +76,8 @@ test("creates a ticket, moves it with its menu, and persists the move across rel
 
   // One representative write journey; drag and assignment branches live in component tests.
   const saved = page.waitForResponse(
-    (response) => response.request().method() === "PUT" &&
+    (response) =>
+      response.request().method() === "PUT" &&
       /^\/api\/v1\/repos\/[^/]+\/tickets\/[^/]+\/board$/.test(new URL(response.url()).pathname),
   );
   await fromCardMenu(page, new RegExp(`^(Actions of ${ref}|${ref} の操作)$`), /^(Ready|着手可)$/);
@@ -85,17 +91,23 @@ test("creates a ticket, moves it with its menu, and persists the move across rel
 
 test("shows a change made elsewhere without a reload (event stream)", async ({ page }) => {
   // The change must come after the page's event stream is open (the GUI shows no indicator for it).
-  const streamOpen = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/events" && r.ok());
+  const streamOpen = page.waitForResponse(
+    (r) => new URL(r.url()).pathname === "/api/v1/events" && r.ok(),
+  );
   await openBoard(page);
   await streamOpen;
-  // Another client with a Bearer token (the owner's, read on the Hub) creates a ticket on the board,
-  // in the workspace's repository the GUI's new-ticket form offers first.
-  const token = readFileSync(join(entryEnv.data as string, "secrets", "owner.token"), "utf8").trim();
-  const api = await request.newContext({ baseURL: env.base, extraHTTPHeaders: { Authorization: `Bearer ${token}` } });
+  // Another HTTP client uses the shared host session to create a ticket in the
+  // repository the board offers first.
+  const api = await request.newContext({
+    baseURL: entryEnv.base,
+    storageState: await page.context().storageState(),
+  });
+  const { csrf } = await (await api.get("/api/v1/session")).json();
   const repos = (await (await api.get("/api/v1/repos")).json()) as { items: { path: string }[] };
   const repo = repos.items.find((r) => r.path.startsWith(`${env.workspace}/`))?.path as string;
   const title = `Made elsewhere ${Date.now()}`;
   const created = await api.post(`/api/v1/repos/${encodeURIComponent(repo)}/tickets`, {
+    headers: { "X-Branvil-CSRF": csrf },
     data: { title, body: "", labels: [], lane: "ready" },
   });
   expect(created.status()).toBe(201);

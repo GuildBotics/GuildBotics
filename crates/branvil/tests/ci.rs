@@ -234,7 +234,7 @@ async fn schema_34_upgrade_preserves_records_and_adds_hold_setting() {
     let data = w.server.data.clone();
     let db = data.join("branvil.redb");
     let admin = |what: &str| {
-        let out = std::process::Command::new(BIN)
+        let out = branvil_command()
             .args(["admin", what, "--data-dir"])
             .arg(&data)
             .output()
@@ -1036,7 +1036,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
     );
     as_schema_34(&db);
     for (command, expected) in [("upgrade", 3), ("check", 0)] {
-        let out = std::process::Command::new(BIN)
+        let out = branvil_command()
             .args(["admin", command, "--data-dir"])
             .arg(&w.server.data)
             .output()
@@ -2143,7 +2143,7 @@ async fn an_expired_lease_requeues_once_and_a_restart_handles_orphans() {
     assert!(runner.claim().await.is_none());
     // The indexes still match the records after all of it.
     w.server.stop();
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["admin", "check", "--data-dir"])
         .arg(&w.server.data)
         .output()
@@ -2535,7 +2535,7 @@ async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
         .await;
     assert_eq!(st, 200, "{v}");
     let target = tempfile::tempdir().unwrap();
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["restore", "--from"])
         .arg(&backup)
         .arg("--data-dir")

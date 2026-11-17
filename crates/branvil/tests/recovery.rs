@@ -262,7 +262,7 @@ async fn the_next_start_waits_for_the_git_a_stopped_service_left_running() {
         // A start that waits still stops at Ctrl-C.
         let waiting_log = w.dir.path().join("waiting.log");
         let mut waiting = ServiceProcess::spawn(
-            std::process::Command::new(BIN)
+            branvil_command()
                 .args(["serve", "--listen", "127.0.0.1:0", "--data-dir"])
                 .arg(&w.server.data)
                 .env_remove("BRANVIL_FAILPOINT")
