@@ -302,15 +302,10 @@ async fn ticket_relations(t: &dyn TicketService) {
 }
 async fn scenario(board_order_only: bool, code_parity_only: bool) {
     let temp = tempfile::tempdir().unwrap();
-    let data = temp.path().join("branvil");
-    let owner_token = ::branvil::api::initialize(&data, "owner").unwrap();
-    let alert_host = alerts::Host::configure(&data);
-    let running = ::branvil::api::Running::start(
-        &data,
-        std::sync::Arc::new(::branvil::vault::Memory::default()),
-    )
-    .await
-    .unwrap();
+    let (fixture, alert_host) =
+        ::branvil::test_support::Fixture::configured("owner", alerts::Host::configure).await;
+    let owner_token = fixture.owner_token.clone();
+    let running = &fixture.running;
     let base = running.data.base_url().to_owned();
     let owner = running
         .data
@@ -391,7 +386,7 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
             &runner.token,
         )
         .await;
-        running.stop().await.unwrap();
+        fixture.stop().await;
         return;
     }
 
@@ -404,7 +399,7 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
             owner_token.trim(),
         )
         .await;
-        running.stop().await.unwrap();
+        fixture.stop().await;
         return;
     }
     owner
@@ -430,7 +425,7 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
             &ActorName("owner".into()),
         )
         .await;
-        running.stop().await.unwrap();
+        fixture.stop().await;
         return;
     }
     ticket_relations(t.as_ref()).await;
@@ -862,7 +857,7 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
     drop(t);
     drop(owner);
     drop(factory);
-    running.stop().await.unwrap();
+    fixture.stop().await;
 }
 fn main() -> ExitCode {
     let args: Vec<_> = std::env::args_os().collect();

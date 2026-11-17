@@ -118,3 +118,6 @@ pub mod endpoint;
 pub mod member_protocol;
 
 pub mod client_release;
+
+#[cfg(test)]
+mod test_branvil;

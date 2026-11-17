@@ -84,7 +84,7 @@ fn every_rate_limit_reset_hint_and_retry_guidance_renders_in_both_languages() {
 async fn rate_limit_envelopes_accept_direct_and_exhausted_cli_errors_but_not_other_categories() {
     for wrapped in [false, true] {
         for category in ["rate_limited", "timeout", "unknown"] {
-            let f = Fixture::new();
+            let f = Fixture::new().await;
             let task = f.task().await;
             let mut failure = guest(category);
             if wrapped && let DispatchFailure::Guest(error) = &mut failure {
@@ -110,7 +110,7 @@ async fn rate_limit_envelopes_accept_direct_and_exhausted_cli_errors_but_not_oth
 #[tokio::test]
 async fn default_and_clamped_budgets_reach_the_turn_without_moving_in_progress_work() {
     for (raw, expected) in [("", 5), ("0", 1), ("x", 5), ("-10", 1), (" 7 ", 7)] {
-        let f = Fixture::new();
+        let f = Fixture::new().await;
         let mut task = f.task().await;
         task.status = "in_progress".into();
         let faults = crate::test_ticket::Faults::new(f.ticket.clone());
@@ -131,14 +131,11 @@ async fn default_and_clamped_budgets_reach_the_turn_without_moving_in_progress_w
             )
             .await
             .unwrap();
-        let calls = f.runner.calls.lock().unwrap();
+        let calls = f.runner.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].run_id, trace.id());
         assert_eq!(calls[0].payload["max_completion_attempts"], expected);
-        let stored: Value = serde_json::from_slice(
-            &std::fs::read(f.root.path().join("services/tickets/acme%2Fteam/T-1.json")).unwrap(),
-        )
-        .unwrap();
+        let stored = f.stored_ticket("1").await;
         assert_eq!(stored["lane"], "ready");
     }
 }
@@ -147,7 +144,7 @@ async fn default_and_clamped_budgets_reach_the_turn_without_moving_in_progress_w
 async fn listing_limited_pulls_uses_distinct_traces_and_refresh_limit_still_runs_the_next_ticket() {
     for source in ["manual", "scheduled", "routine"] {
         for at_refresh in [false, true] {
-            let f = Fixture::new();
+            let f = Fixture::new().await;
             let mut first = f.pull().await;
             let mut second = f.pull_branch("other").await;
             let ticket = f.task().await;
@@ -176,18 +173,14 @@ async fn listing_limited_pulls_uses_distinct_traces_and_refresh_limit_still_runs
                 )
             );
             assert_eq!(f.runner.stops.lock().unwrap().len(), 2);
-            let calls = f.runner.calls.lock().unwrap();
+            let calls = f.runner.calls.lock().unwrap().clone();
             assert_eq!(calls.len(), 1);
             assert_eq!(
                 calls[0].payload["ticket_url"],
                 ticket.url.as_deref().unwrap()
             );
             for number in [1, 2] {
-                let path = f
-                    .root
-                    .path()
-                    .join(format!("services/code/acme%2Frepo/pulls/{number}.json"));
-                let stored: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+                let stored = f.stored_pull(number).await;
                 assert_eq!(stored["draft"], true);
                 assert_eq!(stored["comments"].as_array().unwrap().len(), 2);
             }
@@ -203,7 +196,7 @@ async fn listing_limited_pulls_uses_distinct_traces_and_refresh_limit_still_runs
 #[tokio::test]
 async fn concurrent_reviewers_and_a_prior_human_draft_never_announce_a_second_conversion() {
     for drafted_by_human in [false, true] {
-        let f = Fixture::new();
+        let f = Fixture::new().await;
         let mut pull = f.pull().await;
         pull.trigger_reason = Some(REVIEW_LIMIT.into());
         if drafted_by_human {
@@ -226,10 +219,7 @@ async fn concurrent_reviewers_and_a_prior_human_draft_never_announce_a_second_co
             f.runner.stops.lock().unwrap().len(),
             usize::from(!drafted_by_human)
         );
-        let stored: Value = serde_json::from_slice(
-            &std::fs::read(f.root.path().join("services/code/acme%2Frepo/pulls/1.json")).unwrap(),
-        )
-        .unwrap();
+        let stored = f.stored_pull(1).await;
         assert_eq!(stored["draft"], true);
         assert_eq!(
             stored["comments"].as_array().unwrap().len(),
@@ -247,7 +237,7 @@ async fn move_errors_preserve_the_ready_lane_and_only_unavailable_autonomous_wor
             ServiceError::Unsupported,
             ServiceError::Unavailable,
         ] {
-            let f = Fixture::new();
+            let f = Fixture::new().await;
             let task = f.task().await;
             let faults = crate::test_ticket::Faults::new(f.ticket.clone());
             faults.errors.lock().unwrap().insert("move", error.clone());
@@ -258,17 +248,13 @@ async fn move_errors_preserve_the_ready_lane_and_only_unavailable_autonomous_wor
                 matches!(selector.run(&task,selector.invocation(&task).unwrap(),&trace,5).await,Err(DispatchFailure::Service(e)) if e==error)
             );
             assert!(f.runner.calls.lock().unwrap().is_empty());
-            let stored: Value = serde_json::from_slice(
-                &std::fs::read(f.root.path().join("services/tickets/acme%2Fteam/T-1.json"))
-                    .unwrap(),
-            )
-            .unwrap();
+            let stored = f.stored_ticket("1").await;
             assert_eq!(stored["lane"], "ready");
             let deferred = source != "manual" && error.is_unavailable();
             let comments = f.comments(&task).await;
             assert_eq!(comments.len(), usize::from(!deferred));
             if !deferred {
-                assert_eq!(stored["comments"][0]["status"]["reason"], "failed");
+                assert_eq!(stored["comments"][0]["meta"]["reason"], "failed");
             }
             assert_eq!(
                 f.runner.stops.lock().unwrap().len(),
@@ -282,7 +268,7 @@ async fn failed_comment_delivery_keeps_rate_limit_evidence_and_an_unaddressed_fa
  {
     for fail_post in [false, true] {
         for limited in [false, true] {
-            let f = Fixture::new();
+            let f = Fixture::new().await;
             let task = f.task().await;
             let mut faults = crate::test_ticket::Faults::new(f.ticket.clone());
             faults.omit_comment_url = true;
@@ -336,13 +322,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-struct NoKeys;
+#[derive(Default)]
+struct NoKeys(Mutex<Option<String>>);
 impl Keychain for NoKeys {
     fn read(&self) -> anyhow::Result<Option<String>> {
-        panic!("local provider needs no key")
+        Ok(self.0.lock().unwrap().clone())
     }
-    fn create(&self, _: &str) -> anyhow::Result<()> {
-        panic!("local provider needs no key")
+    fn create(&self, value: &str) -> anyhow::Result<()> {
+        *self.0.lock().unwrap() = Some(value.into());
+        Ok(())
     }
 }
 #[derive(Default)]
@@ -421,14 +409,21 @@ impl Runner for FakeRunner {
 }
 struct Fixture {
     root: tempfile::TempDir,
+    embedded: branvil::test_support::Fixture,
     ticket: Arc<dyn TicketService>,
     code: Arc<dyn CodeHostingService>,
     runner: FakeRunner,
     diagnostics: Diagnostics,
 }
 impl Fixture {
-    fn new() -> Self {
+    async fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
+        let embedded = branvil::test_support::Fixture::new("owner").await;
+        embedded.workspace("acme").await;
+        embedded.repository("acme/repo").await;
+        embedded.member("local-yuki").await;
+        let (_, token) = embedded.member("local-aiko").await;
+        let keys = NoKeys::default();
         let writes = gb_base::shared_writes::SharedWrites::new(
             root.path().join("identity"),
             Some(root.path().join("workspace")),
@@ -438,20 +433,21 @@ impl Fixture {
             Scope::Identity,
             DeviceKey {
                 machine_root: root.path().into(),
-                keychain: &NoKeys,
+                keychain: &keys,
             },
         )
         .unwrap();
+        secrets.set("AIKO_BRANVIL_TOKEN", &token).unwrap();
         let factory = gb_integrations::ServiceIntegrationFactory::new(
             gb_integrations::IntegrationConfig {
                 local_root: root.path().join("services"),
                 identity_root: root.path().join("identity"),
                 person_id: "aiko".into(),
                 display_name: "Aiko".into(),
-                accounts: Default::default(),
+                accounts: BTreeMap::from([("branvil".into(), ActorName("local-aiko".into()))]),
                 branvil_members: Default::default(),
-                ticket_provider: "local".into(),
-                code_provider: "local".into(),
+                ticket_provider: "branvil".into(),
+                code_provider: "branvil".into(),
                 chat_provider: "local".into(),
                 ticket_scope: "acme".into(),
                 code_scope: "acme".into(),
@@ -459,18 +455,16 @@ impl Fixture {
                 slack_base_url: String::new(),
             },
             &secrets,
-            None,
+            Some(embedded.data()),
             Arc::new(|_| {}),
         )
         .unwrap();
         let ticket = factory.create_ticket_service().unwrap();
         let code = factory.create_code_hosting_service().unwrap();
-        let path = root.path().join("services/tickets/acme%2Fteam");
-        std::fs::create_dir_all(&path).unwrap();
-        std::fs::write(path.join("tracker.json"), br#"{"repository":"acme/repo"}"#).unwrap();
         let diagnostics = Diagnostics::open(root.path());
         Self {
             root,
+            embedded,
             ticket,
             code,
             runner: FakeRunner::default(),
@@ -493,7 +487,7 @@ impl Fixture {
     async fn task(&self) -> Task {
         self.ticket
             .create_ticket(CreateTicket {
-                tracker: "acme/team".into(),
+                tracker: "acme/repo".into(),
                 title: "Fix login".into(),
                 body: String::new(),
                 labels: vec![],
@@ -533,51 +527,23 @@ impl Fixture {
         self.pull_branch("feature").await
     }
     async fn pull_branch(&self, branch: &str) -> Task {
-        let bare = self
-            .root
-            .path()
-            .join("services/code/acme%2Frepo/repository.git");
-        std::fs::create_dir_all(&bare).unwrap();
-        let git = |args: &[&str]| {
-            let mut cmd = std::process::Command::new("git");
-            for (key, _) in std::env::vars_os() {
-                if key.to_string_lossy().starts_with("GIT_") {
-                    cmd.env_remove(key);
-                }
-            }
-            let output = cmd
-                .args([
-                    "-c",
-                    "user.name=Fixture",
-                    "-c",
-                    "user.email=fixture@example.invalid",
-                ])
-                .args(args)
-                .current_dir(&bare)
-                .env("HOME", &bare)
-                .env("USERPROFILE", &bare)
-                .env("XDG_CONFIG_HOME", &bare)
-                .env("GIT_CONFIG_NOSYSTEM", "1")
-                .env(
-                    "GIT_CONFIG_GLOBAL",
-                    if cfg!(windows) { "NUL" } else { "/dev/null" },
-                )
-                .env("GIT_ALLOW_PROTOCOL", "file")
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        let base = self.embedded.git(
+            "acme/repo",
+            &["for-each-ref", "--format=%(objectname)", "refs/heads/main"],
+        );
+        let base = if base.is_empty() {
+            self.embedded
+                .commit("acme/repo", "main", None, "README.md", "base")
+        } else {
+            base
         };
-        git(&["init", "--bare", "--initial-branch=main"]);
-        let tree = git(&["mktree"]);
-        let head = git(&["commit-tree", &tree, "-m", "initial"]);
-        for branch in ["main", branch] {
-            git(&["update-ref", &format!("refs/heads/{branch}"), &head]);
-        }
+        self.embedded.commit(
+            "acme/repo",
+            branch,
+            Some(&base),
+            &format!("{branch}.txt"),
+            branch,
+        );
         let pull = self
             .code
             .create_pull_request(CreatePullRequest {
@@ -591,18 +557,16 @@ impl Fixture {
             })
             .await
             .unwrap();
-        self.code
-            .comment(&pull.target.url, "Please fix", None)
+        let number = pull.target.url.rsplit('/').next().unwrap().parse().unwrap();
+        self.embedded
+            .owner
+            .pulls_add_comment(
+                "acme/repo",
+                number,
+                branvil::test_support::input(json!({"body":"Please fix"})),
+            )
             .await
             .unwrap();
-        // A different author leaves feedback for the member's PR.
-        let path = self.root.path().join(format!(
-            "services/code/acme%2Frepo/pulls/{}.json",
-            pull.target.url.rsplit('/').next().unwrap()
-        ));
-        let mut stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        stored["comments"][0]["author"] = json!("reviewer");
-        std::fs::write(path, serde_json::to_vec(&stored).unwrap()).unwrap();
         self.code
             .pull_request_candidates()
             .await
@@ -612,6 +576,60 @@ impl Fixture {
             .unwrap()
     }
 
+    async fn stored_ticket(&self, key: &str) -> Value {
+        let mut value = serde_json::to_value(
+            self.embedded
+                .owner
+                .tickets_get_ticket("acme/repo", key)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        value["assignees"] = value["assignee"]["name"]
+            .as_str()
+            .map(|s| json!([s]))
+            .unwrap_or(json!([]));
+        let page = self
+            .embedded
+            .owner
+            .page("fixture-ticket-comments".into(), None, None)
+            .unwrap();
+        value["comments"] = serde_json::to_value(
+            self.embedded
+                .owner
+                .tickets_list_comments("acme/repo", key, page)
+                .await
+                .unwrap()
+                .items,
+        )
+        .unwrap();
+        value
+    }
+    async fn stored_pull(&self, number: u64) -> Value {
+        let mut value = serde_json::to_value(
+            self.embedded
+                .owner
+                .pulls_get("acme/repo", number)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let page = self
+            .embedded
+            .owner
+            .page("fixture-pull-comments".into(), None, None)
+            .unwrap();
+        value["comments"] = serde_json::to_value(
+            self.embedded
+                .owner
+                .pulls_list_comments("acme/repo", number, page)
+                .await
+                .unwrap()
+                .items,
+        )
+        .unwrap();
+        value
+    }
     fn record(&self, id: &str, evidence: Vec<Value>, summary: &str) {
         self.runner.records.lock().unwrap().push(serde_json::from_value(json!({"run_id":id,"work_kind":"chat","execution_mode":"autonomous",
             "member_id":"aiko","device_id":"device","started_at":"2026-11-05T00:00:00Z","safe_summary":summary,"provider_evidence":evidence})).unwrap());
@@ -624,7 +642,7 @@ fn guest(category: &str) -> DispatchFailure {
 
 #[tokio::test]
 async fn ready_ticket_moves_once_and_turn_receives_trace_identity_and_completion_budget() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let task = f.task().await;
     let selector = f.selector("routine");
     let trace = f.trace("routine");
@@ -651,14 +669,38 @@ async fn ready_ticket_moves_once_and_turn_receives_trace_identity_and_completion
 #[tokio::test]
 async fn mention_preserves_lane_and_assignee_and_uses_a_distinct_conversation_kind() {
     for lane in ["new", "ready", "in_progress", "done"] {
-        let f = Fixture::new();
-        let _ = f.task().await;
-        let path = f.root.path().join("services/tickets/acme%2Fteam/T-1.json");
-        let mut stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        stored["lane"] = json!(lane);
-        stored["assignees"] = json!(["local-yuki"]);
-        stored["comments"] = json!([{"id":"mention","body":"@local-aiko Please provide context.","author":"owner","created_at":"2026-11-05T00:00:00Z"}]);
-        std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        let f = Fixture::new().await;
+        let original = f.task().await;
+        if lane == "done" {
+            f.ticket
+                .move_ticket(&original, MoveLane::Done)
+                .await
+                .unwrap();
+        } else {
+            f.embedded
+                .owner
+                .tickets_put_on_board(
+                    "acme/repo",
+                    "1",
+                    branvil::test_support::input(json!({"lane":lane})),
+                )
+                .await
+                .unwrap();
+        }
+        f.embedded
+            .owner
+            .tickets_set_assignee("acme/repo", "1", Some("local-yuki".into()))
+            .await
+            .unwrap();
+        f.embedded
+            .owner
+            .tickets_add_comment(
+                "acme/repo",
+                "1",
+                branvil::test_support::input(json!({"body":"@local-aiko Please provide context."})),
+            )
+            .await
+            .unwrap();
         let selector = f.selector("routine");
         let trace = f.trace("routine");
         let candidates = selector.candidates().await.unwrap();
@@ -667,7 +709,7 @@ async fn mention_preserves_lane_and_assignee_and_uses_a_distinct_conversation_ki
         let invocation = selector.refresh(task).await.unwrap().unwrap();
         assert_eq!(invocation.work.as_ref().unwrap().kind, "ticket_mention");
         selector.run(task, invocation, &trace, 1).await.unwrap();
-        let after: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let after = f.stored_ticket("1").await;
         assert_eq!(after["lane"], lane);
         assert_eq!(after["assignees"], json!(["local-yuki"]));
         f.ticket
@@ -692,7 +734,7 @@ async fn safe_failure_and_timeout_are_voiced_and_only_autonomous_failures_announ
                     Some("Member's safe explanation".to_owned()),
                     Some(String::new()),
                 ] {
-                    let f = Fixture::new();
+                    let f = Fixture::new().await;
                     let task = f.task().await;
                     *f.runner.failure.lock().unwrap() = Some(guest(category));
                     *f.runner.voice.lock().unwrap() = voice.clone();
@@ -735,15 +777,15 @@ async fn safe_failure_and_timeout_are_voiced_and_only_autonomous_failures_announ
                     assert_eq!(*f.runner.completed.lock().unwrap(), 0);
                     if category == "timeout" && source == "routine" {
                         assert!(selector.candidates().await.unwrap().is_empty());
-                        f.ticket
-                            .comment(task.url.as_deref().unwrap(), "Please continue.", None)
+                        f.embedded
+                            .owner
+                            .tickets_add_comment(
+                                "acme/repo",
+                                "1",
+                                branvil::test_support::input(json!({"body":"Please continue."})),
+                            )
                             .await
                             .unwrap();
-                        let path = f.root.path().join("services/tickets/acme%2Fteam/T-1.json");
-                        let mut stored: Value =
-                            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-                        stored["comments"][1]["author"] = json!("owner");
-                        std::fs::write(path, serde_json::to_vec(&stored).unwrap()).unwrap();
                         let resumed = selector.refresh(&task).await.unwrap().unwrap();
                         assert_eq!(resumed.work, selector.invocation(&task).unwrap().work);
                         assert_eq!(f.comments(&task).await.len(), 2);
@@ -759,7 +801,7 @@ async fn safe_failure_and_timeout_are_voiced_and_only_autonomous_failures_announ
 async fn cancellation_and_unavailable_autonomous_work_leave_no_failure_comment() {
     for source in ["manual", "routine"] {
         for cancelled in [true, false] {
-            let f = Fixture::new();
+            let f = Fixture::new().await;
             let task = f.task().await;
             *f.runner.failure.lock().unwrap() = Some(if cancelled {
                 DispatchFailure::Cancelled
@@ -783,7 +825,7 @@ async fn cancellation_and_unavailable_autonomous_work_leave_no_failure_comment()
 
 #[tokio::test]
 async fn rate_limit_settles_without_worker_failure_or_work_stop_and_preserves_reset() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let task = f.task().await;
     *f.runner.failure.lock().unwrap() = Some(guest("rate_limited"));
     let selector = f.selector("routine");
@@ -806,13 +848,10 @@ async fn rate_limit_settles_without_worker_failure_or_work_stop_and_preserves_re
         "2027-01-01T00:00:00Z"
     );
     assert_eq!(*f.runner.completed.lock().unwrap(), 0);
-    let stored: Value = serde_json::from_slice(
-        &std::fs::read(f.root.path().join("services/tickets/acme%2Fteam/T-1.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(stored["comments"][0]["status"]["reason"], "rate_limited");
+    let stored = f.stored_ticket("1").await;
+    assert_eq!(stored["comments"][0]["meta"]["reason"], "rate_limited");
     assert_eq!(
-        stored["comments"][0]["status"]["retry_after_at"],
+        stored["comments"][0]["meta"]["retry_after_at"],
         "2027-01-01T00:00:00Z"
     );
 }
@@ -857,7 +896,7 @@ fn checks_wait_detection_uses_evidence_type_and_exact_target_url() {
 
 #[tokio::test]
 async fn next_takes_only_the_first_refreshed_item_and_idle_selection_creates_no_run_or_trace() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let selector = f.selector("manual");
     assert!(selector.next().await.unwrap().is_none());
     assert!(!f.root.path().join(".guildbotics/local/run").exists());
@@ -888,7 +927,7 @@ async fn next_takes_only_the_first_refreshed_item_and_idle_selection_creates_no_
 
 #[tokio::test]
 async fn candidates_put_pull_requests_first_and_refresh_each_from_its_own_service() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let ticket = f.task().await;
     let pull = f.pull().await;
     let selector = f.selector("routine");
@@ -912,7 +951,7 @@ async fn candidates_put_pull_requests_first_and_refresh_each_from_its_own_servic
 
 #[tokio::test]
 async fn failed_pull_request_runs_report_to_code_host_and_leave_the_ticket_untouched() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let ticket = f.task().await;
     let pull = f.pull().await;
     *f.runner.failure.lock().unwrap() = Some(guest("timeout"));
@@ -925,12 +964,11 @@ async fn failed_pull_request_runs_report_to_code_host_and_leave_the_ticket_untou
             .is_err()
     );
     assert!(f.comments(&ticket).await.is_empty());
-    let path = f.root.path().join("services/code/acme%2Frepo/pulls/1.json");
-    let stored: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let stored = f.stored_pull(1).await;
     assert_eq!(stored["comments"].as_array().unwrap().len(), 2);
-    assert_eq!(stored["comments"][1]["status"]["reason"], "failed");
+    assert_eq!(stored["comments"][1]["meta"]["reason"], "failed");
     assert_eq!(
-        stored["comments"][1]["status"]["subject"],
+        stored["comments"][1]["meta"]["subject"],
         pull.url.as_deref().unwrap()
     );
     let stops = f.runner.stops.lock().unwrap();
@@ -949,7 +987,7 @@ async fn resumed_checks_restore_work_summary_and_settle_only_when_not_awaited_ag
         ("pull_request_feedback", true, "done", 0, true),
         ("pull_request_feedback", false, "done", 0, false),
     ] {
-        let f = Fixture::new();
+        let f = Fixture::new().await;
         let mut pull = f.pull().await;
         pull.trigger_reason = Some(trigger.into());
         pull.resumes = resumes.then(|| AwaitedRun {
@@ -991,7 +1029,7 @@ async fn resumed_checks_restore_work_summary_and_settle_only_when_not_awaited_ag
             .unwrap(),
         );
         selector.run(&pull, invocation, &trace, 5).await.unwrap();
-        let evidence = f.runner.evidence.lock().unwrap();
+        let evidence = f.runner.evidence.lock().unwrap().clone();
         assert_eq!(evidence.len(), usize::from(resumes));
         if resumes {
             assert_eq!(evidence[0]["type"], "checks_resumed");
@@ -1000,35 +1038,29 @@ async fn resumed_checks_restore_work_summary_and_settle_only_when_not_awaited_ag
                 pull.url.as_deref().unwrap()
             );
         }
-        let stored: Value = serde_json::from_slice(
-            &std::fs::read(f.root.path().join("services/code/acme%2Frepo/pulls/1.json")).unwrap(),
-        )
-        .unwrap();
+        let stored = f.stored_pull(1).await;
         assert_eq!(
             stored["comments"].as_array().unwrap().len(),
             if settled { 2 } else { 1 }
         );
         if settled {
-            assert_eq!(stored["comments"][1]["status"]["reason"], "checks_settled");
+            assert_eq!(stored["comments"][1]["meta"]["reason"], "checks_settled");
         }
     }
 }
 
 #[tokio::test]
 async fn review_limit_conversion_elects_one_notice_in_its_own_trace_without_an_agent_run() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let mut pull = f.pull().await;
     pull.trigger_reason = Some(REVIEW_LIMIT.into());
     let selector = f.selector("routine");
     selector.hand_over(&pull).await;
     selector.hand_over(&pull).await;
-    let stored: Value = serde_json::from_slice(
-        &std::fs::read(f.root.path().join("services/code/acme%2Frepo/pulls/1.json")).unwrap(),
-    )
-    .unwrap();
+    let stored = f.stored_pull(1).await;
     assert_eq!(stored["draft"], true);
     assert_eq!(stored["comments"].as_array().unwrap().len(), 2);
-    assert_eq!(stored["comments"][1]["status"]["reason"], "review_limit");
+    assert_eq!(stored["comments"][1]["meta"]["reason"], "review_limit");
     assert!(f.runner.calls.lock().unwrap().is_empty());
     let stops = f.runner.stops.lock().unwrap();
     assert_eq!(stops.len(), 1);
@@ -1269,7 +1301,7 @@ async fn review_limit_conversion_failures_notify_but_unavailability_defers_and_r
         ServiceError::Unsupported,
         ServiceError::Unavailable,
     ] {
-        let f = Fixture::new();
+        let f = Fixture::new().await;
         let mut pull = f.pull().await;
         pull.trigger_reason = Some(REVIEW_LIMIT.into());
         let mut faults = CodeFaults::new(f.code.clone());
@@ -1277,8 +1309,7 @@ async fn review_limit_conversion_failures_notify_but_unavailability_defers_and_r
         let mut selector = f.selector("manual");
         selector.code = Some(&faults);
         selector.hand_over(&pull).await;
-        let path = f.root.path().join("services/code/acme%2Frepo/pulls/1.json");
-        let stored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let stored = f.stored_pull(1).await;
         assert_eq!(stored["draft"], false);
         assert!(f.runner.calls.lock().unwrap().is_empty());
         assert!(f.runner.activity.lock().unwrap().is_empty());
@@ -1313,14 +1344,14 @@ async fn review_limit_conversion_failures_notify_but_unavailability_defers_and_r
             assert_eq!(f.runner.stops.lock().unwrap()[0].reason, "review_limit");
         } else {
             assert_eq!(stored["comments"].as_array().unwrap().len(), 2);
-            assert_eq!(stored["comments"][1]["status"]["reason"], "failed");
+            assert_eq!(stored["comments"][1]["meta"]["reason"], "failed");
             assert_eq!(f.runner.stops.lock().unwrap()[0].reason, "failed");
         }
     }
 }
 #[tokio::test]
 async fn review_limit_failed_pr_notice_still_records_and_notifies_with_the_pr_address() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let mut pull = f.pull().await;
     pull.trigger_reason = Some(REVIEW_LIMIT.into());
     let mut faults = CodeFaults::new(f.code.clone());
@@ -1343,7 +1374,7 @@ async fn review_limit_failed_pr_notice_still_records_and_notifies_with_the_pr_ad
 async fn cancelled_review_limit_conversion_and_comment_close_the_trace_and_record_any_completed_draft()
  {
     for phase in ["convert", "comment"] {
-        let f = Fixture::new();
+        let f = Fixture::new().await;
         let mut pull = f.pull().await;
         pull.trigger_reason = Some(REVIEW_LIMIT.into());
         let entered = tokio_util::sync::CancellationToken::new();
@@ -1418,12 +1449,12 @@ async fn cancelled_review_limit_conversion_and_comment_close_the_trace_and_recor
 #[tokio::test]
 async fn author_feedback_uses_the_only_open_owned_ticket_and_preserves_resumes() {
     for count in [0, 1, 2] {
-        let f = Fixture::new();
+        let f = Fixture::new().await;
         let task = f.task().await;
         let second = f
             .ticket
             .create_ticket(CreateTicket {
-                tracker: "acme/team".into(),
+                tracker: "acme/repo".into(),
                 title: "Second".into(),
                 body: String::new(),
                 labels: vec![],
@@ -1474,7 +1505,7 @@ async fn author_feedback_uses_the_only_open_owned_ticket_and_preserves_resumes()
 #[tokio::test]
 async fn unreadable_author_links_keep_pr_work_selectable() {
     for missing_ticket in [false, true] {
-        let f = Fixture::new();
+        let f = Fixture::new().await;
         let pull = f.pull().await;
         let mut faulty = CodeFaults::new(f.code.clone());
         faulty.fail_links = !missing_ticket;
@@ -1494,7 +1525,7 @@ async fn unreadable_author_links_keep_pr_work_selectable() {
 #[tokio::test]
 async fn open_pr_limit_is_rechecked_before_moving_ready_work_and_does_not_stop_other_work() {
     for source in ["routine", "scheduled", "manual"] {
-        let f = Fixture::new();
+        let f = Fixture::new().await;
         let quota = PullRequestQuota::new(2);
         let mut selector = f.selector(source);
         selector.quota = Some(&quota);
@@ -1571,15 +1602,11 @@ async fn open_pr_limit_is_rechecked_before_moving_ready_work_and_does_not_stop_o
                     .unwrap();
             }
             assert_eq!(f.runner.calls.lock().unwrap().len(), 6);
-            let paths = f.root.path().join("services/code/acme%2Frepo/pulls");
-            let path = std::fs::read_dir(paths)
-                .unwrap()
-                .map(|entry| entry.unwrap().path())
-                .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+            f.embedded
+                .owner
+                .pulls_set_open("acme/repo", 1, false)
+                .await
                 .unwrap();
-            let mut pull: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            pull["state"] = json!("closed");
-            std::fs::write(path, serde_json::to_vec(&pull).unwrap()).unwrap();
             selector
                 .run(
                     &second,
@@ -1603,7 +1630,7 @@ async fn quota_read_errors_defer_only_new_ready_work_and_clear_the_display() {
             ServiceError::Failed,
             ServiceError::Unavailable,
         ] {
-            let f = Fixture::new();
+            let f = Fixture::new().await;
             let ready = f.task().await;
             let pull = f.pull().await;
             let quota = PullRequestQuota::new(2);
@@ -1697,7 +1724,7 @@ async fn feedback_yields_once_before_author_runs_and_failures_are_best_effort() 
                 Err(ServiceError::Unavailable),
             ] {
                 for fail_evidence in [false, true] {
-                    let mut f = Fixture::new();
+                    let mut f = Fixture::new().await;
                     f.runner.fail_evidence = fail_evidence;
                     let mut task = f.pull().await;
                     task.trigger_reason = Some(trigger.into());
@@ -1726,7 +1753,7 @@ async fn feedback_yields_once_before_author_runs_and_failures_are_best_effort() 
                             vec![]
                         }
                     );
-                    let evidence = f.runner.evidence.lock().unwrap();
+                    let evidence = f.runner.evidence.lock().unwrap().clone();
                     let yielded = evidence
                         .iter()
                         .filter(|e| e["type"] == "checks_yielded")
@@ -1756,7 +1783,7 @@ async fn feedback_yields_once_before_author_runs_and_failures_are_best_effort() 
 #[tokio::test]
 async fn failed_repairs_keep_the_failure_comment_without_a_work_stop() {
     for repair in [false, true] {
-        let f = Fixture::new();
+        let f = Fixture::new().await;
         let mut task = f.task().await;
         task.repair = repair;
         *f.runner.failure.lock().unwrap() = Some(guest("timeout"));
@@ -1791,7 +1818,7 @@ fn repair_takeover_chooses_one_eligible_member_and_preserves_active_assignees() 
 
 #[tokio::test]
 async fn ready_repairs_bypass_the_quota_during_refresh_and_run() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let mut task = f.task().await;
     task.repair = true;
     let quota = PullRequestQuota::new(0);

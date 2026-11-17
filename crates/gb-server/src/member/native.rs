@@ -28,6 +28,8 @@ use std::{
 
 #[derive(Clone)]
 pub struct Native {
+    #[cfg(test)]
+    pub(crate) fixture: Option<Arc<tests::Support>>,
     pub runtime_work: Option<tokio_util::task::TaskTracker>,
     pub chat_subject: Option<gb_member::chat_updates::Subject>,
     pub workspace: PathBuf,
@@ -43,6 +45,8 @@ pub use crate::member_protocol::binary_version;
 impl Native {
     pub fn new(workspace: PathBuf, data: PathBuf) -> anyhow::Result<Self> {
         Ok(Self {
+            #[cfg(test)]
+            fixture: None,
             runtime_work: None,
             chat_subject: None,
             workspace,
@@ -1089,14 +1093,44 @@ pub(crate) mod tests {
             Ok(())
         }
     }
+    pub(crate) struct Support {
+        embedded: branvil::test_support::Background,
+        keys: Arc<Keys>,
+    }
+    impl std::ops::Deref for Support {
+        type Target = branvil::test_support::Background;
+        fn deref(&self) -> &Self::Target {
+            &self.embedded
+        }
+    }
     pub(crate) fn fixture(root: &Path) -> Native {
+        static LIVE: std::sync::LazyLock<Mutex<BTreeMap<PathBuf, std::sync::Weak<Support>>>> =
+            std::sync::LazyLock::new(Default::default);
+        let mut live = LIVE.lock().unwrap();
+        let embedded = live
+            .get(root)
+            .and_then(std::sync::Weak::upgrade)
+            .unwrap_or_else(|| {
+                let support = Arc::new(Support {
+                    embedded: branvil::test_support::Background::start(
+                        "acme",
+                        &["acme/demo"],
+                        &["local-aiko", "local-yuki", "local-kenji"],
+                        "test_branvil::hook",
+                    ),
+                    keys: Arc::new(Keys::default()),
+                });
+                live.insert(root.into(), Arc::downgrade(&support));
+                support
+            });
+        drop(live);
         let workspace = root.join("workspace");
         let identity = root.join("identity");
         let data = root.join("machine/data");
         for (path, value) in [
             (
                 workspace.join(".guildbotics/config/team/project.yml"),
-                json!({"name":"fixture","language":"en","services":{"ticket_service":{"name":"local","owner":"acme"},"code_hosting_service":{"name":"local","owner":"acme"},"chat_service":{"name":"local"}}}),
+                json!({"name":"fixture","language":"en","services":{"ticket_service":{"name":"branvil","workspace":"acme"},"code_hosting_service":{"name":"branvil","workspace":"acme"},"chat_service":{"name":"local"}}}),
             ),
             (
                 workspace.join(".guildbotics/config/team/members/aiko/member.yml"),
@@ -1104,23 +1138,38 @@ pub(crate) mod tests {
             ),
             (
                 identity.join(".guildbotics/config/team/members/aiko/identity.yml"),
-                json!({"person_id":"aiko","name":"Aiko","person_type":"agent","account_info":{"git_user":"Fixture Member","git_email":"fixture@example.invalid"},"profile":{}}),
+                json!({"person_id":"aiko","name":"Aiko","person_type":"agent","account_info":{"branvil_username":"local-aiko","git_user":"Fixture Member","git_email":"fixture@example.invalid"},"profile":{}}),
             ),
         ] {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
         }
+        let keys = embedded.keys.clone();
+        let writes = SharedWrites::new(identity.clone(), Some(workspace.clone()));
+        let secrets = SecretStore::new(
+            &writes,
+            Scope::Identity,
+            DeviceKey {
+                machine_root: root.into(),
+                keychain: &*keys,
+            },
+        )
+        .unwrap();
+        secrets
+            .set("AIKO_BRANVIL_TOKEN", &embedded.tokens["local-aiko"])
+            .unwrap();
         Native {
+            fixture: Some(embedded.clone()),
             runtime_work: None,
             chat_subject: None,
             workspace,
             data,
             identity_root: identity,
             package: gb_base::home::python_package(),
-            branvil: None,
+            branvil: Some(embedded.data.clone()),
             invocation: None,
             guest: None,
-            keychain: Arc::new(Keys::default()),
+            keychain: keys,
         }
     }
     fn request(args: &[&str], stdin: &str) -> MemberRequest {
@@ -1395,7 +1444,7 @@ pub(crate) mod tests {
         assert_eq!(value["code"], "service_settings_invalid");
     }
     #[tokio::test]
-    async fn workflow_runtime_assembles_local_ports_and_idle_ticket_command_leaves_no_run() {
+    async fn workflow_runtime_assembles_embedded_ports_and_idle_ticket_command_leaves_no_run() {
         let temp = tempfile::tempdir().unwrap();
         let native = fixture(temp.path());
         for (id, kind) in [("kenji", "agent"), ("owner", "human")] {
@@ -1859,25 +1908,31 @@ pub(crate) mod tests {
         (runtime, driver)
     }
     #[tokio::test]
-    async fn native_ticket_patrol_moves_the_local_ticket_and_accepts_real_member_comment_and_completion()
+    async fn native_ticket_patrol_moves_the_branvil_ticket_and_accepts_real_member_comment_and_completion()
      {
         for (mention, linked) in [(false, false), (true, false), (false, true), (true, true)] {
             let root = tempfile::tempdir().unwrap();
             let native = fixture(root.path());
             let cleanup = tokio_util::task::TaskTracker::new();
             let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
-            let tracker = native
-                .workspace
-                .join(".guildbotics/local/services/tickets/acme%2Fteam");
             let ticket = runtime.tickets.as_ref().unwrap();
             let task = ready_ticket(&native, &runtime).await;
+            let owner = &native.fixture.as_ref().unwrap().owner;
             if mention {
-                let path = tracker.join("T-1.json");
-                let mut stored: Value =
-                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-                stored["assignees"] = json!(["local-yuki"]);
-                stored["comments"] = json!([{"id":"mention","body":"@local-aiko Please provide context.","author":"owner","created_at":"2026-11-05T00:00:00Z"}]);
-                std::fs::write(path, stored.to_string()).unwrap();
+                owner
+                    .tickets_set_assignee("acme/demo", "1", Some("local-yuki".into()))
+                    .await
+                    .unwrap();
+                owner
+                    .tickets_add_comment(
+                        "acme/demo",
+                        "1",
+                        branvil::test_support::input(
+                            json!({"body":"@local-aiko Please provide context."}),
+                        ),
+                    )
+                    .await
+                    .unwrap();
             }
             let mut linked_url = None;
             if linked {
@@ -1901,14 +1956,30 @@ pub(crate) mod tests {
                     .await
                     .unwrap();
                 linked_url = Some(created.target.url);
-                let path = tracker.join("T-1.json");
-                let mut stored: Value =
-                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-                stored["lane"] = json!("in_progress");
+                owner
+                    .tickets_put_on_board(
+                        "acme/demo",
+                        "1",
+                        branvil::test_support::input(json!({"lane":"in_progress"})),
+                    )
+                    .await
+                    .unwrap();
                 if !mention {
-                    stored["comments"] = json!([{"id":"question","body":"Should I add the check?","author":"local-aiko","created_at":"2026-11-05T00:00:00Z"},{"id":"answer","body":"Yes, please add the check.","author":"owner","created_at":"2026-11-05T00:01:00Z"}]);
+                    ticket
+                        .comment(&task.target.url, "Should I add the check?", None)
+                        .await
+                        .unwrap();
+                    owner
+                        .tickets_add_comment(
+                            "acme/demo",
+                            "1",
+                            branvil::test_support::input(
+                                json!({"body":"Yes, please add the check."}),
+                            ),
+                        )
+                        .await
+                        .unwrap();
                 }
-                std::fs::write(path, stored.to_string()).unwrap();
             }
             let line = if mention && linked {
                 format!("{} 'message=two words'", crate::ticket_selector::COMMAND)
@@ -2282,22 +2353,15 @@ pub(crate) mod tests {
         cleanup.wait().await;
     }
     async fn ready_ticket(
-        native: &Native,
+        _native: &Native,
         runtime: &crate::workflow_runtime::Runtime,
     ) -> gb_ports::TicketCreated {
-        let tracker = native
-            .workspace
-            .join(".guildbotics/local/services/tickets/acme%2Fteam");
-        write_json(
-            &tracker.join("tracker.json"),
-            json!({"repository":"acme/demo"}),
-        );
         runtime
             .tickets
             .as_ref()
             .unwrap()
             .create_ticket(gb_ports::CreateTicket {
-                tracker: "acme/team".into(),
+                tracker: "acme/demo".into(),
                 title: "Fix login".into(),
                 body: String::new(),
                 labels: vec![],
@@ -4332,14 +4396,23 @@ pub(crate) mod tests {
             engine.patrol(slot()).await,
             (crate::service::Outcome::Failed, false)
         );
-        let second_path = native
-            .workspace
-            .join(".guildbotics/local/services/tickets/acme%2Fteam/T-2.json");
-        let mut updated: Value =
-            serde_json::from_slice(&std::fs::read(&second_path).unwrap()).unwrap();
-        updated["lane"] = json!("in_progress");
-        updated["title"] = json!("Updated title");
-        write_json(&second_path, updated);
+        let owner = &native.fixture.as_ref().unwrap().owner;
+        owner
+            .tickets_put_on_board(
+                "acme/demo",
+                "2",
+                branvil::test_support::input(json!({"lane":"in_progress"})),
+            )
+            .await
+            .unwrap();
+        owner
+            .tickets_update_ticket(
+                "acme/demo",
+                "2",
+                branvil::test_support::input(json!({"title":"Updated title"})),
+            )
+            .await
+            .unwrap();
         faults
             .errors
             .lock()
@@ -4921,23 +4994,23 @@ pub(crate) mod tests {
             identity_root: native.identity_root.clone(),
             person_id: "aiko".into(),
             display_name: "Aiko".into(),
-            accounts: Default::default(),
+            accounts: BTreeMap::from([("branvil".into(), ActorName("local-aiko".into()))]),
             branvil_members: Default::default(),
-            ticket_provider: "local".into(),
-            code_provider: "local".into(),
+            ticket_provider: "branvil".into(),
+            code_provider: "branvil".into(),
             chat_provider: "local".into(),
             ticket_scope: "acme".into(),
             code_scope: "acme".into(),
             checks: String::new(),
             slack_base_url: String::new(),
         };
-        write_json(
-            &config.local_root.join("tickets/acme%2Fdemo/tracker.json"),
-            json!({"repository":"acme/demo","labels":[]}),
-        );
-        let factory =
-            ServiceIntegrationFactory::new(config.clone(), &secrets, None, Arc::new(|_| {}))
-                .unwrap();
+        let factory = ServiceIntegrationFactory::new(
+            config.clone(),
+            &secrets,
+            native.branvil.clone(),
+            Arc::new(|_| {}),
+        )
+        .unwrap();
         let tickets = factory.create_ticket_service().unwrap();
         let ticket = tickets
             .create_ticket(CreateTicket {
@@ -4962,12 +5035,12 @@ pub(crate) mod tests {
             roles: json!({}),
             profile: json!({}),
             speaking_style: String::new(),
-            accounts: Default::default(),
+            accounts: BTreeMap::from([("branvil".into(), "local-aiko".into())]),
         }];
         let mut peers = Peers {
             config: &config,
             secrets: &secrets,
-            branvil: None,
+            branvil: native.branvil.clone(),
             roster: &roster,
             eligible: Default::default(),
         };
@@ -4979,12 +5052,6 @@ pub(crate) mod tests {
     async fn ticket_mentions_keep_their_origin_in_completion_and_status() {
         let temp = tempfile::tempdir().unwrap();
         let mut native = fixture(temp.path());
-        write_json(
-            &native
-                .workspace
-                .join(".guildbotics/local/services/tickets/acme%2Fdemo/tracker.json"),
-            json!({"repository":"acme/demo","labels":[]}),
-        );
         let ticket = command(
             &native,
             &[
@@ -5240,18 +5307,20 @@ pub(crate) mod tests {
         git(&seed, &["commit", "-qam", "feature"]);
         let head = git(&seed, &["rev-parse", "HEAD"]);
         let bare = native
-            .workspace
-            .join(".guildbotics/local/services")
-            .join("code/acme%2Fdemo/repository.git");
-        std::fs::create_dir_all(bare.parent().unwrap()).unwrap();
+            .fixture
+            .as_ref()
+            .unwrap()
+            .root
+            .join("repos/acme/demo.git");
         git(
-            &seed,
+            &bare,
             &[
-                "clone",
+                "fetch",
                 "-q",
-                "--bare",
+                "--update-head-ok",
                 seed.to_str().unwrap(),
-                bare.to_str().unwrap(),
+                "main:main",
+                "feature:feature",
             ],
         );
         git(&bare, &["symbolic-ref", "HEAD", "refs/heads/main"]);
@@ -5261,11 +5330,6 @@ pub(crate) mod tests {
     async fn native_http_preserves_ticket_pr_review_reaction_and_completion_contracts() {
         let temp = tempfile::tempdir().unwrap();
         let mut native = fixture(temp.path());
-        let services = native.workspace.join(".guildbotics/local/services");
-        write_json(
-            &services.join("tickets/acme%2Fdemo/tracker.json"),
-            json!({"repository":"acme/demo","labels":["bug"]}),
-        );
         let ticket = command(
             &native,
             &[
@@ -5659,11 +5723,6 @@ pub(crate) mod tests {
     async fn interactive_lifecycle_reuses_identity_keeps_first_target_and_records_failures() {
         let temp = tempfile::tempdir().unwrap();
         let native = fixture(temp.path());
-        let services = native.workspace.join(".guildbotics/local/services");
-        write_json(
-            &services.join("tickets/acme%2Fdemo/tracker.json"),
-            json!({"repository":null,"labels":[]}),
-        );
         let first = command(
             &native,
             &[
@@ -5720,7 +5779,10 @@ pub(crate) mod tests {
         let temp = tempfile::tempdir().unwrap();
         let native = fixture(temp.path());
         let (seed, bare, _) = seed_code(&native, temp.path());
-        let remote = url::Url::from_file_path(&bare).unwrap().to_string();
+        let remote = format!(
+            "{}/git/acme/demo.git",
+            native.branvil.as_ref().unwrap().base_url()
+        );
         git(&seed, &["checkout", "-qb", "new-topic"]);
         std::fs::write(seed.join("new"), "new").unwrap();
         git(&seed, &["add", "."]);
@@ -5793,7 +5855,10 @@ pub(crate) mod tests {
         );
         std::fs::write(seed.join("new"), "remote advance").unwrap();
         git(&seed, &["commit", "-qam", "remote advance"]);
-        git(&seed, &["push", "-q", bare.to_str().unwrap(), "new-topic"]);
+        git(
+            &bare,
+            &["fetch", "-q", seed.to_str().unwrap(), "new-topic:new-topic"],
+        );
         let rejected = native.execute(input.clone(), false, None, &outgoing).await;
         assert_ne!(rejected.exit_code, 0);
         assert!(rejected.stderr.starts_with("Error:"));
@@ -5804,7 +5869,10 @@ pub(crate) mod tests {
         let expected_tracking = git(&seed, &["rev-parse", "HEAD"]);
         std::fs::write(seed.join("new"), "another remote advance").unwrap();
         git(&seed, &["commit", "-qam", "another advance"]);
-        git(&seed, &["push", "-q", bare.to_str().unwrap(), "new-topic"]);
+        git(
+            &bare,
+            &["fetch", "-q", seed.to_str().unwrap(), "new-topic:new-topic"],
+        );
         input.phase = Some(Phase::Tracking);
         input.data.insert("known".into(), json!([]));
         let tracking = native.execute(input.clone(), false, None, &outgoing).await;
@@ -5847,19 +5915,23 @@ pub(crate) mod tests {
         assert_eq!(shown["default_branch"], "main");
         assert_eq!(shown["items"][0]["content"], "base\n");
         assert!(!native.workspace.join(".guildbotics/local/clones").exists());
-        let ticket = "local://tickets/acme/demo/T-1";
-        let root = native
-            .workspace
-            .join(".guildbotics/local/services/tickets/acme%2Fdemo");
-        write_json(
-            &root.join("T-1.json"),
-            json!({"body":"local://tickets/acme/demo/attachments/att","comments":[]}),
-        );
-        write_json(
-            &root.join("attachments/att.json"),
-            json!({"name":"report.bin","media_type":"application/octet-stream"}),
-        );
-        std::fs::write(root.join("attachments/att"), b"raw\0\xff").unwrap();
+        let owner = &native.fixture.as_ref().unwrap().owner;
+        let attachment = owner
+            .attachments_upload(
+                "acme/demo",
+                Some("report.png".into()),
+                b"\x89PNG\r\n\x1a\nraw\0\xff".to_vec(),
+            )
+            .await
+            .unwrap();
+        let created = owner
+            .tickets_create_ticket(
+                "acme/demo",
+                branvil::test_support::input(json!({"title":"Attachment", "body":attachment.url})),
+            )
+            .await
+            .unwrap();
+        let ticket = created.url.as_str();
         let dest = temp.path().join("must-not-open");
         let reply = native
             .execute(
@@ -5873,7 +5945,7 @@ pub(crate) mod tests {
                         "--url",
                         ticket,
                         "--id",
-                        "att",
+                        &attachment.id,
                         "--dest",
                         dest.to_str().unwrap(),
                     ],
@@ -5885,11 +5957,11 @@ pub(crate) mod tests {
             )
             .await;
         assert_eq!(reply.exit_code, 0, "{}", reply.stderr);
-        assert_eq!(std::fs::read(&out).unwrap(), b"raw\0\xff");
+        assert_eq!(std::fs::read(&out).unwrap(), b"\x89PNG\r\n\x1a\nraw\0\xff");
         assert!(!dest.exists());
         assert_eq!(
             reply.metadata["download"]["attachment"],
-            json!(["report.bin", "att"])
+            json!(["report.png", attachment.id])
         );
         let input = request(&["pr", "review", "--help"], "");
         let plan = native.execute(input.clone(), true, None, &out).await;

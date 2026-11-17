@@ -1184,9 +1184,29 @@ pub fn scheduled(r: &impl Rd, first_only: bool) -> AppResult<Vec<(Attempt, Optio
 
 /// Hands the highest-priority queued attempt to `runner` under a new lease.
 pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Option<Claimed>> {
-    let Some((mut a, reuse)) = scheduled(w, true)?.into_iter().next() else {
+    let Some((a, reuse)) = scheduled(w, true)?.into_iter().next() else {
         return Ok(None);
     };
+    claim_selected(w, runner, lease_secs, now, a, reuse).map(Some)
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) fn claim_fixture(w: &Wtx, target: (&str, &str), now: &str) -> AppResult<Claimed> {
+    let (a, reuse) = scheduled(w, true)?
+        .into_iter()
+        .find(|(a, _)| a.repo_path == target.0 && a.sha == target.1)
+        .ok_or_else(|| AppError::internal("fixture head has no queued check"))?;
+    claim_selected(w, "fixture", 300, now, a, reuse)
+}
+
+fn claim_selected(
+    w: &Wtx,
+    runner: &str,
+    lease_secs: u64,
+    now: &str,
+    mut a: Attempt,
+    reuse: Option<Reuse>,
+) -> AppResult<Claimed> {
     let old = get_attempt(w, &a.id)?.unwrap();
     let lease = format!("bvl_{}", util::random_secret::<24>());
     a.status = "in_progress".into();
@@ -1196,11 +1216,11 @@ pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Opt
     a.runner = Some(runner.to_string());
     a.started_at = Some(now.to_string());
     put_attempt(w, Some(&old), &a)?;
-    Ok(Some(Claimed {
+    Ok(Claimed {
         attempt: a,
         lease,
         reuse,
-    }))
+    })
 }
 
 fn lease_hash(lease: &str) -> String {

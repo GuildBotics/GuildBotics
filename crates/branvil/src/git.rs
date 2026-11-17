@@ -66,6 +66,11 @@ pub async fn hold(layout: &Layout) -> anyhow::Result<()> {
             }
         }
     }
+    #[cfg(feature = "test-support")]
+    let file = match crate::test_support::hold_fixture(layout, file) {
+        Ok(()) => return Ok(()),
+        Err(file) => file,
+    };
     HELD.set(file)
         .map_err(|_| anyhow::anyhow!("the Git lock is held already"))
 }
@@ -113,9 +118,15 @@ pub fn base_command(global_config: &Path) -> tokio::process::Command {
     #[cfg(unix)]
     cmd.process_group(0);
     #[cfg(unix)]
-    if let Some(lock) = HELD.get() {
+    let fd = {
         use std::os::fd::AsRawFd;
-        let fd = lock.as_raw_fd();
+        let fd = HELD.get().map(AsRawFd::as_raw_fd);
+        #[cfg(feature = "test-support")]
+        let fd = crate::test_support::lock_fd(global_config).or(fd);
+        fd
+    };
+    #[cfg(unix)]
+    if let Some(fd) = fd {
         // SAFETY: fcntl is async-signal-safe; this clears close-on-exec in the
         // child only.
         unsafe {
