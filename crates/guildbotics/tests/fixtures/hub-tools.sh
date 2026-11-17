@@ -190,6 +190,10 @@ case "$name" in
             environment:prune)
                 [ ! -f "$HOME/Library/Application Support/GuildBotics/Hub${GUILDBOTICS_HUB_INSTANCE:+-$GUILDBOTICS_HUB_INSTANCE}/builds/update-from" ] || exit 1
                 [ ! -f "$FAKE_ROOT/fail-prune" ] || exit 1
+                rm -rf "$FAKE_ROOT/obsolete-snapshot"
+                ;;
+            workspace:current)
+                printf '{"workspace":"%s/workspace"}\n' "$FAKE_ROOT"
                 ;;
             environment:status)
                 if [ -f "$FAKE_ROOT/environment" ]; then cat "$FAKE_ROOT/environment"

@@ -1438,17 +1438,132 @@ fn auto_update_reports_missing_snapshot_after_activation() {
         hub.assert_runs_signed("new");
         assert_eq!(
             hub.root().join("notifications").exists(),
-            snapshot != "ready"
+            ["missing", "stale", "failed"].contains(&snapshot)
         );
         assert!(hub.lines("actions").contains("new|install"));
-        if snapshot != "ready" {
-            assert!(hub.lines("notifications").contains("environment prune"));
+        if ["missing", "stale", "failed"].contains(&snapshot) {
+            assert!(hub.lines("notifications").contains("environment build"));
             assert!(
                 !hub.lines("notifications")
                     .contains("a new commit is required")
             );
         }
     }
+}
+
+#[test]
+fn auto_update_finishes_snapshot_cleanup_on_a_later_pass() {
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    hub.mark("fail-prune");
+    fs::create_dir(hub.root().join("obsolete-snapshot")).unwrap();
+    fs::write(
+        hub.root().join("environment"),
+        r#"{"snapshot":{"state":"building"}}"#,
+    )
+    .unwrap();
+    hub.run("auto-once", None, true);
+    assert!(!hub.root().join("notifications").exists());
+    assert!(hub.root().join("obsolete-snapshot").exists());
+    let state_path = hub.builds().parent().unwrap().join("auto-update.json");
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    assert!(state["snapshotCleanup"]["sha"].is_string());
+    assert!(state["snapshotCleanup"]["workspace"].is_string());
+    // An update still in flight must retain its rollback snapshot.
+    fs::write(hub.builds().join("update-from"), "previous").unwrap();
+    fs::write(
+        hub.root().join("environment"),
+        r#"{"snapshot":{"state":"ready"}}"#,
+    )
+    .unwrap();
+    hub.run("auto-once", None, true);
+    assert_eq!(
+        hub.lines("actions").matches("|environment|prune").count(),
+        0
+    );
+    assert!(hub.root().join("obsolete-snapshot").exists());
+    fs::remove_file(hub.builds().join("update-from")).unwrap();
+    let operation = hub.builds().parent().unwrap().join("operation");
+    fs::create_dir(&operation).unwrap();
+    hub.run("auto-once", None, true);
+    assert!(!hub.lines("actions").contains("|environment|prune"));
+    assert!(hub.root().join("obsolete-snapshot").exists());
+    fs::remove_dir(operation).unwrap();
+    // A failed prune is retained for another pass, even with a ready snapshot.
+    hub.run("auto-once", None, true);
+    assert!(hub.root().join("obsolete-snapshot").exists());
+    assert!(hub.auto_state()["snapshotCleanup"].is_object());
+    fs::remove_file(hub.root().join("fail-prune")).unwrap();
+    hub.run("auto-once", None, true);
+    assert_eq!(
+        hub.lines("actions").matches("|environment|prune").count(),
+        1
+    );
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    assert!(state.get("snapshotCleanup").is_none());
+    assert!(!hub.root().join("obsolete-snapshot").exists());
+    assert!(hub.lines("actions").contains(&format!(
+        "|environment|prune|--workspace|{}",
+        hub.root().join("workspace").display()
+    )));
+    hub.run("auto-once", None, true);
+    assert_eq!(
+        hub.lines("actions").matches("|environment|prune").count(),
+        0
+    );
+}
+
+#[test]
+fn auto_update_notifies_when_a_running_snapshot_build_fails() {
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    hub.mark("fail-prune");
+    fs::write(
+        hub.root().join("environment"),
+        r#"{"snapshot":{"state":"building"}}"#,
+    )
+    .unwrap();
+    hub.run("auto-once", None, true);
+    assert!(!hub.root().join("notifications").exists());
+    fs::write(
+        hub.root().join("environment"),
+        r#"{"snapshot":{"state":"failed"}}"#,
+    )
+    .unwrap();
+    hub.run("auto-once", None, true);
+    assert!(hub.lines("notifications").contains("Snapshot is failed"));
+    hub.run("auto-once", None, true);
+    assert_eq!(hub.lines("notifications").lines().count(), 1);
+}
+
+#[test]
+fn auto_update_discards_snapshot_cleanup_after_rollback() {
+    let hub = Hub::new();
+    hub.install();
+    let old = fs::read(hub.builds().join("current")).unwrap();
+    hub.auto_candidate();
+    hub.mark("fail-prune");
+    fs::create_dir(hub.root().join("obsolete-snapshot")).unwrap();
+    fs::write(
+        hub.root().join("environment"),
+        r#"{"snapshot":{"state":"building"}}"#,
+    )
+    .unwrap();
+    hub.run("auto-once", None, true);
+    fs::write(hub.builds().join("current"), old).unwrap();
+    fs::write(
+        hub.root().join("environment"),
+        r#"{"snapshot":{"state":"ready"}}"#,
+    )
+    .unwrap();
+    hub.run("auto-once", None, true);
+    assert_eq!(
+        hub.lines("actions").matches("|environment|prune").count(),
+        0
+    );
+    assert!(hub.root().join("obsolete-snapshot").exists());
 }
 
 #[test]

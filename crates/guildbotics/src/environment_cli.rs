@@ -87,17 +87,7 @@ pub async fn run(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
                 package: gb_base::home::python_package(),
                 identity_root: gb_base::home::identity_root()?,
             };
-            let device = gb_environment::device::read(&host, &workspace).await;
-            let name = device.view["snapshot"]["name"].as_str().unwrap_or_default();
-            gb_environment::snapshot::ready(&workspace, name)
-                .map_err(|sentence| anyhow::anyhow!(gb_server::i18n::say(sentence, language)))?;
-            gb_environment::snapshot::prune(&workspace, name, |path| async {
-                gb_environment::runtime::remove_snapshot(path).await?;
-                Ok(true)
-            })
-            .await
-            .map_err(anyhow::Error::msg)?;
-            gb_server::environment::sweep_images(&host.data, &workspace).await?;
+            gb_server::environment::prune(&host, &workspace, language).await?;
         }
         EnvironmentCommand::Remove => {
             let removed = gb_environment::runtime::remove_snapshots(
