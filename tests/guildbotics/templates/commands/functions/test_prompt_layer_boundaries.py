@@ -519,6 +519,53 @@ def test_ticket_prompt_requires_current_pr_readiness_in_both_languages():
         assert "{chat_channel_id}" in body and "{chat_thread_id}" in body
 
 
+@pytest.mark.parametrize(
+    ("language", "resumed", "waits", "volume"),
+    [
+        (
+            "en",
+            (
+                "if that work is not finished yet, this run continues it",
+                "judge against its completion conditions",
+                "Report the outcome once, when the run ends, however it ends",
+                "its waiting notice is the report on the PR",
+                "end the run like any other run, in one of the ways in step 13",
+            ),
+            "only when the work cannot go on without a person's decision, answer, or action, or without another member's work",
+            "A large amount of work, or work that takes long, is not a reason to end the run.",
+        ),
+        (
+            "ja",
+            (
+                "その作業がまだ終わっていなければ、この run がその作業の続きとして残りを進め",
+                "完了条件で判断します",
+                "どの終わり方でも run を終えるときに 1 回だけ",
+                "その待ちの告知が PR への報告になる",
+                "ほかの run と同じく手順 13 のいずれかの終わり方で終えてください",
+            ),
+            "人の判断・回答・対応や、ほかのメンバーの作業がないと先へ進めないときにだけ使ってください",
+            "作業が多いことや時間がかかることは、run を終える理由になりません。",
+        ),
+    ],
+)
+def test_ticket_runs_finish_the_remaining_work(language, resumed, waits, volume):
+    """A run resumed after awaiting checks carries the unfinished work on, and
+    neither it nor any other run ends as asking or blocked for the work's size."""
+    body = _prompt_body("handle_ticket", language)
+    steps = {
+        number: next(
+            line for line in body.splitlines() if line.startswith(f"{number}. ")
+        )
+        for number in (8, 13)
+    }
+    for phrase in resumed:
+        assert phrase in steps[8], phrase
+    assert waits in steps[13]
+    assert volume in steps[13]
+    assert "この run 内で解消できない" not in body
+    assert "cannot be resolved in this run" not in body
+
+
 def test_review_verdict_finishes_done_and_waits_use_the_public_roster():
     for language in ("en", "ja"):
         body = _prompt_body("handle_ticket", language)
