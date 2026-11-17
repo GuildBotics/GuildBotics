@@ -947,7 +947,7 @@ pub async fn load_ci(
 fn upkeep_decision(view: &Value, last_problem: &mut String) -> (bool, Option<String>) {
     let state = view["snapshot"]["state"].as_str().unwrap_or_default();
     let setting = view["problem_setting"].as_str().unwrap_or_default();
-    let build = view["snapshot"]["build_due"] == true && ["snapshot", ""].contains(&setting);
+    let build = view["snapshot"]["build_due"] == true;
     let problem = if state == "building" {
         last_problem.clone()
     } else if ["missing", "stale", "ready"].contains(&state) && ["snapshot", ""].contains(&setting)
@@ -1012,8 +1012,8 @@ pub(crate) async fn upkeep(api: Shared) {
             })
             .await
         {
-            // The next status reading reports a changed failure reason once.
-            tracing::debug!("Environment upkeep build ended: {e}");
+            // Keep pre-marker failures visible; status reports changed reasons to the screen.
+            tracing::warn!("Environment upkeep build ended: {e}");
         }
     })
     .await;
@@ -1696,7 +1696,7 @@ mod tests {
             ("image", "load custom image"),
             ("declaration", "invalid DNS"),
         ] {
-            let view = serde_json::json!({"snapshot":{"state":"missing","build_due":true},"problem_setting":setting,"problem":problem});
+            let view = serde_json::json!({"snapshot":{"state":"missing","build_due":false},"problem_setting":setting,"problem":problem});
             assert_eq!(
                 super::upkeep_decision(&view, &mut last),
                 (false, Some(problem.into()))

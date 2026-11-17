@@ -443,7 +443,7 @@ fn print_status(view: &Value, language: &str) {
             gb_server::i18n::t(
                 language,
                 "intelligences.agent_environment.snapshot.next_retry",
-                &[("time", &at.to_rfc3339())]
+                &[("time", &at.with_timezone(&chrono::Local).to_rfc3339())]
             )
         );
     }
