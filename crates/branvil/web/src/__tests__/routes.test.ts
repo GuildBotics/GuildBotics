@@ -17,7 +17,6 @@ describe("routes", () => {
   it("parses app routes", () => {
     expect(parseRoute("/")).toEqual({ name: "home" });
     expect(parseRoute("/-/enter")).toEqual({ name: "enter" });
-    expect(parseRoute("/-/authorize")).toEqual({ name: "authorize" });
     expect(parseRoute("/-/settings")).toEqual({ name: "settings", section: null });
     expect(parseRoute("/-/settings/members")).toEqual({ name: "settings", section: "members" });
     // A repository's editor in its workspace's settings.

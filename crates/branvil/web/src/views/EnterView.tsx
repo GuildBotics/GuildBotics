@@ -1,5 +1,3 @@
-import { rememberReturn, takeReturn } from "@guildbotics/ui/entryReturn";
-export { rememberReturn };
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { isApiError, setCsrfToken } from "../api/client";
@@ -26,7 +24,7 @@ export function EnterView() {
     onSuccess: (session) => {
       setCsrfToken(session.csrf);
       client.setQueryData(keys.session(), session);
-      navigate(takeReturn(["/-/authorize"]) ?? href.home(), { replace: true });
+      navigate(href.home(), { replace: true });
     },
   });
   useEffect(() => {
@@ -47,12 +45,10 @@ export function EnterView() {
 
 /** Without a session every page shows how to get one. */
 export function GuidanceView({
-  lead,
   notice,
   error,
   onRetry,
 }: {
-  lead?: string;
   notice?: string;
   error?: unknown;
   onRetry?: () => void;
@@ -64,7 +60,6 @@ export function GuidanceView({
         <Stack gap="md">
           <Title order={2}>Branvil</Title>
           {notice && <Refusal>{notice}</Refusal>}
-          {lead && <Text size="sm">{lead}</Text>}
           <Text size="sm">{t("guide.run")}</Text>
           <pre>
             <code>guildbotics branvil open --print</code>

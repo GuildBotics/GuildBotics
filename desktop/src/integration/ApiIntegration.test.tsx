@@ -612,15 +612,13 @@ describe("Setup integration (real client + mock server)", () => {
       is_active: true,
       roles: ["product"],
       git_email: "",
-      accounts: {
-        branvil: { username: "", reissue: false },
-        slack: { bot_token: "", app_token: "" },
-      },
+      accounts: { slack: { bot_token: "", app_token: "" } },
       chat_channels: [],
       work_stop_notification_channels: [],
       config_dir: "/workspace/.guildbotics/config",
     });
     expect(memberCall.body).not.toHaveProperty("accounts.github");
+    expect(memberCall.body).not.toHaveProperty("accounts.branvil");
 
     const createButton = await screen.findByRole("button", { name: t("setup.saveInitial") });
     await user.click(createButton);

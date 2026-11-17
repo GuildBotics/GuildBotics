@@ -1,11 +1,11 @@
-// One pending browser consent flow, shared by the integrated screens.
+// One pending browser consent flow on GuildBotics' consent page.
 const RETURN_KEY = "guildbotics.entryReturn";
 const RETURN_MS = 10 * 60_000;
-const CONSENT_PATHS = ["/-/authorize", "/-/guildbotics/-/authorize"];
+const CONSENT_PATH = "/-/guildbotics/-/authorize";
 
-function isConsentPath(value: string, paths: readonly string[]): boolean {
+function isConsentPath(value: string): boolean {
   // eslint-disable-next-line no-control-regex -- reject characters browsers normalize
-  return !/[\s#\x00-\x1f\x7f]/.test(value) && paths.some((path) => value.startsWith(`${path}?`));
+  return !/[\s#\x00-\x1f\x7f]/.test(value) && value.startsWith(`${CONSENT_PATH}?`);
 }
 
 /**
@@ -25,15 +25,13 @@ export function rememberReturn(): void {
 }
 
 /** The remembered consent page, once, while it has not expired. */
-export function takeReturn(paths: readonly string[] = CONSENT_PATHS): string | null {
+export function takeReturn(): string | null {
   try {
     const raw = window.localStorage.getItem(RETURN_KEY);
     window.localStorage.removeItem(RETURN_KEY);
     const saved = raw ? (JSON.parse(raw) as { path?: unknown; expires?: unknown }) : null;
     const fresh = typeof saved?.expires === "number" && saved.expires > Date.now();
-    return fresh && typeof saved.path === "string" && isConsentPath(saved.path, paths)
-      ? saved.path
-      : null;
+    return fresh && typeof saved.path === "string" && isConsentPath(saved.path) ? saved.path : null;
   } catch {
     return null;
   }

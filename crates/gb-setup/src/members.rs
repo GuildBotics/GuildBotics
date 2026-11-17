@@ -6,7 +6,6 @@ use gb_config::repository::ConfigSnapshot;
 use gb_config::team::{
     PrefixConflict, person_secret_prefix, valid_member_directory_name, valid_person_id,
 };
-use std::cell::Cell;
 use std::collections::BTreeSet;
 
 /// What a member joining a workspace with a ticket service runs on patrol
@@ -335,7 +334,6 @@ impl Setup<'_> {
             human: text(&identity, "person_type") == "human",
             account_info: strings(identity.get("account_info")),
             secrets: values,
-            avatar: avatar_in(self.identity_root(), id),
         })
     }
 
@@ -496,12 +494,8 @@ impl Setup<'_> {
         })()
     }
 
-    /// Saves the member `id` at the revisions its form was read at. Each
-    /// account first obtains from its provider what the save needs, outside
-    /// every lock; then the secrets, the identity and the participation are
-    /// written in one span; and each account is told how the save ended:
-    /// refused when nothing was written, saved when it was. A save that
-    /// failed after it began writing settles nothing.
+    /// Saves the member `id` at the revisions its form was read at: the
+    /// secrets, the identity and the participation are written in one span.
     pub async fn save_member(
         &self,
         id: &str,
@@ -518,55 +512,13 @@ impl Setup<'_> {
         for (provider, form) in &input.accounts {
             accounts.push(self.providers.account(provider, form)?);
         }
-        let began = Cell::new(false);
-        let saved = self
-            .prepare_and_save(&input, &mut accounts, expected, &began)
-            .await;
-        if saved.is_ok() || !began.get() {
-            for account in accounts {
-                account.settled(saved.is_ok()).await;
-            }
-        }
-        saved
-    }
-
-    async fn prepare_and_save(
-        &self,
-        input: &PersonSetupInput,
-        accounts: &mut [Box<dyn MemberAccount>],
-        expected: &Revisions,
-        began: &Cell<bool>,
-    ) -> anyhow::Result<ConfigWriteReceipt<()>> {
         let id = input.person_id.as_str();
-        let (account_info, form_secrets) =
-            self.account_info(&self.repository.identity_view(), input, accounts)?;
-        let mut member = SavedMember {
-            person_id: id.into(),
-            name: input.person_name.clone(),
-            human: input.human(),
-            account_info: strings(Some(&Value::Object(account_info))),
-            secrets: if accounts.is_empty() {
-                BTreeMap::new()
-            } else {
-                self.owned(id, true)?.values
-            },
-            avatar: avatar_in(self.identity_root(), id),
-        };
-        member
-            .secrets
-            .extend(form_secrets.into_iter().filter(|(_, v)| !v.is_empty()));
-        for account in accounts.iter_mut() {
-            account.prepare(&member).await?;
-        }
         let identity_path = member_path(id, "identity");
         let member_file = member_path(id, "member");
         self.repository.write_checked(
             expected,
             &[&identity_path],
-            |view, writer| {
-                began.set(true);
-                self.write_member(view, writer, input, accounts)
-            },
+            |view, writer| self.write_member(view, writer, &input, &accounts),
             |view| {
                 let mut revisions = self
                     .repository
@@ -747,16 +699,11 @@ impl Setup<'_> {
         )
     }
 
-    /// Deletes the member `id` everywhere: each provider first undoes what
-    /// saving it obtained, and a refusal keeps it; then it leaves this
-    /// workspace; then its secrets go, so a store failure leaves the
+    /// Deletes the member `id` everywhere: it leaves this workspace first;
+    /// then its secrets go, so a store failure leaves the
     /// identity to retry with, and its identity directory, picture included.
     pub async fn delete_identity(&self, id: &str) -> anyhow::Result<ConfigWriteReceipt<()>> {
         checked_id(id)?;
-        let member = self.saved_member(id)?;
-        for provider in self.providers.member_providers() {
-            self.providers.removed(&provider, &member).await?;
-        }
         let mut revisions = Revisions::new();
         let member_file = member_path(id, "member");
         if self.repository.read_config(&member_file)?.is_some() {
@@ -796,8 +743,7 @@ impl Setup<'_> {
     }
 
     /// Replaces the member's picture with `bytes`, named by `filename`'s
-    /// suffix (PNG for an unknown one), then hands it to each provider. A
-    /// provider's refusal is reported, and the picture stays changed.
+    /// suffix (PNG for an unknown one).
     pub async fn change_avatar(
         &self,
         id: &str,
@@ -841,10 +787,6 @@ impl Setup<'_> {
         let timestamp = avatar_in(self.identity_root(), id)
             .map(|path| mtime(&path))
             .unwrap_or(0);
-        let member = self.saved_member(id)?;
-        for provider in self.providers.member_providers() {
-            self.providers.avatar_changed(&provider, &member).await?;
-        }
         Ok(timestamp)
     }
 }

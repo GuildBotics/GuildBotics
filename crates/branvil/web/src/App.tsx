@@ -15,7 +15,6 @@ import { href, parseRoute, type Route } from "./router/routes";
 import { useStored } from "./storage";
 import { theme } from "@guildbotics/ui/theme";
 import { AppShell } from "@guildbotics/ui/AppShell";
-import { AuthorizeView } from "./views/AuthorizeView";
 import { BoardView } from "./views/BoardView";
 import { CommitView } from "./views/CommitView";
 import { EnterView, GuidanceView } from "./views/EnterView";
@@ -48,13 +47,11 @@ function Shell() {
   const route = parseRoute(usePathname());
   // The entry page makes the session, so it does not wait for one.
   if (route.name === "enter") return <EnterView />;
-  // The consent page stands alone, and says how to enter without a session.
-  if (route.name === "authorize") return <AuthorizeView />;
   return <Gate route={route} />;
 }
 
-/** Every route but the entry and consent pages, which never reach the gate. */
-type AppRoute = Exclude<Route, { name: "enter" | "authorize" }>;
+/** Every route but the entry page, which never reaches the gate. */
+type AppRoute = Exclude<Route, { name: "enter" }>;
 
 function Gate({ route }: { route: AppRoute }) {
   const session = useSession();

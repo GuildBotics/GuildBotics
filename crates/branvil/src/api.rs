@@ -1,13 +1,14 @@
 //! Authenticated in-process access to the same operations used by HTTP.
 use crate::app::Shared;
-use crate::auth::{self, Caller};
-pub use crate::domain::apps::{AppToken, TokenRequest};
+use crate::auth::Caller;
 use crate::domain::tickets::{NewComment, NewReaction, ReactionAdded};
 pub use crate::domain::{CommentView, Page};
 pub use crate::domain::{attachments, members, pulls, repos, tickets};
 pub use crate::error::{AppError, AppResult};
 use crate::git::{CommitSummary, FileChange};
+use crate::model::Member;
 pub use crate::model::{MemberKind, Repo, Workspace};
+use crate::store::Rd;
 pub use crate::upstream::host::{AlertState, DependencyAlert};
 
 /// Paging input verified against the actual operation, caller and filters at dispatch.
@@ -73,21 +74,118 @@ impl DataApi {
         let _open = self.guard()?;
         Ok(())
     }
-    /// Spend a PKCE-bound local application code, as the HTTP endpoint does.
-    pub async fn exchange(&self, input: TokenRequest) -> AppResult<AppToken> {
-        let _open = self.guard()?;
-        crate::domain::apps::exchange(&self.app, input).await
-    }
     pub fn base_url(&self) -> &str {
         &self.app.base_url
     }
-    /// Authentication is repeated on each operation, so revocation takes effect.
-    pub async fn authenticate(&self, token: String) -> AppResult<MemberApi> {
+    /// Act as the owner: the embedding host shares this process, so it is
+    /// trusted without a token.
+    pub fn owner(&self) -> MemberApi {
+        MemberApi {
+            api: self.clone(),
+            name: None,
+        }
+    }
+    /// The owner's member name.
+    pub fn owner_name(&self) -> AppResult<String> {
         let _open = self.guard()?;
-        auth::authenticate_token(&self.app, &token).await?;
+        self.app
+            .store
+            .read_sync(|r| crate::auth::owner(r).map(|m| m.name))
+    }
+    /// Revoke every token labelled `label`: the embedding host's tokens that
+    /// a run it no longer has did not return.
+    pub async fn revoke_labelled(&self, label: &str) -> AppResult<usize> {
+        let _open = self.guard()?;
+        let label = label.to_owned();
+        self.app
+            .store
+            .write(move |w| {
+                let mut revoked = 0;
+                for token in w.prefix_all::<crate::model::Token>(crate::store::TOKENS, &[])? {
+                    if token.label == label {
+                        crate::auth::revoke(w, &token)?;
+                        revoked += 1;
+                    }
+                }
+                Ok(revoked)
+            })
+            .await
+    }
+    /// Create, as agents, the members of `members` (name, display name)
+    /// that do not exist yet. A name no member may have is left out, and a
+    /// display name a member may not have gives way to the name, so one entry
+    /// never keeps the others from being created.
+    pub async fn ensure_agents(&self, members: Vec<(String, String)>) -> AppResult<()> {
+        let _open = self.guard()?;
+        let wanted: Vec<_> = members
+            .into_iter()
+            .filter(|(name, _)| members::check_name(name).is_ok())
+            .collect();
+        let missing = self
+            .app
+            .store
+            .read(move |r| {
+                let mut missing = Vec::new();
+                for (name, display_name) in wanted {
+                    if r.get::<Member>(crate::store::MEMBERS, &Member::key(&name))?
+                        .is_none()
+                    {
+                        missing.push((name, display_name));
+                    }
+                }
+                Ok(missing)
+            })
+            .await?;
+        if missing.is_empty() {
+            return Ok(());
+        }
+        // The write rereads, so a concurrent creation is kept rather than refused.
+        self.app
+            .store
+            .write(move |w| {
+                for (name, display_name) in missing {
+                    if w.get::<Member>(crate::store::MEMBERS, &Member::key(&name))?
+                        .is_none()
+                    {
+                        members::insert_member(
+                            w,
+                            &members::NewMember {
+                                name,
+                                display_name: crate::domain::check_text(
+                                    "display_name",
+                                    &display_name,
+                                    256,
+                                )
+                                .is_ok()
+                                .then_some(display_name),
+                                kind: MemberKind::Agent,
+                            },
+                        )?;
+                    }
+                }
+                Ok(())
+            })
+            .await
+    }
+    /// Act as the agent `name`, which is created with `display_name` when
+    /// missing. Each operation reads the member again, so it acts with the
+    /// member's current permissions.
+    pub async fn agent(&self, name: &str, display_name: &str) -> AppResult<MemberApi> {
+        members::check_name(name)?;
+        self.ensure_agents(vec![(name.into(), display_name.into())])
+            .await?;
+        let key = name.to_owned();
+        let member = self
+            .app
+            .store
+            .read(move |r| crate::domain::member_by_name(r, &key))
+            .await?;
+        if member.kind != MemberKind::Agent {
+            return Err(AppError::invalid(format!("Member {name} is not an agent.")));
+        }
         Ok(MemberApi {
             api: self.clone(),
-            token,
+            name: Some(member.name),
         })
     }
 }
@@ -95,15 +193,10 @@ impl DataApi {
 #[derive(Clone)]
 pub struct MemberApi {
     api: DataApi,
-    token: String,
+    /// The member acted as; `None` for the owner.
+    name: Option<String>,
 }
 impl MemberApi {
-    /// Issue the same single-use browser entry link as the HTTP endpoint.
-    pub async fn entry_link(&self) -> AppResult<members::EntryLink> {
-        let _open = self.api.guard()?;
-        members::entry_link(&self.api.app, &self.caller().await?)
-    }
-
     pub async fn upstream_dependency_alerts(
         &self,
         repo: &str,
@@ -126,6 +219,16 @@ impl MemberApi {
     pub async fn identity(&self) -> AppResult<members::MemberView> {
         let _open = self.api.guard()?;
         Ok(members::member_view(&self.caller().await?.member))
+    }
+    /// The CI settings and the operation in progress (owner).
+    pub async fn ci_settings(&self) -> AppResult<serde_json::Value> {
+        let _open = self.api.guard()?;
+        crate::ci::admin::data_settings(&self.api.app, &self.caller().await?).await
+    }
+    /// Start loading an archive on this machine into the automatic runner (owner).
+    pub async fn ci_load_image(&self, path: &str) -> AppResult<serde_json::Value> {
+        let _open = self.api.guard()?;
+        crate::ci::admin::data_load(&self.api.app, &self.caller().await?, path).await
     }
     pub async fn job_retry(&self, repo: &str, id: &str) -> AppResult<crate::ci::api::AttemptView> {
         let _open = self.api.guard()?;
@@ -165,9 +268,17 @@ impl MemberApi {
         Ok(bytes)
     }
     async fn caller(&self) -> AppResult<Caller> {
-        Ok(Caller {
-            member: auth::authenticate_token(&self.api.app, &self.token).await?,
-        })
+        let name = self.name.clone();
+        let member = self
+            .api
+            .app
+            .store
+            .read(move |r| match name {
+                Some(name) => crate::domain::member_by_name(r, &name),
+                None => crate::auth::owner(r),
+            })
+            .await?;
+        Ok(Caller { member })
     }
     pub fn page(
         &self,
@@ -846,7 +957,7 @@ mod tests {
         serde_json::from_value(v).unwrap()
     }
     #[tokio::test]
-    async fn authenticated_data_operations_share_permissions_and_revocation() {
+    async fn in_process_members_act_with_their_permissions() {
         let temp = tempfile::tempdir().unwrap();
         let token = initialize(temp.path(), "owner1").unwrap();
         let running = Running::start(
@@ -856,8 +967,9 @@ mod tests {
         .await
         .unwrap();
         let api = &running.data;
-        assert!(api.authenticate("invalid".into()).await.is_err());
-        let owner = api.authenticate(token).await.unwrap();
+        assert_eq!(api.owner_name().unwrap(), "owner1");
+        let owner = api.owner();
+        assert_eq!(owner.identity().await.unwrap().name, "owner1");
         owner
             .repos_create_workspace(input(json!({"name":"test"})))
             .await
@@ -866,21 +978,32 @@ mod tests {
             .repos_create(input(json!({"path":"test/repo","labels":["bug"]})))
             .await
             .unwrap();
+        // The owner and a runner are not agents, so they cannot be acted as one.
         owner
-            .members_create(input(json!({"name":"agent1","kind":"agent"})))
+            .members_create(input(json!({"name":"runner1","kind":"runner"})))
             .await
             .unwrap();
-        let issued = owner
-            .members_issue_token("agent1".into(), input(json!({"label":"contract"})))
-            .await
-            .unwrap();
-        let agent = api.authenticate(issued.token).await.unwrap();
+        for name in ["owner1", "runner1"] {
+            assert_eq!(api.agent(name, "Any").await.err().unwrap().code, "invalid");
+        }
+        // A missing agent is created with the display name, then reused as is.
+        let agent = api.agent("agent1", "Agent One").await.unwrap();
+        let again = api.agent("agent1", "Renamed").await.unwrap();
+        for acting in [&agent, &again] {
+            let me = acting.identity().await.unwrap();
+            assert_eq!(
+                (me.name.as_str(), me.display_name.as_str(), me.kind),
+                ("agent1", "Agent One", MemberKind::Agent)
+            );
+        }
         assert!(
             agent
                 .repos_create_workspace(input(json!({"name":"forbidden"})))
                 .await
                 .is_err()
         );
+        assert_eq!(agent.ci_settings().await.err().unwrap().code, "forbidden");
+        assert!(owner.ci_settings().await.is_ok());
         let ticket = agent
             .tickets_create_ticket("test/repo", input(json!({"title":"Test","labels":["bug"]})))
             .await
@@ -1022,7 +1145,7 @@ mod tests {
         let url = format!("{}/api/v1/repos/test%2Frepo/tickets/{key}", api.base_url());
         let observed: serde_json::Value = client
             .get(&url)
-            .bearer_auth(&owner.token)
+            .bearer_auth(&token)
             .send()
             .await
             .unwrap()
@@ -1034,7 +1157,7 @@ mod tests {
         assert_eq!(observed["title"], "Survives cancellation");
         let posted: serde_json::Value = client
             .post(format!("{url}/comments"))
-            .bearer_auth(&owner.token)
+            .bearer_auth(&token)
             .json(&json!({"body":"From HTTP"}))
             .send()
             .await
@@ -1055,30 +1178,62 @@ mod tests {
         assert_eq!(comments.items.len(), 1);
         assert_eq!(comments.items[0].id, posted["id"].as_str().unwrap());
         assert_eq!(comments.items[0].body, "From HTTP");
-        owner
-            .members_revoke_token("agent1".into(), issued.id)
-            .await
-            .unwrap();
+        // One unacceptable entry does not keep the others from being created.
+        api.ensure_agents(vec![
+            ("roster1".into(), "あ".repeat(100)),
+            ("branvil".into(), "Reserved".into()),
+            ("roster2".into(), "Roster Two".into()),
+        ])
+        .await
+        .unwrap();
+        let long = owner.members_get("roster1".into()).await.unwrap();
+        assert_eq!(long.display_name, "roster1");
+        let named = owner.members_get("roster2".into()).await.unwrap();
+        assert_eq!(named.display_name, "Roster Two");
         assert_eq!(
-            agent
-                .tickets_get_ticket("test/repo", &ticket.key)
-                .await
-                .unwrap_err()
-                .code,
-            "unauthorized"
+            api.agent("branvil", "Reserved").await.err().unwrap().code,
+            "invalid"
         );
-        drop(agent);
-        drop(owner);
+        // Only the tokens of the named label are revoked.
+        for (name, label) in [("agent1", "lent"), ("agent1", "kept"), ("owner1", "lent")] {
+            owner
+                .members_issue_token(name.into(), input(json!({ "label": label })))
+                .await
+                .unwrap();
+        }
+        assert_eq!(api.revoke_labelled("lent").await.unwrap(), 2);
+        assert_eq!(api.revoke_labelled("lent").await.unwrap(), 0);
+        let labels = |name: &'static str| {
+            let owner = owner.clone();
+            async move {
+                let page = owner
+                    .page(format!("labels:{name}"), Some(100), None)
+                    .unwrap();
+                owner
+                    .members_list_tokens(name.into(), page)
+                    .await
+                    .unwrap()
+                    .items
+                    .into_iter()
+                    .map(|t| t.label)
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert!(labels("agent1").await.contains(&"kept".to_owned()));
+        assert!(!labels("agent1").await.contains(&"lent".to_owned()));
+        assert!(!labels("owner1").await.contains(&"lent".to_owned()));
+        drop((agent, again, owner));
         let stopped = api.clone();
         running.stop().await.unwrap();
         assert_eq!(
             stopped
-                .authenticate("invalid".into())
+                .agent("agent1", "Agent One")
                 .await
                 .err()
                 .unwrap()
                 .code,
             "unavailable"
         );
+        assert_eq!(stopped.owner_name().err().unwrap().code, "unavailable");
     }
 }

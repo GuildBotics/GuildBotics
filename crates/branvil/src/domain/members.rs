@@ -110,13 +110,19 @@ pub struct NewMember {
     pub kind: MemberKind,
 }
 
+/// Whether a member may have `name`.
+pub fn check_name(name: &str) -> AppResult<()> {
+    util::validate_member_name(name)?;
+    if util::fold(name) == "branvil" {
+        return Err(AppError::invalid("The member name branvil is reserved."));
+    }
+    Ok(())
+}
+
 /// Inserts a member in a write transaction (shared by the API, `init`, and
 /// the automatic runner).
 pub fn insert_member(w: &Wtx, input: &NewMember) -> AppResult<Member> {
-    util::validate_member_name(&input.name)?;
-    if util::fold(&input.name) == "branvil" {
-        return Err(AppError::invalid("The member name branvil is reserved."));
-    }
+    check_name(&input.name)?;
     let key = Member::key(&input.name);
     if w.exists(store::MEMBERS, &key)? {
         return Err(AppError::conflict(format!(

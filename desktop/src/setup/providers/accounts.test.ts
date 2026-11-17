@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import i18n from "../../i18n";
 import "../../i18n";
-import { branvilAccount, type BranvilForm } from "./branvil/BranvilAccount";
 import { branvilCodeHosting, branvilTickets } from "./branvil/BranvilServices";
 import { isSlackChannel, slackAccount, type SlackForm } from "./slack/SlackAccount";
 import type { MemberContext } from "./types";
@@ -124,46 +123,6 @@ describe("isSlackChannel", () => {
     for (const channel of ["Dev", "_dev", "-dev", "#_dev", "#-dev", ""]) {
       expect(isSlackChannel(channel)).toBe(false);
     }
-  });
-});
-
-function branvil(overrides: Partial<BranvilForm> = {}): BranvilForm {
-  return { ...branvilAccount.initial(), ...overrides };
-}
-
-describe("branvilAccount", () => {
-  it("sends the agent saved, chosen or to be created, and a human's saved name", () => {
-    expect(branvilAccount.request(branvil(), false)).toEqual({ username: "", reissue: false });
-    expect(branvilAccount.request(branvil({ choice: "existing", chosen: "aiko" }), false)).toEqual({
-      username: "aiko",
-      reissue: false,
-    });
-    expect(
-      branvilAccount.request(
-        branvil({ stored: "aiko", choice: "existing", chosen: "other", reissue: true }),
-        false,
-      ),
-    ).toEqual({ username: "aiko", reissue: true });
-    expect(branvilAccount.request(branvil({ stored: "otota" }), true)).toEqual({
-      username: "otota",
-    });
-  });
-
-  it("edits a stored account with its token kept", () => {
-    expect(
-      branvilAccount.fromView({ username: "aiko", has_token: true }, branvil(), false),
-    ).toEqual(branvil({ stored: "aiko", storedToken: true }));
-    expect(branvilAccount.fromView(undefined, branvil(), false)).toEqual(branvil());
-  });
-
-  it("asks an agent to be chosen only when choosing one", () => {
-    expect(branvilAccount.errors(branvil(), context(), t)).toEqual({});
-    expect(branvilAccount.errors(branvil({ choice: "existing" }), context(), t)).toEqual({
-      chosen: t("setup.branvil.member.chooseRequired"),
-    });
-    expect(
-      branvilAccount.errors(branvil({ choice: "existing" }), context({ human: true }), t),
-    ).toEqual({});
   });
 });
 

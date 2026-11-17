@@ -528,7 +528,7 @@ async fn unavailable_credentials_keep_individual_checks_and_provider_metadata() 
     let mut member = f.read(&member_path);
     member["message_channels"] = json!([{"id":"C000000001"}]);
     f.write(&member_path, &member.to_string());
-    f.seed_identity_secret("ALICE_BRANVIL_TOKEN", "synthetic-token");
+    f.seed_identity_secret("ALICE_SLACK_BOT_TOKEN", "synthetic-token");
     f.keys(Keys::Locked);
     *f.api.diagnostics_runner.lock().unwrap() = Some(Arc::new(|command, person, _, _| {
         assert_eq!(command, "diagnostics/cli_agent");

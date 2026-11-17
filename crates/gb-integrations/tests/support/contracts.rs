@@ -1529,8 +1529,6 @@ pub async fn code_contract(
         assert!(!credential.username.is_empty());
         assert!(!credential.password.is_empty());
     }
-    service.identity(false).await.unwrap();
-    service.identity(true).await.unwrap();
     let remote = service.clone_url(repository).await.unwrap();
     assert_eq!(
         service.repository_from_remote(&remote).as_deref(),

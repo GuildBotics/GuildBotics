@@ -171,14 +171,10 @@ impl Selector<'_> {
     }
 
     async fn adopt_repairs(&self) -> Result<(), ServiceError> {
-        let Some(code) = self.code else {
+        if self.code.is_none() {
             return Ok(());
-        };
-        let identity = code.identity(false).await?;
-        let Some(account_key) = identity.keys().find(|key| key.ends_with("_username")) else {
-            return Ok(());
-        };
-        let active = repair_members(self.roster, account_key.trim_end_matches("_username"));
+        }
+        let active = repair_members(self.roster, "branvil");
         for ticket in self.ticket.repair_tickets().await? {
             if !ticket.repair || ticket.state != "open" {
                 continue;

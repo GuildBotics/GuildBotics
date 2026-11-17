@@ -74,7 +74,9 @@ time.
 once it accepts requests. It refuses non-loopback listen addresses.
 
 Branvil has one human, the owner; everyone else is an agent (GuildBotics'
-AI members) or a CI runner, each with its own token. Whoever can run commands
+AI members) or a CI runner. A runner, and an agent outside GuildBotics, uses
+a token of its own; GuildBotics acts as its agents in-process, named by their
+person_id and created on first use (`docs/architecture.md`). Whoever can run commands
 as the Hub machine's OS user is the owner: the owner's token is the `0600` file
 `<data dir>/secrets/owner.token`, and the CLI on the Hub uses it by default.
 `guildbotics branvil open` asks the service for a single-use link (valid for 60 seconds)
@@ -82,13 +84,11 @@ and opens it with the system's browser; the GUI exchanges it for a session
 cookie that lasts 30 days (`limits.session_hours`). `guildbotics branvil open --print`
 prints the link instead (for a headless Hub, or a Hub shared with other OS
 users: the command line of the browser launcher is visible in `ps`). On other
-machines, a local app such as GuildBotics Desktop gets an owner token of its
-own once the owner allows it on Branvil's consent page (`/-/authorize`), and
-opens the GUI with an entry link the same way (`docs/architecture.md`, "Local
-apps"). There is no sign-out: to end every session, stop the service, delete
-`secrets/owner.token`, and start it again (a new owner token is written and
-the old one stops working; tokens given to local apps stay until revoked under
-Settings → Members → owner → Tokens).
+machines, the GUI is opened through the GuildBotics server, which shares its
+entry link and browser session with Branvil (`guildbotics open --branvil`,
+after `guildbotics connect` once). There is no sign-out: to end every session,
+stop the service, delete `secrets/owner.token`, and start it again (a new
+owner token is written and the old one stops working).
 
 The secrets of other systems that Branvil uses, members' upstream credentials
 and the notification webhook's URL, are never in the data directory:
@@ -235,11 +235,13 @@ allowed for the owner.
 
 ### Your own checkout with GuildBotics
 
-Connect GuildBotics to Branvil on the Hub and fetch that connection and its
-credentials on the other machine. With GuildBotics running there:
+GuildBotics embeds Branvil and hands Git the owner's token for the machine;
+there is no connection step. On a machine other than the Hub, run
+`guildbotics connect` once so that its CLI can ask the GuildBotics server.
 
-1. Open **Setup → Integrations → Branvil → Your own git on this machine** in
-   GuildBotics Desktop and copy the configuration it shows.
+1. In GuildBotics' screens, under **Setup → Integrations**, copy the
+   configuration that **Your own git on this machine** shows above the
+   workspace choice of the code host or the tickets.
 2. Run `git config --global --edit` and paste those lines **at the end**. For
    example, on Windows:
 
@@ -249,7 +251,7 @@ credentials on the other machine. With GuildBotics running there:
        helper = "!guildbotics git-credential"
    ```
 
-   Use the lines from Desktop for this machine's CLI path and Branvil base
+   Use the lines GuildBotics shows for the CLI path and Branvil base
    URL. The empty `helper =` resets earlier helpers for that URL; keep these
    lines last so another helper does not store the token.
 3. In your existing checkout, set the remote and fetch (replace `acme/demo`
@@ -265,7 +267,7 @@ credentials on the other machine. With GuildBotics running there:
 
 GuildBotics issues a separate owner token per machine on first use, labelled
 `git:<device name> (<device ID suffix>)`, and keeps it only in that machine's
-OS keychain. For connection setup, platform details, and troubleshooting, see
+OS keychain. For platform details and troubleshooting, see
 GuildBotics' [Use Branvil from your own checkouts](https://github.com/GuildBotics/GuildBotics/blob/main/docs/branvil_integration.en.md#use-branvil-from-your-own-checkouts)
 ([日本語](https://github.com/GuildBotics/GuildBotics/blob/main/docs/branvil_integration.ja.md)).
 
@@ -324,11 +326,9 @@ Under Branvil's **Settings → Members → owner → Tokens**, revoke that machi
 the other machines' tokens in place. Remove the saved credential from the
 retired machine's OS credential store as well, if you still have access.
 
-A connected GuildBotics can issue a new token after revocation. To cut that
-machine off, first remove it from the GuildBotics Hub, revoke `app:GuildBotics`
-and reconnect GuildBotics on a retained machine, let the retained machines
-fetch the new connection, then revoke the retired machine's `git:` token.
-The linked GuildBotics guide describes this procedure too.
+GuildBotics issues a new `git:` token after revocation to any machine whose
+CLI its server accepts. To cut that machine off, first remove it from the
+GuildBotics Hub, then revoke the retired machine's `git:` token.
 
 For automation, give Git credentials through a helper or `GIT_ASKPASS`. The
 tests in `tests/` use an askpass script that reads the name and token from

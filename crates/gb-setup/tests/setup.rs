@@ -10,7 +10,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    pin::Pin,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -23,7 +22,7 @@ type Log = Arc<Mutex<Vec<String>>>;
 #[derive(Default)]
 struct Models {
     log: Log,
-    /// Hooks that refuse: `prepare:alpha`, `stored:alpha`, `removed:beta`, ...
+    /// Accounts that refuse to be stored: `stored:alpha`, ...
     refuse: BTreeSet<String>,
 }
 
@@ -46,19 +45,6 @@ fn refusal(code: &str) -> SetupError {
 }
 
 impl MemberAccount for Account {
-    fn prepare<'a>(&'a mut self, member: &'a SavedMember) -> Hook<'a> {
-        Box::pin(async move {
-            self.log.lock().unwrap().push(format!(
-                "prepare:{}:{}",
-                self.provider,
-                member.secret(&format!("{}_TOKEN", self.provider.to_uppercase()))
-            ));
-            if self.refuse.contains(&format!("prepare:{}", self.provider)) {
-                return Err(refusal("provider_refused"));
-            }
-            Ok(())
-        })
-    }
     fn stored(&self, _: &str, human: bool) -> Result<StoredAccount, SetupError> {
         self.log
             .lock()
@@ -86,14 +72,6 @@ impl MemberAccount for Account {
             );
         }
         Ok(stored)
-    }
-    fn settled(self: Box<Self>, saved: bool) -> Pin<Box<dyn Future<Output = ()> + Send>> {
-        let (log, provider) = (self.log.clone(), self.provider.clone());
-        Box::pin(async move {
-            log.lock()
-                .unwrap()
-                .push(format!("settled:{provider}:{saved}"))
-        })
     }
 }
 
@@ -149,36 +127,6 @@ impl ProviderModels for Models {
         json!({
             "user": account_info.get(&format!("{provider}_user")).cloned().unwrap_or_default(),
             "has_token": has_secret(&format!("{}_TOKEN", provider.to_uppercase())),
-        })
-    }
-    fn removed<'a>(&'a self, provider: &'a str, member: &'a SavedMember) -> Hook<'a> {
-        Box::pin(async move {
-            self.log
-                .lock()
-                .unwrap()
-                .push(format!("removed:{provider}:{}", member.person_id));
-            if self.refuse.contains(&format!("removed:{provider}")) {
-                return Err(refusal("removal_refused"));
-            }
-            Ok(())
-        })
-    }
-    fn avatar_changed<'a>(&'a self, provider: &'a str, member: &'a SavedMember) -> Hook<'a> {
-        Box::pin(async move {
-            let avatar = member
-                .avatar
-                .as_ref()
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            self.log
-                .lock()
-                .unwrap()
-                .push(format!("avatar_changed:{provider}:{avatar}"));
-            if self.refuse.contains(&format!("avatar_changed:{provider}")) {
-                return Err(refusal("avatar_refused"));
-            }
-            Ok(())
         })
     }
     fn channel(&self, services: &Value, reference: &str) -> anyhow::Result<Map<String, Value>> {
@@ -430,56 +378,18 @@ fn diagnostic_credentials_match_runtime_store_even_with_environment_tokens() {
 }
 
 #[test]
-fn provider_hooks_run_in_frozen_order() {
+fn providers_are_asked_only_to_store_accounts() {
     let world = World::new();
     world.init(json!({"language": "en"}));
-    // A save: every account's stored items, their effective secrets and
-    // each account's preparation outside the locks, then the write, and the
-    // settling.
+    // A save asks each account for its stored items once, inside the write.
     world
         .save(
             json!({"person_id": "a", "person_name": "A", "person_type": "agent",
             "accounts": {"alpha": {"user": "u", "token": "alpha-1"}, "beta": {"user": "v"}}}),
         )
         .unwrap();
-    assert_eq!(
-        world.log(),
-        [
-            "stored:alpha:false",
-            "stored:beta:false",
-            "prepare:alpha:alpha-1",
-            "prepare:beta:",
-            "stored:alpha:false",
-            "stored:beta:false",
-            "settled:alpha:true",
-            "settled:beta:true",
-        ]
-    );
-    // A refusal before the write settles as not saved, and writes nothing.
-    let refused = World::with(refusing(&["prepare:beta"]));
-    let error = refused
-        .save(json!({"person_id": "a", "person_name": "A",
-            "accounts": {"alpha": {"token": "alpha-1"}, "beta": {}}}))
-        .unwrap_err();
-    assert_eq!(code(&error), "provider_refused");
-    assert_eq!(
-        refused.log()[2..],
-        [
-            "prepare:alpha:alpha-1",
-            "prepare:beta:",
-            "settled:alpha:false",
-            "settled:beta:false",
-        ]
-    );
-    assert!(!refused.identities().join("team/members/a").exists());
-    assert!(
-        !refused
-            .dir
-            .path()
-            .join("identity/.guildbotics/config/secrets.yml")
-            .exists()
-    );
-    // A stale save is refused before it begins writing: not saved.
+    assert_eq!(world.log(), ["stored:alpha:false", "stored:beta:false"]);
+    // A stale save is refused before it writes.
     let stale = Revisions::from([("team/members/a/identity.yml".to_owned(), String::new())]);
     let error = save(
         &world.setup(),
@@ -488,74 +398,21 @@ fn provider_hooks_run_in_frozen_order() {
     )
     .unwrap_err();
     assert!(error.is::<gb_config::repository::StaleConfigWriteError>());
-    assert_eq!(world.log().last().unwrap(), "settled:alpha:false");
-    // A failure after the write began settles nothing: what the provider
-    // obtained stays for the member it may have been stored for.
-    world.identity_file("c_x", "person_id: c_x\n");
-    world.log();
-    let error = world
-        .save(json!({"person_id": "c-x", "person_name": "C", "accounts": {"alpha": {}}}))
-        .unwrap_err();
-    assert_eq!(code(&error), "person_env_prefix_conflict");
-    let log = world.log();
-    assert!(log.contains(&"prepare:alpha:".to_owned()), "{log:?}");
-    assert!(
-        log.iter().all(|entry| !entry.starts_with("settled")),
-        "{log:?}"
-    );
-    // A deletion asks every provider first, and a refusal keeps the member.
-    let removing = World::with(refusing(&["removed:beta"]));
-    removing.init(json!({"language": "en"}));
-    removing.save(agent("a")).unwrap();
-    removing.log();
-    let error = block_on(removing.setup().delete_identity("a")).unwrap_err();
-    assert_eq!(code(&error), "removal_refused");
-    assert_eq!(removing.log(), ["removed:alpha:a", "removed:beta:a"]);
-    assert!(
-        removing
-            .workspace()
-            .join("team/members/a/member.yml")
-            .is_file()
-    );
-    assert!(
-        removing
-            .identities()
-            .join("team/members/a/identity.yml")
-            .is_file()
-    );
-    block_on(world.setup().delete_identity("a")).unwrap();
-    assert_eq!(world.log(), ["removed:alpha:a", "removed:beta:a"]);
-    // Taking a member out of a workspace asks no provider.
+    assert_eq!(world.identity("a")["name"], "A");
+    // Taking a member out, a new picture and a deletion ask no provider.
     world.save(agent("b")).unwrap();
     world.log();
     world.setup().remove_member("b").unwrap();
-    assert!(world.log().is_empty());
-    // A new picture is handed over once stored; a refusal keeps it.
-    let avatar = World::with(refusing(&["avatar_changed:alpha"]));
-    let error = block_on(avatar.setup().change_avatar("b", b"png", "me.PNG")).unwrap_err();
-    assert_eq!(code(&error), "avatar_refused");
-    assert_eq!(avatar.log(), ["avatar_changed:alpha:avatar.png"]);
+    block_on(world.setup().change_avatar("a", b"gif", "x.gif")).unwrap();
     assert_eq!(
-        fs::read(avatar.identities().join("team/members/b/avatar.png")).unwrap(),
-        b"png"
-    );
-    block_on(world.setup().change_avatar("b", b"gif", "x.gif")).unwrap();
-    assert_eq!(
-        world.log(),
-        [
-            "avatar_changed:alpha:avatar.gif",
-            "avatar_changed:beta:avatar.gif"
-        ]
-    );
-    assert!(
-        !world
-            .identities()
-            .join("team/members/b/avatar.png")
-            .exists()
+        fs::read(world.identities().join("team/members/a/avatar.gif")).unwrap(),
+        b"gif"
     );
     let oversized = vec![0; AVATAR_LIMIT + 1];
-    let error = block_on(world.setup().change_avatar("b", &oversized, "x.png")).unwrap_err();
+    let error = block_on(world.setup().change_avatar("a", &oversized, "x.png")).unwrap_err();
     assert_eq!(code(&error), "avatar_invalid");
+    block_on(world.setup().delete_identity("a")).unwrap();
+    assert!(!world.identities().join("team/members/a").exists());
     assert!(world.log().is_empty());
 }
 #[test]
@@ -1228,7 +1085,7 @@ fn refused_or_failed_account_leaves_files_and_secrets_unchanged() {
     world.init(json!({"language": "en"}));
     world.save(agent("a")).unwrap();
     let before = bytes_under(world.dir.path());
-    let models = refusing(&["prepare:alpha"]);
+    let models = refusing(&["stored:alpha"]);
     let refused = Setup {
         providers: &models,
         ..world.setup()
@@ -1239,7 +1096,7 @@ fn refused_or_failed_account_leaves_files_and_secrets_unchanged() {
         &Revisions::new(),
     )
     .unwrap_err();
-    assert_eq!(code(&error), "provider_refused");
+    assert_eq!(code(&error), "account_refused");
     assert_eq!(bytes_under(world.dir.path()), before);
     assert_eq!(world.identity_secrets()["A_ALPHA_TOKEN"], "alpha-1");
 }

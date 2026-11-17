@@ -282,9 +282,6 @@ def test_copy_leaves_production_behind(tmp_path, symlinks):
     (workspace / "local/run/diagnostics.jsonl").write_text("{}\n")
     (workspace / "local/service.yml").write_text("start_with_server: true\n")
     (workspace / "config/transcripts.yml").write_text("retention_days: 30\n")
-    connection = roots["identity"] / ".guildbotics/config/connections/branvil.yml"
-    connection.parent.mkdir()
-    connection.write_text("base_url: http://127.0.0.1:7878\n")
 
     destination = tmp_path / "copy"
     copy(roots["workspace"], roots["identity"], destination)
@@ -310,10 +307,6 @@ def test_copy_leaves_production_behind(tmp_path, symlinks):
     ]
     assert "start_with_server: false" in (copied / "local/service.yml").read_text()
     assert "retention_days: 36500" in (copied / "config/transcripts.yml").read_text()
-    copied_connection = (
-        destination / "identity/.guildbotics/config/connections/branvil.yml"
-    )
-    assert copied_connection.read_text() == "base_url: http://127.0.0.1:1\n"
 
 
 def test_cutover_preparation_preserves_meaning_and_unrelated_fields(tmp_path):

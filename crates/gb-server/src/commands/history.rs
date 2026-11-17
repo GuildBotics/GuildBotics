@@ -19,7 +19,7 @@ async fn service(
         templates: gb_base::home::python_package().join("templates"),
     };
     let metadata = resolved_guest::member(&roots, &api.identity_root, person)?;
-    let person = crate::member::native::public(&metadata);
+    let person = crate::member::native::public(&metadata, api.branvil.get());
     anyhow::ensure!(
         person.is_active && person.person_type == "agent",
         "inactive member"

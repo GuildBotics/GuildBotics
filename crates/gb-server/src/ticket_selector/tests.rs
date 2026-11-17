@@ -421,8 +421,8 @@ impl Fixture {
         let embedded = branvil::test_support::Fixture::new("owner").await;
         embedded.workspace("acme").await;
         embedded.repository("acme/repo").await;
-        embedded.member("local-yuki").await;
-        let (_, token) = embedded.member("local-aiko").await;
+        embedded.member("yuki").await;
+        embedded.member("aiko").await;
         let keys = NoKeys::default();
         let writes = gb_base::shared_writes::SharedWrites::new(
             root.path().join("identity"),
@@ -437,14 +437,13 @@ impl Fixture {
             },
         )
         .unwrap();
-        secrets.set("AIKO_BRANVIL_TOKEN", &token).unwrap();
         let factory = gb_integrations::ServiceIntegrationFactory::new(
             gb_integrations::IntegrationConfig {
                 local_root: root.path().join("services"),
                 identity_root: root.path().join("identity"),
                 person_id: "aiko".into(),
                 display_name: "Aiko".into(),
-                accounts: BTreeMap::from([("branvil".into(), ActorName("local-aiko".into()))]),
+                accounts: BTreeMap::new(),
                 branvil_members: Default::default(),
 
                 chat_provider: "local".into(),
@@ -490,7 +489,7 @@ impl Fixture {
                 labels: vec![],
                 add_to_board: true,
                 interactive: false,
-                assignee: Some(ActorName("local-aiko".into())),
+                assignee: Some(ActorName("aiko".into())),
                 lane: Some(CreateLane::Ready),
                 parent: None,
                 blocked_by: vec![],
@@ -686,7 +685,7 @@ async fn mention_preserves_lane_and_assignee_and_uses_a_distinct_conversation_ki
         }
         f.embedded
             .owner
-            .tickets_set_assignee("acme/repo", "1", Some("local-yuki".into()))
+            .tickets_set_assignee("acme/repo", "1", Some("yuki".into()))
             .await
             .unwrap();
         f.embedded
@@ -694,7 +693,7 @@ async fn mention_preserves_lane_and_assignee_and_uses_a_distinct_conversation_ki
             .tickets_add_comment(
                 "acme/repo",
                 "1",
-                branvil::test_support::input(json!({"body":"@local-aiko Please provide context."})),
+                branvil::test_support::input(json!({"body":"@aiko Please provide context."})),
             )
             .await
             .unwrap();
@@ -708,11 +707,11 @@ async fn mention_preserves_lane_and_assignee_and_uses_a_distinct_conversation_ki
         selector.run(task, invocation, &trace, 1).await.unwrap();
         let after = f.stored_ticket("1").await;
         assert_eq!(after["lane"], lane);
-        assert_eq!(after["assignees"], json!(["local-yuki"]));
+        assert_eq!(after["assignees"], json!(["yuki"]));
         f.ticket
             .comment(
                 task.url.as_deref().unwrap(),
-                "@local-yuki Here is the context.",
+                "@yuki Here is the context.",
                 None,
             )
             .await
@@ -1135,9 +1134,6 @@ impl CodeHostingService for CodeFaults {
     ) -> ServiceFuture<'a, ReadPage> {
         self.inner.read(resource, subject, parameters, continuation)
     }
-    fn identity(&self, check: bool) -> ServiceFuture<'_, BTreeMap<String, String>> {
-        self.inner.identity(check)
-    }
     fn comment<'a>(
         &'a self,
         url: &'a str,
@@ -1457,7 +1453,7 @@ async fn author_feedback_uses_the_only_open_owned_ticket_and_preserves_resumes()
                 labels: vec![],
                 add_to_board: true,
                 interactive: false,
-                assignee: Some(ActorName("local-aiko".into())),
+                assignee: Some(ActorName("aiko".into())),
                 lane: Some(CreateLane::Ready),
                 parent: None,
                 blocked_by: vec![],

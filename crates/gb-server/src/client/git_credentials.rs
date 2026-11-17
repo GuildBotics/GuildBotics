@@ -107,7 +107,7 @@ fn diagnostic(key: &'static str) -> anyhow::Error {
 }
 
 fn invalid() -> anyhow::Error {
-    diagnostic("integrations.branvil.api.admin_refused")
+    diagnostic("integrations.branvil.api.invalid")
 }
 
 struct Api<'a> {

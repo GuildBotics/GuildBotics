@@ -4,7 +4,7 @@
     "function": "lifecycle_from_run",
     "arguments": {
       "record": {
-        "schema_version": 4,
+        "schema_version": 5,
         "run_id": "run-1",
         "work_kind": "workflows/chat_conversation_workflow",
         "work_identity": null,
@@ -57,7 +57,7 @@
     "function": "lifecycle_from_run",
     "arguments": {
       "record": {
-        "schema_version": 4,
+        "schema_version": 5,
         "run_id": "run-1",
         "work_kind": "workflows/chat_conversation_workflow",
         "work_identity": null,
@@ -104,7 +104,7 @@
     "function": "lifecycle_from_run",
     "arguments": {
       "record": {
-        "schema_version": 4,
+        "schema_version": 5,
         "run_id": "run-1",
         "work_kind": "workflows/chat_conversation_workflow",
         "work_identity": null,
@@ -151,7 +151,7 @@
     "function": "lifecycle_from_run",
     "arguments": {
       "record": {
-        "schema_version": 4,
+        "schema_version": 5,
         "run_id": "run-1",
         "work_kind": "ticket",
         "work_identity": null,

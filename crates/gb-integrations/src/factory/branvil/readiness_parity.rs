@@ -33,11 +33,9 @@ async fn readiness_keeps_report_and_current_heads_distinct() {
     .unwrap();
     let service = BranvilService::new(
         running.data.clone(),
-        String::new(),
-        "owner1".into(),
         "test".into(),
-        "aiko".into(),
-        std::sync::Arc::new(|_| {}),
+        "owner1".into(),
+        "Owner".into(),
     );
     let activity = json!({
         "comments":[{"id":"c1","author":"aiko","created_at":"1"},{"id":"c2","author":"kenji","created_at":"5","meta":{"kind":"workflow_error","reason":"failed","person_id":"kenji","run_id":"r"}}],

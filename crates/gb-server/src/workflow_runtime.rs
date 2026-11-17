@@ -110,7 +110,7 @@ impl Runtime {
         };
         let team = Team::load(&roots.config, &native.identity_root)?;
         let metadata = resolved_guest::member(&roots, &native.identity_root, person_id)?;
-        let person = crate::member::native::public(&metadata);
+        let person = crate::member::native::public(&metadata, native.branvil.as_ref());
         anyhow::ensure!(
             person.is_active && person.person_type == "agent",
             "inactive or human service member"
@@ -120,7 +120,7 @@ impl Runtime {
             .iter()
             .map(|m| {
                 resolved_guest::member(&roots, &native.identity_root, &m.person_id)
-                    .map(|v| crate::member::native::public(&v))
+                    .map(|v| crate::member::native::public(&v, native.branvil.as_ref()))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
         let project_path = roots.config.join("team/project.yml");

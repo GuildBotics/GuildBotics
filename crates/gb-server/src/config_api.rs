@@ -374,6 +374,7 @@ async fn switch(
         Err(error) => return failure(error, &headers),
     };
     api.select(next_selection);
+    crate::member::native::ensure_branvil_agents(&api, &workspace).await;
     let diagnostics = gb_observability::Diagnostics::open(&workspace);
     match tokio::task::spawn_blocking(move || diagnostics.start_system_session(&instance)).await {
         Ok(Ok(())) => (),
@@ -613,13 +614,7 @@ pub(crate) async fn create_member(
     }
     expected.extend(request.expected_revisions);
     let form = request.form;
-    written(
-        with_setup(&api, workspace, move |setup| {
-            wait(setup.save_member(&id, form, &expected))
-        })
-        .await,
-        &headers,
-    )
+    member_written(&api, workspace, id, form, expected, &headers).await
 }
 
 pub(crate) async fn read_member(
@@ -660,13 +655,26 @@ pub(crate) async fn save_member(
         Err(refused) => return *refused,
     };
     let (form, expected) = (request.form, request.expected_revisions);
-    written(
-        with_setup(&api, workspace, move |setup| {
-            wait(setup.save_member(&id, form, &expected))
-        })
-        .await,
-        &headers,
-    )
+    member_written(&api, workspace, id, form, expected, &headers).await
+}
+
+/// Saves a member, then has the code host know the team's agents.
+async fn member_written(
+    api: &Shared,
+    workspace: PathBuf,
+    id: String,
+    form: gb_setup::PersonSetupInput,
+    expected: Revisions,
+    headers: &HeaderMap,
+) -> Response {
+    let saved = with_setup(api, workspace.clone(), move |setup| {
+        wait(setup.save_member(&id, form, &expected))
+    })
+    .await;
+    if saved.is_ok() {
+        crate::member::native::ensure_branvil_agents(api, &workspace).await;
+    }
+    written(saved, headers)
 }
 
 /// Takes a member out of the selected workspace; its identity stays.

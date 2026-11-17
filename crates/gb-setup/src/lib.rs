@@ -16,9 +16,7 @@ use serde_json::{Map, Value, json};
 use std::{
     collections::BTreeMap,
     fmt, fs,
-    future::Future,
     path::{Path, PathBuf},
-    pin::Pin,
 };
 
 pub mod intelligences;
@@ -123,10 +121,6 @@ pub(crate) fn secrets<T>(result: anyhow::Result<T>) -> anyhow::Result<T> {
     })
 }
 
-/// Something a provider does while a member is saved, deleted or given a
-/// new picture.
-pub type Hook<'a> = Pin<Box<dyn Future<Output = Result<(), SetupError>> + Send + 'a>>;
-
 /// The providers' part of a setup, as the provider registry knows it.
 pub trait ProviderModels: Send + Sync {
     /// Every secret a member may hold with any provider, by its
@@ -151,25 +145,13 @@ pub trait ProviderModels: Send + Sync {
         account_info: &BTreeMap<String, String>,
         has_secret: &dyn Fn(&str) -> bool,
     ) -> Value;
-    /// Undo with `provider` what saving `member` obtained, before it is
-    /// deleted; a refusal keeps the member.
-    fn removed<'a>(&'a self, provider: &'a str, member: &'a SavedMember) -> Hook<'a>;
-    /// Hand `provider` the member's picture, which has just changed; a
-    /// refusal leaves the picture changed here.
-    fn avatar_changed<'a>(&'a self, provider: &'a str, member: &'a SavedMember) -> Hook<'a>;
     /// How the chat of `services` names the channel the member screen names.
     fn channel(&self, services: &Value, reference: &str) -> anyhow::Result<Map<String, Value>>;
 }
 
-/// A member's account with a provider, as a save handles it: what the save
-/// needs of the provider is obtained by `prepare` before any lock, stored by
-/// `stored`, and `settled` once the save is over.
+/// A member's account with a provider, as a save stores it.
 pub trait MemberAccount: Send {
-    fn prepare<'a>(&'a mut self, member: &'a SavedMember) -> Hook<'a>;
     fn stored(&self, person_id: &str, human: bool) -> Result<StoredAccount, SetupError>;
-    /// The save is over: `saved` with what `stored` gave, or refused before
-    /// it wrote anything. It never fails the save.
-    fn settled(self: Box<Self>, saved: bool) -> Pin<Box<dyn Future<Output = ()> + Send>>;
 }
 
 /// Deliberately not Debug/Serialize: secret values never belong in responses.
@@ -189,8 +171,6 @@ pub struct SavedMember {
     pub account_info: BTreeMap<String, String>,
     /// Its secrets by member-relative name, as the save leaves them.
     pub secrets: BTreeMap<String, String>,
-    /// Its picture as GuildBotics keeps it.
-    pub avatar: Option<PathBuf>,
 }
 impl SavedMember {
     /// A secret's value by its member-relative name ("" for none).

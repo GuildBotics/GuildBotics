@@ -47,41 +47,18 @@ Hub machine                                 another machine
   machine use it.
 - The same base URL everywhere is what keeps recorded URLs valid: a ticket is
   `{base}/{repository}/-/tickets/{n}` and a pull request `{base}/{repository}/-/pulls/{n}`
-  on every machine, and GuildBotics' connection to Branvil names one base URL. A repository
-  numbers its tickets (`#1`) apart from its pull requests (`!1`).
+  on every machine. A repository numbers its tickets (`#1`) apart from its pull requests (`!1`).
 
-When nothing forwards the port, every Branvil operation fails with "Branvil is not
-reachable at …", and **Setup → Verification** reports *Branvil is not reachable*.
+The GuildBotics server calls the service directly, in its own process. While the embedded
+service is not running, for example while the server stops, every ticket and pull request
+operation fails, and **Setup → Verification** reports that the workspace cannot be read.
 
-A member command invoked through a running command's broker retries failed connections
-to Branvil within its remaining execution time. For example, if 50 seconds of its
-300-second budget have elapsed, a Branvil operation or `member git` before fetching or
-pushing can wait for the remaining 250 seconds. Requests share that deadline; starting
-another request does not renew the budget. An attempt in progress is also bounded by
-the deadline. Exhausting it raises `Unreachable`; a known unconnected request also
-has the `ServiceUnavailable` type described below.
-
-Without a caller deadline (a scheduler patrol or a standalone interactive member CLI),
-each request gets a 300-second operation budget. Five minutes limits how long one
-service call may occupy a worker or interactive CLI; it is not an estimate of how
-long Branvil needs to restart. Host calls that select tickets, move their lanes or
-post workflow status comments also use this budget. The ordinary HTTP timeout still
-applies to each attempt. Once a connection wait has run out, no client in the same
-process retries that base URL until any client observes a response. Recreating a
-context, or another member's patrol, does not renew the wait. Member, admin and health
-responses all clear this state; a failed admin or health probe does not set it.
-A request Branvil may already have
-received is never sent again, so a write does not land twice. The setup screens and the check that
-Branvil answers do not wait: they report whether Branvil answers now.
-
-When no connection could be made, the provider raises the port's `ServiceUnavailable`
-type. Autonomous patrols and scheduled commands defer that work: they leave no failed
-workflow comment, record a started run as `deferred` (shown as information in Activity),
-and preserve the worker's consecutive-error count. Other work, including chat, keeps
-running. Later patrols probe Branvil without another connection wait and resume work
-when it answers. A manual command still returns its error. Authentication refusals,
-timeouts without proof of nonconnection and failures after a request may have arrived remain failures;
-they are never silently retried as unavailable work.
+The provider then raises the port's `ServiceUnavailable` type. Autonomous patrols and
+scheduled commands defer that work: they leave no failed workflow comment, record a started
+run as `deferred` (shown as information in Activity), and preserve the worker's
+consecutive-error count. Other work, including chat, keeps running. A later patrol checks
+again and resumes work once the service runs. A manual command still returns its error.
+Other failures remain failures; they are never silently retried as unavailable work.
 An unavailable scheduled occurrence stays due and is retried on a later scheduler cycle.
 
 ## Prepare Branvil
@@ -96,7 +73,7 @@ Follow the [GuildBotics installation steps](../README.md#installation) on the Hu
    a repository holds its tickets; a merge closes only tickets of the pull request's
    repository. GuildBotics can create the workspace itself (below).
 
-Members and their tokens are not created in Branvil: GuildBotics does that.
+Members are not created on the screens: GuildBotics creates each AI member ([Members](#members)).
 
 ## Install the Windows client
 
@@ -179,10 +156,8 @@ attempts. Check `http://127.0.0.1:7878` in the browser to verify Branvil too.
 Do not run a second forwarding service for the same ports. The scripts themselves
 contain no application names or default ports.
 
-Several GuildBotics workspaces can use one Branvil. The connection to Branvil and each
-member's agent and token belong with the members' identities, which every workspace
-shares, so connecting once serves every workspace, and each workspace chooses the Branvil
-workspace its members work in.
+Several GuildBotics workspaces can use one Branvil. The members are the same in every
+workspace, and each GuildBotics workspace chooses the code host's workspace its members work in.
 
 The integrated server uses one browser entry and session for GuildBotics and Branvil.
 `guildbotics open`, `guildbotics open --branvil`, and `guildbotics branvil open`
@@ -190,62 +165,21 @@ issue links to `/-/guildbotics/-/enter`; only the landing screen differs.
 After updating, enter once again with a new link. Standalone `guildbotics branvil serve`
 retains its own Branvil sessions.
 
-## Connect GuildBotics to Branvil
+## Set up the code host and the tickets
 
 On the Hub's screens, under **Setup → Integrations**:
 
-1. Choose **Branvil** for the code host and for the tickets. Both use the one Branvil
-   GuildBotics is connected to.
-2. Check the **Base URL** next to **Connect to Branvil** (`http://127.0.0.1:7878` unless
-   changed), then press **Connect to Branvil**. The browser opens Branvil's consent screen: *Allow
-   GuildBotics to manage Branvil?* Choose **Allow**. (When the browser has no Branvil
-   session yet, the page says to run `guildbotics branvil open` on this machine; it comes back to the
-   consent screen once you have entered.) The screen then shows *Connected to Branvil as
-   its owner*. The connection, with its base URL, is the same in every workspace:
-   another workspace that chooses Branvil is connected already.
-3. Choose the **Workspace** the members work in, or create one there. Members write only
+1. Choose **Branvil** for the code host and for the tickets. Both use the same service on
+   the Hub.
+2. Choose the **Workspace** the members work in, or create one there. Members write only
    to its repositories and take tickets from its board; reads are not limited.
 
-Branvil issues GuildBotics an owner token labelled `app:GuildBotics`. GuildBotics keeps
-it in the encrypted identity store as `BRANVIL_ADMIN_TOKEN`, in the identities' store that every
-workspace shares, and the base URL beside it in
-`~/.guildbotics/identity/.guildbotics/config/connections/branvil.yml`. It uses the token only in
-its own process on the machine (the setup screens and the checks): no member, command, or
-isolated environment receives it. To revoke it, delete the token under Branvil's
-**Settings → Members → owner → Tokens**, then connect again.
+There is no connection step. The server calls the service in its own process directly, as
+the owner and as each AI member. It keeps no token for this and hands none to a member, a
+command, or an isolated environment.
 
-**Open Branvil**, next to the connection, opens Branvil's GUI in the browser: GuildBotics
-asks Branvil for a single-use entry link with the admin token.
-The **Branvil** item below **Setup** in the sidebar opens it the same way, with an
-external-link icon. It appears when the saved code host or ticket service uses Branvil;
-saving the integration settings updates its visibility immediately. If opening fails,
-the reason appears below the item.
-
-## Set up the members
-
-Under **Setup → Members → Branvil**:
-
-- An AI member is a Branvil agent: **Create a new agent** (named after the member's ID)
-  or **Choose an existing agent**. Saving the member creates the agent unless one was
-  chosen, issues its token (labelled `guildbotics`), and keeps the token in the encrypted identity store as `{PERSON_ID}_BRANVIL_TOKEN` (its ID as `{PERSON_ID}_BRANVIL_TOKEN_ID`). The
-  token it replaces is revoked once the save is done; when the save is refused, the token
-  issued for it is revoked instead and the one held before keeps working. No token is ever
-  shown or typed. The token is also the member's git password: git authenticates with
-  the agent's name and the token. The agent and its token are the member's in every
-  workspace: a save in any workspace keeps the token while Branvil accepts it as the
-  agent's; **Issue a new token when saved** replaces it.
-- The human member is Branvil's owner: its Branvil name is filled in with the owner's
-  when the member is saved.
-- The member's avatar is Branvil's picture of its agent (or of the owner, for the human
-  member): GuildBotics hands it over on every save and whenever the avatar is uploaded or
-  imported. It is set in GuildBotics only.
-- Removing a member from a workspace (**Remove from this workspace**) revokes nothing: the
-  other workspaces keep using its token. Deleting an AI member (**Delete**) revokes the
-  `guildbotics` tokens of its agent. The agent stays in Branvil, as its history names it.
-
-Saving an AI member and deleting one reach Branvil, so they need Branvil to be reachable
-and GuildBotics to be connected; otherwise nothing is saved or deleted,
-and the screen says why.
+The item below **Setup** in the sidebar switches to the code host's screens in the same
+browser session. It appears while the server runs with the code host embedded.
 
 Without the GUI, the same settings are in `team/project.yml`:
 
@@ -259,17 +193,24 @@ services:
     workspace: acme
 ```
 
-and in each member's `identity.yml`, which a save of the member writes:
+Press **Validate settings** under **Setup → Verification**: it checks that the chosen
+workspace exists.
 
-```yaml
-account_info:
-  branvil_username: aiko
-```
+## Members
 
-Press **Validate settings** under **Setup → Verification**: it checks that Branvil
-answers, that GuildBotics holds its connection and Branvil takes it for its
-owner (the human member), that each AI member's token is accepted as that member's own,
-and that the workspace can be read.
+An AI member needs nothing done on the code host after it is added.
+
+- An AI member is created automatically, named after the member's ID and with the member's
+  display name, when the server starts, when a workspace is selected, when a member is saved,
+  and before any member's operation. Others can assign it work before it has ever acted. An existing agent
+  whose name equals the member's ID is used as it is. When the member of that name is not
+  an agent, the operation is refused.
+- The human member is the owner (the person `guildbotics branvil init` created).
+- For a run in which a member pushes or fetches with git, the server issues that member a
+  token (labelled `guildbotics-git`) and hands it to git with the member's ID. It is revoked
+  when the run ends and releases the service. The token is kept in no store.
+- Removing a member from a workspace, or deleting it, keeps its member on the code host:
+  its history names it.
 
 ## Use Branvil from your own checkouts
 
@@ -277,8 +218,8 @@ You, the human member, are Branvil's owner, and you can make Branvil the `origin
 checkouts on the Hub. Branvil's git asks for a member's name and
 token. GuildBotics hands git yours, so git never asks for a name or a password:
 
-1. Under **Setup → Integrations → Branvil**, while connected, **Your own git on this machine**
-   shows the lines to add. Copy them.
+1. Under **Setup → Integrations**, the code host or the tickets show **Your own git on this
+   machine** above the workspace choice, with the lines to add. Copy them.
 2. Open your global git configuration with `git config --global --edit` and paste the lines
    **at the end**:
 
@@ -294,24 +235,22 @@ token. GuildBotics hands git yours, so git never asks for a name or a password:
 3. `git fetch origin` and `git push origin <branch>` now work without a prompt.
 
 On its first request, the helper asks the running GuildBotics server to issue the owner a token
-for the requesting machine. The CLI reads neither the administrator token nor identity connection
-settings. A valid cached token is checked directly at its own origin and reused without asking
+for the requesting machine. A valid cached token is checked directly at its own origin and reused without asking
 the GuildBotics API; issuance requires the server to be running. The token is labelled `git:<device name> (<last 8 characters of the device ID>)`
 and kept in the machine's OS keychain only. It is never written to a URL, a git configuration,
 your shell history, or a workspace file. You can revoke it under Branvil's **Settings → Members →
 owner → Tokens**. Once Branvil no longer accepts the token, the next request issues a new one in
 its place and revokes the machine's other `git:` tokens.
 
-The token is a full owner token, the same trust as the connection GuildBotics already holds.
-Revoking it does not lock the helper out: while GuildBotics is connected, the next request
-issues another.
+The token is a full owner token, with the owner's permissions. Revoking it does not lock the
+helper out: the next request has the server issue another.
 
-When the helper cannot hand a token (Branvil does not answer, the connection's token is
-missing, or the keychain cannot be used), git stops and prints why, without asking for a
-password. When GuildBotics is not connected to the Branvil of the remote at all, the helper
-says so, and git falls back to asking for a name and a password: connect instead of
-answering. The members' own git never uses this helper. GuildBotics hands member git the
-agent's token and drops every configured helper.
+When the helper cannot hand a token (the server or the embedded service is not running, or
+the keychain cannot be used), git stops and prints why, without asking for a password. When
+the remote is not a service of GuildBotics on this machine, the helper says so, and git falls
+back to asking for a name and a password. The members' own git never uses this helper.
+GuildBotics hands member git the token lent for the run ([Members](#members)) and drops every
+configured helper.
 
 ## How members work with it
 

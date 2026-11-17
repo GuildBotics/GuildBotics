@@ -3,19 +3,24 @@ mod code;
 pub(super) mod owner_git;
 mod patrol;
 mod tickets;
-use super::{IntegrationEvent, IntegrationObserver};
 use crate::WriteScope;
 use branvil::api::{AppError, DataApi, MemberApi};
 use gb_ports::*;
 use serde::Serialize;
 use serde_json::{Value, json};
 
+/// The label of the tokens lent to runs for their git transfers.
+pub const GIT_TOKEN_LABEL: &str = "guildbotics-git";
+
 pub(super) struct BranvilService {
     api: DataApi,
-    observer: IntegrationObserver,
-    token: String,
-    username: String,
+    /// The agent acted as: the member's person_id, also its Branvil name.
     person_id: String,
+    display_name: String,
+    /// The token lent for this service's git transfers until it is closed.
+    git_token: tokio::sync::Mutex<Option<branvil::api::members::IssuedToken>>,
+    /// Set once the roster's members all exist, so any of them can be named.
+    roster_ready: tokio::sync::OnceCell<()>,
     workspace: String,
     scope: WriteScope,
     members: std::collections::BTreeMap<String, String>,
@@ -23,18 +28,16 @@ pub(super) struct BranvilService {
 impl BranvilService {
     pub(super) fn new(
         api: DataApi,
-        token: String,
-        username: String,
         workspace: String,
         person_id: String,
-        observer: IntegrationObserver,
+        display_name: String,
     ) -> Self {
         Self {
             api,
-            observer,
-            token,
-            username,
             person_id,
+            display_name,
+            git_token: Default::default(),
+            roster_ready: Default::default(),
             scope: WriteScope::new(&workspace),
             workspace,
             members: Default::default(),
@@ -51,51 +54,24 @@ impl BranvilService {
             .collect();
         self
     }
-    fn api_error(&self, e: AppError) -> ServiceError {
-        if e.code == "unauthorized" {
-            (self.observer)(IntegrationEvent::CredentialFailed {
-                provider: "branvil",
-                code: "unauthorized",
-            });
-        }
-        error(e, "authenticate")
-    }
     async fn member(&self) -> Result<MemberApi, ServiceError> {
-        if self.token.is_empty() {
-            return Err(ServiceError::Diagnostic {
-                class: ServiceErrorClass::Failure,
-                key: "integrations.branvil.api.token_missing",
-                args: [(
-                    "name".into(),
-                    gb_config::team::person_secret_name(&self.person_id, "BRANVIL_TOKEN"),
-                )]
-                .into(),
-            });
-        }
-        if self.username.is_empty() {
-            return Err(ServiceError::Diagnostic {
-                class: ServiceErrorClass::Failure,
-                key: "integrations.branvil.api.username_missing",
-                args: Default::default(),
-            });
-        }
-        let m = self
-            .api
-            .authenticate(self.token.clone())
+        // A roster member that has not acted yet can still be assigned or
+        // asked to review: every missing one is created before any operation.
+        self.roster_ready
+            .get_or_try_init(|| {
+                self.api.ensure_agents(
+                    self.members
+                        .iter()
+                        .map(|(name, display_name)| (name.clone(), display_name.clone()))
+                        .collect(),
+                )
+            })
             .await
-            .map_err(|e| self.api_error(e))?;
-        let name = m.identity().await.map_err(|e| self.api_error(e))?.name;
-        if !name.eq_ignore_ascii_case(&self.username) {
-            (self.observer)(IntegrationEvent::CredentialFailed {
-                provider: "branvil",
-                code: "identity_mismatch",
-            });
-            return Err(diagnostic(
-                "integrations.branvil.api.identity_mismatch",
-                [("name", name), ("username", self.username.clone())],
-            ));
-        }
-        Ok(m)
+            .map_err(|e| error(e, "ensure_agents"))?;
+        self.api
+            .agent(&self.person_id, &self.display_name)
+            .await
+            .map_err(|e| error(e, "agent"))
     }
     fn item(&self, url: &str, kind: &str) -> Result<(String, String), ServiceError> {
         let invalid = || {
@@ -186,7 +162,7 @@ impl BranvilService {
     fn author_type(&self, author: &str) -> &'static str {
         if author.is_empty() {
             ""
-        } else if patrol::fold(author) == patrol::fold(&self.username) {
+        } else if patrol::fold(author) == patrol::fold(&self.person_id) {
             "Assistant"
         } else {
             "User"

@@ -42,7 +42,7 @@ SHARED_ROOTS = ("config", "state")
 #: record was written in is readable from the record itself. It lives here
 #: rather than beside any one record because the writers span layers that
 #: cannot import each other -- ``observability`` may depend on ``utils`` alone.
-SHARED_RECORD_SCHEMA_VERSION = 4
+SHARED_RECORD_SCHEMA_VERSION = 5
 
 
 def shared_relative_path(path: Path, workspace_root: Path | None = None) -> str | None:

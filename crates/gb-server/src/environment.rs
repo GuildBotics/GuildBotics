@@ -901,7 +901,6 @@ pub async fn load_ci(
     archive: &std::path::Path,
     on_load: impl FnOnce(&std::path::Path),
 ) -> anyhow::Result<Option<Vec<String>>> {
-    use gb_config::secrets::{DeviceKey, Scope, SecretStore, SystemKeychain};
     let project = gb_config::yaml_value(&std::fs::read_to_string(
         workspace.join(".guildbotics/config/team/project.yml"),
     )?)?;
@@ -912,37 +911,20 @@ pub async fn load_ci(
     {
         return Ok(None);
     }
-    let identity = gb_base::home::identity_root()?;
-    let config = gb_config::yaml_value(&std::fs::read_to_string(
-        identity.join(".guildbotics/config/connections/branvil.yml"),
-    )?)?;
-    let base = config["base_url"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("Branvil is not connected"))?
-        .trim_end_matches('/');
-    let writes = gb_base::shared_writes::SharedWrites::new(identity, Some(workspace.into()));
-    let device = DeviceKey {
-        machine_root: gb_base::home::machine_root()?,
-        keychain: &SystemKeychain,
-    };
-    let token = SecretStore::new(&writes, Scope::Identity, device)?
-        .get("BRANVIL_ADMIN_TOKEN")?
-        .ok_or_else(|| anyhow::anyhow!("Branvil admin credential is unavailable"))?;
     let path = std::fs::canonicalize(archive)?;
     anyhow::ensure!(path.is_file(), "The archive is not a regular file");
     on_load(&path);
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(10))
-        .build()?;
-    let response = client
-        .post(format!("{base}/api/v1/admin/ci/images/load"))
-        .bearer_auth(&token)
-        .json(&json!({"path":path}))
-        .send()
-        .await?
-        .error_for_status()?;
-    let mut state: Value = response.json().await?;
+    let owner = crate::client::OwnerClient::connect(
+        &gb_base::home::data()?,
+        crate::endpoint::port()?,
+        crate::client::language().await,
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("The GuildBotics server is not reachable"))?;
+    let timeout = Some(std::time::Duration::from_secs(10));
+    let mut state = owner
+        .post(CI_IMAGES, Some(&json!({"path":path})), timeout)
+        .await?;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30 * 60);
     loop {
         if let Some(loaded) = ci_result(&state["operation"], &path)? {
@@ -953,14 +935,59 @@ pub async fn load_ci(
             "CI image load exceeded 30 minutes"
         );
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        state = client
-            .get(format!("{base}/api/v1/admin/ci"))
-            .bearer_auth(&token)
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
+        state = owner
+            .post(&format!("{CI_IMAGES}/state"), None, timeout)
             .await?;
+    }
+}
+
+const CI_IMAGES: &str = "/intelligences/agent-environment/ci-images";
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CiImage {
+    path: String,
+}
+/// Start loading a CI archive into the embedded code host's runner, as its owner.
+pub(crate) async fn load_ci_image(
+    State(api): State<Shared>,
+    headers: HeaderMap,
+    crate::api::Body(input): crate::api::Body<CiImage>,
+) -> Response {
+    ci_images_answer(&api, &headers, |owner| async move {
+        owner.ci_load_image(&input.path).await
+    })
+    .await
+}
+/// The embedded code host's CI state while a load runs.
+pub(crate) async fn ci_images_state(
+    State(api): State<Shared>,
+    headers: HeaderMap,
+    crate::api::Body(_): crate::api::Body<crate::provider_api::Empty>,
+) -> Response {
+    ci_images_answer(
+        &api,
+        &headers,
+        |owner| async move { owner.ci_settings().await },
+    )
+    .await
+}
+async fn ci_images_answer<F: Future<Output = Result<Value, branvil::api::AppError>>>(
+    api: &Shared,
+    headers: &HeaderMap,
+    operation: impl FnOnce(branvil::api::MemberApi) -> F,
+) -> Response {
+    let Some(data) = api.branvil.get() else {
+        return crate::config_api::failure(
+            gb_setup::SetupError::new("branvil", "integrations.branvil.api.stopped").into(),
+            headers,
+        );
+    };
+    match operation(data.owner()).await {
+        Ok(state) => Json(state).into_response(),
+        Err(e) => crate::config_api::failure(
+            crate::setup_providers::refused_for(e, "ci_images").into(),
+            headers,
+        ),
     }
 }
 
@@ -1863,6 +1890,74 @@ mod tests {
 #[cfg(test)]
 mod provider_image_tests {
     use super::*;
+    #[tokio::test]
+    async fn ci_image_routes_act_as_the_branvil_owner_and_explain_refusals() {
+        use axum::{
+            body::{Body, to_bytes},
+            http::{Request, StatusCode},
+        };
+        use tower::ServiceExt;
+        struct Untouchable;
+        impl gb_config::secrets::Keychain for Untouchable {
+            fn read(&self) -> anyhow::Result<Option<String>> {
+                panic!("the keychain was reached")
+            }
+            fn create(&self, _: &str) -> anyhow::Result<()> {
+                panic!("the keychain was reached")
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let auth = crate::auth::ServerAuth::open(&data, 38762).unwrap();
+        let token = std::fs::read_to_string(auth.owner_token_path()).unwrap();
+        let mut api = crate::api::Api::new(
+            crate::api::Selected::default(),
+            crate::input_files::InputFileStore::deferred(&data.join("inputs")),
+            auth,
+            "fixture".into(),
+            data,
+        );
+        api.keychain = std::sync::Arc::new(Untouchable);
+        let api = std::sync::Arc::new(api);
+        let app = crate::api::router(api.clone());
+        let call = async |path: &str, body: Value| {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/-/guildbotics/api{CI_IMAGES}{path}"))
+                        .header("host", "127.0.0.1:38762")
+                        .header("authorization", format!("Bearer {}", token.trim()))
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            (status, serde_json::from_slice::<Value>(&body).unwrap())
+        };
+        let (_, stopped) = call("/state", json!({})).await;
+        assert_eq!(
+            stopped["message"],
+            crate::i18n::t("en", "integrations.branvil.api.stopped", &[])
+        );
+        let fixture = branvil::test_support::Fixture::new("owner1").await;
+        api.branvil.set(fixture.data()).ok().unwrap();
+        let (status, state) = call("/state", json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{state}");
+        assert!(state["images"].is_object(), "{state}");
+        assert_eq!(state["operation"], Value::Null);
+        let (status, refused) = call("", json!({"path":"relative.tar"})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert_eq!(refused["code"], "branvil");
+        let message = refused["message"].as_str().unwrap();
+        assert!(message.contains("absolute path"), "{message}");
+        assert!(!message.contains("%{"), "{message}");
+        fixture.stop().await;
+    }
     #[tokio::test]
     async fn ci_image_loading_is_only_offered_for_branvil() {
         let root = tempfile::tempdir().unwrap();

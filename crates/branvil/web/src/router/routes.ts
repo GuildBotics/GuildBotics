@@ -9,7 +9,6 @@
 export type Route =
   | { name: "home" }
   | { name: "enter" }
-  | { name: "authorize" }
   | { name: "settings"; section: string | null; repo?: string }
   | { name: "workspace"; workspace: string }
   | { name: "pulls"; workspace: string }
@@ -42,7 +41,6 @@ export function parseRoute(pathname: string): Route {
   if (segs[0] === "-") {
     const [, page, ...rest] = segs;
     if (page === "enter" && rest.length === 0) return { name: "enter" };
-    if (page === "authorize" && rest.length === 0) return { name: "authorize" };
     if (page === "settings" && rest.length <= 1) return { name: "settings", section: rest[0] ?? null };
     if (page === "settings" && rest[0] === "repos" && rest.length === 3) return { name: "settings", section: null, repo: rest.slice(1).join("/") };
     return { name: "not_found", pathname };

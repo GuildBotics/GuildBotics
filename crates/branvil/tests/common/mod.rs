@@ -760,14 +760,13 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
 }
 
 /// Recreates the immediately preceding schema in a stopped database.
-pub fn as_schema_34(db: &Path) {
+/// Version 35 stored the same records; its tokens may include those
+/// GuildBotics kept, which the upgrade revokes.
+pub fn as_schema_35(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
-            *v = json!(34);
+            *v = json!(35);
         }
-    });
-    edit_records(db, "repos", |v| {
-        v.as_object_mut().unwrap().remove("hold_while_failing");
     });
 }
 

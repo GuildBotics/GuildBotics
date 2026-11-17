@@ -3,31 +3,25 @@ use branvil::api::{Running, initialize};
 #[tokio::test]
 async fn member_identity_scope_and_resource_boundaries() {
     let temp = tempfile::tempdir().unwrap();
-    let token = initialize(temp.path(), "owner1").unwrap();
+    initialize(temp.path(), "owner1").unwrap();
     let running = Running::start(
         temp.path(),
         std::sync::Arc::new(::branvil::vault::Memory::default()),
     )
     .await
     .unwrap();
-    let m = running.data.authenticate(token.clone()).await.unwrap();
+    let m = running.data.owner();
     m.repos_create_workspace(decode(json!({"name":"test"})).unwrap())
         .await
         .unwrap();
     m.repos_create(decode(json!({"path":"test/repo","labels":["bug"]})).unwrap())
         .await
         .unwrap();
-    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let observed = events.clone();
-    let observer: IntegrationObserver =
-        std::sync::Arc::new(move |event| observed.lock().unwrap().push(event));
     let service = BranvilService::new(
         running.data.clone(),
-        token.clone(),
-        "owner1".into(),
         "test".into(),
-        "owner_id".into(),
-        observer.clone(),
+        "agent1".into(),
+        "Agent One".into(),
     );
     for limit in [0, MAX_LOG_TAIL_BYTES + 1] {
         for logs in [false, true] {
@@ -133,28 +127,26 @@ async fn member_identity_scope_and_resource_boundaries() {
             .await
             .is_err()
     );
-    let wrong = BranvilService::new(
+    // The owner is not an agent, so a member named like it cannot act.
+    let owner_named = BranvilService::new(
         running.data.clone(),
-        token.clone(),
-        "other".into(),
         "test".into(),
-        "other".into(),
-        observer.clone(),
+        "owner1".into(),
+        "Owner".into(),
     );
     assert_eq!(
-        wrong.create_ticket(request()).await.unwrap_err(),
-        diagnostic(
-            "integrations.branvil.api.identity_mismatch",
-            [("name", "owner1".into()), ("username", "other".into())]
-        )
+        owner_named
+            .create_ticket(request())
+            .await
+            .unwrap_err()
+            .translation_key(),
+        "integrations.branvil.api.refused"
     );
     let outside = BranvilService::new(
         running.data.clone(),
-        token,
-        "owner1".into(),
         "other".into(),
-        "other".into(),
-        observer.clone(),
+        "agent1".into(),
+        "Agent One".into(),
     );
     assert_eq!(
         outside.create_ticket(request()).await.unwrap_err(),
@@ -196,47 +188,6 @@ async fn member_identity_scope_and_resource_boundaries() {
         .await
         .is_err()
     );
-    let invalid = BranvilService::new(
-        running.data.clone(),
-        "invalid-secret".into(),
-        "owner1".into(),
-        "test".into(),
-        "agent-one".into(),
-        observer.clone(),
-    );
-    assert_eq!(
-        invalid.member().await.err().unwrap(),
-        diagnostic("integrations.branvil.api.authentication", [])
-    );
-    let missing = BranvilService::new(
-        running.data.clone(),
-        String::new(),
-        "owner1".into(),
-        "test".into(),
-        "agent-one".into(),
-        observer,
-    );
-    assert_eq!(
-        missing.member().await.err(),
-        Some(ServiceError::Diagnostic {
-            class: ServiceErrorClass::Failure,
-            key: "integrations.branvil.api.token_missing",
-            args: [("name".into(), "AGENT_ONE_BRANVIL_TOKEN".into())].into(),
-        })
-    );
-    assert_eq!(
-        *events.lock().unwrap(),
-        vec![
-            IntegrationEvent::CredentialFailed {
-                provider: "branvil",
-                code: "identity_mismatch"
-            },
-            IntegrationEvent::CredentialFailed {
-                provider: "branvil",
-                code: "unauthorized"
-            }
-        ]
-    );
     running.stop().await.unwrap();
 }
 
@@ -275,11 +226,9 @@ async fn ticket_task_comments_use_roster_names_and_role_fallbacks() {
     .unwrap();
     let mut service = BranvilService::new(
         running.data.clone(),
-        String::new(),
-        "aiko-service".into(),
         "test".into(),
-        "aiko".into(),
-        std::sync::Arc::new(|_| {}),
+        "aiko-service".into(),
+        "Aiko".into(),
     );
     for key in ["1", "9999999999"] {
         assert!(
@@ -333,9 +282,9 @@ async fn ticket_task_comments_use_roster_names_and_role_fallbacks() {
             ("", "")
         ]
     );
-    service.username = "Straße".into();
+    service.person_id = "Straße".into();
     assert_eq!(service.author_type("STRASSE"), "Assistant");
-    service.username.clear();
+    service.person_id.clear();
     assert_eq!(service.author_type(""), "");
     // Resource reads continue to expose the code host login.
     assert_eq!(
@@ -348,7 +297,7 @@ async fn ticket_task_comments_use_roster_names_and_role_fallbacks() {
 #[tokio::test]
 async fn interactive_links_are_read_only_after_pull_patrol_selects_work() {
     let temp = tempfile::tempdir().unwrap();
-    let token = initialize(temp.path(), "owner1").unwrap();
+    initialize(temp.path(), "owner1").unwrap();
     let running = Running::start(
         temp.path(),
         std::sync::Arc::new(::branvil::vault::Memory::default()),
@@ -357,13 +306,11 @@ async fn interactive_links_are_read_only_after_pull_patrol_selects_work() {
     .unwrap();
     let service = BranvilService::new(
         running.data.clone(),
-        token,
-        "owner1".into(),
         "test".into(),
         "aiko".into(),
-        std::sync::Arc::new(|_| {}),
+        "Aiko".into(),
     );
-    let mut pull = json!({"url":format!("{}/test/repo/-/pulls/1", running.data.base_url()),"repository":"test/repo","author":"owner1","head_sha":"head","state":"open","tickets":[{"url":format!("{}/test/repo/-/tickets/999",running.data.base_url())}]});
+    let mut pull = json!({"url":format!("{}/test/repo/-/pulls/1", running.data.base_url()),"repository":"test/repo","author":"aiko","head_sha":"head","state":"open","tickets":[{"url":format!("{}/test/repo/-/tickets/999",running.data.base_url())}]});
     for patch in [
         json!({}),
         json!({"draft":true}),
@@ -390,7 +337,7 @@ async fn interactive_links_are_read_only_after_pull_patrol_selects_work() {
         Err(ref error) if error.is_not_found()
     ));
     pull["author"] = json!("human");
-    pull["reviewers"] = json!(["owner1"]);
+    pull["reviewers"] = json!(["aiko"]);
     assert!(
         service
             .pull_work(&pull, &json!({}))
@@ -398,8 +345,8 @@ async fn interactive_links_are_read_only_after_pull_patrol_selects_work() {
             .unwrap()
             .is_some()
     );
-    pull["author"] = json!("owner1");
-    let owner = service.member().await.unwrap();
+    pull["author"] = json!("aiko");
+    let owner = running.data.owner();
     owner
         .repos_create_workspace(decode(json!({"name":"test"})).unwrap())
         .await
@@ -430,8 +377,14 @@ fn pull_numbers_have_the_frozen_canonical_decimal_shape() {
     }
 }
 
+async fn token_labels(owner: &MemberApi, name: &str) -> Vec<String> {
+    let page = owner.page("labels".into(), Some(100), None).unwrap();
+    let tokens = owner.members_list_tokens(name.into(), page).await.unwrap();
+    tokens.items.into_iter().map(|t| t.label).collect()
+}
+
 #[tokio::test]
-async fn missing_branvil_credentials_point_to_member_setup() {
+async fn git_credential_lends_one_agent_token_until_the_service_is_closed() {
     let temp = tempfile::tempdir().unwrap();
     initialize(temp.path(), "owner1").unwrap();
     let running = Running::start(
@@ -440,31 +393,129 @@ async fn missing_branvil_credentials_point_to_member_setup() {
     )
     .await
     .unwrap();
-    for (token, username, key, args) in [
-        (
-            "",
-            "owner1",
-            "integrations.branvil.api.token_missing",
-            [("name".into(), "AIKO_BRANVIL_TOKEN".into())].into(),
-        ),
-        (
-            "present",
-            "",
-            "integrations.branvil.api.username_missing",
-            std::collections::BTreeMap::new(),
-        ),
-    ] {
-        let service = BranvilService::new(
-            running.data.clone(),
-            token.into(),
-            username.into(),
-            "test".into(),
-            "aiko".into(),
-            std::sync::Arc::new(|_| {}),
-        );
-        let error = service.member().await.err().unwrap();
-        assert_eq!(error.translation_key(), key);
-        assert_eq!(error.translation_args(), args);
-    }
+    let data = &running.data;
+    let owner = data.owner();
+    owner
+        .repos_create_workspace(decode(json!({"name":"test"})).unwrap())
+        .await
+        .unwrap();
+    owner
+        .repos_create(decode(json!({"path":"test/repo"})).unwrap())
+        .await
+        .unwrap();
+    let service = BranvilService::new(data.clone(), "test".into(), "aiko".into(), "Aiko".into());
+    let lent = service.git_credential().await.unwrap().unwrap();
+    let again = service.git_credential().await.unwrap().unwrap();
+    assert_eq!(lent.username, "aiko");
+    assert_eq!(again.password, lent.password);
+    assert_eq!(token_labels(&owner, "aiko").await, ["guildbotics-git"]);
+    // The token authenticates the agent over HTTP and over Git.
+    let member = || ::branvil::test_support::token_member(data, &lent.password);
+    assert_eq!(member().await.as_deref(), Some("aiko"));
+    let refs = format!(
+        "{}/git/test/repo.git/info/refs?service=git-upload-pack",
+        data.base_url()
+    );
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let git = |password: &str| {
+        client
+            .get(&refs)
+            .basic_auth(&lent.username, Some(password))
+            .send()
+    };
+    assert!(git(&lent.password).await.unwrap().status().is_success());
+    assert_eq!(git("wrong").await.unwrap().status().as_u16(), 401);
+    CodeHostingService::aclose(&service).await.unwrap();
+    assert!(token_labels(&owner, "aiko").await.is_empty());
+    assert_eq!(member().await, None);
+    // A second close, after the token is gone, still succeeds.
+    CodeHostingService::aclose(&service).await.unwrap();
+    // A service used again after its close lends a new token, not the revoked one.
+    let renewed = service.git_credential().await.unwrap().unwrap();
+    assert_ne!(renewed.password, lent.password);
+    assert!(git(&renewed.password).await.unwrap().status().is_success());
+    CodeHostingService::aclose(&service).await.unwrap();
+    assert!(token_labels(&owner, "aiko").await.is_empty());
+    // A close that cannot revoke keeps the run's outcome; the token is left
+    // to the revocation at the next start.
+    service.git_credential().await.unwrap().unwrap();
+    assert_eq!(data.revoke_labelled("unrelated").await.unwrap(), 0);
+    let left = data.clone();
+    running.stop().await.unwrap();
+    CodeHostingService::aclose(&service).await.unwrap();
+    assert!(
+        left.revoke_labelled(crate::factory::GIT_TOKEN_LABEL)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn a_roster_member_that_never_acted_can_be_assigned() {
+    let temp = tempfile::tempdir().unwrap();
+    initialize(temp.path(), "owner1").unwrap();
+    let running = Running::start(
+        temp.path(),
+        std::sync::Arc::new(::branvil::vault::Memory::default()),
+    )
+    .await
+    .unwrap();
+    let data = &running.data;
+    let owner = data.owner();
+    owner
+        .repos_create_workspace(decode(json!({"name":"test"})).unwrap())
+        .await
+        .unwrap();
+    owner
+        .repos_create(decode(json!({"path":"test/repo"})).unwrap())
+        .await
+        .unwrap();
+    // The roster names the owner (the human), the acting agent, an agent
+    // that has never acted, and a name no member may have.
+    let roster = [
+        ("owner1", "Owner"),
+        ("aiko", "Aiko"),
+        ("kenji", "Kenji"),
+        ("branvil", "Reserved"),
+    ]
+    .map(|(login, name)| (login.to_owned(), name.to_owned()))
+    .into();
+    let service = BranvilService::new(data.clone(), "test".into(), "aiko".into(), "Aiko".into())
+        .with_members(&roster);
+    let created = service
+        .create_ticket(CreateTicket {
+            tracker: "test/repo".into(),
+            title: "for kenji".into(),
+            body: String::new(),
+            labels: vec![],
+            add_to_board: true,
+            interactive: false,
+            assignee: Some(ActorName("kenji".into())),
+            lane: None,
+            parent: None,
+            blocked_by: vec![],
+        })
+        .await
+        .unwrap();
+    let ticket = service.ticket(&created.target.url).await.unwrap();
+    assert_eq!(ticket["assignee"]["name"], "kenji");
+    let kenji = owner.members_get("kenji".into()).await.unwrap();
+    assert_eq!(
+        (kenji.kind, kenji.display_name.as_str()),
+        (::branvil::api::MemberKind::Agent, "Kenji")
+    );
+    assert_eq!(
+        owner.members_get("owner1".into()).await.unwrap().kind,
+        ::branvil::api::MemberKind::Owner
+    );
+    assert_eq!(
+        owner
+            .members_get("branvil".into())
+            .await
+            .err()
+            .unwrap()
+            .code,
+        "not_found"
+    );
     running.stop().await.unwrap();
 }

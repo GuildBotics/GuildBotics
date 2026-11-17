@@ -263,7 +263,7 @@ async fn merge_checked(
     .expect("fixture merge did not become ready");
 }
 async fn ticket_relations(t: &dyn TicketService) {
-    contracts::ticket_contract(t, REPO, "bug", "aiko-service").await;
+    contracts::ticket_contract(t, REPO, "bug", "aiko").await;
     let parent = create(t, "Parent").await;
     let blocker = create(t, "Blocker").await;
     let child = create(t, "Child").await;
@@ -309,11 +309,7 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
     let owner_token = fixture.owner_token.clone();
     let running = &fixture.running;
     let base = running.data.base_url().to_owned();
-    let owner = running
-        .data
-        .authenticate(owner_token.trim().into())
-        .await
-        .unwrap();
+    let owner = running.data.owner();
     owner
         .repos_create_workspace(input(json!({"name":"acme"})))
         .await
@@ -323,11 +319,7 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
         .await
         .unwrap();
     owner
-        .members_create(input(json!({"name":"aiko-service","kind":"agent"})))
-        .await
-        .unwrap();
-    let member = owner
-        .members_issue_token("aiko-service".into(), input(json!({"label":"fixture"})))
+        .members_create(input(json!({"name":"aiko","kind":"agent"})))
         .await
         .unwrap();
     owner
@@ -352,13 +344,12 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
         },
     )
     .unwrap();
-    secrets.set("AIKO_BRANVIL_TOKEN", &member.token).unwrap();
     let config = IntegrationConfig {
         local_root: workspace.join(".guildbotics/local/services"),
         identity_root: identity,
         person_id: "aiko".into(),
         display_name: "Aiko".into(),
-        accounts: [("branvil".into(), ActorName("aiko-service".into()))].into(),
+        accounts: Default::default(),
         branvil_members: Default::default(),
         chat_provider: "local".into(),
         slack_base_url: String::new(),
@@ -418,7 +409,7 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
             t.as_ref(),
             &driver,
             REPO,
-            &ActorName("aiko-service".into()),
+            &ActorName("aiko".into()),
             &ActorName("owner".into()),
         )
         .await;
@@ -713,7 +704,7 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
         &driver,
         REPO,
         "bug",
-        ActorName("aiko-service".into()),
+        ActorName("aiko".into()),
         ActorName("owner".into()),
     )
     .await;
@@ -778,14 +769,8 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
         },
     )
     .await;
-    secrets
-        .set("HUMAN_BRANVIL_TOKEN", owner_token.trim())
-        .unwrap();
     let mut other_config = config;
-    other_config.person_id = "human".into();
-    other_config
-        .accounts
-        .insert("branvil".into(), ActorName("owner".into()));
+    other_config.person_id = "kenji".into();
     let other_factory = ServiceIntegrationFactory::new(
         other_config,
         &secrets,

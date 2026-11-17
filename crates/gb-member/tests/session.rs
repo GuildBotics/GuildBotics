@@ -292,7 +292,7 @@ async fn run_commands_dispatch_only_through_the_bound_control_and_reject_caller_
 }
 
 #[tokio::test]
-async fn context_without_a_code_host_keeps_credentials_unchecked() {
+async fn context_credential_check_never_consults_the_code_host() {
     struct Absent;
     impl RepositoryServices for Absent {
         fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
@@ -300,9 +300,6 @@ async fn context_without_a_code_host_keeps_credentials_unchecked() {
         }
         fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
             panic!("no ticket access")
-        }
-        fn code_configured(&self) -> bool {
-            false
         }
     }
     let services = Services(support::Probe::new(None));
@@ -317,7 +314,8 @@ async fn context_without_a_code_host_keeps_credentials_unchecked() {
         )
         .await
         .unwrap();
-    assert_eq!(result.payload["credential_status"], "unchecked");
+    assert_eq!(result.payload["person_id"], "aiko");
+    assert!(result.payload.get("credential_status").is_none());
 }
 
 #[tokio::test]

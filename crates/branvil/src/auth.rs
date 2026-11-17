@@ -112,12 +112,10 @@ pub fn replace_token(w: &Wtx, member: &str, label: &str) -> AppResult<(Token, St
 const OWNER_FILE_LABEL: &str = "owner-file";
 /// Label of the automatic runner's token.
 pub const AUTO_LABEL: &str = "auto";
-/// Prefix of the labels of tokens a local app got through the consent screen.
-pub const APP_LABEL_PREFIX: &str = "app:";
 
 /// Labels Branvil issues itself, never through the tokens endpoint.
 pub fn is_reserved_label(label: &str) -> bool {
-    label == OWNER_FILE_LABEL || label == AUTO_LABEL || label.starts_with(APP_LABEL_PREFIX)
+    label == OWNER_FILE_LABEL || label == AUTO_LABEL
 }
 
 /// Keeps `secrets/owner.token` holding a token of the owner. When the file is
@@ -133,11 +131,7 @@ pub fn ensure_owner_token(store: &store::Store, layout: &Layout) -> anyhow::Resu
     })?;
     if !valid {
         let text = store.write_sync(|w| {
-            let owner = w
-                .prefix_all::<Member>(store::MEMBERS, &[])?
-                .into_iter()
-                .find(|m| m.kind == MemberKind::Owner)
-                .ok_or_else(|| AppError::internal("there is no owner; run `branvil init`"))?;
+            let owner = owner(w)?;
             w.clear(store::SESSIONS)?;
             Ok(replace_token(w, &owner.name, OWNER_FILE_LABEL)?.1)
         })?;
@@ -145,6 +139,14 @@ pub fn ensure_owner_token(store: &store::Store, layout: &Layout) -> anyhow::Resu
     }
     // Also a kept file: one copied back with looser permissions is tightened.
     restrict(&path, false)
+}
+
+/// The owner, whom `branvil init` creates.
+pub fn owner(r: &impl Rd) -> AppResult<Member> {
+    r.prefix_all::<Member>(store::MEMBERS, &[])?
+        .into_iter()
+        .find(|m| m.kind == MemberKind::Owner)
+        .ok_or_else(|| AppError::internal("there is no owner; run `branvil init`"))
 }
 
 /// Splits `bvt_<id>_<secret>` into the stored token id and the secret.
@@ -322,15 +324,7 @@ pub(crate) async fn host_session(
             "The X-Branvil-CSRF header does not match the current session.",
         ),
     })?;
-    let member = app
-        .store
-        .read(|r| {
-            r.prefix_all::<Member>(store::MEMBERS, &[])?
-                .into_iter()
-                .find(|m| m.kind == MemberKind::Owner)
-                .ok_or_else(AppError::unauthorized)
-        })
-        .await?;
+    let member = app.store.read(owner).await?;
     Ok((member, csrf))
 }
 

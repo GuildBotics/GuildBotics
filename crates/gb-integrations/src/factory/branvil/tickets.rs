@@ -64,7 +64,7 @@ impl TicketService for BranvilService {
     }
     fn assign_to_me<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, ()> {
         Box::pin(async move {
-            self.ticket_assign(url, &self.username).await?;
+            self.ticket_assign(url, &self.person_id).await?;
             Ok(())
         })
     }

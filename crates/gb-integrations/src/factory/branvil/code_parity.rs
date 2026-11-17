@@ -95,11 +95,9 @@ async fn frozen_remote_and_pull_address_population() {
     .unwrap();
     let service = BranvilService::new(
         running.data.clone(),
-        String::new(),
-        "owner1".into(),
         "acme".into(),
         "aiko".into(),
-        std::sync::Arc::new(|_| {}),
+        "Aiko".into(),
     );
     let base = running.data.base_url();
     let repo = "acme/demo";
@@ -128,7 +126,7 @@ async fn frozen_remote_and_pull_address_population() {
         format!("{base}/{repo}/-/pulls/1?x=1"),
         format!("{base}/demo/-/pulls/1"),
     ] {
-        // Missing credentials would be a different error if validation reached the API.
+        // Validation answers before the API is reached.
         assert_eq!(
             CodeHostingService::comment(&service, &url, "Hi", None)
                 .await
@@ -142,48 +140,6 @@ async fn frozen_remote_and_pull_address_population() {
     }
     running.stop().await.unwrap();
 }
-#[tokio::test]
-async fn frozen_git_credentials_identity_and_missing_token_operations() {
-    let temp = tempfile::tempdir().unwrap();
-    let token = initialize(temp.path(), "owner1").unwrap();
-    let running = Running::start(
-        temp.path(),
-        std::sync::Arc::new(::branvil::vault::Memory::default()),
-    )
-    .await
-    .unwrap();
-    let mut service = BranvilService::new(
-        running.data.clone(),
-        token.clone(),
-        "owner1".into(),
-        "acme".into(),
-        "aiko".into(),
-        std::sync::Arc::new(|_| {}),
-    );
-    let credential = service.git_credential().await.unwrap().unwrap();
-    assert_eq!(credential.username, "owner1");
-    assert_eq!(credential.password, token);
-    assert_eq!(
-        service.identity(true).await.unwrap(),
-        [("branvil_username".into(), "owner1".into())].into()
-    );
-    service.token.clear();
-    for error in [
-        service.git_credential().await.err().unwrap(),
-        service.default_branch("acme/demo").await.unwrap_err(),
-    ] {
-        assert_eq!(
-            error.translation_key(),
-            "integrations.branvil.api.token_missing"
-        );
-        assert_eq!(
-            error.translation_args(),
-            [("name".into(), "AIKO_BRANVIL_TOKEN".into())].into()
-        );
-    }
-    running.stop().await.unwrap();
-}
-
 #[tokio::test]
 async fn draft_conflicts_reread_both_human_writer_states() {
     use std::sync::{Arc, Mutex};

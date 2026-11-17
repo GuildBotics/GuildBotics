@@ -8,7 +8,6 @@ use std::{path::Path, sync::Arc};
 pub struct Background {
     pub data: DataApi,
     pub owner: MemberApi,
-    pub tokens: std::collections::BTreeMap<String, String>,
     pub root: std::path::PathBuf,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -42,16 +41,13 @@ impl Background {
                     for repository in repositories {
                         fixture.repository(&repository).await;
                     }
-                    let mut tokens = std::collections::BTreeMap::new();
                     for member in members {
-                        let (_, token) = fixture.member(&member).await;
-                        tokens.insert(member, token);
+                        fixture.member(&member).await;
                     }
                     ready
                         .send((
                             fixture.data(),
                             fixture.owner.clone(),
-                            tokens,
                             fixture.root().to_path_buf(),
                         ))
                         .unwrap();
@@ -59,11 +55,10 @@ impl Background {
                     fixture.stop().await;
                 });
         });
-        let (data, owner, tokens, root) = started.recv().expect("fixture startup");
+        let (data, owner, root) = started.recv().expect("fixture startup");
         Self {
             data,
             owner,
-            tokens,
             root,
             stop: Some(stop),
             thread: Some(thread),
@@ -104,6 +99,24 @@ pub(crate) fn lock_fd(config: &Path) -> Option<std::os::fd::RawFd> {
         .unwrap()
         .get(config)
         .and_then(|slot| slot.as_ref().map(AsRawFd::as_raw_fd))
+}
+
+/// The member a bearer token authenticates as over HTTP; `None` when refused.
+pub async fn token_member(data: &DataApi, token: &str) -> Option<String> {
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(format!("{}/api/v1/me", data.base_url()))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return None;
+    }
+    let me: Value = response.error_for_status().unwrap().json().await.unwrap();
+    Some(me["name"].as_str().unwrap().into())
 }
 
 pub fn input<T: DeserializeOwned>(value: Value) -> T {
@@ -151,11 +164,7 @@ impl Fixture {
         let running = Running::start(root.path(), Arc::new(crate::vault::Memory::default()))
             .await
             .unwrap();
-        let owner = running
-            .data
-            .authenticate(owner_token.clone())
-            .await
-            .unwrap();
+        let owner = running.data.owner();
         (
             Self {
                 running,
@@ -188,24 +197,9 @@ impl Fixture {
             .unwrap();
     }
 
-    pub async fn member(&self, name: &str) -> (MemberApi, String) {
-        self.owner
-            .members_create(input(json!({"name":name,"kind":"agent"})))
-            .await
-            .unwrap();
-        let issued = self
-            .owner
-            .members_issue_token(name.into(), input(json!({"label":"fixture"})))
-            .await
-            .unwrap();
-        (
-            self.running
-                .data
-                .authenticate(issued.token.clone())
-                .await
-                .unwrap(),
-            issued.token,
-        )
+    /// An agent named `name`, acted as in-process.
+    pub async fn member(&self, name: &str) -> MemberApi {
+        self.running.data.agent(name, name).await.unwrap()
     }
 
     pub async fn ticket(

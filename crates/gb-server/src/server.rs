@@ -323,11 +323,22 @@ impl Server {
             };
             let embedded = prepare.await?;
             let data_api = embedded.data_api();
+            // No run holds a git token yet: those still there were lent to
+            // runs that ended without returning them.
+            if let Err(error) = data_api
+                .revoke_labelled(gb_integrations::factory::GIT_TOKEN_LABEL)
+                .await
+            {
+                tracing::warn!("cannot revoke the git tokens left by earlier runs: {error}");
+            }
             startup_api
                 .branvil
                 .set(data_api.clone())
                 .map_err(|_| anyhow::anyhow!("Branvil already attached"))?;
             let workspace = startup_api.selected().workspace.clone();
+            if let Some(workspace) = &workspace {
+                crate::member::native::ensure_branvil_agents(&startup_api, workspace).await;
+            }
             startup_api.select(Selected::open(workspace, &startup_api, Some(data_api)));
             *host_router.write().unwrap() = Some(embedded.router());
             ready_tx.send_replace(true);

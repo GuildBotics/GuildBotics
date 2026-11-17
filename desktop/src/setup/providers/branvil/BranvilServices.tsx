@@ -1,4 +1,4 @@
-import { Button, Group, Select, Stack, TextInput } from "@mantine/core";
+import { Button, Code, CopyButton, Group, Select, Stack, Text, TextInput } from "@mantine/core";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -11,8 +11,7 @@ import {
 } from "../../../api/client";
 import { RequiredLabel } from "@guildbotics/ui/formParts";
 import type { FieldErrors, ServiceUi } from "../types";
-import { branvilKey, createWorkspace, listWorkspaces } from "./api";
-import { BranvilConnection, BranvilGitConfig, useConnection } from "./BranvilConnection";
+import { branvilKey, createWorkspace, getGitConfig, listWorkspaces } from "./api";
 
 const NAME = /^[A-Za-z0-9_.-]+$/;
 
@@ -41,7 +40,7 @@ function errors(value: ServiceSelection, t: Translate): FieldErrors {
   return result;
 }
 
-/** The workspace, chosen from the connected Branvil's or created there. */
+/** The workspace, chosen from Branvil's or created there. */
 function WorkspaceField({
   value,
   onChange,
@@ -54,13 +53,8 @@ function WorkspaceField({
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
-  const connected = useConnection().data?.status === "connected";
   const key = branvilKey("workspaces");
-  const listed = useQuery({
-    queryKey: key,
-    queryFn: listWorkspaces,
-    enabled: connected,
-  });
+  const listed = useQuery({ queryKey: key, queryFn: listWorkspaces });
   const create = useMutation({
     mutationFn: () => createWorkspace(name.trim()),
     onSuccess: (created) => {
@@ -77,46 +71,76 @@ function WorkspaceField({
         label={<RequiredLabel text={t("setup.branvil.workspace")} />}
         aria-label={t("setup.branvil.workspace")}
         aria-required
-        description={
-          connected ? t("setup.branvil.workspaceHint") : t("setup.branvil.workspaceConnect")
-        }
+        description={t("setup.branvil.workspaceHint")}
         data={workspaces}
         value={value || null}
         onChange={(chosen) => onChange(chosen ?? "")}
         error={error}
       />
-      {connected ? (
-        <Group align="flex-start" gap="xs">
-          <TextInput
-            aria-label={t("setup.branvil.newWorkspace")}
-            placeholder={t("setup.branvil.newWorkspace")}
-            size="xs"
-            value={name}
-            onChange={(event) => setName(event.currentTarget.value)}
-            error={
-              create.error?.message ||
-              (newName && !isWorkspace(newName) ? t("setup.branvil.workspaceInvalid") : "")
-            }
-          />
-          <Button
-            size="xs"
-            variant="default"
-            loading={create.isPending}
-            disabled={!isWorkspace(newName)}
-            onClick={() => create.mutate()}
-          >
-            {t("setup.branvil.createWorkspace")}
-          </Button>
-        </Group>
-      ) : null}
+      <Group align="flex-start" gap="xs">
+        <TextInput
+          aria-label={t("setup.branvil.newWorkspace")}
+          placeholder={t("setup.branvil.newWorkspace")}
+          size="xs"
+          value={name}
+          onChange={(event) => setName(event.currentTarget.value)}
+          error={
+            create.error?.message ||
+            (newName && !isWorkspace(newName) ? t("setup.branvil.workspaceInvalid") : "")
+          }
+        />
+        <Button
+          size="xs"
+          variant="default"
+          loading={create.isPending}
+          disabled={!isWorkspace(newName)}
+          onClick={() => create.mutate()}
+        >
+          {t("setup.branvil.createWorkspace")}
+        </Button>
+      </Group>
     </Stack>
   );
 }
 
-/** The items of one kind: the connection to Branvil, shown with the first kind
- * that names Branvil (it is the identities', the same for every kind and every
- * workspace), and the workspace whose repositories members write to and whose
- * board they take tickets from. */
+/** The git configuration that lets the owner's own checkouts on this machine
+ * reach Branvil: git asks GuildBotics for this machine's token instead of a
+ * name and a password. */
+function GitConfig() {
+  const { t } = useTranslation();
+  const config = useQuery({ queryKey: branvilKey("git_config"), queryFn: getGitConfig }).data
+    ?.git_config;
+  if (!config) {
+    return null;
+  }
+  return (
+    <Stack gap={4}>
+      <Text size="sm" fw={500}>
+        {t("setup.branvil.git.title")}
+      </Text>
+      <Text size="xs" c="dimmed">
+        {t("setup.branvil.git.hint")}
+      </Text>
+      <Code block aria-label={t("setup.branvil.git.title")}>
+        {config}
+      </Code>
+      <Group>
+        <CopyButton value={config}>
+          {({ copied, copy }) => (
+            <Button size="compact-sm" variant="light" onClick={copy}>
+              {t(copied ? "setup.branvil.git.copied" : "setup.branvil.git.copy")}
+            </Button>
+          )}
+        </CopyButton>
+      </Group>
+    </Stack>
+  );
+}
+
+/** The items of one kind: the git configuration of the owner's own checkouts,
+ * shown with the first kind that names Branvil (it is the same for every kind
+ * and every workspace), and the workspace whose repositories members write to
+ * and whose board they take tickets from. */
 function service(kind: ServiceKind): ServiceUi {
   function Fields({
     value,
@@ -132,8 +156,7 @@ function service(kind: ServiceKind): ServiceUi {
     const first = SERVICE_KINDS.find((other) => services[other]?.name === "branvil") === kind;
     return (
       <Stack>
-        {first ? <BranvilConnection /> : null}
-        {first ? <BranvilGitConfig /> : null}
+        {first ? <GitConfig /> : null}
         <WorkspaceField
           value={String(value.workspace ?? "")}
           onChange={(workspace) => onChange({ ...value, workspace })}

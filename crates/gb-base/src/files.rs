@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 /// The generation of every shared record this version writes.
-pub const SHARED_RECORD_SCHEMA_VERSION: u64 = 4;
+pub const SHARED_RECORD_SCHEMA_VERSION: u64 = 5;
 
 /// How long a writer of a workspace's shared files waits for another one.
 pub const SHARED_WRITE_TIMEOUT: Duration = Duration::from_secs(30);

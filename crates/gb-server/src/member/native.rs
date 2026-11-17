@@ -148,10 +148,10 @@ impl Native {
             .iter()
             .map(|m| {
                 gb_config::resolved_guest::member(&roots, &self.identity_root, &m.person_id)
-                    .map(|v| public(&v))
+                    .map(|v| public(&v, self.branvil.as_ref()))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        let public_person = public(&metadata);
+        let public_person = public(&metadata, self.branvil.as_ref());
         if person.person_type != "agent" {
             return Err(MemberError::Capability("cli.member.human_subject").into());
         }
@@ -354,14 +354,7 @@ impl Native {
             &roster,
             &providers,
             memory.as_ref().expect("context memory").context()?,
-            if parsed.command == "context" && !services.code_workspace.is_empty() {
-                Some(services.code()?)
-            } else {
-                None
-            },
-            false,
-        )
-        .await?}else{json!({})};
+        )}else{json!({})};
         let guest = Guest {
             channel: self.guest.as_ref(),
             language: &team.language,
@@ -822,16 +815,50 @@ fn yaml(path: &Path) -> anyhow::Result<Value> {
     gb_config::yaml_value(&std::fs::read_to_string(path)?)
         .map_err(|_| anyhow::anyhow!("invalid member configuration"))
 }
-pub(crate) fn public(member: &Value) -> PublicMember {
-    let text = |key: &str| member[key].as_str().unwrap_or("").to_owned();
-    let accounts = [("branvil", "branvil_username"), ("slack", "slack_user_id")]
+/// Creates in the embedded code host every agent of `workspace`'s team that
+/// it lacks, so the owner and other members can name them before they act.
+pub(crate) async fn ensure_branvil_agents(api: &crate::api::Shared, workspace: &Path) {
+    let Some(data) = api.branvil.get() else {
+        return;
+    };
+    let team = match gb_config::team::Team::load(
+        &workspace.join(".guildbotics/config"),
+        &api.identity_root,
+    ) {
+        Ok(team) => team,
+        Err(error) => {
+            tracing::warn!("cannot read the team for the code host: {error:#}");
+            return;
+        }
+    };
+    let agents = team
+        .members
         .into_iter()
-        .filter_map(|(service, key)| {
-            member["account_info"][key]
-                .as_str()
-                .map(|v| (service.into(), v.into()))
-        })
+        .filter(|member| member.person_type == "agent")
+        .map(|member| (member.person_id, member.name))
         .collect();
+    if let Err(error) = data.ensure_agents(agents).await {
+        tracing::warn!("cannot create the team's agents in the code host: {error}");
+    }
+}
+
+/// The member as the roster shows it. Agents act in Branvil by their
+/// person_id, and the human acts as Branvil's owner.
+pub(crate) fn public(member: &Value, branvil: Option<&branvil::api::DataApi>) -> PublicMember {
+    let text = |key: &str| member[key].as_str().unwrap_or("").to_owned();
+    let mut accounts: BTreeMap<String, String> = member["account_info"]["slack_user_id"]
+        .as_str()
+        .map(|v| ("slack".into(), v.into()))
+        .into_iter()
+        .collect();
+    let branvil_name = match text("person_type").as_str() {
+        "human" => branvil.and_then(|data| data.owner_name().ok()),
+        "agent" => Some(text("person_id")),
+        _ => None,
+    };
+    if let Some(name) = branvil_name.filter(|name| !name.is_empty()) {
+        accounts.insert("branvil".into(), name);
+    }
     PublicMember {
         person_id: text("person_id"),
         name: text("name"),
@@ -893,9 +920,6 @@ struct Services<'a> {
     chat: OnceLock<std::result::Result<Arc<dyn ChatService>, ServiceError>>,
 }
 impl RepositoryServices for Services<'_> {
-    fn code_configured(&self) -> bool {
-        !self.code_workspace.is_empty()
-    }
     fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
         self.code
             .get_or_init(|| {
@@ -1096,7 +1120,7 @@ pub(crate) mod tests {
                     embedded: branvil::test_support::Background::start(
                         "acme",
                         &["acme/demo"],
-                        &["local-aiko", "local-yuki", "local-kenji"],
+                        &["aiko", "yuki", "kenji"],
                         "test_branvil::hook",
                     ),
                     keys: Arc::new(Keys::default()),
@@ -1119,26 +1143,13 @@ pub(crate) mod tests {
             ),
             (
                 identity.join(".guildbotics/config/team/members/aiko/identity.yml"),
-                json!({"person_id":"aiko","name":"Aiko","person_type":"agent","account_info":{"branvil_username":"local-aiko","git_user":"Fixture Member","git_email":"fixture@example.invalid"},"profile":{}}),
+                json!({"person_id":"aiko","name":"Aiko","person_type":"agent","account_info":{"git_user":"Fixture Member","git_email":"fixture@example.invalid"},"profile":{}}),
             ),
         ] {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
         }
         let keys = embedded.keys.clone();
-        let writes = SharedWrites::new(identity.clone(), Some(workspace.clone()));
-        let secrets = SecretStore::new(
-            &writes,
-            Scope::Identity,
-            DeviceKey {
-                machine_root: root.into(),
-                keychain: &*keys,
-            },
-        )
-        .unwrap();
-        secrets
-            .set("AIKO_BRANVIL_TOKEN", &embedded.tokens["local-aiko"])
-            .unwrap();
         Native {
             fixture: Some(embedded.clone()),
             runtime_work: None,
@@ -1673,7 +1684,7 @@ pub(crate) mod tests {
                         }
                     );
                     if command.work_kind == "ticket_mention" {
-                        assert_eq!(item.items()[0]["assignees"], json!(["local-yuki"]));
+                        assert_eq!(item.items()[0]["assignees"], json!(["yuki"]));
                     }
                     vec![
                         (
@@ -1901,7 +1912,7 @@ pub(crate) mod tests {
             let owner = &native.fixture.as_ref().unwrap().owner;
             if mention {
                 owner
-                    .tickets_set_assignee("acme/demo", "1", Some("local-yuki".into()))
+                    .tickets_set_assignee("acme/demo", "1", Some("yuki".into()))
                     .await
                     .unwrap();
                 owner
@@ -1909,7 +1920,7 @@ pub(crate) mod tests {
                         "acme/demo",
                         "1",
                         branvil::test_support::input(
-                            json!({"body":"@local-aiko Please provide context."}),
+                            json!({"body":"@aiko Please provide context."}),
                         ),
                     )
                     .await
@@ -2348,7 +2359,7 @@ pub(crate) mod tests {
                 labels: vec![],
                 add_to_board: true,
                 interactive: false,
-                assignee: Some(gb_ports::ActorName("local-aiko".into())),
+                assignee: Some(gb_ports::ActorName("aiko".into())),
                 lane: Some(gb_ports::CreateLane::Ready),
                 parent: None,
                 blocked_by: vec![],
@@ -4975,7 +4986,7 @@ pub(crate) mod tests {
             identity_root: native.identity_root.clone(),
             person_id: "aiko".into(),
             display_name: "Aiko".into(),
-            accounts: BTreeMap::from([("branvil".into(), ActorName("local-aiko".into()))]),
+            accounts: BTreeMap::new(),
             branvil_members: Default::default(),
 
             chat_provider: "local".into(),
@@ -4998,7 +5009,7 @@ pub(crate) mod tests {
                 labels: vec![],
                 add_to_board: true,
                 interactive: false,
-                assignee: Some(ActorName("local-aiko".into())),
+                assignee: Some(ActorName("aiko".into())),
                 lane: Some(CreateLane::Ready),
                 parent: None,
                 blocked_by: vec![],
@@ -5013,7 +5024,7 @@ pub(crate) mod tests {
             roles: json!({}),
             profile: json!({}),
             speaking_style: String::new(),
-            accounts: BTreeMap::from([("branvil".into(), "local-aiko".into())]),
+            accounts: BTreeMap::from([("branvil".into(), "aiko".into())]),
         }];
         let mut peers = Peers {
             code_workspace: "acme",
@@ -6082,5 +6093,36 @@ mod guest_failure_tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn the_roster_names_agents_by_person_id_and_humans_as_the_branvil_owner() {
+        let fixture = branvil::test_support::Fixture::new("owner1").await;
+        let data = fixture.data();
+        let accounts = |member: Value, branvil: Option<&branvil::api::DataApi>| {
+            public(&member, branvil)
+                .accounts
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        let agent =
+            json!({"person_id":"aiko","person_type":"agent","account_info":{"slack_user_id":"U1"}});
+        let human = json!({"person_id":"otota","person_type":"human","account_info":{}});
+        assert_eq!(
+            accounts(agent, Some(&data)),
+            [
+                ("branvil".into(), "aiko".into()),
+                ("slack".into(), "U1".into())
+            ]
+        );
+        assert_eq!(
+            accounts(human.clone(), Some(&data)),
+            [("branvil".to_owned(), "owner1".to_owned())]
+        );
+        assert!(accounts(human, None).is_empty());
+        // A member of another type is neither: no code host name.
+        let other = json!({"person_id":"guest","person_type":"Human","account_info":{}});
+        assert!(accounts(other, Some(&data)).is_empty());
+        fixture.stop().await;
     }
 }

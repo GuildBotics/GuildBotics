@@ -56,15 +56,7 @@ export const en = {
 
   "enter.expired": "This link has expired or was already used.",
   "guide.run": "On the Hub machine, print an entry link with:",
-  "guide.why": "Paste the printed URL into the address bar of this same browser. If you are connecting an app, use the browser showing its consent page. The link works once, for 60 seconds; access applies only to that browser.",
-  "authorize.title": "Allow {client} to manage Branvil?",
-  "authorize.rights": "It gets the owner's rights: it can do everything you can do in Branvil.",
-  "authorize.revoke": "You can revoke it under Settings → Members → {owner} → Tokens, where it is listed as app:{client}.",
-  "authorize.returns": "Either way, you return to {address}.",
-  "authorize.allow": "Allow",
-  "authorize.deny": "Deny",
-  "authorize.invalid": "This request from an app is not valid ({fields}). Start again from the app.",
-  "authorize.enterFirst": "To allow {client}, open Branvil first: this page comes back once you have entered (within 10 minutes).",
+  "guide.why": "Paste the printed URL into the address bar of this same browser. The link works once, for 60 seconds; access applies only to that browser.",
 
   "lane.new": "New",
   "lane.ready": "Ready",

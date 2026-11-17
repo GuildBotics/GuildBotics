@@ -269,21 +269,8 @@ async fn branvil_factory_supplies_roster_names_to_task_comments() {
         .repos_create(serde_json::from_value(serde_json::json!({"path":"acme/repo"})).unwrap())
         .await
         .unwrap();
-    owner
-        .members_create(
-            serde_json::from_value(serde_json::json!({"name":"aiko-service","kind":"agent"}))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let member = owner
-        .members_issue_token(
-            "aiko-service".into(),
-            serde_json::from_value(serde_json::json!({"label":"fixture"})).unwrap(),
-        )
-        .await
-        .unwrap();
-    let ticket = owner.tickets_create_ticket("acme/repo", serde_json::from_value(serde_json::json!({"title":"task","body":"please","lane":"ready","assignee":"aiko-service"})).unwrap()).await.unwrap();
+    fixture.member("aiko").await;
+    let ticket = owner.tickets_create_ticket("acme/repo", serde_json::from_value(serde_json::json!({"title":"task","body":"please","lane":"ready","assignee":"aiko"})).unwrap()).await.unwrap();
     owner
         .tickets_add_comment(
             "acme/repo",
@@ -303,10 +290,7 @@ async fn branvil_factory_supplies_roster_names_to_task_comments() {
         },
     )
     .unwrap();
-    secrets.set("AIKO_BRANVIL_TOKEN", &member.token).unwrap();
     let mut c = config(d.path());
-    c.accounts
-        .insert("branvil".into(), ActorName("aiko-service".into()));
     // Deliberately vary case and include account whitespace as in saved identities.
     c.branvil_members.insert(" OWNER1 ".into(), "Otota".into());
     let factory =

@@ -1,17 +1,15 @@
-//! The providers' part of a setup, as the server's registry knows it
-//! (the Python version's `integrations/factory.py` `PROVIDERS` and each
-//! provider's `setup`). The service and member models of Branvil and Slack
-//! are validated with their setup screens; a provider without a model keeps
-//! the items its form names.
+//! The providers' part of a setup, as the server's registry knows it. The
+//! service models of Branvil and Slack and Slack's member model are validated
+//! with their setup screens; a provider without a model keeps the items its
+//! form names.
 
 use crate::api::Shared;
 use gb_setup::{
-    Hook, InvalidInput, MemberAccount, ProviderModels, SavedMember, ServiceKind, SetupError,
+    InvalidInput, MemberAccount, ProviderModels, SavedMember, ServiceKind, SetupError,
     StoredAccount,
 };
 use serde::Deserialize;
 use serde_json::json;
-pub(crate) mod accounts;
 pub mod diagnostics;
 #[cfg(test)]
 mod models_tests;
@@ -29,12 +27,7 @@ const PROVIDERS: &[(&str, &[ServiceKind])] = &[
 ];
 
 /// The secrets a member holds with each provider, by member-relative name.
-const MEMBER_SECRETS: &[&str] = &[
-    "BRANVIL_TOKEN",
-    "BRANVIL_TOKEN_ID",
-    "SLACK_BOT_TOKEN",
-    "SLACK_APP_TOKEN",
-];
+const MEMBER_SECRETS: &[&str] = &["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"];
 
 #[derive(Clone, Default)]
 pub struct Registry(pub Option<Shared>);
@@ -100,12 +93,11 @@ impl ProviderModels for Registry {
     }
 
     fn member_providers(&self) -> Vec<String> {
-        vec!["branvil".into(), "slack".into()]
+        vec!["slack".into()]
     }
 
     fn account_info_keys(&self, provider: &str) -> Vec<String> {
         match provider {
-            "branvil" => vec!["branvil_username".into()],
             "slack" => vec!["slack_user_id".into()],
             _ => vec![],
         }
@@ -124,21 +116,6 @@ impl ProviderModels for Registry {
             "slack" => Ok(Box::new(
                 serde_json::from_value::<SlackAccount>(form.clone()).map_err(invalid)?,
             )),
-            "branvil" => {
-                let mut account = serde_json::from_value::<accounts::BranvilAccount>(form.clone())
-                    .map_err(invalid)?;
-                if !account.username.is_empty()
-                    && !regex::Regex::new(r"^[A-Za-z0-9_.-]{1,64}$")
-                        .expect("member grammar")
-                        .is_match(&account.username)
-                {
-                    return Err(
-                        InvalidInput("username must be a Branvil member name".into()).into(),
-                    );
-                }
-                account.registry = self.clone();
-                Ok(Box::new(account))
-            }
             _ => Err(InvalidInput(format!("'{provider}' has no member account")).into()),
         }
     }
@@ -149,38 +126,11 @@ impl ProviderModels for Registry {
         has: &dyn Fn(&str) -> bool,
     ) -> Value {
         match provider {
-            "branvil" => {
-                json!({"username":info.get("branvil_username").cloned().unwrap_or_default(),"has_token":has("BRANVIL_TOKEN")})
-            }
             "slack" => {
                 json!({"user_id":info.get("slack_user_id").cloned().unwrap_or_default(),"has_bot_token":has("SLACK_BOT_TOKEN"),"has_app_token":has("SLACK_APP_TOKEN")})
             }
             _ => json!({}),
         }
-    }
-    fn removed<'a>(&'a self, provider: &'a str, member: &'a SavedMember) -> Hook<'a> {
-        Box::pin(async move {
-            if provider == "branvil" {
-                self.remove_branvil(member).await?;
-            }
-            Ok(())
-        })
-    }
-    fn avatar_changed<'a>(&'a self, provider: &'a str, member: &'a SavedMember) -> Hook<'a> {
-        Box::pin(async move {
-            let name = member
-                .account_info
-                .get("branvil_username")
-                .map(String::as_str)
-                .unwrap_or("");
-            if provider == "branvil"
-                && !name.is_empty()
-                && let Some((_, admin)) = self.admin().await?
-            {
-                accounts::picture(&admin, name, member).await?;
-            }
-            Ok(())
-        })
     }
     fn channel(&self, services: &Value, reference: &str) -> anyhow::Result<Map<String, Value>> {
         let mut chat = Map::new();
@@ -209,9 +159,6 @@ struct SlackAccount {
     app_token: String,
 }
 impl MemberAccount for SlackAccount {
-    fn prepare<'a>(&'a mut self, _: &'a SavedMember) -> Hook<'a> {
-        Box::pin(async { Ok(()) })
-    }
     fn stored(&self, _: &str, human: bool) -> Result<StoredAccount, SetupError> {
         let mut result = StoredAccount::default();
         if human {
@@ -232,7 +179,97 @@ impl MemberAccount for SlackAccount {
         }
         Ok(result)
     }
-    fn settled(self: Box<Self>, _: bool) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> {
-        Box::pin(async {})
+}
+
+pub(crate) fn message_for(e: branvil::api::AppError, operation: &str, lang: &str) -> String {
+    match refused_for(e, operation).sentence {
+        gb_setup::Sentence::Key(key, params) => {
+            let args: Vec<_> = params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            crate::i18n::t(lang, &key, &args)
+        }
+        gb_setup::Sentence::Text(text) => text,
+    }
+}
+/// Branvil's refusal as a setup error with the shared diagnostic key.
+pub(crate) fn refused_for(e: branvil::api::AppError, operation: &str) -> SetupError {
+    let error = gb_integrations::factory::branvil_error(e, operation);
+    let mut result = SetupError::new("branvil", error.translation_key());
+    if error.is_unavailable() {
+        result.status = 503;
+    }
+    for (key, value) in error.translation_args() {
+        result = result.with(&key, value);
+    }
+    result
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn branvil_errors_keep_shared_locale_keys_and_operation_parameters() {
+        for (status, code, message, key) in [
+            (
+                401,
+                "unauthorized",
+                "No valid token or session.",
+                "authentication",
+            ),
+            (404, "not_found", "missing workspace", "not_found"),
+            (422, "invalid", "unsupported operation", "unsupported"),
+            (409, "head_moved", "stale head", "head_moved"),
+            (400, "label_undefined", "label absent", "label_undefined"),
+            (
+                503,
+                "unavailable",
+                "integrations.branvil.api.stopped",
+                "stopped",
+            ),
+            (403, "forbidden", "owner required", "refused"),
+            (500, "internal", "storage failed", "refused"),
+            (503, "unavailable", "storage unavailable", "refused"),
+        ] {
+            let make = || {
+                branvil::api::AppError::new(StatusCode::from_u16(status).unwrap(), code, message)
+            };
+            let error = refused_for(make(), "members_create");
+            let gb_setup::Sentence::Key(actual_key, params) = &error.sentence else {
+                panic!("Branvil errors must retain a translation key");
+            };
+            assert_eq!(actual_key, &format!("integrations.branvil.api.{key}"));
+            assert_eq!(error.status, if status == 503 { 503 } else { 400 });
+            if key == "refused" {
+                assert!(params.contains(&("operation".into(), "members_create".into())));
+                assert!(params.contains(&("status".into(), status.to_string())));
+                assert!(params.contains(&("code".into(), code.into())));
+                assert!(params.contains(&("message".into(), message.into())));
+            }
+            for lang in ["en", "ja"] {
+                let args: Vec<_> = params
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
+                let rendered = message_for(make(), "members_create", lang);
+                assert_eq!(rendered, crate::i18n::t(lang, actual_key, &args));
+                assert!(!rendered.contains("%{"));
+                assert!(!rendered.contains("integrations.branvil.api."));
+            }
+        }
+        let error = refused_for(branvil::api::AppError::invalid_cursor(), "page");
+        assert_eq!(
+            error.sentence,
+            gb_setup::Sentence::Key("integrations.resources.continuation".into(), vec![])
+        );
+        for lang in ["en", "ja"] {
+            assert_eq!(
+                message_for(branvil::api::AppError::unauthorized(), "authenticate", lang),
+                crate::i18n::t(lang, "integrations.branvil.api.authentication", &[])
+            );
+        }
     }
 }

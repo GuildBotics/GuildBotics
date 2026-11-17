@@ -3,7 +3,6 @@
 import base64
 import time
 from dataclasses import dataclass
-from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
@@ -49,34 +48,6 @@ class BranvilProvider:
         self.post("workspaces", {"name": "acme"})
         repo = self.post("repos", {"path": self.repository})
         self.clone_url = repo["clone_url"]
-        connected = stack.api.post("config/providers/branvil/connect", json={})
-        assert connected.is_success, connected.status_code
-        query = parse_qs(urlsplit(connected.json()["url"]).query)
-        consent = self.post(
-            "apps/authorizations",
-            {
-                key: query[key][0]
-                for key in ("client", "redirect_uri", "state", "code_challenge")
-            },
-        )
-        accepted = stack.api.get(consent["redirect"])
-        assert accepted.is_success, accepted.status_code
-        # The ordinary member form provisions its Branvil account and vault token.
-        current = stack.api.get(f"config/members/{PERSON}").json()
-        saved = stack.api.put(
-            f"config/members/{PERSON}",
-            json={
-                "config_dir": stack.config_dir,
-                "person_type": "agent",
-                "person_id": PERSON,
-                "person_name": "Blackbox",
-                "is_active": True,
-                "roles": [],
-                "accounts": {"branvil": {"username": PERSON}},
-                "expected_revisions": current["revisions"],
-            },
-        )
-        assert saved.status_code == 200, saved.text
         owner = self.api.get("me").json()["name"]
         token = self.post(f"members/{owner}/tokens", {"label": "blackbox seed"})[
             "token"

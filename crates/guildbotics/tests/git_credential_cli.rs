@@ -42,9 +42,8 @@ fn git_credential_protocol_ignores_non_get_without_reading_identity() {
 fn git_credential_ignores_invalid_origins_without_reading_identity_or_keychain() {
     let home = tempfile::tempdir().unwrap();
     let identity = home.path().join("identity/.guildbotics/config");
-    std::fs::create_dir_all(identity.join("connections")).unwrap();
+    std::fs::create_dir_all(&identity).unwrap();
     // Neither identity configuration nor the OS keychain is needed to reject malformed input.
-    std::fs::write(identity.join("connections/branvil.yml"), "broken: [").unwrap();
     std::fs::write(identity.join("secrets.yml"), "broken: [").unwrap();
     for request in [
         "protocol=http\nhost=owner@127.0.0.1:7878\n",

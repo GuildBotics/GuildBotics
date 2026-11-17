@@ -1,6 +1,6 @@
 //! The only provider selection boundary; provider modules stay private.
 mod branvil;
-pub use branvil::error as branvil_error;
+pub use branvil::{GIT_TOKEN_LABEL, error as branvil_error};
 mod local;
 mod slack;
 use gb_config::secrets::SecretStore;
@@ -13,11 +13,10 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 pub async fn human_git_credential(
     origin: &str,
     data: &::branvil::api::DataApi,
-    admin: &::branvil::api::MemberApi,
     device_id: &str,
     display_name: &str,
 ) -> anyhow::Result<Option<GitCredential>> {
-    branvil::owner_git::credential(origin, data, admin, device_id, display_name).await
+    branvil::owner_git::credential(origin, data, device_id, display_name).await
 }
 
 /// Resolve a public commit link without loading a member's credentials.
@@ -136,11 +135,9 @@ impl<'a> ServiceIntegrationFactory<'a> {
     fn branvil(&self, scope: &str) -> Result<branvil::BranvilService, ServiceError> {
         Ok(branvil::BranvilService::new(
             self.branvil.clone().ok_or(ServiceError::Unavailable)?,
-            self.secret("BRANVIL_TOKEN")?,
-            self.actor("branvil").0,
             scope.into(),
             self.config.person_id.clone(),
-            self.observer.clone(),
+            self.config.display_name.clone(),
         )
         .with_members(&self.config.branvil_members))
     }

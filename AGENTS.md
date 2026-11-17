@@ -63,12 +63,12 @@ GuildBotics の共有記録を古い版で読めない形へ変えるときは `
 ### HTTP 経路の認証分類
 
 - 新しい経路は登録と同時に `loopback_auth::RouteAuth` で分類する。Branvil は `classified_routes!`、GuildBotics API と画面外の経路は `api.rs` の `routes!` を使う。画面は `ui.rs` の共通パス定義へ加える。分類表とは別に `.route()` で追加しない。
-- 分類にはオーナーの Bearer またはセッション＋CSRF、メンバー・アプリ・ランナーの Bearer またはセッション＋CSRF、セッション、オーナーか同意トークン、Git Basic、hook secret、認証なしを使う。メンバー内の権限は domain が検査する。
+- 分類にはオーナーの Bearer またはセッション＋CSRF、メンバー・ランナーの Bearer またはセッション＋CSRF、セッション、オーナーか同意トークン、Git Basic、hook secret、認証なしを使う。メンバー内の権限は domain が検査する。
 - 全経路の Host／Origin 検査を分類テストで固定する。hook は正確な登録パスだけを secret 認証の例外とし、WebSocket はハンドシェイク後の専用検査を維持する。Branvil の経路を `/-/guildbotics/` に登録しない。
 
 ### Branvil
 
-- `branvil` は下位の GuildBotics crate（`gb-base`・`gb-config`）に依存できる。テストが読むファイルとビルドする crate は CI の `rust-test-branvil` の paths に含める。`loopback-auth` は GuildBotics の crate に依存しない。データの入口は同じサービスの公開API（`api::DataApi` と認証後の `MemberApi`）。HTTP APIはその上にあり、CLIと画面はHTTPで使う。組み込みproviderは別のstoreを開かない。停止中に直接データを扱うのは `guildbotics branvil init`、`admin check|reindex|upgrade`、`restore`。
+- `branvil` は下位の GuildBotics crate（`gb-base`・`gb-config`）に依存できる。テストが読むファイルとビルドする crate は CI の `rust-test-branvil` の paths に含める。`loopback-auth` は GuildBotics の crate に依存しない。データの入口は同じサービスの公開API（`api::DataApi` と、その `owner()`・`agent()` が返す `MemberApi`）。HTTP APIはその上にあり、CLIと画面はHTTPで使う。組み込みproviderは別のstoreを開かない。停止中に直接データを扱うのは `guildbotics branvil init`、`admin check|reindex|upgrade`、`restore`。
 - 保存形式を変える場合は互換コードを追加しない規則の例外として、`crates/branvil/src/store.rs` の `SCHEMA_VERSION` を上げ、`upgrade.rs` に直前の1版からの変換を置く。`admin upgrade` と `restore` が使う。古い版を通常の読み取りで扱わない。Branvilの `secrets/` にはowner tokenだけを置く。ほかの秘密は起動するプロセスが渡す `vault::Vault` 越しに保存し、平文のファイルへ逃がさない（`branvil` 単体では `BRANVIL_VAULT` のディレクトリに、名前ごとに `BRANVIL_VAULT_KEY` で暗号化したファイル）。カーソルの署名鍵はプロセスごとにメモリで作る。実データやtokenの中身を参照しない。
 - HTTP契約を変えたら [API文書](crates/branvil/docs/api.md) とRustの組み込みproviderを合わせ、`scripts/branvil-integration.sh` で公開APIとの結合を確認する。上流サービス固有の処理は `upstream::Host` の実装に置く。自然言語の意味判定はGuildBoticsが扱う。
 - loopbackだけで待ち受ける。リモート接続はOSが管理するOpenSSHの転送を使う。HubはmacOS、CIはLinux。サービスのGitは `src/git.rs` を通し、システム・ユーザーのGit設定や `GIT_*` を継承しない。テストでは `tests/common/mod.rs` の `git` / `git_as` を使う。自前で起動する場合は `GIT_CONFIG_NOSYSTEM=1`、空の `GIT_CONFIG_GLOBAL`、`GIT_TERMINAL_PROMPT=0`、`-c credential.helper=` を指定し、トークンは `GIT_ASKPASS` と環境変数で渡す。URLや引数に含めず、テストのメンバー名は架空のものにする。
