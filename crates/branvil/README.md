@@ -608,7 +608,7 @@ request changing only GuildBotics' crates skips) and `rust-test` (the rest),
 `rust-duplicates` (jscpd), `branvil-web` (`npm ci` at the
 repository root, then `npm run lint`, `npm run typecheck`, and `npm run test`
 in `crates/branvil/web`), and
-`branvil-integration` (see "Checking with GuildBotics"). Their image is
+`rust-test` (see "Checking with GuildBotics"). Their image is
 GuildBotics' development image
 (`guildbotics/agent-environment:dev`, built by
 `scripts/build-agent-environment-image.sh`): the owner loads its `docker save`
@@ -825,7 +825,7 @@ From the repository root, run the integration check against a disposable
 Branvil service:
 
 ```sh
-scripts/branvil-integration.sh
+cargo nextest run --locked -p gb-integrations --test main -E 'test(/^branvil::/)'
 ```
 
 The check covers tickets and dependencies, Git push and the pull request that

@@ -295,7 +295,7 @@ pub(super) async fn pending_closed_and_advanced_heads(
     finish_claim(base, runner, &attempt, "success").await;
 }
 
-async fn author_yields_running_checks(
+pub(super) async fn author_yields_running_checks(
     root: &Path,
     owner: &::branvil::api::MemberApi,
     code: &dyn CodeHostingService,
@@ -467,20 +467,4 @@ pub(super) async fn retry_main_verification(
     assert!(next.ends_with(retry["attempt_id"].as_str().unwrap()));
     assert!(code.retry_job(&next).await.is_err());
     finish_claim(base, runner, &retry, "success").await;
-}
-
-pub(super) async fn contract(
-    root: &Path,
-    owner: &::branvil::api::MemberApi,
-    code: &dyn CodeHostingService,
-    tickets: &dyn TicketService,
-    base: &str,
-    owner_token: &str,
-    runner: &str,
-) {
-    retry_main_verification(root, owner, code, tickets, base, owner_token, runner).await;
-    author_yields_running_checks(root, owner, code, base, owner_token, runner).await;
-    primary_failure_logs_and_cancelled_fallback(root, owner, code, base, owner_token, runner).await;
-    ten_failed_logs_fit_one_page(root, owner, code, base, owner_token, runner).await;
-    pending_closed_and_advanced_heads(root, owner, code, base, owner_token, runner).await;
 }
