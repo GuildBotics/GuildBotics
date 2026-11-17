@@ -74,6 +74,16 @@ fn reference_includes_standard_work_procedure() {
     assert!(text.contains("never end the turn while it still runs"));
     assert!(text.contains("This covers only the commands you run inside the environment"));
     assert!(text.contains("Stage with plain git"));
+    assert!(text.contains(
+        "Deliver a ticket's work as one PR that meets the ticket's completion conditions"
+    ));
+    assert!(text.contains("keep pushing to the same branch and PR"));
+    assert!(
+        text.contains("The amount of work, or the time it takes, is not a reason to split it.")
+    );
+    assert!(text.contains("ask on the ticket before opening a PR"));
+    assert!(text.contains("a split divides the ticket, not its PRs"));
+    assert!(text.contains("a ticket whose body tells you to split its work"));
     assert!(text.contains("Pass `--issue-url` once for each ticket the PR works on"));
     assert!(text.contains("add `--closes-issue` only when every one of those tickets is complete once this PR merges into the branch that receives its work"));
     assert!(text.contains("`--closes-issue` applies to all of them"));
@@ -106,6 +116,11 @@ fn reference_includes_standard_work_procedure() {
     assert!(text.contains("end the run with `member checks await`"));
     assert!(text.contains("summary says where the outcome is to be reported"));
     assert!(text.contains("the patrol resumes the run's work once the checks finish"));
+    assert!(
+        text.contains("The resumed run continues that work rather than only reporting the checks")
+    );
+    assert!(text.contains("carries on with whatever of the work is still unfinished"));
+    assert!(text.contains("the resumed run carries on with any of that work still unfinished"));
     assert!(!text.contains("awaiting_checks"));
     assert!(text.contains("externally visible trace"));
     assert!(text.contains("entry point"));
