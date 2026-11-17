@@ -46,7 +46,7 @@ You configure, run, and monitor GuildBotics in its screens, which the GuildBotic
 - **Interactive member sessions**: The guildbotics skill lets an AI CLI tool work as a member in your current repository
 - **Scheduled execution**: Per-member patrol commands and cron-based scheduled commands
 - **Custom commands**: Define your own work as a Markdown prompt / Python / Shell / YAML command and reuse it per member or role
-- **Swappable LLM / AI CLI tool**: Swap LLM providers or delegate to an AI CLI tool (Codex, Claude Code, and Grok Build launched from a local CLI)
+- **Swappable LLM / AI CLI tool**: Swap LLM providers or delegate to an AI CLI tool (Codex, Claude Code, or Grok Build, each launched from its local CLI)
 - **AI assistants in the screens**: Ask questions and apply proposed source changes in the command editor, and investigate execution failures in the diagnostics screen
 - **Internationalization**: English / Japanese
 

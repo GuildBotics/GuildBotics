@@ -938,7 +938,7 @@ effort:            # overlays it for low / high only
 
 `default` and unspecified apply no overlay, so a model that should always be used belongs in `parameters:`. These two keys are all there is to configure: the tool itself is driven by its built-in adapter. The shipped defaults additionally declare `effort_fields:` -- the typed-editing descriptors of the previous section -- but that is provider knowledge shipped with the tool, not something to configure.
 
-Every shipped tool carries a working default mapping plus `effort_fields:`, so `low` and `high` do something before you configure anything: codex takes model/effort on `turn/start`, Claude Code takes `--model` / `--effort`, Grok takes model and reasoning effort as ACP session config options. Supporting a new AI CLI tool means implementing a native adapter for it in this repository, which is also where its `effort_fields:` are declared -- there is no way to add a tool from a workspace YAML file.
+Every shipped tool carries a working default mapping plus `effort_fields:`, so `low` and `high` do something before you configure anything: codex takes model/effort on `turn/start`, Claude Code takes `--model` / `--effort`, and Grok takes model and reasoning effort as ACP session config options. Supporting a new AI CLI tool means implementing a native adapter for it in this repository, which is also where its `effort_fields:` are declared -- there is no way to add a tool from a workspace YAML file.
 
 ```yaml
 # intelligences/cli_agents/codex/default.yml
