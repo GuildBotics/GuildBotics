@@ -262,7 +262,7 @@ async fn merge_checked(
     .await
     .expect("fixture merge did not become ready");
 }
-async fn ticket_relations(t: &dyn TicketService) {
+async fn ticket_relations_contract(t: &dyn TicketService) {
     contracts::ticket_contract(t, REPO, "bug", "aiko").await;
     let parent = create(t, "Parent").await;
     let blocker = create(t, "Blocker").await;
@@ -301,141 +301,253 @@ async fn ticket_relations(t: &dyn TicketService) {
             .is_empty()
     );
 }
-async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only: bool) {
-    let temp = tempfile::tempdir().unwrap();
-    let (fixture, alert_host) =
-        ::branvil::test_support::Fixture::configured("owner", alerts::Host::configure).await;
-    fixture.install_test_hooks("branvil::hook");
-    let owner_token = fixture.owner_token.clone();
-    let running = &fixture.running;
-    let base = running.data.base_url().to_owned();
-    let owner = running.data.owner();
-    owner
-        .repos_create_workspace(input(json!({"name":"acme"})))
-        .await
+struct Context {
+    temp: tempfile::TempDir,
+    fixture: ::branvil::test_support::Fixture,
+    alert_host: alerts::Host,
+    owner: ::branvil::api::MemberApi,
+    owner_token: String,
+    base: String,
+    runner: String,
+    t: Arc<dyn TicketService>,
+    c: Arc<dyn CodeHostingService>,
+    chat: Arc<dyn ChatService>,
+    other_code: Arc<dyn CodeHostingService>,
+}
+impl Context {
+    async fn new() -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let (fixture, alert_host) =
+            ::branvil::test_support::Fixture::configured("owner", alerts::Host::configure).await;
+        fixture.install_test_hooks("branvil::hook");
+        let owner_token = fixture.owner_token.clone();
+        let running = &fixture.running;
+        let base = running.data.base_url().to_owned();
+        let owner = running.data.owner();
+        owner
+            .repos_create_workspace(input(json!({"name":"acme"})))
+            .await
+            .unwrap();
+        owner
+            .repos_create(input(json!({"path":REPO,"labels":["bug"]})))
+            .await
+            .unwrap();
+        owner
+            .members_create(input(json!({"name":"aiko","kind":"agent"})))
+            .await
+            .unwrap();
+        owner
+            .members_create(input(json!({"name":"runner1","kind":"runner"})))
+            .await
+            .unwrap();
+        let runner = owner
+            .members_issue_token("runner1".into(), input(json!({"label":"fixture"})))
+            .await
+            .unwrap();
+        let identity = temp.path().join("identity");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(identity.join(".guildbotics/config/team/members/aiko")).unwrap();
+        let writes = SharedWrites::new(identity.clone(), Some(workspace.clone()));
+        let key = MemoryKey(Mutex::new(None));
+        let secrets = SecretStore::new(
+            &writes,
+            Scope::Identity,
+            DeviceKey {
+                machine_root: temp.path().join("machine"),
+                keychain: &key,
+            },
+        )
         .unwrap();
-    owner
-        .repos_create(input(json!({"path":REPO,"labels":["bug"]})))
-        .await
+        let config = IntegrationConfig {
+            local_root: workspace.join(".guildbotics/local/services"),
+            identity_root: identity,
+            person_id: "aiko".into(),
+            display_name: "Aiko".into(),
+            accounts: Default::default(),
+            branvil_members: Default::default(),
+            chat_provider: "local".into(),
+            slack_base_url: String::new(),
+        };
+        let factory = ServiceIntegrationFactory::new(
+            config.clone(),
+            &secrets,
+            Some(running.data.clone()),
+            Arc::new(|_| {}),
+        )
         .unwrap();
-    owner
-        .members_create(input(json!({"name":"aiko","kind":"agent"})))
-        .await
-        .unwrap();
-    owner
-        .members_create(input(json!({"name":"runner1","kind":"runner"})))
-        .await
-        .unwrap();
-    let runner = owner
-        .members_issue_token("runner1".into(), input(json!({"label":"fixture"})))
-        .await
-        .unwrap();
-    let identity = temp.path().join("identity");
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(identity.join(".guildbotics/config/team/members/aiko")).unwrap();
-    let writes = SharedWrites::new(identity.clone(), Some(workspace.clone()));
-    let key = MemoryKey(Mutex::new(None));
-    let secrets = SecretStore::new(
-        &writes,
-        Scope::Identity,
-        DeviceKey {
-            machine_root: temp.path().join("machine"),
-            keychain: &key,
-        },
-    )
-    .unwrap();
-    let config = IntegrationConfig {
-        local_root: workspace.join(".guildbotics/local/services"),
-        identity_root: identity,
-        person_id: "aiko".into(),
-        display_name: "Aiko".into(),
-        accounts: Default::default(),
-        branvil_members: Default::default(),
-        chat_provider: "local".into(),
-        slack_base_url: String::new(),
-    };
-    let factory = ServiceIntegrationFactory::new(
-        config.clone(),
-        &secrets,
-        Some(running.data.clone()),
-        Arc::new(|_| {}),
-    )
-    .unwrap();
-    let t = factory.create_ticket_service("acme").unwrap();
-    let c = factory.create_code_hosting_service("acme").unwrap();
+        let t = factory.create_ticket_service("acme").unwrap();
+        let c = factory.create_code_hosting_service("acme").unwrap();
 
-    if repair_only {
-        readiness::retry_main_verification(
-            temp.path(),
-            &owner,
-            c.as_ref(),
-            t.as_ref(),
-            &base,
-            owner_token.trim(),
-            &runner.token,
+        let chat = factory.create_chat_service().unwrap();
+        let mut other_config = config;
+        other_config.person_id = "kenji".into();
+        let other_factory = ServiceIntegrationFactory::new(
+            other_config,
+            &secrets,
+            Some(running.data.clone()),
+            Arc::new(|_| {}),
         )
-        .await;
-        fixture.stop().await;
-        return;
+        .unwrap();
+        let other_code = other_factory.create_code_hosting_service("acme").unwrap();
+        Self {
+            temp,
+            fixture,
+            alert_host,
+            owner,
+            owner_token,
+            base,
+            runner: runner.token,
+            t,
+            c,
+            chat,
+            other_code,
+        }
     }
-    if code_behavior_only {
-        code_behavior::contract(
-            temp.path(),
-            &owner,
-            c.as_ref(),
-            t.as_ref(),
-            owner_token.trim(),
-        )
-        .await;
-        fixture.stop().await;
-        return;
+    async fn git(&self) -> (Git, String, String) {
+        self.repository(".branvil/ci.toml", PIPELINE).await
     }
+    async fn repository(&self, file: &str, body: &str) -> (Git, String, String) {
+        let git = Git::new(self.temp.path());
+        let main = git.commit("", file, body);
+        let remote = self.c.clone_url(REPO).await.unwrap();
+        assert!(remote.starts_with(&self.base));
+        git.push(&remote, &main, "main", "owner", self.owner_token.trim());
+        (git, main, remote)
+    }
+    async fn open(&self) -> (Git, String, PullRequestCreated) {
+        let (git, main, remote) = self.git().await;
+        let credential = self.c.git_credential().await.unwrap().unwrap();
+        let head = git.commit(&main, "feature.txt", "feature\n");
+        git.push(
+            &remote,
+            &head,
+            "next",
+            &credential.username,
+            &credential.password,
+        );
+        let next = self
+            .c
+            .create_pull_request(CreatePullRequest {
+                repository: REPO.into(),
+                head: "next".into(),
+                base: String::new(),
+                title: "Next".into(),
+                body: String::new(),
+                draft: false,
+                tickets: vec![],
+            })
+            .await
+            .unwrap();
+        (git, remote, next)
+    }
+    async fn stop(self) {
+        self.c.aclose().await.unwrap();
+        self.t.aclose().await.unwrap();
+        self.other_code.aclose().await.unwrap();
+        drop(self.c);
+        drop(self.t);
+        drop(self.other_code);
+        drop(self.owner);
+        self.fixture.stop().await;
+    }
+}
+#[test]
+fn hook() {
+    ::branvil::test_support::hook();
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ticket_relations() {
+    let f = Context::new().await;
+    let Context { t, .. } = &f;
+    ticket_relations_contract(t.as_ref()).await;
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chat() {
+    let f = Context::new().await;
+
+    chat_contracts::chat_contract(f.chat.as_ref(), "contract").await;
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ticket_placement() {
+    let f = Context::new().await;
+    let Context { owner, t, .. } = &f;
     owner
         .repos_create(input(json!({"path":"acme/order-other"})))
         .await
         .unwrap();
     contracts::ticket_placement_tracker_contract(t.as_ref(), REPO, "acme/order-other").await;
-    if board_order_only {
-        let git = Git::new(temp.path());
-        let driver = driver::Driver {
-            owner: &owner,
-            code: c.as_ref(),
-            git: &git,
-            base: &base,
-            runner: &runner.token,
-            sequence: std::sync::atomic::AtomicUsize::new(0),
-        };
-        contracts::ticket_board_order_contract(
-            t.as_ref(),
-            &driver,
-            REPO,
-            &ActorName("aiko".into()),
-            &ActorName("owner".into()),
-        )
-        .await;
-        fixture.stop().await;
-        return;
-    }
-    ticket_relations(t.as_ref()).await;
-    chat_contracts::chat_contract(factory.create_chat_service().unwrap().as_ref(), "contract")
-        .await;
+
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn board_order() {
+    let f = Context::new().await;
+    let Context {
+        temp,
+        owner,
+        base,
+        runner,
+        t,
+        c,
+        ..
+    } = &f;
     let git = Git::new(temp.path());
-    // An empty runner queue is temporary while push processing registers jobs.
-    assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            next_claim(&base, &runner.token)
-        )
-        .await
-        .is_err()
-    );
-    let main = git.commit("", ".branvil/ci.toml", PIPELINE);
-    let remote = c.clone_url(REPO).await.unwrap();
-    assert!(remote.starts_with(&base));
-    git.push(&remote, &main, "main", "owner", owner_token.trim());
-    alerts::contract(&alert_host, c.as_ref(), &base, owner_token.trim(), &main).await;
-    let head = git.commit(&main, "feature.txt", "feature\n");
+    let driver = driver::Driver {
+        owner,
+        code: c.as_ref(),
+        git: &git,
+        base,
+        runner,
+        sequence: std::sync::atomic::AtomicUsize::new(0),
+    };
+    contracts::ticket_board_order_contract(
+        t.as_ref(),
+        &driver,
+        REPO,
+        &ActorName("aiko".into()),
+        &ActorName("owner".into()),
+    )
+    .await;
+
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn code_patrol() {
+    let f = Context::new().await;
+    let Context {
+        temp,
+        owner,
+        owner_token,
+        t,
+        c,
+        ..
+    } = &f;
+    code_behavior::contract(
+        temp.path(),
+        owner,
+        c.as_ref(),
+        t.as_ref(),
+        owner_token.trim(),
+    )
+    .await;
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn merge_closes_ticket() {
+    let f = Context::new().await;
+    let Context {
+        owner,
+        base,
+        runner,
+        t,
+        c,
+        ..
+    } = &f;
+    let (git, main, remote) = f.git().await;
     let credential = c.git_credential().await.unwrap().unwrap();
+    let head = git.commit(&main, "feature.txt", "feature\n");
     git.push(
         &remote,
         &head,
@@ -465,7 +577,7 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
         .unwrap();
     assert_eq!(pending.head_sha, head);
     assert_eq!(pending.rollup, ReadinessRollup::Pending);
-    finish(&base, &runner.token, &head, "success").await;
+    finish(base, runner, &head, "success").await;
     let ready = c
         .readiness(&pr.target.url, false, MAX_LOG_TAIL_BYTES)
         .await
@@ -502,7 +614,47 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
             .items()[0]["state"],
         "closed"
     );
-    let moved = git.commit(&head, "later.txt", "later\n");
+    contracts::code_closed_contract(c.as_ref(), &pr.target.url).await;
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dependency_alerts() {
+    let f = Context::new().await;
+    let Context {
+        owner_token,
+        base,
+        c,
+        ..
+    } = &f;
+    let (_, main, _) = f.git().await;
+    alerts::contract(&f.alert_host, c.as_ref(), base, owner_token.trim(), &main).await;
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn empty_runner_queue() {
+    let f = Context::new().await;
+    let Context { base, runner, .. } = &f;
+    // An empty runner queue is temporary while push processing registers jobs.
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            next_claim(base, runner)
+        )
+        .await
+        .is_err()
+    );
+
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn artifacts_and_stale_head() {
+    let f = Context::new().await;
+    let Context {
+        base, runner, c, ..
+    } = &f;
+    let (git, main, remote) = f.git().await;
+    let credential = c.git_credential().await.unwrap().unwrap();
+    let moved = git.commit(&main, "later.txt", "later\n");
     git.push(
         &remote,
         &moved,
@@ -529,7 +681,7 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
     assert_eq!(again.head_sha, moved);
     assert_eq!(again.rollup, ReadinessRollup::Pending);
     let artifact = b"PK\x03\x04synthetic test artifact";
-    finish_artifact(&base, &runner.token, &moved, "success", Some(artifact)).await;
+    finish_artifact(base, runner, &moved, "success", Some(artifact)).await;
     let too_large = c.artifact(&next.target.url, "report", 1).await.unwrap_err();
     assert_eq!(
         too_large.translation_key(),
@@ -567,7 +719,7 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
     assert_eq!(changed.rollup, ReadinessRollup::Pending);
     contracts::code_stale_head_contract(c.as_ref(), &next.target.url, &moved).await;
     contracts::code_old_artifact_contract(c.as_ref(), &next.target.url).await;
-    finish(&base, &runner.token, &advanced, "failure").await;
+    finish(base, runner, &advanced, "failure").await;
     assert_eq!(
         c.readiness(&next.target.url, false, MAX_LOG_TAIL_BYTES)
             .await
@@ -575,6 +727,16 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
             .rollup,
         ReadinessRollup::Failure
     );
+
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn code_contract_and_boundaries() {
+    let f = Context::new().await;
+    let Context { t, c, .. } = &f;
+    let (git, main, remote) = f.git().await;
+    let credential = c.git_credential().await.unwrap().unwrap();
+    let head = git.commit(&main, "feature.txt", "feature\n");
     git.commit(&head, "README.md", "contract line\n");
     let contract = git.commit("", "日本.md", "Unicode content\n");
     git.push(
@@ -584,39 +746,19 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
         &credential.username,
         &credential.password,
     );
-    let aliases = [
+    for branch in [
         "contract-feature-other",
         "contract-feature-wrong-kind-false",
         "contract-feature-wrong-kind-true",
-        "contract-order",
-        "ticket-search-decoy",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect::<Vec<_>>();
-    let bases = (0..101)
-        .map(|n| format!("order-base-{n}"))
-        .collect::<Vec<_>>();
-    let mut owned = std::iter::once("push".to_string())
-        .chain(std::iter::once("-q".to_string()))
-        .chain(std::iter::once(remote.clone()))
-        .chain(
-            aliases
-                .iter()
-                .map(|name| format!("{contract}:refs/heads/{name}")),
-        )
-        .chain(bases.iter().map(|name| format!("{head}:refs/heads/{name}")))
-        .collect::<Vec<_>>();
-    let mut link_head = contract.clone();
-    for n in [7, 0, 1, 2, 3, 4, 5, 6] {
-        link_head = git.commit(&link_head, &format!("links-{n}.txt"), "link case\n");
-        owned.push(format!("{link_head}:refs/heads/contract-feature-links-{n}"));
+    ] {
+        git.push(
+            &remote,
+            &contract,
+            branch,
+            &credential.username,
+            &credential.password,
+        );
     }
-    git.run(
-        &owned.iter().map(String::as_str).collect::<Vec<_>>(),
-        &credential.username,
-        &credential.password,
-    );
     contracts::code_contract(c.as_ref(), REPO, "contract-feature", "main").await;
     let contract_pr = c
         .open_pull_requests(REPO, "contract-feature")
@@ -631,7 +773,23 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
         .unwrap();
     contracts::code_kind_boundary_contract(c.as_ref(), t.as_ref(), REPO, &contract_pr).await;
     contracts::ticket_wrong_subject_contract(t.as_ref(), &contract_pr, &comment.id).await;
-    contracts::code_closed_contract(c.as_ref(), &pr.target.url).await;
+
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ticket_search_decoy() {
+    let f = Context::new().await;
+    let Context { t, c, .. } = &f;
+    let (git, main, remote) = f.git().await;
+    let credential = c.git_credential().await.unwrap().unwrap();
+    let head = git.commit(&main, "feature.txt", "feature\n");
+    git.push(
+        &remote,
+        &head,
+        "ticket-search-decoy",
+        &credential.username,
+        &credential.password,
+    );
     contracts::ticket_search_decoy_contract(
         t.as_ref(),
         c.as_ref(),
@@ -641,7 +799,68 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
         "main",
     )
     .await;
+
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn code_open_order() {
+    let f = Context::new().await;
+    let Context { c, .. } = &f;
+    let (git, main, remote) = f.repository("README.md", "base\n").await;
+    let credential = c.git_credential().await.unwrap().unwrap();
+    let head = git.commit(&main, "feature.txt", "feature\n");
+    let bases = (0..101)
+        .map(|n| format!("order-base-{n}"))
+        .collect::<Vec<_>>();
+    let args = std::iter::once("push".to_owned())
+        .chain(std::iter::once("-q".to_owned()))
+        .chain(std::iter::once(remote.clone()))
+        .chain(std::iter::once(format!("{head}:refs/heads/contract-order")))
+        .chain(bases.iter().map(|name| format!("{main}:refs/heads/{name}")))
+        .collect::<Vec<_>>();
+    git.run(
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+        &credential.username,
+        &credential.password,
+    );
     contracts::code_open_order_contract(c.as_ref(), REPO, "contract-order", &bases, true).await;
+
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn code_links() {
+    let f = Context::new().await;
+    let Context {
+        owner,
+        base,
+        runner,
+        t,
+        c,
+        ..
+    } = &f;
+    let (git, main, remote) = f.git().await;
+    let credential = c.git_credential().await.unwrap().unwrap();
+    let head = git.commit(&main, "feature.txt", "feature\n");
+    git.commit(&head, "README.md", "contract line\n");
+    let contract = git.commit("", "日本.md", "Unicode content\n");
+    git.push(
+        &remote,
+        &contract,
+        "contract-feature",
+        &credential.username,
+        &credential.password,
+    );
+    let mut owned = vec!["push".to_owned(), "-q".to_owned(), remote.clone()];
+    let mut link_head = contract.clone();
+    for n in [7, 0, 1, 2, 3, 4, 5, 6] {
+        link_head = git.commit(&link_head, &format!("links-{n}.txt"), "link case\n");
+        owned.push(format!("{link_head}:refs/heads/contract-feature-links-{n}"));
+    }
+    git.run(
+        &owned.iter().map(String::as_str).collect::<Vec<_>>(),
+        &credential.username,
+        &credential.password,
+    );
     let cases = contracts::code_link_population(
         c.as_ref(),
         t.as_ref(),
@@ -669,7 +888,7 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
             .rollup
             == ReadinessRollup::Pending
         {
-            finish(&base, &runner.token, &current_head, "success").await;
+            finish(base, runner, &current_head, "success").await;
         }
         owner
             .pulls_review(
@@ -679,64 +898,16 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
             )
             .await
             .unwrap();
-        merge_checked(
-            &owner,
-            REPO,
-            n,
-            &current_head,
-            &current_base,
-            &base,
-            &runner.token,
-        )
-        .await;
+        merge_checked(owner, REPO, n, &current_head, &current_base, base, runner).await;
         contracts::code_link_case_finished(t.as_ref(), &case).await;
     }
-    let driver = driver::Driver {
-        owner: &owner,
-        code: c.as_ref(),
-        git: &git,
-        base: &base,
-        runner: &runner.token,
-        sequence: std::sync::atomic::AtomicUsize::new(0),
-    };
-    contracts::ticket_patrol_contract(
-        t.as_ref(),
-        &driver,
-        REPO,
-        "bug",
-        ActorName("aiko".into()),
-        ActorName("owner".into()),
-    )
-    .await;
-    owner
-        .repos_create_workspace(input(json!({"name":"elsewhere"})))
-        .await
-        .unwrap();
-    owner
-        .repos_create(input(json!({"path":"elsewhere/repo","labels":["bug"]})))
-        .await
-        .unwrap();
-    let their = owner
-        .tickets_create_ticket("elsewhere/repo", input(json!({"title":"Their ticket"})))
-        .await
-        .unwrap();
-    let their_comment = owner
-        .tickets_add_comment(
-            "elsewhere/repo",
-            &their.key,
-            input(json!({"body":"Their comment"})),
-        )
-        .await
-        .unwrap();
-    contracts::ticket_scope_contract(
-        t.as_ref(),
-        REPO,
-        "elsewhere/repo",
-        &their.url,
-        &their_comment.id,
-    )
-    .await;
-    contracts::code_cross_repo_link_contract(c.as_ref(), &next.target.url, &their.url).await;
+
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ticket_attachments() {
+    let f = Context::new().await;
+    let Context { owner, t, .. } = &f;
     let screen = owner
         .attachments_upload(
             REPO,
@@ -769,24 +940,27 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
         },
     )
     .await;
-    let mut other_config = config;
-    other_config.person_id = "kenji".into();
-    let other_factory = ServiceIntegrationFactory::new(
-        other_config,
-        &secrets,
-        Some(running.data.clone()),
-        Arc::new(|_| {}),
-    )
-    .unwrap();
-    contracts::code_other_actor_contract(
-        c.as_ref(),
-        other_factory
-            .create_code_hosting_service("acme")
-            .unwrap()
-            .as_ref(),
-        &next.target.url,
-    )
-    .await;
+
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn code_other_actor() {
+    let f = Context::new().await;
+    let Context { c, .. } = &f;
+    let (_, _, next) = f.open().await;
+    contracts::code_other_actor_contract(c.as_ref(), f.other_code.as_ref(), &next.target.url).await;
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn member_show_and_missing_base() {
+    let f = Context::new().await;
+    let Context {
+        owner,
+        owner_token,
+        c,
+        ..
+    } = &f;
+    let (git, remote, next) = f.open().await;
     let final_base = owner.repos_branch(REPO, "main").await.unwrap().sha;
     let repo_config = owner.repos_get(REPO).await.unwrap();
     owner.repos_update(REPO,input(json!({"revision":repo_config.revision,"default_branch":"main/next","protected_branches":[]}))).await.unwrap();
@@ -807,51 +981,213 @@ async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only:
     );
     contracts::member_show_contract(c.as_ref(), REPO).await;
     contracts::code_missing_base_contract(c.as_ref(), &next.target.url).await;
+
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reused_and_gates() {
+    let f = Context::new().await;
+    let Context {
+        temp,
+        owner,
+        owner_token,
+        base,
+        runner,
+        c,
+        ..
+    } = &f;
     extra::reused_and_gates(
         temp.path(),
-        &owner,
+        owner,
         c.as_ref(),
-        &base,
+        base,
         owner_token.trim(),
-        &runner.token,
+        runner,
     )
     .await;
-    readiness::contract(
-        temp.path(),
-        &owner,
-        c.as_ref(),
-        t.as_ref(),
-        &base,
-        owner_token.trim(),
-        &runner.token,
-    )
-    .await;
-    c.aclose().await.unwrap();
-    t.aclose().await.unwrap();
-    drop(c);
-    drop(t);
-    drop(owner);
-    drop(factory);
-    fixture.stop().await;
+    f.stop().await;
 }
-#[test]
-fn hook() {
-    ::branvil::test_support::hook();
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn ticket_code_scope_links_and_readiness() {
-    scenario(false, false, false).await;
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn board_order() {
-    scenario(true, false, false).await;
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn code_patrol() {
-    scenario(false, true, false).await;
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn retry_main_verification() {
-    scenario(false, false, true).await;
+    let f = Context::new().await;
+    let Context {
+        temp,
+        owner,
+        owner_token,
+        base,
+        runner,
+        t,
+        c,
+        ..
+    } = &f;
+    readiness::retry_main_verification(
+        temp.path(),
+        owner,
+        c.as_ref(),
+        t.as_ref(),
+        base,
+        owner_token.trim(),
+        runner,
+    )
+    .await;
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn author_yields_running_checks() {
+    let f = Context::new().await;
+    let Context {
+        temp,
+        owner,
+        owner_token,
+        base,
+        runner,
+        c,
+        ..
+    } = &f;
+    readiness::author_yields_running_checks(
+        temp.path(),
+        owner,
+        c.as_ref(),
+        base,
+        owner_token.trim(),
+        runner,
+    )
+    .await;
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn primary_failure_logs_and_cancelled_fallback() {
+    let f = Context::new().await;
+    let Context {
+        temp,
+        owner,
+        owner_token,
+        base,
+        runner,
+        c,
+        ..
+    } = &f;
+    readiness::primary_failure_logs_and_cancelled_fallback(
+        temp.path(),
+        owner,
+        c.as_ref(),
+        base,
+        owner_token.trim(),
+        runner,
+    )
+    .await;
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ten_failed_logs_fit_one_page() {
+    let f = Context::new().await;
+    let Context {
+        temp,
+        owner,
+        owner_token,
+        base,
+        runner,
+        c,
+        ..
+    } = &f;
+    readiness::ten_failed_logs_fit_one_page(
+        temp.path(),
+        owner,
+        c.as_ref(),
+        base,
+        owner_token.trim(),
+        runner,
+    )
+    .await;
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pending_closed_and_advanced_heads() {
+    let f = Context::new().await;
+    let Context {
+        temp,
+        owner,
+        owner_token,
+        base,
+        runner,
+        c,
+        ..
+    } = &f;
+    readiness::pending_closed_and_advanced_heads(
+        temp.path(),
+        owner,
+        c.as_ref(),
+        base,
+        owner_token.trim(),
+        runner,
+    )
+    .await;
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ticket_patrol() {
+    let f = Context::new().await;
+    let Context {
+        owner,
+        base,
+        runner,
+        t,
+        c,
+        ..
+    } = &f;
+    let (git, _, _) = f.git().await;
+    let driver = driver::Driver {
+        owner,
+        code: c.as_ref(),
+        git: &git,
+        base,
+        runner,
+        sequence: std::sync::atomic::AtomicUsize::new(0),
+    };
+    contracts::ticket_patrol_contract(
+        t.as_ref(),
+        &driver,
+        REPO,
+        "bug",
+        ActorName("aiko".into()),
+        ActorName("owner".into()),
+    )
+    .await;
+    f.stop().await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ticket_and_code_scope() {
+    let f = Context::new().await;
+    let Context { owner, t, c, .. } = &f;
+    let (_, _, next) = f.open().await;
+    owner
+        .repos_create_workspace(input(json!({"name":"elsewhere"})))
+        .await
+        .unwrap();
+    owner
+        .repos_create(input(json!({"path":"elsewhere/repo","labels":["bug"]})))
+        .await
+        .unwrap();
+    let their = owner
+        .tickets_create_ticket("elsewhere/repo", input(json!({"title":"Their ticket"})))
+        .await
+        .unwrap();
+    let their_comment = owner
+        .tickets_add_comment(
+            "elsewhere/repo",
+            &their.key,
+            input(json!({"body":"Their comment"})),
+        )
+        .await
+        .unwrap();
+    contracts::ticket_scope_contract(
+        t.as_ref(),
+        REPO,
+        "elsewhere/repo",
+        &their.url,
+        &their_comment.id,
+    )
+    .await;
+    contracts::code_cross_repo_link_contract(c.as_ref(), &next.target.url, &their.url).await;
+    f.stop().await;
 }
