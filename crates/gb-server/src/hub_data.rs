@@ -22,12 +22,14 @@ fn roots() -> anyhow::Result<Vec<PathBuf>> {
     registered_roots(&home::data()?, &home::identity_root()?)
 }
 
+/// The identity root first, then each registered workspace once.
 fn registered_roots(data: &Path, identity: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    let mut roots = vec![host_path::directory(identity, true)?];
-    roots.extend(gb_workspace::selection::registered(data)?);
-    roots.sort();
-    roots.dedup();
-    Ok(roots)
+    let identity = host_path::directory(identity, true)?;
+    let mut workspaces = gb_workspace::selection::registered(data)?;
+    workspaces.retain(|root| *root != identity);
+    workspaces.sort();
+    workspaces.dedup();
+    Ok([vec![identity], workspaces].concat())
 }
 
 pub fn execute(
@@ -42,7 +44,6 @@ pub fn execute(
                 "backup cannot select an archive as input"
             );
             backup(
-                &home::identity_root()?,
                 &roots()?,
                 to.ok_or_else(|| anyhow::anyhow!("backup requires --to"))?,
             )
@@ -68,18 +69,19 @@ pub fn execute(
     }
 }
 
-/// Converts every root. Nothing changes in any root until every root has
-/// passed the check (no link, no unreadable file, no newer version) and has
-/// had everything its conversion reads read, the secret store decrypted.
+/// Converts the identity root, the first of `roots`: every record the
+/// conversions change lives there. Nothing changes until every root has
+/// passed the check (no link, no unreadable file, no newer version) and
+/// everything the conversion reads has been read, the secret store decrypted.
 fn upgrade(roots: &[PathBuf], device: &DeviceKey) -> anyhow::Result<()> {
     for root in roots {
         check_root(root, files::SHARED_RECORD_SCHEMA_VERSION)?;
-        upgrade_root(root, device, false)?;
     }
-    for root in roots {
-        upgrade_root(root, device, true)?;
-    }
-    Ok(())
+    let identity = roots
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("no identity root"))?;
+    upgrade_root(identity, device, false)?;
+    upgrade_root(identity, device, true)
 }
 
 /// Where a converted root records the version of its data, so that the
@@ -88,8 +90,9 @@ const SCHEMA_RECORD: &str = ".guildbotics/state/schema.json";
 
 /// 4 → 5 (versions 1–4 only added fields): GuildBotics no longer keeps a
 /// connection, an owner token, or member tokens and user names of its own for
-/// the built-in code host. Repeating it changes nothing more, and nothing
-/// changes before every file it reads and the secret store have been read.
+/// the built-in code host. Version 4 keeps them only in the identity root.
+/// Repeating it changes nothing more, and nothing changes before every file
+/// it reads and the secret store have been read.
 /// With `write` false, only reads what the conversion reads.
 fn upgrade_root(root: &Path, device: &DeviceKey, write: bool) -> anyhow::Result<()> {
     let writes = SharedWrites::new(root.to_path_buf(), None);
@@ -231,15 +234,15 @@ fn each(
     Ok(())
 }
 
-fn backup(identity_root: &Path, roots: &[PathBuf], destination: &Path) -> anyhow::Result<()> {
-    backup_with(identity_root, roots, destination, &mut |file| {
+/// Copies `roots`, the identity root first, as `registered_roots` lists them.
+fn backup(roots: &[PathBuf], destination: &Path) -> anyhow::Result<()> {
+    backup_with(roots, destination, &mut |file| {
         fs::File::open(file)?.sync_all()
     })
 }
 
 /// [`backup`], making each copied file durable with `flush`.
 fn backup_with(
-    identity_root: &Path,
     roots: &[PathBuf],
     destination: &Path,
     flush: &mut impl FnMut(&Path) -> std::io::Result<()>,
@@ -267,6 +270,9 @@ fn backup_with(
     // only the copy, which clones on APFS; making it durable waits until after.
     let mut copies = Vec::new();
     {
+        let identity_root = roots
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("no identity root"))?;
         let mut identity = IdentityLock::acquire(identity_root, files::SHARED_WRITE_TIMEOUT)?;
         for (index, root) in roots.iter().enumerate() {
             let _workspace = identity.workspace(root, files::SHARED_WRITE_TIMEOUT)?;
@@ -292,7 +298,7 @@ fn backup_with(
     }
     files::atomic_write(
         &destination.join("manifest.json"),
-        files::dump_shared_json(&json!({"version":1,"roots":roots})).as_bytes(),
+        files::dump_shared_json(&json!({"version":2,"roots":roots})).as_bytes(),
     )?;
     Ok(())
 }
@@ -304,7 +310,8 @@ fn archive_roots(archive: &Path) -> anyhow::Result<Vec<PathBuf>> {
         .ok_or_else(|| anyhow::anyhow!("backup manifest is missing"))?;
     let manifest: Value =
         serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("invalid backup manifest"))?;
-    anyhow::ensure!(manifest["version"] == 1, "unsupported backup manifest");
+    // Version 1 listed the roots in path order, not the identity root first.
+    anyhow::ensure!(manifest["version"] == 2, "unsupported backup manifest");
     let roots = manifest["roots"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("invalid backup roots"))?;
@@ -485,7 +492,7 @@ mod tests {
         version_4_identity(&identity, &keys);
         write(&workspace, "config/project.yml", "name: test");
         let archive = temp.path().join("backup");
-        backup(&identity, &[identity.clone(), workspace.clone()], &archive).unwrap();
+        backup(&[identity.clone(), workspace.clone()], &archive).unwrap();
         let originals = [snapshot(&identity), snapshot(&workspace)];
 
         let roots = archive_roots(&archive).unwrap();
@@ -544,6 +551,47 @@ mod tests {
         assert_eq!(snapshot(&archive), converted);
     }
 
+    #[test]
+    fn an_upgrade_converts_the_identity_root_and_reads_no_workspace_secret_index() {
+        let temp = tempfile::tempdir().unwrap();
+        // Roots are compared as the registry stores them, links resolved.
+        let temp = temp.path().canonicalize().unwrap();
+        let keys = Keys::default();
+        let data = temp.join("data");
+        // The identity root sorts after the workspace: it comes first because
+        // it is the identity root, not because of its path.
+        let identity = temp.join("z-identity");
+        let workspace = temp.join("a-workspace");
+        version_4_identity(&identity, &keys);
+        // A workspace an older build left: no current build reads its index.
+        write(
+            &workspace,
+            "config/secrets.yml",
+            "store_id: abc\nkeys:\n  OPENAI_API_KEY:\n    generation: 2\n",
+        );
+        gb_workspace::selection::register(&data, &workspace).unwrap();
+        let roots = registered_roots(&data, &identity).unwrap();
+        assert_eq!(roots, [identity.clone(), workspace.clone()]);
+        let archive = temp.join("backup");
+        backup(&roots, &archive).unwrap();
+        let copies = archive_roots(&archive).unwrap();
+        let workspace_before = snapshot(&copies[1]);
+
+        upgrade(&copies, &device(&temp, &keys)).unwrap();
+        check_archive(&archive).unwrap();
+        assert!(!copies[0].join(".guildbotics/config/connections").exists());
+        assert!(copies[0].join(SCHEMA_RECORD).is_file());
+        assert_eq!(snapshot(&copies[1]), workspace_before);
+
+        // A backup by an older build listed its roots in path order.
+        let manifest = archive.join("manifest.json");
+        let mut older: Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+        older["version"] = json!(1);
+        fs::write(&manifest, older.to_string()).unwrap();
+        let error = archive_roots(&archive).unwrap_err().to_string();
+        assert!(error.contains("unsupported backup manifest"), "{error}");
+    }
+
     #[cfg(unix)]
     #[test]
     fn an_upgrade_changes_no_root_until_every_root_passes_the_check() {
@@ -577,18 +625,6 @@ mod tests {
         assert!(error.contains("passes through a link"), "{error}");
         assert_eq!(snapshot(&outside), target);
         assert_eq!(snapshot(&good), before);
-        // A later root whose store this keychain cannot decrypt: the root
-        // before it is not converted either.
-        let foreign = temp.path().join("foreign");
-        version_4_identity(&foreign, &Keys::default());
-        let foreign_before = snapshot(&foreign);
-        upgrade(
-            &[good.clone(), foreign.clone()],
-            &device(temp.path(), &keys),
-        )
-        .unwrap_err();
-        assert_eq!(snapshot(&good), before);
-        assert_eq!(snapshot(&foreign), foreign_before);
         upgrade(std::slice::from_ref(&good), &device(temp.path(), &keys)).unwrap();
         assert_ne!(snapshot(&good), before);
     }
@@ -635,12 +671,7 @@ mod tests {
             .unwrap();
         }
         let archive = temp.path().join("backup");
-        backup(
-            &temp.path().join("identity"),
-            std::slice::from_ref(&source),
-            &archive,
-        )
-        .unwrap();
+        backup(std::slice::from_ref(&source), &archive).unwrap();
         write(&source, "state/run.json", r#"{"schema_version":99}"#);
         check_archive(&archive).unwrap();
         assert!(check(&source).is_err());
@@ -680,19 +711,14 @@ mod tests {
         write(&source, "state/run.json", "{}");
         let roots = [identity.clone(), source.clone()];
         let mut flushed = 0;
-        backup_with(
-            &identity,
-            &roots,
-            &temp.path().join("backup"),
-            &mut |file| {
-                // A writer takes both locks, in the order writers take them.
-                let mut lock = IdentityLock::acquire(&identity, std::time::Duration::ZERO).unwrap();
-                lock.workspace(&source, std::time::Duration::ZERO).unwrap();
-                assert!(file.is_file());
-                flushed += 1;
-                Ok(())
-            },
-        )
+        backup_with(&roots, &temp.path().join("backup"), &mut |file| {
+            // A writer takes both locks, in the order writers take them.
+            let mut lock = IdentityLock::acquire(&identity, std::time::Duration::ZERO).unwrap();
+            lock.workspace(&source, std::time::Duration::ZERO).unwrap();
+            assert!(file.is_file());
+            flushed += 1;
+            Ok(())
+        })
         .unwrap();
         assert_eq!(flushed, 2);
         assert!(temp.path().join("backup/manifest.json").is_file());
@@ -701,23 +727,21 @@ mod tests {
     #[test]
     fn selects_all_registered_workspaces_and_identity_once() {
         let temp = tempfile::tempdir().unwrap();
-        let data = temp.path().join("data");
-        let identity = temp.path().join("identity");
-        let one = temp.path().join("one");
-        let two = temp.path().join("two");
-        gb_workspace::selection::register(&data, &one).unwrap();
+        let temp = temp.path().canonicalize().unwrap();
+        let data = temp.join("data");
+        let identity = temp.join("identity");
+        let one = temp.join("one");
+        let two = temp.join("two");
         gb_workspace::selection::register(&data, &two).unwrap();
         gb_workspace::selection::register(&data, &identity).unwrap();
+        gb_workspace::selection::register(&data, &one).unwrap();
         let roots = registered_roots(&data, &identity).unwrap();
-        assert_eq!(roots.len(), 3);
-        for root in [&one, &two, &identity] {
-            assert!(roots.contains(root));
-        }
+        assert_eq!(roots, [identity.clone(), one, two]);
         for root in &roots {
             write(root, "state/item.json", r#"{"schema_version":4}"#);
         }
-        let archive = temp.path().join("archive");
-        backup(&identity, &roots, &archive).unwrap();
+        let archive = temp.join("archive");
+        backup(&roots, &archive).unwrap();
         check_archive(&archive).unwrap();
         for i in 0..3 {
             assert!(
@@ -727,7 +751,7 @@ mod tests {
                     .is_file()
             );
         }
-        assert!(backup(&identity, &roots, &archive).is_err());
+        assert!(backup(&roots, &archive).is_err());
         fs::write(data.join("workspaces.json"), "invalid").unwrap();
         assert!(registered_roots(&data, &identity).is_err());
     }
@@ -802,7 +826,7 @@ mod tests {
         assert!(check(&root).is_err());
         fs::write(
             temp.path().join("manifest.json"),
-            r#"{"version":1,"roots":["/never/read"]}"#,
+            r#"{"version":2,"roots":["/never/read"]}"#,
         )
         .unwrap();
         assert!(check_archive(temp.path()).is_err());
