@@ -703,11 +703,9 @@ fn test_environment_problems_open_one_alert_per_thing_to_fix() {
         assert_eq!(a["reason"], reason);
         assert_eq!(a["actions"], json!(["setup"]));
     }
-    assert_eq!(
-        f.view(&json!({}), &p, Some("agent-environment:device"))
-            .len(),
-        4
-    );
+    for alert in &a {
+        assert_eq!(f.view(&json!({}), &p, alert["id"].as_str()).len(), 4);
+    }
     assert!(f.list().is_empty());
 }
 #[test]

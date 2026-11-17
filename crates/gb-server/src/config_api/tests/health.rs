@@ -215,6 +215,15 @@ async fn environment_tool_authentication_alert_recovers_without_losing_saved_log
         f.add(json!({"person_id":name,"person_name":name,"person_type":"agent","is_active":true}))
             .await;
     }
+    f.add(
+        json!({"person_id":"human","person_name":"Human","person_type":"human","is_active":true}),
+    )
+    .await;
+    // The editor deactivates humans; exercise an active participation saved directly.
+    f.write(
+        &f.config().join("team/members/human/member.yml"),
+        "is_active: true\n",
+    );
     f.add(json!({"person_id":"inactive","person_name":"Inactive","person_type":"agent","is_active":false})).await;
     f.write(
         &f.config().join("intelligences/brain_mapping.yml"),
@@ -291,6 +300,44 @@ async fn environment_tool_authentication_alert_recovers_without_losing_saved_log
                 )
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn human_only_tools_and_broken_slots_never_produce_environment_alerts() {
+    let f = fixture();
+    f.init().await;
+    f.add(
+        json!({"person_id":"human","person_name":"Human","person_type":"human","is_active":true}),
+    )
+    .await;
+    // The editor deactivates humans; exercise an active participation saved directly.
+    f.write(
+        &f.config().join("team/members/human/member.yml"),
+        "is_active: true\n",
+    );
+    let mapping = f
+        .config()
+        .join("team/members/human/intelligences/brain_mapping.yml");
+    for declaration in [
+        "default:\n  kind: ai_cli\n  cli_agent: default\n",
+        "default:\n  kind: ai_cli\n  cli_agent: absent\n",
+    ] {
+        f.write(&mapping, declaration);
+        let view = f.get("/intelligences/agent-environment").await;
+        assert_eq!(view["members"], json!([]));
+        for tool in view["tools"].as_array().unwrap() {
+            assert_eq!(tool["members"], json!([]));
+        }
+        assert!(
+            crate::health::environment_problems(&view)
+                .iter()
+                .all(|p| p["setting"] != "tool" && p["person_id"] != "human")
+        );
+        let alerts = f.get("/system-alerts").await;
+        assert!(alerts["alerts"].as_array().unwrap().iter().all(
+            |a| a["person_id"] != "human" && a["code"] != "agent_environment_tool_unavailable"
+        ));
     }
 }
 

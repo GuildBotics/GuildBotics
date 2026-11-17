@@ -5,9 +5,6 @@ en:
   # and why a build or a start failed. Dynamic text from below -- a
   # validator's own explanation, the runtime's error -- is passed through
   # as %{error} / %{detail}, never restated.
-  tool_members: "Used by: %{members}"
-  tool_member_slot: "%{name} (%{slot})"
-  tool_no_members: "No members use this tool"
   runtime:
     # Runtime failures stay verbatim; filesystem preflight is described below.
     sdk_missing: "The microsandbox SDK is not installed for this platform."

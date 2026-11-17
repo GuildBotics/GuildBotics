@@ -509,7 +509,7 @@ fn member_slots(resolved: &Value, access: &Value, language: &str) -> Vec<Value> 
     }).collect()
 }
 
-/// Project tool users once, from the active members' resolved slots.
+/// Project tool users once, from the active agents' resolved slots.
 pub(crate) fn attach_tool_members(view: &mut Value) {
     let mut users = std::collections::BTreeMap::<String, Vec<Value>>::new();
     for member in view["members"].as_array().into_iter().flatten() {
@@ -583,7 +583,11 @@ pub(crate) async fn status_with(
     };
     let mut members = vec![];
     if let Ok(team) = gb_config::team::Team::load(&config, &host.identity_root) {
-        for member in team.members.into_iter().filter(|m| m.is_active) {
+        for member in team
+            .members
+            .into_iter()
+            .filter(|m| m.is_active && m.person_type != "human")
+        {
             let slots = match gb_config::resolved_guest::resolve(
                 &roots,
                 workspace,
