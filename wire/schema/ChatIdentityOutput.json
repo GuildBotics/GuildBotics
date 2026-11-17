@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The member CLI identity output read by the guest.",
+  "description": "The member CLI identity output used to generate the wire schema.",
   "properties": {
     "display_name": {
       "title": "Display Name",

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The member CLI reaction output read by the guest.",
+  "description": "The member CLI reaction output used to generate the wire schema.",
   "properties": {
     "channel_id": {
       "title": "Channel Id",

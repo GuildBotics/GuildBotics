@@ -21,7 +21,7 @@ def message_position(occurred_at: datetime, message_id: str) -> str:
 
 
 class ChatIdentityOutput(TypedDict):
-    """The member CLI identity output read by the guest."""
+    """The member CLI identity output used to generate the wire schema."""
 
     service: str
     user_id: str
@@ -42,7 +42,7 @@ class ChatPostOutput(TypedDict):
 
 
 class ChatReactionOutput(TypedDict):
-    """The member CLI reaction output read by the guest."""
+    """The member CLI reaction output used to generate the wire schema."""
 
     service: str
     channel_id: str
