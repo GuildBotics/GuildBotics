@@ -1192,7 +1192,7 @@ pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Opt
 
 #[cfg(feature = "test-support")]
 pub(crate) fn claim_fixture(w: &Wtx, target: (&str, &str), now: &str) -> AppResult<Claimed> {
-    let (a, reuse) = scheduled(w, true)?
+    let (a, reuse) = scheduled(w, false)?
         .into_iter()
         .find(|(a, _)| a.repo_path == target.0 && a.sha == target.1)
         .ok_or_else(|| AppError::internal("fixture head has no queued check"))?;

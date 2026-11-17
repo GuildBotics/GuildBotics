@@ -152,3 +152,54 @@ async fn independent_services_keep_ticket_relations_and_lifecycle_isolated() {
     );
     second.stop().await;
 }
+
+#[tokio::test]
+async fn target_results_ignore_other_heads_priority_class() {
+    for draft in [Some(false), Some(true), None] {
+        for conclusion in ["success", "failure"] {
+            let f = Fixture::new("owner").await;
+            f.workspace("fixture").await;
+            f.repository("fixture/repo").await;
+            let (agent, _) = f.member("agent").await;
+            let base = f.commit("fixture/repo", "main", None, "README.md", "base");
+            f.check("fixture/repo", "main", &base, None).await;
+            let head = f.commit(
+                "fixture/repo",
+                "feature",
+                Some(&base),
+                "feature.txt",
+                "feature",
+            );
+            if let Some(draft) = draft {
+                f.pull(
+                    &agent,
+                    "fixture/repo",
+                    json!({"head":"feature","title":"Work","draft":draft}),
+                )
+                .await;
+            }
+            f.check("fixture/repo", "feature", &head, Some(conclusion))
+                .await;
+            let attempts = f
+                .data()
+                .app
+                .store
+                .read(move |r| {
+                    let repo = crate::domain::repo_by_path(r, "fixture/repo")?;
+                    Ok((
+                        crate::ci::queue::attempts_of(r, &repo.id, &base)?,
+                        crate::ci::queue::attempts_of(r, &repo.id, &head)?,
+                    ))
+                })
+                .await
+                .unwrap();
+            assert_eq!(attempts.0.len(), 1);
+            assert_eq!(attempts.0[0].status, "queued");
+            assert_eq!(attempts.0[0].conclusion, None);
+            assert_eq!(attempts.1.len(), 1);
+            assert_eq!(attempts.1[0].status, "completed");
+            assert_eq!(attempts.1[0].conclusion.as_deref(), Some(conclusion));
+            f.stop().await;
+        }
+    }
+}
