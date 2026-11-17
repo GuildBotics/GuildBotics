@@ -94,6 +94,11 @@ npm run quality       # format:check + lint + typecheck + duplicates + test（E2
 
 ### E2E（Playwright・実ブラウザ + 実 Local API backend）
 
+Branvil の画面の検証も同じ構成で動かします。`npm run e2e -- --project=branvil`
+でチケットの作成・移動・イベント反映、セッションの復帰と表示の検証を実行します。
+一時サーバーの共有セッションを使い、単体の Branvil バイナリは起動しません。
+性能調査だけを行う場合は `BRANVIL_E2E_PERF=1` を指定します。
+
 jsdom では検証できない「実ブラウザ engine + 実 `client.ts ↔ Rust Local API ↔ /-/guildbotics/api/events` + 実ファイル書き込み」を貫く critical user journey を検証します。browser-preview mode で実 backend に接続し、journeyごとに専用の一時ワークスペースとloopbackポートを使います。ブラウザはテストサーバーが同じポートで配る画面を開きます。
 
 前提:

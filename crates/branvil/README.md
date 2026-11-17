@@ -792,11 +792,16 @@ and streams Vitest output into the job log. Measurements and interpretation
 are in
 [`docs/performance.md`](docs/performance.md#web-tests).
 
-The integration tests start real `guildbotics branvil serve` processes on free loopback
+The integration tests restart their own test executable with embedded Branvil on free loopback
 ports and drive them with real Git clients isolated from the user's Git
 configuration and credential helpers. They are one test crate,
 [`tests/main.rs`](tests/main.rs), with a module per file:
 `cargo nextest run -p branvil --test main tickets::` runs the tests of `tests/tickets.rs`.
+
+Branvil browser journeys and fixture layouts run in Desktop E2E:
+`cd desktop && npm run e2e -- --project=branvil`. The stack owns a disposable
+embedded service and uses the host browser session. Set `BRANVIL_E2E_PERF=1`
+only for board timing investigations.
 
 ### GitHub Actions
 

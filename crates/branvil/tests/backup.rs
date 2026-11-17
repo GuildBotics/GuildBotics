@@ -218,7 +218,7 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     bytes[last] ^= 0xff;
     std::fs::write(&bundle, bytes).unwrap();
     let target = tempfile::tempdir().unwrap();
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["restore", "--from"])
         .arg(&damaged)
         .arg("--data-dir")
@@ -242,7 +242,7 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         &bundle,
     )
     .unwrap();
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["restore", "--from"])
         .arg(&damaged)
         .arg("--data-dir")
@@ -255,7 +255,7 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
 
     // A backup of this schema version restores as it is.
     let current = out_dir.path().join("current");
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["restore", "--from"])
         .arg(&backup)
         .arg("--data-dir")
@@ -297,7 +297,7 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
 
     // Restore it into another directory (upgraded on the way), then check it
     // offline; everything below compares the restored data with the original.
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["restore", "--from"])
         .arg(&previous)
         .arg("--data-dir")
@@ -328,7 +328,7 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     assert!(text(&out).contains(&checks_first), "{}", text(&out));
     // The restore upgraded it: it needs its check before it serves.
     let admin = |what: &str| {
-        std::process::Command::new(BIN)
+        branvil_command()
             .args(["admin", what, "--data-dir"])
             .arg(target.path().join("data"))
             .output()

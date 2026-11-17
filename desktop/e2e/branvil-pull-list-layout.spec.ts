@@ -1,9 +1,7 @@
-// Layout regression coverage with fixture API responses; no service credentials
-// or data are used. Serve the GUI, then set BRANVIL_E2E_BASE_URL and optionally
-// BRANVIL_E2E_CHANNEL as for the other browser tests.
+// Browser layout regression coverage against the Desktop Branvil stack.
 import { expect, test } from "@playwright/test";
 
-test.skip(!process.env.BRANVIL_E2E_BASE_URL, "BRANVIL_E2E_BASE_URL must serve the GUI.");
+
 
 const AUTHOR = "build-bot-with-a-name-that-needs-to-be-truncated";
 const AT = "2026-10-23T12:00:00Z";

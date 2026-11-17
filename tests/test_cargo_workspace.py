@@ -131,8 +131,8 @@ def _built_from(tested: set[str]) -> set[str]:
     return built
 
 
-#: Every crate of the workspace, by the workspace crates it may use. Branvil
-#: and what Branvil and GuildBotics share know nothing of GuildBotics.
+#: Every crate of the workspace, by the workspace crates it may use. The shared
+#: crates and Branvil depend only on lower layers.
 #: GuildBotics' crates follow the layers of the Python version's zones (#81):
 #: each uses only crates below it, and siblings of one layer (workspace and
 #: observability) never each other. The wire, generated from the schemas,
@@ -141,7 +141,7 @@ def _built_from(tested: set[str]) -> set[str]:
 #: identity and record stores, without depending on a provider or the server.
 _ALLOWED = {
     "loopback-auth": set(),
-    "branvil": {"loopback-auth"},
+    "branvil": {"loopback-auth", "gb-base", "gb-config"},
     "gb-base": set(),
     "gb-workspace": {"gb-base"},
     "gb-observability": {"gb-base"},

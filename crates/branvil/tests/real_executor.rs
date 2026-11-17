@@ -233,7 +233,7 @@ async fn jobs_run_in_microvms_without_network_or_host_files() {
         "[ci.executor]\nmax_cpus = 1\nmax_memory_mib = 512\n",
     )
     .unwrap();
-    let mut child = Command::new(BIN)
+    let mut child = branvil_command()
         .args(["runner", "--url", &s.url, "--config"])
         .arg(&config)
         .arg("--work-dir")

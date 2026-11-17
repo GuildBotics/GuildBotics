@@ -1,7 +1,7 @@
 # The checks of every push and pull request. GitHub Actions runs only what
 # this runner cannot: macOS Clippy and Windows client tests
-# (.github/workflows/ci.yml), and Branvil E2E
-# (.github/workflows/branvil-e2e.yml).
+# (.github/workflows/ci.yml), and Desktop E2E, including Branvil
+# (.github/workflows/desktop-e2e.yml).
 # The runner supplies the image version, CPUs, memory and network access.
 # Commands start in /work, a Git checkout of the commit with its history and
 # tags, as a user that is not root, with CI metadata only; each array entry has
@@ -12,10 +12,9 @@
 # every job. test and markdown-links always run, as their inputs span the repo.
 #
 # The Rust jobs check the whole Cargo workspace, its tests in two jobs:
-# rust-test-branvil tests Branvil's crates, which use none of GuildBotics', so
-# a change to GuildBotics' crates alone skips it; rust-test tests the rest,
-# which uses Branvil, so it also runs for Branvil's changes. Each crate is
-# tested by one of them, and each job's paths include every workspace crate
+# rust-test-branvil tests Branvil and loopback-auth; rust-test tests the rest.
+# Branvil may use lower GuildBotics crates, so both jobs cover crate changes.
+# Each crate is tested by one of them, and each job's paths include every workspace crate
 # its tested crates build from (tests/test_cargo_workspace.py).
 #
 # The Rust jobs' cache restores `target` built from other commits, which can
@@ -166,12 +165,11 @@ cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-tool
 [[jobs]]
 name = "rust-test-branvil"
 paths = [
-  "crates/branvil/src/**",
-  "crates/branvil/tests/**",
-  "crates/branvil/examples/**",
-  "crates/branvil/Cargo.toml",
-  "crates/loopback-auth/src/**",
-  "crates/loopback-auth/Cargo.toml",
+  "crates/*/src/**",
+  "crates/*/tests/**",
+  "crates/*/examples/**",
+  "crates/*/Cargo.toml",
+  "crates/*/build.rs",
   "Cargo.toml",
   "Cargo.lock",
   "rust-toolchain*",

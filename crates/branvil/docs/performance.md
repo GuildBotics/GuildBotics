@@ -28,7 +28,7 @@ Results go to `$B/results-*.json` and a Markdown summary to stdout. The Git
 clients it starts use `GIT_CONFIG_NOSYSTEM=1`, an empty `GIT_CONFIG_GLOBAL`,
 `GIT_TERMINAL_PROMPT=0`, `-c credential.helper=`, and credentials only through
 a `GIT_ASKPASS` script that reads the environment. The GUI timing is
-`web/e2e/perf.spec.ts` (see [GUI](#gui)).
+`desktop/e2e/branvil-perf.spec.ts` (see [GUI](#gui)).
 
 ## Conditions
 
@@ -251,7 +251,7 @@ The bundle (`web/dist`, Vite production build): `index.html` 0.4 kB, CSS 6.4
 kB (2.0 kB gzip), JavaScript 431 kB (129.2 kB gzip). The service sends the
 files uncompressed (`Cache-Control: public, max-age=3600`).
 
-Time to a rendered board, `web/e2e/perf.spec.ts` in Google Chrome
+Time to a rendered board, `desktop/e2e/branvil-perf.spec.ts` in Google Chrome
 (`BRANVIL_E2E_CHANNEL=chrome`, a new browser context per run, Playwright
 tracing off), board `acme/board-0` of the fixture (now the board of workspace
 `acme-0`, `BRANVIL_E2E_WORKSPACE`): 1,695 open cards (the

@@ -1,4 +1,4 @@
-//! Test harness: a real `branvil serve` on an ephemeral loopback port, real
+//! Test harness: an embedded Branvil server on an ephemeral loopback port, real
 //! redb data directories, and real Git clients over Smart HTTP.
 
 #![allow(dead_code)]
@@ -15,9 +15,62 @@ pub use process::ServiceProcess;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 
-pub const BIN: &str = env!("CARGO_BIN_EXE_branvil");
-/// The key of every test service's vault (`BRANVIL_VAULT_KEY`): 32 bytes of 7.
-const VAULT_KEY: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
+/// Run the embedded CLI on this test executable, including hooks and runners.
+#[ctor::ctor]
+fn process_entry() {
+    if let Some(code) = branvil::askpass_main() {
+        std::process::exit(if code == std::process::ExitCode::SUCCESS {
+            0
+        } else {
+            1
+        });
+    }
+    let args: Vec<_> = std::env::args_os().collect();
+    if std::env::var_os("BRANVIL_TEST_PROCESS").is_some()
+        || args.get(1).is_some_and(|a| a == "hook" || a == "runner")
+    {
+        let vault = std::env::var_os("BRANVIL_TEST_VAULT")
+            .map(|p| branvil::vault::Sealed::new(Path::new(&p), &[7; 32]).unwrap());
+        let vault: std::sync::Arc<dyn branvil::vault::Vault> =
+            if std::env::var_os("BRANVIL_TEST_NO_VAULT").is_some() {
+                std::sync::Arc::new(NoVault)
+            } else {
+                match vault {
+                    Some(v) => std::sync::Arc::new(v),
+                    None => std::sync::Arc::new(branvil::vault::Memory::default()),
+                }
+            };
+        let code = branvil::main(branvil::Invocation::standalone(), vault, args);
+        let status = (0u8..=255)
+            .find(|n| code == std::process::ExitCode::from(*n))
+            .unwrap();
+        std::process::exit(i32::from(status));
+    }
+}
+
+/// A host that cannot provide a vault must refuse secret operations.
+struct NoVault;
+impl branvil::vault::Vault for NoVault {
+    fn get(&self, _: &str) -> anyhow::Result<Option<String>> {
+        anyhow::bail!("test host has no vault")
+    }
+    fn set(&self, _: &str, _: &str) -> anyhow::Result<()> {
+        anyhow::bail!("test host has no vault: secrets cannot be kept")
+    }
+    fn delete(&self, _: &str) -> anyhow::Result<()> {
+        anyhow::bail!("test host has no vault")
+    }
+}
+
+pub fn branvil_command() -> Command {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command.env("BRANVIL_TEST_PROCESS", "1");
+    command
+}
+
+pub fn async_branvil_command() -> tokio::process::Command {
+    branvil_command().into()
+}
 
 pub struct Server {
     child: Option<ServiceProcess>,
@@ -25,33 +78,18 @@ pub struct Server {
     lines: std::sync::mpsc::Receiver<String>,
     pub url: String,
     pub data: PathBuf,
-    /// The directory of the service's sealed secrets (`BRANVIL_VAULT`),
+    /// The directory of the test-provided sealed vault,
     /// outside its data directory.
     pub vault: PathBuf,
     pub http: reqwest::Client,
 }
 
-/// `branvil init` into `dir/data`; returns the owner's token (from the file
-/// init writes).
+/// Initialize `dir/data` through the embedded API and return the owner credential.
 pub fn init(dir: &Path, owner: &str) -> String {
-    let out = Command::new(BIN)
-        .args([
-            "init",
-            "--owner",
-            owner,
-            "--listen",
-            "127.0.0.1:0",
-            "--data-dir",
-        ])
-        .arg(dir.join("data"))
-        .output()
-        .expect("run branvil init");
-    assert!(
-        out.status.success(),
-        "init failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    owner_token(&dir.join("data"))
+    branvil::api::initialize(&dir.join("data"), owner)
+        .unwrap()
+        .trim()
+        .into()
 }
 
 /// The owner's token as `<data>/secrets/owner.token` holds it now.
@@ -81,11 +119,10 @@ impl Server {
             .open(dir.join("serve.log"))
             .unwrap();
         let vault = dir.join("vault");
-        let mut cmd = Command::new(BIN);
+        let mut cmd = branvil_command();
         cmd.args(["serve", "--listen", listen, "--data-dir"])
             .arg(&data)
-            .env("BRANVIL_VAULT", &vault)
-            .env("BRANVIL_VAULT_KEY", VAULT_KEY)
+            .env("BRANVIL_TEST_VAULT", &vault)
             .env("BRANVIL_LOG", "branvil=debug")
             .env_remove("BRANVIL_FAILPOINT")
             .stdout(Stdio::piped())
@@ -375,7 +412,7 @@ impl Server {
 
     /// Runs `branvil` with the given arguments against this server.
     pub fn cli(&self, token: &str, args: &[&str]) -> Output {
-        Command::new(BIN)
+        branvil_command()
             .args(args)
             .env("BRANVIL_URL", &self.url)
             .env("BRANVIL_TOKEN", token)
@@ -600,7 +637,7 @@ impl World {
             .post("/admin/backup", &self.owner, json!({"to": backup}))
             .await;
         assert_eq!(st, StatusCode::OK, "{v}");
-        let out = Command::new(BIN)
+        let out = branvil_command()
             .args(["restore", "--from"])
             .arg(&backup)
             .arg("--data-dir")

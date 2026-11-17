@@ -311,7 +311,7 @@ async fn upgrade_preserves_landing_conflicts_and_notice_history() {
     w.server.stop();
     let db = w.server.data.join("branvil.redb");
     as_schema_34(&db);
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["admin", "upgrade", "--data-dir"])
         .arg(&w.server.data)
         .output()
@@ -328,7 +328,7 @@ async fn upgrade_preserves_landing_conflicts_and_notice_history() {
         .unwrap();
     assert_eq!(e["conflicts"], json!(["README.md"]));
     assert_eq!(e["told"], json!(["conflict"]));
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["admin", "check", "--data-dir"])
         .arg(&w.server.data)
         .output()
@@ -358,13 +358,13 @@ async fn upgrade_preserves_landing_conflicts_and_notice_history() {
     );
     w.server.stop();
     as_schema_34(&db);
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["admin", "upgrade", "--data-dir"])
         .arg(&w.server.data)
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(3));
-    let out = std::process::Command::new(BIN)
+    let out = branvil_command()
         .args(["admin", "check", "--data-dir"])
         .arg(&w.server.data)
         .output()
