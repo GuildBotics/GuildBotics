@@ -815,7 +815,34 @@ fn yaml(path: &Path) -> anyhow::Result<Value> {
     gb_config::yaml_value(&std::fs::read_to_string(path)?)
         .map_err(|_| anyhow::anyhow!("invalid member configuration"))
 }
-/// The member as the roster shows it. Members act in Branvil by their
+/// Creates in the embedded code host every agent of `workspace`'s team that
+/// it lacks, so the owner and other members can name them before they act.
+pub(crate) async fn ensure_branvil_agents(api: &crate::api::Shared, workspace: &Path) {
+    let Some(data) = api.branvil.get() else {
+        return;
+    };
+    let team = match gb_config::team::Team::load(
+        &workspace.join(".guildbotics/config"),
+        &api.identity_root,
+    ) {
+        Ok(team) => team,
+        Err(error) => {
+            tracing::warn!("cannot read the team for the code host: {error:#}");
+            return;
+        }
+    };
+    let agents = team
+        .members
+        .into_iter()
+        .filter(|member| member.person_type == "agent")
+        .map(|member| (member.person_id, member.name))
+        .collect();
+    if let Err(error) = data.ensure_agents(agents).await {
+        tracing::warn!("cannot create the team's agents in the code host: {error}");
+    }
+}
+
+/// The member as the roster shows it. Agents act in Branvil by their
 /// person_id, and the human acts as Branvil's owner.
 pub(crate) fn public(member: &Value, branvil: Option<&branvil::api::DataApi>) -> PublicMember {
     let text = |key: &str| member[key].as_str().unwrap_or("").to_owned();
@@ -824,10 +851,10 @@ pub(crate) fn public(member: &Value, branvil: Option<&branvil::api::DataApi>) ->
         .map(|v| ("slack".into(), v.into()))
         .into_iter()
         .collect();
-    let branvil_name = if text("person_type") == "human" {
-        branvil.and_then(|data| data.owner_name().ok())
-    } else {
-        Some(text("person_id"))
+    let branvil_name = match text("person_type").as_str() {
+        "human" => branvil.and_then(|data| data.owner_name().ok()),
+        "agent" => Some(text("person_id")),
+        _ => None,
     };
     if let Some(name) = branvil_name.filter(|name| !name.is_empty()) {
         accounts.insert("branvil".into(), name);
@@ -6093,6 +6120,9 @@ mod guest_failure_tests {
             [("branvil".to_owned(), "owner1".to_owned())]
         );
         assert!(accounts(human, None).is_empty());
+        // A member of another type is neither: no code host name.
+        let other = json!({"person_id":"guest","person_type":"Human","account_info":{}});
+        assert!(accounts(other, Some(&data)).is_empty());
         fixture.stop().await;
     }
 }

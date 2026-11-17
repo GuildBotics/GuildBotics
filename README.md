@@ -92,7 +92,7 @@ Open the screens with `guildbotics open` on the Hub. The browser opens on **Proj
 **Integrating with Branvil or Slack requires preparation on the service side before you start configuring.** Every integration is optional and can be enabled later under **Setup → Integrations**. If you just want to see GuildBotics run, leave them unused and move on.
 
 - **Slack**: for members to take requests in Slack, you need a Socket Mode Slack App and its bot / app tokens. See [Ask for Work in Slack](#ask-for-work-in-slack) for what to prepare
-- **Branvil**: a running Branvil, reachable at the same base URL on every machine. There is no connection step: GuildBotics sets up each AI member automatically the first time it uses tickets, pull requests, or git. Your own checkouts can use it as their `origin` too. See the [Branvil Integration Guide](docs/branvil_integration.en.md)
+- **Branvil**: a running Branvil, reachable at the same base URL on every machine. There is no connection step: GuildBotics sets up each AI member automatically. Your own checkouts can use it as their `origin` too. See the [Branvil Integration Guide](docs/branvil_integration.en.md)
 
 In GuildBotics, the folder that holds a project's settings and state is called the **workspace**. Plain text configuration files are written there:
 

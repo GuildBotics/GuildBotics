@@ -14,7 +14,7 @@ port calls into the API of [`api.md`](api.md) and the answers into the port's
 models. The Rust provider (`crates/gb-integrations/src/factory/branvil/`) calls
 the same operations in-process, without a token: `DataApi::agent(person_id,
 display_name)` acts as the member, whose Branvil agent is named by its
-person_id and created on first use, and `DataApi::owner()` acts as the owner. Branvil keeps the data; the provider keeps none. Selection rules that are
+person_id and created when the team is read or a member first acts, and `DataApi::owner()` acts as the owner. Branvil keeps the data; the provider keeps none. Selection rules that are
 GuildBotics' own (workflow status, mentions, the review limit) are applied by the
 provider to the raw activity Branvil returns, as the GitHub provider applies them
 to GitHub's.

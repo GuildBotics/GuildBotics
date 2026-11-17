@@ -73,7 +73,7 @@ Follow the [GuildBotics installation steps](../README.md#installation) on the Hu
    a repository holds its tickets; a merge closes only tickets of the pull request's
    repository. GuildBotics can create the workspace itself (below).
 
-Members are not created on the screens: GuildBotics creates each AI member the first time it is used ([Members](#members)).
+Members are not created on the screens: GuildBotics creates each AI member ([Members](#members)).
 
 ## Install the Windows client
 
@@ -200,8 +200,9 @@ workspace exists.
 
 An AI member needs nothing done on the code host after it is added.
 
-- An AI member is created automatically the first time it uses tickets, pull requests, or
-  git, named after the member's ID and with the member's display name. An existing agent
+- An AI member is created automatically, named after the member's ID and with the member's
+  display name, when the server starts, when a workspace is selected, when a member is saved,
+  and before any member's operation. Others can assign it work before it has ever acted. An existing agent
   whose name equals the member's ID is used as it is. When the member of that name is not
   an agent, the operation is refused.
 - The human member is the owner (the person `guildbotics branvil init` created).

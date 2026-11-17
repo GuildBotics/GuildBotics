@@ -76,6 +76,31 @@ async fn members_have_no_branvil_account_and_save_and_delete_without_branvil() {
     );
     assert!(!f.identities().join("agent1").exists());
 }
+#[tokio::test]
+async fn a_saved_agent_is_known_to_the_code_host_before_it_acts() {
+    let f = fixture();
+    f.init().await;
+    let running = branvil(&f).await;
+    f.add(agent("agent1")).await;
+    let mut human = agent("person1");
+    human["person_type"] = "human".into();
+    f.add(human).await;
+    let owner = running.data.owner();
+    let found = owner.members_get("agent1".into()).await.unwrap();
+    assert_eq!(found.kind, branvil::api::MemberKind::Agent);
+    assert_eq!(found.display_name, "Test");
+    // Only agents become the code host's members; the human is its owner.
+    assert_eq!(
+        owner
+            .members_get("person1".into())
+            .await
+            .err()
+            .unwrap()
+            .code,
+        "not_found"
+    );
+    running.stop().await.unwrap();
+}
 type Calls = Arc<Mutex<Vec<(String, String, BTreeMap<String, String>)>>>;
 pub(super) struct SlackDouble {
     pub(super) base: String,

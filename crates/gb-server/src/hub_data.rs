@@ -58,9 +58,7 @@ pub fn execute(
                     machine_root: home::machine_root()?,
                     keychain: &SystemKeychain,
                 };
-                for root in &roots {
-                    upgrade_root(root, &device)?;
-                }
+                upgrade(&roots, &device)?;
             }
             for root in &roots {
                 check_root(root, files::SHARED_RECORD_SCHEMA_VERSION)?;
@@ -68,6 +66,20 @@ pub fn execute(
             Ok(())
         }
     }
+}
+
+/// Converts every root. Nothing changes in any root until every root has
+/// passed the check (no link, no unreadable file, no newer version) and has
+/// had everything its conversion reads read, the secret store decrypted.
+fn upgrade(roots: &[PathBuf], device: &DeviceKey) -> anyhow::Result<()> {
+    for root in roots {
+        check_root(root, files::SHARED_RECORD_SCHEMA_VERSION)?;
+        upgrade_root(root, device, false)?;
+    }
+    for root in roots {
+        upgrade_root(root, device, true)?;
+    }
+    Ok(())
 }
 
 /// Where a converted root records the version of its data, so that the
@@ -78,12 +90,13 @@ const SCHEMA_RECORD: &str = ".guildbotics/state/schema.json";
 /// connection, an owner token, or member tokens and user names of its own for
 /// the built-in code host. Repeating it changes nothing more, and nothing
 /// changes before every file it reads and the secret store have been read.
-fn upgrade_root(root: &Path, device: &DeviceKey) -> anyhow::Result<()> {
+/// With `write` false, only reads what the conversion reads.
+fn upgrade_root(root: &Path, device: &DeviceKey, write: bool) -> anyhow::Result<()> {
     let writes = SharedWrites::new(root.to_path_buf(), None);
     let config = root.join(".guildbotics/config");
     let connections = config.join("connections");
     let connection = connections.join("branvil.yml");
-    writes.transaction(|writer| {
+    let decrypt = writes.transaction(|writer| {
         let mut secrets = vec!["BRANVIL_ADMIN_TOKEN".to_owned()];
         let mut identities = Vec::new();
         let members = match fs::read_dir(config.join("team/members")) {
@@ -126,9 +139,13 @@ fn upgrade_root(root: &Path, device: &DeviceKey) -> anyhow::Result<()> {
         let index = read_secret_index(&config)?;
         secrets.retain(|name| index.contains(name));
         if secrets.is_empty() && identities.is_empty() && !connection.exists() {
-            return Ok(());
+            return Ok(false);
         }
         // Decrypting the store is the last read; its first write the first change.
+        if !write {
+            // The store is decrypted below, outside the lock it takes itself.
+            return Ok(!secrets.is_empty());
+        }
         if !secrets.is_empty() {
             SecretStore::new(&writes, Scope::Identity, device.clone())?
                 .delete_many_with(writer, &secrets)?;
@@ -144,8 +161,12 @@ fn upgrade_root(root: &Path, device: &DeviceKey) -> anyhow::Result<()> {
         if connections.is_dir() && fs::read_dir(&connections)?.next().is_none() {
             writer.remove_tree(&connections)?;
         }
-        Ok(())
-    })
+        Ok(false)
+    })?;
+    if decrypt {
+        SecretStore::new(&writes, Scope::Identity, device.clone())?.values()?;
+    }
+    Ok(())
 }
 
 fn excluded(relative: &Path) -> bool {
@@ -468,9 +489,7 @@ mod tests {
         let originals = [snapshot(&identity), snapshot(&workspace)];
 
         let roots = archive_roots(&archive).unwrap();
-        for root in &roots {
-            upgrade_root(root, &device(temp.path(), &keys)).unwrap();
-        }
+        upgrade(&roots, &device(temp.path(), &keys)).unwrap();
         check_archive(&archive).unwrap();
         assert_eq!([snapshot(&identity), snapshot(&workspace)], originals);
 
@@ -521,10 +540,57 @@ mod tests {
 
         // Repeating it neither changes anything nor reads the keychain.
         let converted = snapshot(&archive);
-        for root in &roots {
-            upgrade_root(root, &device(temp.path(), &Untouchable)).unwrap();
-        }
+        upgrade(&roots, &device(temp.path(), &Untouchable)).unwrap();
         assert_eq!(snapshot(&archive), converted);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_upgrade_changes_no_root_until_every_root_passes_the_check() {
+        let temp = tempfile::tempdir().unwrap();
+        let keys = Keys::default();
+        let good = temp.path().join("good");
+        version_4_identity(&good, &keys);
+        let before = snapshot(&good);
+        // A newer version is refused, not overwritten with version 5.
+        let newer = temp.path().join("newer");
+        write(&newer, "config/connections/branvil.yml", "base_url: x\n");
+        write(&newer, "state/schema.json", r#"{"schema_version":6}"#);
+        let newer_before = snapshot(&newer);
+        let error = upgrade(&[good.clone(), newer.clone()], &device(temp.path(), &keys))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unsupported record schema"), "{error}");
+        assert_eq!(snapshot(&good), before);
+        assert_eq!(snapshot(&newer), newer_before);
+        // A root that passes through a link leaves what the link names alone.
+        let outside = temp.path().join("outside");
+        write(&outside, "config/connections/branvil.yml", "base_url: x\n");
+        let target = snapshot(&outside);
+        let linked = temp.path().join("linked");
+        fs::create_dir_all(&linked).unwrap();
+        std::os::unix::fs::symlink(outside.join(".guildbotics"), linked.join(".guildbotics"))
+            .unwrap();
+        let error = upgrade(&[good.clone(), linked], &device(temp.path(), &keys))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("passes through a link"), "{error}");
+        assert_eq!(snapshot(&outside), target);
+        assert_eq!(snapshot(&good), before);
+        // A later root whose store this keychain cannot decrypt: the root
+        // before it is not converted either.
+        let foreign = temp.path().join("foreign");
+        version_4_identity(&foreign, &Keys::default());
+        let foreign_before = snapshot(&foreign);
+        upgrade(
+            &[good.clone(), foreign.clone()],
+            &device(temp.path(), &keys),
+        )
+        .unwrap_err();
+        assert_eq!(snapshot(&good), before);
+        assert_eq!(snapshot(&foreign), foreign_before);
+        upgrade(std::slice::from_ref(&good), &device(temp.path(), &keys)).unwrap();
+        assert_ne!(snapshot(&good), before);
     }
 
     #[test]
@@ -534,9 +600,12 @@ mod tests {
         version_4_identity(&identity, &Keys::default());
         let before = snapshot(&identity);
         // Another machine's keychain does not hold this store's key.
-        let error = upgrade_root(&identity, &device(temp.path(), &Keys::default()))
-            .unwrap_err()
-            .to_string();
+        let error = upgrade(
+            std::slice::from_ref(&identity),
+            &device(temp.path(), &Keys::default()),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("device key missing"), "{error}");
         assert_eq!(snapshot(&identity), before);
         check_root(&identity, 4).unwrap();

@@ -91,7 +91,7 @@ Hub で `guildbotics open` を実行して画面を開きます。ブラウザ�
 **Branvil / Slack と連携する場合は、設定を始める前にサービス側の準備が必要です。** どの連携も任意で、あとから **設定 → 連携** で有効にできます。まず動かしてみたい場合は、連携を使わずに進めてください。
 
 - **Slack**: メンバーが Slack で依頼を受けるには、Socket Mode の Slack App と bot / app トークンが必要です。準備する内容は [Slack で作業を依頼する](#slack-で作業を依頼する)を参照してください
-- **Branvil**: すべてのマシンから同じベース URL で届く Branvil が必要です。接続の手順はありません。各 AI メンバーは、最初にチケット・pull request・git を使うときに GuildBotics が自動で用意します。自分のチェックアウトの `origin` にも使えます。[Branvil 連携ガイド](docs/branvil_integration.ja.md)を参照してください
+- **Branvil**: すべてのマシンから同じベース URL で届く Branvil が必要です。接続の手順はありません。各 AI メンバーは GuildBotics が自動で用意します。自分のチェックアウトの `origin` にも使えます。[Branvil 連携ガイド](docs/branvil_integration.ja.md)を参照してください
 
 GuildBotics では、プロジェクトの設定と状態を置くフォルダを **ワークスペース** と呼びます。ワークスペースには、以下のようなプレーンテキストの設定ファイルが書き出されます。
 

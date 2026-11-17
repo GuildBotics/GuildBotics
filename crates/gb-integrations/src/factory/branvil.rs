@@ -19,6 +19,8 @@ pub(super) struct BranvilService {
     display_name: String,
     /// The token lent for this service's git transfers until it is closed.
     git_token: tokio::sync::Mutex<Option<branvil::api::members::IssuedToken>>,
+    /// Set once the roster's members all exist, so any of them can be named.
+    roster_ready: tokio::sync::OnceCell<()>,
     workspace: String,
     scope: WriteScope,
     members: std::collections::BTreeMap<String, String>,
@@ -35,6 +37,7 @@ impl BranvilService {
             person_id,
             display_name,
             git_token: Default::default(),
+            roster_ready: Default::default(),
             scope: WriteScope::new(&workspace),
             workspace,
             members: Default::default(),
@@ -52,6 +55,19 @@ impl BranvilService {
         self
     }
     async fn member(&self) -> Result<MemberApi, ServiceError> {
+        // A roster member that has not acted yet can still be assigned or
+        // asked to review: every missing one is created before any operation.
+        self.roster_ready
+            .get_or_try_init(|| {
+                self.api.ensure_agents(
+                    self.members
+                        .iter()
+                        .map(|(name, display_name)| (name.clone(), display_name.clone()))
+                        .collect(),
+                )
+            })
+            .await
+            .map_err(|e| error(e, "ensure_agents"))?;
         self.api
             .agent(&self.person_id, &self.display_name)
             .await

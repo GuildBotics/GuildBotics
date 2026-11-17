@@ -449,3 +449,73 @@ async fn git_credential_lends_one_agent_token_until_the_service_is_closed() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn a_roster_member_that_never_acted_can_be_assigned() {
+    let temp = tempfile::tempdir().unwrap();
+    initialize(temp.path(), "owner1").unwrap();
+    let running = Running::start(
+        temp.path(),
+        std::sync::Arc::new(::branvil::vault::Memory::default()),
+    )
+    .await
+    .unwrap();
+    let data = &running.data;
+    let owner = data.owner();
+    owner
+        .repos_create_workspace(decode(json!({"name":"test"})).unwrap())
+        .await
+        .unwrap();
+    owner
+        .repos_create(decode(json!({"path":"test/repo"})).unwrap())
+        .await
+        .unwrap();
+    // The roster names the owner (the human), the acting agent, an agent
+    // that has never acted, and a name no member may have.
+    let roster = [
+        ("owner1", "Owner"),
+        ("aiko", "Aiko"),
+        ("kenji", "Kenji"),
+        ("branvil", "Reserved"),
+    ]
+    .map(|(login, name)| (login.to_owned(), name.to_owned()))
+    .into();
+    let service = BranvilService::new(data.clone(), "test".into(), "aiko".into(), "Aiko".into())
+        .with_members(&roster);
+    let created = service
+        .create_ticket(CreateTicket {
+            tracker: "test/repo".into(),
+            title: "for kenji".into(),
+            body: String::new(),
+            labels: vec![],
+            add_to_board: true,
+            interactive: false,
+            assignee: Some(ActorName("kenji".into())),
+            lane: None,
+            parent: None,
+            blocked_by: vec![],
+        })
+        .await
+        .unwrap();
+    let ticket = service.ticket(&created.target.url).await.unwrap();
+    assert_eq!(ticket["assignee"]["name"], "kenji");
+    let kenji = owner.members_get("kenji".into()).await.unwrap();
+    assert_eq!(
+        (kenji.kind, kenji.display_name.as_str()),
+        (::branvil::api::MemberKind::Agent, "Kenji")
+    );
+    assert_eq!(
+        owner.members_get("owner1".into()).await.unwrap().kind,
+        ::branvil::api::MemberKind::Owner
+    );
+    assert_eq!(
+        owner
+            .members_get("branvil".into())
+            .await
+            .err()
+            .unwrap()
+            .code,
+        "not_found"
+    );
+    running.stop().await.unwrap();
+}

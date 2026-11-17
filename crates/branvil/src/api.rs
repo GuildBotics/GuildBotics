@@ -111,38 +111,75 @@ impl DataApi {
             })
             .await
     }
+    /// Create, as agents, the members of `members` (name, display name)
+    /// that do not exist yet. A name no member may have is left out, and a
+    /// display name a member may not have gives way to the name, so one entry
+    /// never keeps the others from being created.
+    pub async fn ensure_agents(&self, members: Vec<(String, String)>) -> AppResult<()> {
+        let _open = self.guard()?;
+        let wanted: Vec<_> = members
+            .into_iter()
+            .filter(|(name, _)| members::check_name(name).is_ok())
+            .collect();
+        let missing = self
+            .app
+            .store
+            .read(move |r| {
+                let mut missing = Vec::new();
+                for (name, display_name) in wanted {
+                    if r.get::<Member>(crate::store::MEMBERS, &Member::key(&name))?
+                        .is_none()
+                    {
+                        missing.push((name, display_name));
+                    }
+                }
+                Ok(missing)
+            })
+            .await?;
+        if missing.is_empty() {
+            return Ok(());
+        }
+        // The write rereads, so a concurrent creation is kept rather than refused.
+        self.app
+            .store
+            .write(move |w| {
+                for (name, display_name) in missing {
+                    if w.get::<Member>(crate::store::MEMBERS, &Member::key(&name))?
+                        .is_none()
+                    {
+                        members::insert_member(
+                            w,
+                            &members::NewMember {
+                                name,
+                                display_name: crate::domain::check_text(
+                                    "display_name",
+                                    &display_name,
+                                    256,
+                                )
+                                .is_ok()
+                                .then_some(display_name),
+                                kind: MemberKind::Agent,
+                            },
+                        )?;
+                    }
+                }
+                Ok(())
+            })
+            .await
+    }
     /// Act as the agent `name`, which is created with `display_name` when
     /// missing. Each operation reads the member again, so it acts with the
     /// member's current permissions.
     pub async fn agent(&self, name: &str, display_name: &str) -> AppResult<MemberApi> {
-        let _open = self.guard()?;
-        let input = members::NewMember {
-            name: name.into(),
-            display_name: Some(display_name.into()),
-            kind: MemberKind::Agent,
-        };
-        let key = Member::key(name);
-        let found = self
+        members::check_name(name)?;
+        self.ensure_agents(vec![(name.into(), display_name.into())])
+            .await?;
+        let key = name.to_owned();
+        let member = self
             .app
             .store
-            .read(move |r| r.get::<Member>(crate::store::MEMBERS, &key))
+            .read(move |r| crate::domain::member_by_name(r, &key))
             .await?;
-        let member = match found {
-            Some(member) => member,
-            // Created on first use; the write rereads, so a concurrent
-            // creation is kept rather than refused.
-            None => {
-                self.app
-                    .store
-                    .write(move |w| {
-                        match w.get::<Member>(crate::store::MEMBERS, &Member::key(&input.name))? {
-                            Some(member) => Ok(member),
-                            None => members::insert_member(w, &input),
-                        }
-                    })
-                    .await?
-            }
-        };
         if member.kind != MemberKind::Agent {
             return Err(AppError::invalid(format!("Member {name} is not an agent.")));
         }
@@ -1141,6 +1178,22 @@ mod tests {
         assert_eq!(comments.items.len(), 1);
         assert_eq!(comments.items[0].id, posted["id"].as_str().unwrap());
         assert_eq!(comments.items[0].body, "From HTTP");
+        // One unacceptable entry does not keep the others from being created.
+        api.ensure_agents(vec![
+            ("roster1".into(), "あ".repeat(100)),
+            ("branvil".into(), "Reserved".into()),
+            ("roster2".into(), "Roster Two".into()),
+        ])
+        .await
+        .unwrap();
+        let long = owner.members_get("roster1".into()).await.unwrap();
+        assert_eq!(long.display_name, "roster1");
+        let named = owner.members_get("roster2".into()).await.unwrap();
+        assert_eq!(named.display_name, "Roster Two");
+        assert_eq!(
+            api.agent("branvil", "Reserved").await.err().unwrap().code,
+            "invalid"
+        );
         // Only the tokens of the named label are revoked.
         for (name, label) in [("agent1", "lent"), ("agent1", "kept"), ("owner1", "lent")] {
             owner

@@ -336,6 +336,9 @@ impl Server {
                 .set(data_api.clone())
                 .map_err(|_| anyhow::anyhow!("Branvil already attached"))?;
             let workspace = startup_api.selected().workspace.clone();
+            if let Some(workspace) = &workspace {
+                crate::member::native::ensure_branvil_agents(&startup_api, workspace).await;
+            }
             startup_api.select(Selected::open(workspace, &startup_api, Some(data_api)));
             *host_router.write().unwrap() = Some(embedded.router());
             ready_tx.send_replace(true);

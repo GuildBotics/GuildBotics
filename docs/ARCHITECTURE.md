@@ -251,7 +251,9 @@ base URL. Its API answers raw data (comments with an opaque `meta` carrying a wo
 status, reviews, threads, checks); the provider applies the rules above to it. The
 provider calls the embedded service in the server's process, without a token:
 `DataApi::owner()` acts as the owner and `DataApi::agent(person_id, display_name)` as an
-AI member, whose member there is named by its person_id and created on first use. For
+AI member, whose member there is named by its person_id. Every agent of the team is
+created there when the server starts, when a workspace is selected, when a member is saved,
+and before any member operation, so others can name it before it acts. For
 member git, the provider issues a token labelled `guildbotics-git` for the run, hands it
 to git with the person_id, and revokes it when the run releases the service.
 
