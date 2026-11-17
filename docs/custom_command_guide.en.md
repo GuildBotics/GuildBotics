@@ -229,7 +229,7 @@ The Edit Command screen saves invalid work-in-progress source, but disables exec
 
 ## 3. Using the AI CLI tool
 
-Specify `brain: agent` in YAML front matter to invoke an AI CLI tool such as OpenAI Codex or Google Antigravity. With an AI CLI tool, you can instruct the assigned GuildBotics member to read files, run system commands, and perform more advanced operations.
+Specify `brain: agent` in YAML front matter to invoke an AI CLI tool such as OpenAI Codex or Claude Code. With an AI CLI tool, you can instruct the assigned GuildBotics member to read files, run system commands, and perform more advanced operations.
 
 For example, create a file `summarize.md` with the following content:
 
@@ -938,7 +938,7 @@ effort:            # overlays it for low / high only
 
 `default` and unspecified apply no overlay, so a model that should always be used belongs in `parameters:`. These two keys are all there is to configure: the tool itself is driven by its built-in adapter. The shipped defaults additionally declare `effort_fields:` -- the typed-editing descriptors of the previous section -- but that is provider knowledge shipped with the tool, not something to configure.
 
-Every shipped tool carries a working default mapping plus `effort_fields:`, so `low` and `high` do something before you configure anything: codex takes model/effort on `turn/start`, Claude Code takes `--model` / `--effort`, Grok and Copilot take model and reasoning effort as ACP session config options, and `agy --print` takes `--model` or `--effort` on its command line (the two are mutually exclusive, so a slot that sets both keeps the model). Supporting a new AI CLI tool means implementing a native adapter for it in this repository, which is also where its `effort_fields:` are declared -- there is no way to add a tool from a workspace YAML file.
+Every shipped tool carries a working default mapping plus `effort_fields:`, so `low` and `high` do something before you configure anything: codex takes model/effort on `turn/start`, Claude Code takes `--model` / `--effort`, Grok takes model and reasoning effort as ACP session config options. Supporting a new AI CLI tool means implementing a native adapter for it in this repository, which is also where its `effort_fields:` are declared -- there is no way to add a tool from a workspace YAML file.
 
 ```yaml
 # intelligences/cli_agents/codex/default.yml

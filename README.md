@@ -46,7 +46,7 @@ You configure, run, and monitor GuildBotics in its screens, which the GuildBotic
 - **Interactive member sessions**: The guildbotics skill lets an AI CLI tool work as a member in your current repository
 - **Scheduled execution**: Per-member patrol commands and cron-based scheduled commands
 - **Custom commands**: Define your own work as a Markdown prompt / Python / Shell / YAML command and reuse it per member or role
-- **Swappable LLM / AI CLI tool**: Swap LLM providers or delegate to an AI CLI tool (Codex, Claude Code, Grok Build, Antigravity, and other AI tools launched from a local CLI)
+- **Swappable LLM / AI CLI tool**: Swap LLM providers or delegate to an AI CLI tool (Codex, Claude Code, and Grok Build launched from a local CLI)
 - **AI assistants in the screens**: Ask questions and apply proposed source changes in the command editor, and investigate execution failures in the diagnostics screen
 - **Internationalization**: English / Japanese
 
@@ -56,7 +56,7 @@ You configure, run, and monitor GuildBotics in its screens, which the GuildBotic
 
 - An Apple Silicon Mac for the Hub, Git, the Rust toolchain pinned in `rust-toolchain.toml`, and Node.js 24 with npm to build the screens. CI runs on Linux.
 - To use a browser on another machine, enable Remote Login on the Hub and install an OpenSSH client on that machine. Windows can be a client.
-- For model-backed commands such as translation, an API key for Google Gemini, OpenAI, or Anthropic. To use an AI CLI member, log in on the Hub after setup with `guildbotics environment login <tool>`. The environment provisions Codex, Claude Code, Grok Build, GitHub Copilot CLI, and Antigravity.
+- For model-backed commands such as translation, an API key for Google Gemini, OpenAI, or Anthropic. To use an AI CLI member, log in on the Hub after setup with `guildbotics environment login <tool>`. The environment provisions Codex, Claude Code, and Grok Build.
 
 ### Installation
 
@@ -609,7 +609,7 @@ A field in the other file is refused when the team is loaded. A workspace member
 - `intelligences/brain_mapping.yml`: per-function engine and LLM / AI CLI slot assignments. For `chat_decision`, which decides whether a chat needs a response agent, see the [Slack integration guide](docs/slack_integration.en.md#chat-judgment-engine).
 - `intelligences/cli_agent_mapping.yml`: default AI CLI tool selection
 - `intelligences/cli_agent_filesystem_grants.yml`: explicit home-relative grants (`documents`), shared by all members. Device-only extra paths and denies use `local/cli_agent_filesystem_grants.yml`. There is no implicit shared grant.
-- `intelligences/cli_agents/<tool>/*.yml`: the parameters and effort mapping for each AI CLI tool. Only Codex, Claude Code, Grok Build, GitHub Copilot CLI, and Antigravity CLI can be run; supporting another tool means implementing a native adapter in the GuildBotics repository
+- `intelligences/cli_agents/<tool>/*.yml`: the parameters and effort mapping for each AI CLI tool. Only Codex, Claude Code, and Grok Build can be run; supporting another tool means implementing a native adapter in the GuildBotics repository
 - `intelligences/agent_environment.yml`: the environment shared by every member and slot: its base image (`image`: GuildBotics' own Debian image unless set; for another toolchain, build an image yourself that keeps git, load it on the machine with `docker save` → `guildbotics environment image load`, and pick it in the settings or declare it with `guildbotics environment image declare`; images and declared digests are per CPU architecture), resources assigned to each microVM (`resources.memory_mib`, default 4096; `resources.cpus`, default 2), network policy (`network`: `deny`, an `allowlist`, or an explicitly selected `unrestricted`; omission means `deny`), and DNS resolvers (`dns.nameservers`: fixed IPv4 addresses or `host`). Put additional tools in the image rather than a package list. `docker/agent-environment/Dockerfile` and `scripts/build-agent-environment-image.sh` are the example used to develop GuildBotics itself. Before merging an image or recipe change, a human prebuilds the snapshot on the Hub from the PR head; see [the Hub procedure](docs/hub-server.md#レシピ変更のマージ前にスナップショットを用意する). After switching versions and confirming the current snapshot is ready, run `guildbotics environment prune` on each device to remove obsolete recipes; do not prune while prebuilding a future version or while rollback may still be needed. Changing the image rebuilds the environment; resources, network, and DNS apply at the next microVM boot without rebuilding the disk snapshot
 - `team/members/<person_id>/intelligences/`: optional per-member overrides. By default they inherit the team settings
 

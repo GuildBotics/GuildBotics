@@ -16,8 +16,6 @@ const SENSITIVE: &[&str] = &[
     ".codex",
     ".claude",
     ".grok",
-    ".copilot",
-    ".gemini",
     ".agents",
 ];
 

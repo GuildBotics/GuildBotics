@@ -423,7 +423,7 @@ describe("AgentEnvironmentCard", () => {
       await screen.findByText(tr("setup.intelligence.environment.toolAuthenticationFailed"));
       for (const tool of data.tools) {
         const row = within(document.getElementById(`agent-environment-tool-${tool.name}`)!);
-        if (["codex", "claude", "grok", "copilot"].includes(tool.name)) {
+        if (["codex", "claude", "grok"].includes(tool.name)) {
           expect(
             row.getByRole("button", { name: tr("setup.intelligence.environment.login") }),
           ).toBeInTheDocument();

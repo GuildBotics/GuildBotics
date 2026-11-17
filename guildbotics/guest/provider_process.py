@@ -2,8 +2,8 @@
 
 An adapter holds, for one turn, the turn's environment and the provider it
 started there, and ends both when the turn is over. The provider either runs
-one process per turn that prints one JSON event per line (Claude Code,
-Antigravity), or serves JSON-RPC for the turn (Codex App Server, the ACP
+one process per turn that prints one JSON event per line (Claude Code), or
+serves JSON-RPC for the turn (Codex App Server, the ACP
 agents). Every turn is bounded by the adapter's deadline, and a turn that is
 cut short or cancelled stops its provider before the error leaves the
 adapter. What the provider says stays the adapter's to interpret.

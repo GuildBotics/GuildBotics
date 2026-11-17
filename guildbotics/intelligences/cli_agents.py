@@ -24,8 +24,8 @@ CLI_AGENT_ROOT = "cli_agents"
 _CLI_AGENT_PATH_PARTS = 3
 _CLI_AGENT_TOOL_INDEX = 1
 
-#: The usage panels Claude Code and Antigravity print headlessly, without an
-#: agent turn. They read the account, so running one is also what makes the
+#: The usage panel Claude Code prints headlessly, without an
+#: agent turn. It reads the account, so running one is also what makes the
 #: tool refresh an expired login. Claude Code must not pile a resumable
 #: session onto disk for each one.
 CLAUDE_USAGE_COMMAND = (
@@ -36,7 +36,6 @@ CLAUDE_USAGE_COMMAND = (
     "json",
     "--no-session-persistence",
 )
-ANTIGRAVITY_USAGE_COMMAND = ("agy", "-p", "/usage", "--output-format", "json")
 
 
 def _names_a_place_inside(value: str) -> bool:
@@ -62,9 +61,8 @@ class CredentialBroker(BaseModel):
     The login lives sealed on this device (see ``credential_vault``), and a
     turn holds a stand-in that authenticates nothing: a credentials file of
     the same shape with no refresh token and an expiry far away, or -- for a
-    tool that takes its login from a command (``stand_in_command_env``) or
-    from a variable (``stand_in_env``) -- that. Either way the tool never
-    tries to refresh it. A login with no refresh token and no expiry
+    tool that takes its login from a command (``stand_in_command_env``) -- that.
+    Either way the tool never tries to refresh it. A login with no refresh token and no expiry
     (``refresh_token``, ``expires_at`` and ``refresh`` left empty) lasts
     until the user signs out, and one the provider refuses is logged in
     again. The tool is pointed at a gateway outside the microVM (``base_url_env``)
@@ -74,10 +72,7 @@ class CredentialBroker(BaseModel):
 
     A tool that takes its API over HTTPS only (``tls``) is answered over TLS,
     with a certificate from a CA of the turn's own that the turn trusts
-    beside the system's. A host the tool reaches at a URL of its own that no
-    setting moves (``relayed_hosts``) resolves, inside the turn, to a relay
-    onto the gateway, which answers for that name too. What else a turn
-    must reach with no credential in it is ``turn_domains``.
+    beside the system's.
 
     What the gateway cannot reach -- refreshing the login, and the tool's
     own account endpoints its ``/usage`` reads -- runs in an environment of
@@ -134,9 +129,6 @@ class CredentialBroker(BaseModel):
     #: that takes the stand-in that way (it prints ``access_token`` and
     #: ``expires_in`` as JSON) rather than from a file.
     stand_in_command_env: str = ""
-    #: The variable the stand-in itself is given in, for a tool that takes it
-    #: that way.
-    stand_in_env: str = ""
     #: The variables the stand-in is given in as well, however the tool takes
     #: its login: for a part of the tool that authenticates by one of its own.
     stand_in_also_env: tuple[str, ...] = ()
@@ -145,8 +137,6 @@ class CredentialBroker(BaseModel):
     #: What the tool is told beside the gateway's URL.
     turn_environment: tuple[tuple[str, str], ...] = ()
     tls: bool = False
-    relayed_hosts: tuple[str, ...] = ()
-    turn_domains: tuple[str, ...] = ()
     refresh: tuple[str, ...] = ()
 
     @field_validator("routes")
@@ -180,24 +170,19 @@ class CredentialBroker(BaseModel):
     @model_validator(mode="after")
     def _names_one_way_for_each(self) -> CredentialBroker:
         """A login that expires is refreshed, and one that does not never is;
-        a stand-in reaches the turn one way; a relayed host is reached at a
-        URL of its own, which is HTTPS."""
+        a stand-in reaches the turn through a file or command."""
         refreshed = (self.refresh_token, self.expires_at, self.refresh)
         if any(refreshed) and not all(refreshed):
             raise ValueError("refresh_token, expires_at and refresh go together")
         if self.empty_refresh_token and not self.refresh_token:
             raise ValueError("an empty refresh token needs its place")
-        if self.stand_in_env and self.stand_in_command_env:
-            raise ValueError("a stand-in reaches the turn one way")
         told = [
             *self.stand_in_also_env,
             *self.base_url_env,
-            *filter(None, (self.stand_in_env, self.stand_in_command_env)),
+            *filter(None, (self.stand_in_command_env,)),
         ]
         if len(set(told)) != len(told):
             raise ValueError("a variable tells the turn one thing")
-        if self.relayed_hosts and not self.tls:
-            raise ValueError("relayed hosts are answered over TLS only")
         return self
 
     def origin(self, method: str, path: str) -> str | None:
@@ -329,13 +314,6 @@ class CliAgentProvision(BaseModel):
     def provisioned(self) -> bool:
         """Whether the snapshot puts this tool into the environment."""
         return bool(self.package or self.install)
-
-    @property
-    def turn_domains(self) -> tuple[str, ...]:
-        """What every turn of the tool reaches directly: nothing that carries
-        a credential of it."""
-        broker = self.credential_broker
-        return broker.turn_domains if broker else ()
 
     def environment(self, home: str) -> dict[str, str]:
         """The variables that point the tool at its state under ``home``."""
@@ -544,140 +522,6 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
                 # Lists the models without a turn; it needs the login, so a
                 # login told it has expired is refreshed first.
                 refresh=("grok", "--no-auto-update", "models"),
-            ),
-        ),
-    ),
-    CliAgentInfo(
-        name="copilot",
-        label="GitHub Copilot",
-        order=40,
-        executable="copilot",
-        config_reference=f"{CLI_AGENT_ROOT}/copilot/{CLI_AGENT_DEFAULT_FILENAME}",
-        # Without a system credential store -- there is none in the
-        # environment -- the login keeps its token in `config.json` at the
-        # state root (after a line of comments), under a key named for the
-        # account. It neither expires nor refreshes. The login is brokered:
-        # a turn takes the stand-in from COPILOT_GITHUB_TOKEN, which must look
-        # like a GitHub token, and both of its API URLs -- GitHub's and
-        # Copilot's own -- point at the gateway. What it reads of the GitHub
-        # API is the account and its policy; of Copilot's, beside inference,
-        # the hosted GitHub MCP server (read-only, as the user) and the
-        # repository's custom agents. The telemetry stays closed.
-        provision=CliAgentProvision(
-            package="@github/copilot@1.0.112",
-            state_root=".copilot",
-            user_skills=".copilot/skills",
-            state_root_env="COPILOT_HOME",
-            auth="config.json",
-            persisted=("session-state/",),
-            login=("copilot", "login", "--device-code"),
-            api_domains=(
-                "github.com",
-                "api.github.com",
-                "*.githubcopilot.com",
-                "*.githubusercontent.com",
-            ),
-            credential_broker=CredentialBroker(
-                format="copilot-oauth",
-                access_token=("authTokens", "*", "token"),
-                upstream="https://api.individual.githubcopilot.com",
-                # Inference goes where the model's supported endpoints say.
-                routes=(
-                    "GET https://api.github.com/copilot_internal/user",
-                    "GET https://api.github.com/copilot_internal/managed_settings",
-                    "GET /models",
-                    "POST /chat/completions",
-                    "POST /responses",
-                    "POST /v1/messages",
-                    "POST /mcp/readonly",
-                    "GET /agents/swe/custom-agents/*",
-                ),
-                base_url_env=("COPILOT_DEBUG_GITHUB_API_URL", "COPILOT_API_URL"),
-                stand_in_env="COPILOT_GITHUB_TOKEN",
-                # 1.0.89 takes `gho_` followed by URL-safe characters.
-                stand_in_prefix="gho_",
-            ),
-        ),
-    ),
-    CliAgentInfo(
-        name="antigravity",
-        label="Antigravity",
-        order=50,
-        executable="agy",
-        config_reference=f"{CLI_AGENT_ROOT}/antigravity/{CLI_AGENT_DEFAULT_FILENAME}",
-        # Antigravity's installer always takes the latest release and the CLI
-        # updates itself, so the snapshot fetches one release by the versioned
-        # URL its manifest names and checks the digest the manifest gives.
-        provision=CliAgentProvision(
-            install=(
-                'case "$(uname -m)" in\n'
-                "  x86_64) platform=linux-x64 archive=cli_linux_x64"
-                " sha512=d01eb13ba7750eed18907f1ae8860864371e0ad9064415e8d033d22b4bd7b9b4e4c7f962058520b452d67db1c33163d9a889d55a7dffa159596ec6cd91a87b79 ;;\n"
-                "  aarch64) platform=linux-arm archive=cli_linux_arm64"
-                " sha512=16c632a09b81f598f7652bc11180861f9d2ee4408ffa161dadc83b2010de7a9cd055e97b4b46cd01903e35c0e8bf21d8262462ba7c5f168cc6dada9ac3d522c0 ;;\n"
-                '  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;\n'
-                "esac\n"
-                'curl -fsSL "https://storage.googleapis.com/antigravity-public'
-                '/antigravity-cli/1.5.9-4515810895593472/$platform/$archive.tar.gz"'
-                " -o /tmp/agy.tar.gz\n"
-                'echo "$sha512  /tmp/agy.tar.gz" | sha512sum -c -\n'
-                "tar -xzf /tmp/agy.tar.gz -C /usr/local/bin antigravity\n"
-                "mv /usr/local/bin/antigravity /usr/local/bin/agy\n"
-                "chmod +x /usr/local/bin/agy\n"
-                "rm /tmp/agy.tar.gz\n"
-                "agy --version"
-            ),
-            # `agy` has no login command: a print-mode run without a saved
-            # login prints the Google sign-in URL and takes the code on stdin.
-            # Conversations span the per-conversation databases and the brain
-            # transcripts; the project they belong to lives under config.
-            state_root=".gemini",
-            user_skills=".gemini/config/skills",
-            auth="antigravity-cli/antigravity-oauth-token",
-            persisted=(
-                "antigravity-cli/conversations/",
-                "antigravity-cli/brain/",
-                "antigravity-cli/cache/",
-                "config/",
-            ),
-            login=("agy", "--print", "Reply with OK."),
-            api_domains=(
-                "cloudcode-pa.googleapis.com",
-                "*.googleapis.com",
-                "accounts.google.com",
-                "*.googleusercontent.com",
-            ),
-            # The login is brokered. CLOUD_CODE_URL moves the Cloud Code API,
-            # over HTTPS only; the eligibility check at start reads the
-            # account's profile from a URL no setting moves, and then its
-            # picture, which carries no credential. Its telemetry carries the
-            # token and a turn goes without it. `/usage` reads the quota
-            # without a turn, refreshing a login that has expired.
-            credential_broker=CredentialBroker(
-                format="antigravity-oauth",
-                access_token=("token", "access_token"),
-                refresh_token=("token", "refresh_token"),
-                expires_at=("token", "expiry"),
-                expires_format="rfc3339",
-                turn_fields=(("token", "token_type"), ("auth_method",)),
-                upstream="https://daily-cloudcode-pa.googleapis.com",
-                routes=(
-                    "POST /v1internal:loadCodeAssist",
-                    "POST /v1internal:fetchAvailableModels",
-                    "POST /v1internal:fetchAdminControls",
-                    "POST /v1internal:fetchUserInfo",
-                    "POST /v1internal:retrieveUserQuotaSummary",
-                    "POST /v1internal:listExperiments",
-                    "POST /v1internal:streamGenerateContent",
-                    # Names a conversation's owner; it carries its ID alone.
-                    "POST /v1internal:writeTrajectoryAcls",
-                    "GET https://www.googleapis.com/oauth2/v2/userinfo",
-                ),
-                base_url_env=("CLOUD_CODE_URL",),
-                tls=True,
-                relayed_hosts=("www.googleapis.com",),
-                turn_domains=("lh3.googleusercontent.com",),
-                refresh=ANTIGRAVITY_USAGE_COMMAND,
             ),
         ),
     ),

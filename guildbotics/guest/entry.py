@@ -158,15 +158,6 @@ def _failure(exc: Exception) -> CommandFailure:
     return failure
 
 
-async def _run_with_relays(
-    request: CommandRequest, facts: CommandFacts, client: HostClient
-) -> CommandReply:
-    from guildbotics.guest.gateway_relays import relays
-
-    async with relays():
-        return await run(request, facts, client)
-
-
 def main() -> None:
     """Run the command the host asks for, as the host started this process.
 
@@ -208,9 +199,7 @@ def main() -> None:
     request = CommandRequest.model_validate_json(sys.stdin.buffer.read())
     client = command_window()
     assert client is not None
-    reply = asyncio.run(
-        _run_with_relays(request, CommandFacts.read(os.environ), client)
-    )
+    reply = asyncio.run(run(request, CommandFacts.read(os.environ), client))
     with replies:
         replies.write(reply.model_dump_json() + "\n")
 

@@ -89,15 +89,12 @@
         ],
         "base_url_path": "/backend-api",
         "stand_in_command_env": "",
-        "stand_in_env": "",
         "stand_in_also_env": [
           "CODEX_CONNECTORS_TOKEN"
         ],
         "stand_in_prefix": "guildbotics-stand-in-",
         "turn_environment": [],
         "tls": true,
-        "relayed_hosts": [],
-        "turn_domains": [],
         "refresh": [
           "codex",
           "debug",
@@ -176,7 +173,6 @@
         ],
         "base_url_path": "",
         "stand_in_command_env": "",
-        "stand_in_env": "",
         "stand_in_also_env": [],
         "stand_in_prefix": "guildbotics-stand-in-",
         "turn_environment": [
@@ -186,8 +182,6 @@
           ]
         ],
         "tls": false,
-        "relayed_hosts": [],
-        "turn_domains": [],
         "refresh": [
           "claude",
           "-p",
@@ -260,181 +254,14 @@
         ],
         "base_url_path": "/v1",
         "stand_in_command_env": "GROK_AUTH_PROVIDER_COMMAND",
-        "stand_in_env": "",
         "stand_in_also_env": [],
         "stand_in_prefix": "guildbotics-stand-in-",
         "turn_environment": [],
         "tls": false,
-        "relayed_hosts": [],
-        "turn_domains": [],
         "refresh": [
           "grok",
           "--no-auto-update",
           "models"
-        ]
-      }
-    }
-  },
-  {
-    "name": "copilot",
-    "label": "GitHub Copilot",
-    "package": "@github/copilot@1.0.112",
-    "install": "",
-    "provision": {
-      "package": "@github/copilot@1.0.112",
-      "install": "",
-      "state_root": ".copilot",
-      "state_root_env": "COPILOT_HOME",
-      "user_skills": ".copilot/skills",
-      "auth": "config.json",
-      "auth_env": "",
-      "persisted": [
-        "session-state/"
-      ],
-      "login": [
-        "copilot",
-        "login",
-        "--device-code"
-      ],
-      "api_domains": [
-        "github.com",
-        "api.github.com",
-        "*.githubcopilot.com",
-        "*.githubusercontent.com"
-      ],
-      "credential_broker": {
-        "format": "copilot-oauth",
-        "access_token": [
-          "authTokens",
-          "*",
-          "token"
-        ],
-        "refresh_token": [],
-        "expires_at": [],
-        "expires_format": "epoch_ms",
-        "turn_fields": [],
-        "empty_refresh_token": false,
-        "stand_in_claims_from": [],
-        "stand_in_claims": [],
-        "upstream": "https://api.individual.githubcopilot.com",
-        "routes": [
-          "GET https://api.github.com/copilot_internal/user",
-          "GET https://api.github.com/copilot_internal/managed_settings",
-          "GET /models",
-          "POST /chat/completions",
-          "POST /responses",
-          "POST /v1/messages",
-          "POST /mcp/readonly",
-          "GET /agents/swe/custom-agents/*"
-        ],
-        "base_url_env": [
-          "COPILOT_DEBUG_GITHUB_API_URL",
-          "COPILOT_API_URL"
-        ],
-        "base_url_path": "",
-        "stand_in_command_env": "",
-        "stand_in_env": "COPILOT_GITHUB_TOKEN",
-        "stand_in_also_env": [],
-        "stand_in_prefix": "gho_",
-        "turn_environment": [],
-        "tls": false,
-        "relayed_hosts": [],
-        "turn_domains": [],
-        "refresh": []
-      }
-    }
-  },
-  {
-    "name": "antigravity",
-    "label": "Antigravity",
-    "package": "",
-    "install": "case \"$(uname -m)\" in\n  x86_64) platform=linux-x64 archive=cli_linux_x64 sha512=d01eb13ba7750eed18907f1ae8860864371e0ad9064415e8d033d22b4bd7b9b4e4c7f962058520b452d67db1c33163d9a889d55a7dffa159596ec6cd91a87b79 ;;\n  aarch64) platform=linux-arm archive=cli_linux_arm64 sha512=16c632a09b81f598f7652bc11180861f9d2ee4408ffa161dadc83b2010de7a9cd055e97b4b46cd01903e35c0e8bf21d8262462ba7c5f168cc6dada9ac3d522c0 ;;\n  *) echo \"unsupported architecture: $(uname -m)\" >&2; exit 1 ;;\nesac\ncurl -fsSL \"https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.9-4515810895593472/$platform/$archive.tar.gz\" -o /tmp/agy.tar.gz\necho \"$sha512  /tmp/agy.tar.gz\" | sha512sum -c -\ntar -xzf /tmp/agy.tar.gz -C /usr/local/bin antigravity\nmv /usr/local/bin/antigravity /usr/local/bin/agy\nchmod +x /usr/local/bin/agy\nrm /tmp/agy.tar.gz\nagy --version",
-    "provision": {
-      "package": "",
-      "install": "case \"$(uname -m)\" in\n  x86_64) platform=linux-x64 archive=cli_linux_x64 sha512=d01eb13ba7750eed18907f1ae8860864371e0ad9064415e8d033d22b4bd7b9b4e4c7f962058520b452d67db1c33163d9a889d55a7dffa159596ec6cd91a87b79 ;;\n  aarch64) platform=linux-arm archive=cli_linux_arm64 sha512=16c632a09b81f598f7652bc11180861f9d2ee4408ffa161dadc83b2010de7a9cd055e97b4b46cd01903e35c0e8bf21d8262462ba7c5f168cc6dada9ac3d522c0 ;;\n  *) echo \"unsupported architecture: $(uname -m)\" >&2; exit 1 ;;\nesac\ncurl -fsSL \"https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.9-4515810895593472/$platform/$archive.tar.gz\" -o /tmp/agy.tar.gz\necho \"$sha512  /tmp/agy.tar.gz\" | sha512sum -c -\ntar -xzf /tmp/agy.tar.gz -C /usr/local/bin antigravity\nmv /usr/local/bin/antigravity /usr/local/bin/agy\nchmod +x /usr/local/bin/agy\nrm /tmp/agy.tar.gz\nagy --version",
-      "state_root": ".gemini",
-      "state_root_env": "",
-      "user_skills": ".gemini/config/skills",
-      "auth": "antigravity-cli/antigravity-oauth-token",
-      "auth_env": "",
-      "persisted": [
-        "antigravity-cli/conversations/",
-        "antigravity-cli/brain/",
-        "antigravity-cli/cache/",
-        "config/"
-      ],
-      "login": [
-        "agy",
-        "--print",
-        "Reply with OK."
-      ],
-      "api_domains": [
-        "cloudcode-pa.googleapis.com",
-        "*.googleapis.com",
-        "accounts.google.com",
-        "*.googleusercontent.com"
-      ],
-      "credential_broker": {
-        "format": "antigravity-oauth",
-        "access_token": [
-          "token",
-          "access_token"
-        ],
-        "refresh_token": [
-          "token",
-          "refresh_token"
-        ],
-        "expires_at": [
-          "token",
-          "expiry"
-        ],
-        "expires_format": "rfc3339",
-        "turn_fields": [
-          [
-            "token",
-            "token_type"
-          ],
-          [
-            "auth_method"
-          ]
-        ],
-        "empty_refresh_token": false,
-        "stand_in_claims_from": [],
-        "stand_in_claims": [],
-        "upstream": "https://daily-cloudcode-pa.googleapis.com",
-        "routes": [
-          "POST /v1internal:loadCodeAssist",
-          "POST /v1internal:fetchAvailableModels",
-          "POST /v1internal:fetchAdminControls",
-          "POST /v1internal:fetchUserInfo",
-          "POST /v1internal:retrieveUserQuotaSummary",
-          "POST /v1internal:listExperiments",
-          "POST /v1internal:streamGenerateContent",
-          "POST /v1internal:writeTrajectoryAcls",
-          "GET https://www.googleapis.com/oauth2/v2/userinfo"
-        ],
-        "base_url_env": [
-          "CLOUD_CODE_URL"
-        ],
-        "base_url_path": "",
-        "stand_in_command_env": "",
-        "stand_in_env": "",
-        "stand_in_also_env": [],
-        "stand_in_prefix": "guildbotics-stand-in-",
-        "turn_environment": [],
-        "tls": true,
-        "relayed_hosts": [
-          "www.googleapis.com"
-        ],
-        "turn_domains": [
-          "lh3.googleusercontent.com"
-        ],
-        "refresh": [
-          "agy",
-          "-p",
-          "/usage",
-          "--output-format",
-          "json"
         ]
       }
     }

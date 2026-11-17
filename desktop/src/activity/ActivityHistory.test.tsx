@@ -986,8 +986,8 @@ describe("ActivityHistoryPage", () => {
     );
   });
 
-  it("distinguishes Antigravity model-group windows of the same duration", async () => {
-    mockMemberUsage("antigravity", {
+  it("distinguishes labelled usage windows of the same duration", async () => {
+    mockMemberUsage("claude", {
       windows: [
         {
           window: "5h",

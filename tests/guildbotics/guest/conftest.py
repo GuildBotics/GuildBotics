@@ -7,7 +7,6 @@ import pytest
 
 from guildbotics.guest import (
     acp,
-    antigravity,
     claude,
     codex,
 )
@@ -151,6 +150,6 @@ class _ProcessInEnvironment:
 def fake_environment(request, monkeypatch) -> type[FakeEnvironment]:
     """Every adapter boots a fake environment unless a test says otherwise."""
     FakeEnvironment.started = []
-    for module in (codex, acp, claude, antigravity):
+    for module in (codex, acp, claude):
         monkeypatch.setattr(module, "start_turn", FakeEnvironment.start)
     return FakeEnvironment

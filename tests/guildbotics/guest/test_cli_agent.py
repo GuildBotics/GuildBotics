@@ -1107,7 +1107,7 @@ async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
     use_cli_agent_slots(
         monkeypatch,
         "judge",
-        {"default": cli_agents.ExecutableInfo(adapter="copilot")},
+        {"default": cli_agents.ExecutableInfo(adapter="grok")},
     )
 
     async def run_turn(prompt, context, conversation, emit):
@@ -1130,14 +1130,14 @@ async def test_a_turn_whose_lent_login_was_refused_fails_as_authentication(
         person_id="judge",
         run_id="turn",
         cwd=tmp_path,
-        conversation_key=ConversationKey("judge", "copilot", "manual", "turn"),
+        conversation_key=ConversationKey("judge", "grok", "manual", "turn"),
     )
 
     turn = brain._execute_native_turn(
         input="work",
         configured={},
         context=context,
-        adapter_name="copilot",
+        adapter_name="grok",
         records=cli_agent._TurnRecords(window),
     )
     if tool_says == "crash" and not refused:

@@ -1706,7 +1706,7 @@ fn templates_are_bytes_samples_are_not_overwritten_and_paths_are_checked_first()
         .unwrap(),
         b"a: 1\r\nb: 2\r\n"
     );
-    for tool in ["antigravity", "claude", "copilot", "grok"] {
+    for tool in ["claude", "grok"] {
         let relative = format!("intelligences/cli_agents/{tool}/default.yml");
         assert_eq!(
             fs::read(source.workspace().join(&relative)).unwrap(),

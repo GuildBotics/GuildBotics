@@ -512,10 +512,8 @@ function ToolLogin({ tool }: { tool: EnvironmentToolStatus }) {
           </Button>
         )}
       </Group>
-      {["codex", "claude", "grok", "copilot"].includes(tool.name) && (
-        <BrowserToolLogin tool={tool.name} />
-      )}
-      {!["codex", "claude", "grok", "copilot"].includes(tool.name) && (
+      {["codex", "claude", "grok"].includes(tool.name) && <BrowserToolLogin tool={tool.name} />}
+      {!["codex", "claude", "grok"].includes(tool.name) && (
         <Text size="xs" c="dimmed">
           {t("setup.intelligence.environment.loginHint")}
         </Text>
@@ -525,9 +523,7 @@ function ToolLogin({ tool }: { tool: EnvironmentToolStatus }) {
           {t("setup.intelligence.environment.loginRecheckHint")}
         </Text>
       )}
-      {!["codex", "claude", "grok", "copilot"].includes(tool.name) && (
-        <CommandLine command={command} />
-      )}
+      {!["codex", "claude", "grok"].includes(tool.name) && <CommandLine command={command} />}
     </Stack>
   );
 }

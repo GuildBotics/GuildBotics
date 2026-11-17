@@ -5,7 +5,7 @@ use std::{fs, path::Path, process::Command};
 const BIN: &str = env!("CARGO_BIN_EXE_guildbotics");
 const SKILL: &[u8] = include_bytes!("../../../skills/guildbotics/SKILL.md");
 
-fn install(home: &Path, copilot: &Path) -> String {
+fn install(home: &Path) -> String {
     let result = Command::new(BIN)
         .args(["install"])
         .env("HOME", home)
@@ -16,7 +16,6 @@ fn install(home: &Path, copilot: &Path) -> String {
         .env_remove("CODEX_HOME")
         .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("GROK_HOME")
-        .env("COPILOT_HOME", copilot)
         .env("LANGUAGE", "en")
         .output()
         .unwrap();
@@ -45,7 +44,7 @@ fn installation_replaces_managed_cli_paths_without_touching_the_old_directory() 
         "#!/bin/sh\n# Managed by GuildBotics desktop.\nexec old\n",
     )
     .unwrap();
-    install(home, &home.join("copilot"));
+    install(home);
     assert!(!bin.is_symlink());
     assert_eq!(
         fs::read_to_string(programs.join("guildbotics")).unwrap(),
@@ -79,24 +78,17 @@ fn installation_preserves_user_commands_and_edited_skills() {
     let on_path = home.join(".local/bin/guildbotics");
     fs::create_dir_all(on_path.parent().unwrap()).unwrap();
     fs::write(&on_path, "#!/bin/sh\nexec mine\n").unwrap();
-    let copilot = home.join("copilot-overridden");
-    for path in [
-        home.join(".codex"),
-        home.join(".claude"),
-        home.join(".gemini"),
-        copilot.clone(),
-    ] {
+    for path in [home.join(".codex"), home.join(".claude")] {
         fs::create_dir_all(path).unwrap();
     }
-    let grok = home.join(".grok/skills/guildbotics/SKILL.md");
+    let grok = home.join(".grok/skills/other/SKILL.md");
     fs::create_dir_all(grok.parent().unwrap()).unwrap();
     fs::write(&grok, "user-owned").unwrap();
-    install(home, &copilot);
+    install(home);
     let paths = [
         home.join(".agents/skills/guildbotics/SKILL.md"),
         home.join(".claude/skills/guildbotics/SKILL.md"),
-        home.join(".gemini/config/skills/guildbotics/SKILL.md"),
-        copilot.join("skills/guildbotics/SKILL.md"),
+        home.join(".grok/skills/guildbotics/SKILL.md"),
     ];
     for path in &paths {
         assert_eq!(fs::read(path).unwrap(), SKILL);
@@ -109,7 +101,7 @@ fn installation_preserves_user_commands_and_edited_skills() {
         r#"{"content_hash":"af63dc4c8601ec8c","manager":"GuildBotics","skill":"guildbotics"}"#,
     )
     .unwrap();
-    install(home, &copilot);
+    install(home);
     assert_eq!(fs::read(&paths[1]).unwrap(), [0xff]);
     assert_eq!(fs::read(&paths[2]).unwrap(), SKILL);
     assert_eq!(fs::read_to_string(grok).unwrap(), "user-owned");
@@ -125,7 +117,7 @@ fn helper_uses_this_machines_managed_cli_and_is_idempotent() {
     let home = temp.path().join("a home 'quoted'");
     fs::create_dir_all(&home).unwrap();
     for _ in 0..2 {
-        install(&home, &home.join("copilot"));
+        install(&home);
     }
     let result = Command::new("git")
         .args([
@@ -248,7 +240,7 @@ fn installer_lists_copies_but_eof_does_not_delete() {
         serde_json::json!([workspace]).to_string(),
     )
     .unwrap();
-    let output = install(temp.path(), &temp.path().join("copilot"));
+    let output = install(temp.path());
     assert!(
         output.contains(
             &workspace

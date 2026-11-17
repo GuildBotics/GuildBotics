@@ -45,7 +45,7 @@ Branvil は GuildBotics に同梱されたコードホスト兼ボードです�
 - **対話メンバーセッション**: guildbotics スキルにより、AI CLI ツールが現在のリポジトリでメンバーとして作業
 - **スケジュール実行**: メンバーごとの巡回実行コマンドと、cron ベースの定期実行コマンド
 - **カスタムコマンド**: Markdown プロンプト / Python / Shell / YAML で独自の作業を定義し、メンバーや役割ごとに再利用
-- **LLM / AI CLI ツールの切り替え**: LLM プロバイダーの切り替え、または AI CLI ツール（Codex、Claude Code、Grok Build、Antigravity など、ローカル CLI から起動する AI 実行ツール）への委譲
+- **LLM / AI CLI ツールの切り替え**: LLM プロバイダーの切り替え、または AI CLI ツール（Codex、Claude Code、Grok Build の 3 つのローカル CLI から起動する AI 実行ツール）への委譲
 - **画面の AI アシスタント**: コマンドエディタでの質問応答・変更提案の適用と、診断画面での実行失敗の原因調査
 - **多言語対応**: 英語 / 日本語
 
@@ -55,7 +55,7 @@ Branvil は GuildBotics に同梱されたコードホスト兼ボードです�
 
 - HubはApple Silicon搭載のMacです。Rustは `rust-toolchain.toml` の指定版、画面のビルドにはNode.js 24とnpmを使います。Gitも `PATH` に入れてください。CIはLinuxで実行します。
 - 他のマシンのブラウザから使う場合は、Hubで「リモートログイン」を有効にし、接続元にOpenSSHクライアントを用意します。接続元にはWindowsも使えます。
-- 翻訳などのモデルを使うコマンドには、Google Gemini、OpenAI、AnthropicのいずれかのAPIキーが必要です。AI CLIを使うメンバーは、セットアップ後に `guildbotics environment login <tool>` でHub上の隔離環境にログインします。対応ツールはCodex、Claude Code、Grok Build、GitHub Copilot CLI、Antigravityです。
+- 翻訳などのモデルを使うコマンドには、Google Gemini、OpenAI、AnthropicのいずれかのAPIキーが必要です。AI CLIを使うメンバーは、セットアップ後に `guildbotics environment login <tool>` でHub上の隔離環境にログインします。対応ツールはCodex、Claude Code、Grok Buildです。
 
 ### インストール
 
@@ -607,11 +607,11 @@ GuildBotics が保存するローカルデータは、次の 3 種類です。
 - `intelligences/brain_mapping.yml`: 機能ごとのエンジンと LLM／AI CLI スロットの割り当て。チャットの起動要否を判定する `chat_decision` の設定は、[Slack 連携ガイド](docs/slack_integration.ja.md#チャット判断エンジン)を参照してください。
 - `intelligences/cli_agent_mapping.yml`: デフォルトの AI CLI ツール選択
 - `intelligences/cli_agent_filesystem_grants.yml`: ホーム配下の明示的な許可先（`documents`）。端末固有の追加パスと拒否は `local/cli_agent_filesystem_grants.yml` に置きます。暗黙の共通許可先はありません。
-- `intelligences/cli_agents/<tool>/*.yml`: AI CLI ツールごとの parameters と effort マッピング。実行できるのは Codex・Claude Code・Grok Build・GitHub Copilot CLI・Antigravity CLI のみで、他のツールに対応するには GuildBotics リポジトリへネイティブアダプタを実装します
+- `intelligences/cli_agents/<tool>/*.yml`: AI CLI ツールごとの parameters と effort マッピング。実行できるのは Codex・Claude Code・Grok Build のみで、他のツールに対応するには GuildBotics リポジトリへネイティブアダプタを実装します
 - `intelligences/agent_environment.yml`: 全メンバー・全スロットで共有する環境。ベースイメージ（`image`: 省略時は GuildBotics 既定の Debian。別のツールチェーンが必要なら git を残して自分で build し、そのマシンで `docker save` → `guildbotics environment image load` して設定画面で選ぶか `guildbotics environment image declare` で宣言する。image と宣言する digest は CPU アーキテクチャごと）、各 microVM に割り当てるリソース（`resources.memory_mib`: 省略時 4096、`resources.cpus`: 省略時 2）、ネットワークポリシー（`network`: `deny`、`allowlist`、または明示的に選ぶ `unrestricted`。省略時は `deny`）、DNS リゾルバ（`dns.nameservers`: 固定 IPv4 アドレスまたは `host`）を持ちます。追加ツールは package list ではなく image に入れます。GuildBotics 自身の開発用 image は `docker/agent-environment/Dockerfile` と `scripts/build-agent-environment-image.sh` が例です。image の変更は環境を再ビルドし、resources・network・DNS は再ビルドせず次回の microVM 起動から効きます
 - `team/members/<person_id>/intelligences/`: メンバーごとの任意の上書き。既定ではチーム設定を継承します
 
-設定可能な値とセキュリティ上の注意事項は、[Codex・Claude Code・Grok Build・GitHub Copilot・Antigravity のセッション連携](docs/native_agent_runtime.ja.md#設定)を参照してください。
+設定可能な値とセキュリティ上の注意事項は、[Codex・Claude Code・Grok Build のセッション連携](docs/native_agent_runtime.ja.md#設定)を参照してください。
 
 ### CLI リファレンス
 

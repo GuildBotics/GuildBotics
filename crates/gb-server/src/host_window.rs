@@ -2162,8 +2162,6 @@ pub async fn prepare_command(
     if let Some(port) = test.and_then(|test| test.recorder_port) {
         tool_ports.push(port);
     }
-    let mut relays = vec![];
-    let mut turn_domains = vec![];
     for tool in catalog.as_array().into_iter().flatten() {
         let name = tool["name"].as_str().unwrap_or("");
         if !tools.contains(name) {
@@ -2202,11 +2200,7 @@ pub async fn prepare_command(
         });
         tool_mounts.extend(loan.persisted_mounts(command.access.read_only)?);
         tool_ports.push(loan.gateway.port);
-        let hosts = loan.relayed_hosts();
-        if !hosts.is_empty() {
-            relays.push(json!({"hosts":hosts,"port":loan.gateway.port}));
-        }
-        turn_domains.extend(loan.turn_domains());
+
         loans.insert(name.to_owned(), loan);
     }
     let providers = resolved["brains"]
@@ -2436,16 +2430,7 @@ pub async fn prepare_command(
         window_token: window.token.clone(),
         resolved,
         mounts: tool_mounts,
-        env: vec![
-            (
-                "GUILDBOTICS_GATEWAY_RELAYS".into(),
-                serde_json::to_string(&relays).map_err(|_| "Invalid gateway relays.")?,
-            ),
-            (
-                "GUILDBOTICS_TURN_DOMAINS".into(),
-                serde_json::to_string(&turn_domains).map_err(|_| "Invalid tool domains.")?,
-            ),
-        ],
+        env: vec![],
         ports: std::iter::once(window.port)
             .chain(tool_ports)
             .chain(gateways.iter().map(|g| g.port))

@@ -11,8 +11,7 @@ document and the implementation disagree, fix the document (see `AGENTS.md`).
 GuildBotics runs AI agents as _team members_ that collaborate through Branvil and Slack.
 A scheduler starts one worker per active member; workers pick up work from Branvil
 (tickets) or from incoming Slack events, then delegate the actual
-investigation/editing/judgment to an external AI CLI tool (Claude Code, Codex CLI,
-Antigravity CLI, ...). External side effects that the AI agent performs _as the member_
+investigation/editing/judgment to an external AI CLI tool (Codex, Claude Code, Grok Build). External side effects that the AI agent performs _as the member_
 — git pushes, Branvil comments and PRs, Slack posts, memory writes — go through a single
 boundary: the `guildbotics member ...` CLI (member capability). Workflows additionally
 perform a narrow set of orchestration/status writes of their own (see §3).
@@ -591,12 +590,11 @@ from current settings.
 What a turn *really* ran on is decided by the layer that holds the provider
 knowledge and is carried out on the normal result path: each adapter fills
 `AgentTerminalResult.model` / `.effort` with the value its provider reported
-(claude's `system/init` model, copilot's confirmed session options, grok's
+(claude's `system/init` model, grok's
 confirmed session options or `_x.ai/models/update.currentModelId`) or with the
 one it imposed itself
 (codex's validated `turn/start` settings and the catalog's advertised default
-model and `defaultReasoningEffort`, claude's `--effort` flag, `agy`'s command
-line), and the brain passes
+model and `defaultReasoningEffort`, claude's `--effort` flag), and the brain passes
 them to `record_span_summary()` and logs one line per span. The conversation
 record retains the last reported or imposed values (`effective_model` /
 `effective_effort`, cleared on rotation). Claude re-sends recorded settings on

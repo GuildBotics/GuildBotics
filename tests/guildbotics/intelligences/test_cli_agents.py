@@ -19,7 +19,7 @@ def test_a_tool_is_identified_by_its_definition_directory() -> None:
     """One tool, one spelling -- the same rule a model path follows."""
     assert cli_agent_name_from_path("cli_agents/codex/default.yml") == "codex"
     assert cli_agent_name_from_path("cli_agents/codex/reviewer.yml") == "codex"
-    assert cli_agent_name_from_path("cli_agents/copilot/default.yml") == "copilot"
+    assert cli_agent_name_from_path("cli_agents/grok/default.yml") == "grok"
     # Anything that is not a definition path names no tool.
     assert cli_agent_name_from_path("codex") == ""
     assert cli_agent_name_from_path("cli_agents/codex.yml") == ""
@@ -54,7 +54,7 @@ def test_a_path_outside_the_catalog_is_rejected_with_the_entry_named(
     assert "AI CLI tool slot 'default'" in message
     assert path in message
     # The message teaches the fix: it lists every tool that can run.
-    assert "codex, claude, grok, copilot, antigravity" in message
+    assert "codex, claude, grok" in message
 
 
 def test_every_catalog_tool_ships_a_definition_template() -> None:
@@ -70,11 +70,12 @@ def test_every_catalog_tool_ships_a_definition_template() -> None:
 def test_the_catalog_is_ordered_and_names_each_tools_binary() -> None:
     agents = {agent.name: agent for agent in CLI_AGENTS}
 
+    assert set(agents) == {"codex", "claude", "grok"}
     assert agents["codex"].executable == "codex"
     assert agents["codex"].config_reference == "cli_agents/codex/default.yml"
     assert agents["grok"].label == "Grok Build"
-    # Antigravity is the one tool whose binary is not named after it.
-    assert agents["antigravity"].executable == "agy"
+    # Every remaining tool names its own binary.
+    assert agents["claude"].executable == "claude"
     assert [agent.order for agent in CLI_AGENTS] == sorted(
         agent.order for agent in CLI_AGENTS
     )
@@ -86,11 +87,9 @@ def test_resolve_default_cli_agent_names_the_catalog_tool(
     monkeypatch.setenv("GUILDBOTICS_CONFIG_DIR", str(tmp_path))
     mapping = tmp_path / "intelligences/cli_agent_mapping.yml"
     mapping.parent.mkdir(parents=True, exist_ok=True)
-    mapping.write_text(
-        "default: cli_agents/antigravity/default.yml\n", encoding="utf-8"
-    )
+    mapping.write_text("default: cli_agents/claude/default.yml\n", encoding="utf-8")
 
-    assert resolve_default_cli_agent() == "antigravity"
+    assert resolve_default_cli_agent() == "claude"
 
 
 def test_resolve_default_cli_agent_mapping_load_failure(monkeypatch) -> None:
@@ -191,8 +190,6 @@ _ACCOUNT_HOSTS = {
     "codex": "auth.openai.com",
     "claude": "platform.claude.com",
     "grok": "auth.x.ai",
-    "copilot": "api.github.com",
-    "antigravity": "oauth2.googleapis.com",
 }
 
 
@@ -291,16 +288,6 @@ def test_a_route_that_does_not_name_one_place_is_refused(
         _broker(*routes)
 
 
-def test_a_relayed_host_is_answered_over_tls_only() -> None:
-    """The relay listens where the tool's own https URL leads."""
-    fields = _broker("GET /me").model_dump()
-    with pytest.raises(ValidationError):
-        CredentialBroker(**{**fields, "relayed_hosts": ("profile.example.test",)})
-    assert CredentialBroker(
-        **{**fields, "relayed_hosts": ("profile.example.test",), "tls": True}
-    ).tls
-
-
 def test_a_provisioned_tool_without_a_brokered_login_is_refused() -> None:
     """A login a turn would hold is the one thing a turn must never hold."""
     with pytest.raises(ValidationError):
@@ -318,17 +305,18 @@ def test_a_provisioned_tool_without_a_brokered_login_is_refused() -> None:
             "refresh": (),
             "empty_refresh_token": True,
         },
-        {"stand_in_env": "TOKEN", "stand_in_command_env": "TOKEN_COMMAND"},
-        {"stand_in_env": "TOKEN", "stand_in_also_env": ("TOKEN",)},
         {"stand_in_also_env": ("API_URL",)},
+        {
+            "stand_in_command_env": "TOKEN_COMMAND",
+            "stand_in_also_env": ("TOKEN_COMMAND",),
+        },
     ],
     ids=[
         "expires-unrefreshed",
         "refreshed-never-expiring",
         "no-place",
-        "two-ways",
-        "one-variable-twice",
         "a-variable-for-two-things",
+        "command-variable-twice",
     ],
 )
 def test_a_login_is_lent_and_refreshed_one_whole_way(fields: dict[str, object]) -> None:

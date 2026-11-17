@@ -1,25 +1,16 @@
 # Native Agent Runtime
 
-GuildBotics uses native protocol adapters for Codex, Claude Code, Grok Build,
-GitHub Copilot, and Antigravity. Codex is driven through
+GuildBotics uses native protocol adapters for Codex, Claude Code, and Grok Build. Codex is driven through
 [Codex App Server](https://developers.openai.com/codex/app-server); Claude Code is
 driven with its documented `stream-json` input/output and an exact `--resume` session
-id; Grok Build and GitHub Copilot are driven through the
+id; Grok Build is driven through the
 [Agent Client Protocol](https://agentclientprotocol.com/protocol/v1/initialization)
-(ACP) v1, which `grok agent stdio` and `copilot --acp` serve over stdin/stdout. The two
-ACP adapters share one ACP client, and that client shares a line-based JSON-RPC
+(ACP) v1, which `grok agent stdio` serves over stdin/stdout. The ACP client shares a line-based JSON-RPC
 transport with Codex; only the dialect and reverse-request handling differ. Each
 provider adapter adds just its own launch command, authentication, session
 configuration, and private notification channels.
 
-Antigravity is the exception to the "one process, many turns" shape. `agy` has no
-resident server mode -- the only programmatic entry point is a single
-`agy --print --output-format stream-json` run -- so one turn is one process, and
-session identity is carried by `--conversation <id>` rather than by a living
-process. Everything else (exact resume, streamed events, token usage, structured
-error classification) works the same way as for the other native tools.
-
-These five are the only AI CLI tools GuildBotics can run. Supporting a new one
+These three are the only AI CLI tools GuildBotics can run. Supporting a new one
 means implementing a native adapter in this repository; there is no way to add an
 unsupported tool by dropping a YAML file into a workspace.
 
@@ -32,8 +23,6 @@ default: codex
 codex: codex
 claude: claude
 grok: grok
-copilot: copilot
-antigravity: antigravity
 ```
 
 Each tool still reads its own definition under
@@ -159,8 +148,6 @@ builds every architecture, loads it here and into the CI runner, and declares) i
 the worked example.
 
 On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics server start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
-
-
 
 Every host mount source is opened one path component at a time without following
 symbolic links, before GuildBotics reads or creates
@@ -445,9 +432,7 @@ unexpected approval request is declined. Claude Code runs with
 turn is root inside the microVM and Claude Code otherwise refuses that mode as
 root). Grok Build launches with
 `--sandbox off` and `--always-approve` (its Linux profiles need Landlock, which the
-environment's kernel lacks, and Grok refuses to start with a profile it cannot enforce), GitHub Copilot with
-`--no-remote-export` and `allow_all: on`, Antigravity with
-`--dangerously-skip-permissions`; none of them takes a flag from configuration,
+environment's kernel lacks, and Grok refuses to start with a profile it cannot enforce); none of them takes a flag from configuration,
 and a read-only turn launches them the same way. Codex uses its bundled bubblewrap
 (a bubblewrap installed in the image is preferred to it and cannot exec Codex's
 helper, so the image ships none). Whether a new pinned release's inner sandbox
@@ -469,21 +454,12 @@ validation instead of silently changing the effective boundary.
 The AI CLI tools run inside the isolated environment, so nothing is installed on the
 host and a host login is not what a turn uses. Logging in happens inside the
 environment: on every device that runs turns, run `guildbotics environment login
-<tool>` (`codex` / `claude` / `grok` / `copilot` / `antigravity`) in a terminal. The tool's own login command starts inside
+<tool>` (`codex` / `claude` / `grok`) in a terminal. The tool's own login command starts inside
 the environment and walks you through its device code flow in the browser. The result
 is sealed on the device (see below) and shared by every member and workspace on that
 device. GuildBotics does not copy them into its conversation store or
 diagnostics. The screens show the login state and the command to run; they never
 drives the login dialogue itself.
-
-The login runs on a terminal inside the environment, because a tool that must ask
-before it stores its credentials in a file only asks on one: Copilot, finding no system
-keychain there, confirms plain-text storage under its state root once. Grok Build uses
-its device-code login. Antigravity has no login command; a print-mode run without a
-saved login prints the Google sign-in URL and takes the authorization code on standard
-input (within 60 seconds). Grok Build's own sandbox profiles need Landlock, which the
-environment's kernel lacks, so it runs with `--sandbox off` there; the environment is
-the boundary.
 
 The settings card always offers the login command and copy action, including when
 credentials are already saved. The command uses the managed CLI's absolute path.
@@ -509,8 +485,6 @@ takes Claude Code as the example; the tools differ as this table shows.
 |---|---|---|---|---|
 | Codex | `~/.codex/auth.json` (a ChatGPT account login) | a stand-in `auth.json`: an unsigned JWT that claims only an expiry and the account (email, plan, account ID) stands for both the access token and the ID token, and the refresh token is empty (`chatgpt_base_url` and the `base_url` of a model provider of GuildBotics' own, `guildbotics`, point at the gateway); the same stand-in in `CODEX_CONNECTORS_TOKEN` for the connected apps | `https://chatgpt.com` (inference at `/backend-api/codex/responses`, the model list, the rate limits and settings under `/backend-api/wham/`, plugins at `/backend-api/ps/plugins/*` and `/backend-api/plugins/featured`, and the connected apps' MCP server at `/backend-api/ps/mcp`) | refresh by running `codex debug models` with the access token claiming an expiry that has passed; usage through App Server `account/rateLimits/read` |
 | Claude Code | `~/.claude/.credentials.json` | a stand-in credentials file (`ANTHROPIC_BASE_URL` points at the gateway) | `https://api.anthropic.com` | `claude -p /usage` |
-| Antigravity | `~/.gemini/antigravity-cli/antigravity-oauth-token` | a stand-in credentials file (the access token, `token_type`, the expiry, and `auth_method` only; no refresh token and no ID token). `CLOUD_CODE_URL` points at the gateway over HTTPS, and `www.googleapis.com` is relayed to the gateway inside the turn | `https://daily-cloudcode-pa.googleapis.com` (eight `/v1internal:` methods) and `https://www.googleapis.com/oauth2/v2/userinfo` | both through `agy -p /usage`, which refreshes a login it is told has expired |
-| GitHub Copilot | `~/.copilot/config.json` (JSON after lines of comments; the token under a key named for the account, one account only; no expiry and no refresh token) | a stand-in beginning `gho_` (the only shape Copilot takes) in `COPILOT_GITHUB_TOKEN`; `COPILOT_DEBUG_GITHUB_API_URL` and `COPILOT_API_URL` point at the gateway | `https://api.github.com` (`/copilot_internal/user`, `/copilot_internal/managed_settings`) and `https://api.individual.githubcopilot.com` (`/models` and inference at `/chat/completions`, `/responses`, and `/v1/messages`, as each model supports; also the GitHub MCP server at `/mcp/readonly` and custom agents at `/agents/swe/custom-agents/*`) | no refresh (a refused login asks for a new one); usage through Copilot SDK server `account.getQuota` |
 | Grok Build | `~/.grok/auth/auth.json` (one entry named for the account) | an external auth provider command (`GROK_AUTH_PROVIDER_COMMAND`) prints the stand-in (`GROK_CLI_CHAT_PROXY_BASE_URL` points at the gateway) | `https://cli-chat-proxy.grok.com` | refresh through `grok models`; usage through ACP `_x.ai/billing`, which an external login cannot read, so it is read where the login is |
 
 In a turn's microVM, each tool is pointed at the gateway with the setting that moves its
@@ -570,7 +544,7 @@ handling and cleanup. Use the skill to select and run a test.
 - **TLS**: for tools that require HTTPS, the gateway uses a certificate from a CA made
   for each turn. Through `SSL_CERT_FILE`, the turn trusts the system's CAs with that CA
   added in `/etc/guildbotics/ca-certificates.crt`. The CA's key never leaves the
-  GuildBotics process's memory. Codex and Antigravity use this mechanism.
+  GuildBotics process's memory. Codex uses this mechanism.
 - **Refresh and usage**: refreshing the token and `/usage` talk to Anthropic's account
   endpoints directly, so the gateway does not carry them. Claude Code runs them itself in
   an environment of their own that holds the login in memory, mounts no working directory
@@ -580,8 +554,7 @@ handling and cleanup. Use the skill to select and run a test.
   short to be a credential. A refresh gives it the login marked
   as expired and runs `claude -p /usage`; the refreshed login is taken out and sealed before
   the environment is stopped. A login within five minutes of its expiry is refreshed before
-  the turn and the tool start: a tool reaches its API as soon as it starts, and
-  Antigravity gives up on its sign-in after ten seconds, so the first request never waits
+  the turn and the tool start: a tool reaches its API as soon as it starts, so the first request never waits
   for a refresh. During a turn, the gateway asks for a refresh five minutes before expiry
   or when the upstream refuses the token, and that request waits for it (every tool that refreshes
   has been seen, with real accounts, to carry on with its turn after that wait). That environment runs one at a time on the device,
@@ -612,68 +585,22 @@ handling and cleanup. Use the skill to select and run a test.
   `workspace_backend_origin: NO_CONSTRAINT`, Codex retains the configured gateway origin
   but still requires HTTPS. The discovery response is forwarded unchanged; routing policies
   that require a different backend origin have not been verified.
-- **Antigravity specifics**: the Cloud Code API requires HTTPS, so Antigravity uses TLS.
-  The eligibility check at start reads a URL no setting moves (the userinfo
-  on `www.googleapis.com`), so `/etc/hosts` inside the turn points that host at `127.0.0.2`,
-  where a Node TCP relay connects it to the gateway (which presents a certificate for that name
-  too). `HTTPS_PROXY` is not used: it would route every request of the tool through the host.
-  Only the profile picture (`lh3.googleusercontent.com`, which carries no credential) is fetched
-  straight from the turn. Telemetry that carries the token (`play.googleapis.com/log`) is not
-  reachable from a turn, which runs without it. `/v1internal:writeTrajectoryAcls`, which
-  names a conversation's owner on Google's side (its body is the conversation's ID alone),
-  is forwarded. The gateway logs the routes it did not forward
-  as `METHOD /path` only, the same route once per turn (never a token, a query, or a body).
-- **GitHub Copilot specifics**: its login neither expires nor refreshes, so the gateway
-  asks for a new login instead of refreshing a refused one. Copilot's hosted read-only
-  GitHub MCP server (`/mcp/readonly`, which acts with the user's GitHub permissions) and
-  the repository's custom agents are forwarded; its telemetry is not. Where the API of an account on another plan (Business,
-  Enterprise) should be forwarded is not verified.
-- **Switching over**: the earlier plain files (Codex's
-  `~/.guildbotics/data/agent_environment/codex/.codex/auth.json`, Claude Code's
-  `~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`, Grok Build's
-  `~/.guildbotics/data/agent_environment/grok/.grok/auth/`, Antigravity's
-  `~/.guildbotics/data/agent_environment/antigravity/.gemini/antigravity-cli/antigravity-oauth-token`,
-  GitHub Copilot's `~/.guildbotics/data/agent_environment/copilot/.copilot/config.json`, and
-  the `~/.guildbotics/data/agent_environment/copilot/turns/` a killed turn left)
-  are neither read nor bound. Log
-  in again with `guildbotics environment login <tool>`, then delete them (macOS / Linux:
-  `rm ~/.guildbotics/data/agent_environment/codex/.codex/auth.json`,
-  `rm ~/.guildbotics/data/agent_environment/antigravity/.gemini/antigravity-cli/antigravity-oauth-token`,
-  `rm ~/.guildbotics/data/agent_environment/copilot/.copilot/config.json`,
-  `rm -r ~/.guildbotics/data/agent_environment/copilot/turns`,
-  `rm ~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`, and
-  `rm -r ~/.guildbotics/data/agent_environment/grok/.grok/auth`).
-  GuildBotics keeps no code for the earlier format, so it does not delete it for you. Leave
-  the sessions (`sessions/`, `projects/`, `session-state/`, `antigravity-cli/conversations/`, and the like) and the cache alone. Copies in past backups cannot be erased.
+
 - **Recovery**: when the state says the keychain is locked, unlock it; when it says the
   login cannot be used, fix the keychain or the disk (free space, for one) and try again.
   A login that cannot be opened (a missing or broken key or record) and a failed refresh
   are replaced by logging in again with `guildbotics environment login <tool>`.
-- **What remains**: a compromised turn can still use the allowed API through the gateway
-  while it runs, spend the account's quota, and put data into allowed request bodies. The
-  allowed API includes GitHub Copilot's GitHub MCP server (reading with the logged-in GitHub
-  account's permissions) and Codex's connected apps (the services linked to the ChatGPT
-  account). This
-  does not protect against the host's memory or its administrator.
-- **Limits of this scheme**: Codex turns send no analytics. A Claude Code turn cannot
-  read the account's profile (`/api/oauth/profile`). Grok Build's usage cannot be read in a
-  turn; it is read where the login is held. GitHub Copilot sends no telemetry, and where Business and Enterprise accounts go is
-  not verified. Antigravity sends no telemetry that carries the token. That GitHub Copilot's login has neither an
-  expiry nor a refresh is the provider's own design.
+
+A compromised turn can still spend account quota and send data through the allowed
+API, including Codex's connected apps. This boundary does not protect against the
+host's memory or its administrator. Codex sends no analytics; Claude cannot read
+`/api/oauth/profile`, and Grok account usage is read only where the login is held.
 
 For Grok Build, GuildBotics selects only the advertised method of the external auth
 provider command (`_meta.external_provider`), which is how a turn's stand-in reaches it.
 The browser sign-in and the API key method are never used: no one is there to answer
 the one, and a key never reaches the environment. When the method is not offered, the
 turn fails as an authentication error.
-
-GitHub Copilot advertises one method, `copilot-login`, whose metadata tells the client
-to run `copilot login` in a terminal. GuildBotics calls ACP `authenticate` with that
-method; a turn authenticates with the stand-in in `COPILOT_GITHUB_TOKEN` and is answered
-immediately. It never drives the sign-in itself. A rejected `authenticate`, a missing method, or a call
-that does not answer promptly -- the terminal login waiting for a user who is not there
--- all fail the turn as an authentication error pointing at `copilot login`. Only the
-method id is recorded; the contents of the Copilot credential store are never read.
 
 GitHub, Git, and SSH write credentials never reach a provider process: the
 environment inherits none of the host's environment variables. The member's own
@@ -684,15 +611,13 @@ absent inside. They are consumed in the GuildBotics process on the host, and the
 CLI loads its own from the OS keychain, so their absence changes nothing a member can
 legitimately do.
 
-Codex, Claude Code, Grok Build, GitHub Copilot, and Antigravity each receive the
+Codex, Claude Code, and Grok Build each receive the
 command's HTTP MCP endpoint, which listens on the host's loopback and is reached from
 the microVM as `host.microsandbox.internal`, and an unguessable bearer grant.
-Grok Build and GitHub Copilot attach the endpoint through ACP `mcpServers`; Codex and
+Grok Build attaches the endpoint through ACP `mcpServers`; Codex and
 Claude Code receive process-local MCP configuration. Codex reads the raw token from a
 dedicated environment variable through `bearer_token_env_var`, so Codex itself adds the
-required `Authorization: Bearer` prefix. Antigravity reads `.agents/mcp_config.json`
-from a private auxiliary workspace added with `--add-dir`; the process cwd and primary
-workspace remain the member's actual working directory. The single
+required `Authorization: Bearer` prefix. The single
 `guildbotics_member` tool accepts
 only tokenized arguments for the fixed `guildbotics member` entrypoint; it cannot choose
 an executable, invoke a shell, override the workspace, or act as another person. The
@@ -785,7 +710,7 @@ The chat workflow passes the latest event and a bounded thread snapshot to the r
 as separate values. The runtime selects the effective input based on the AI CLI tool's
 conversation capability:
 
-- Healthy native resume (Codex, Claude, Grok, Copilot, or Antigravity): only the latest event is
+- Healthy native resume (Codex, Claude, Grok): only the latest event is
   added to the context already held by the provider session. The workflow may refresh a bounded snapshot for safe
   future rotation, but that snapshot is not injected into the healthy session.
 - New or rotated native session: the bounded snapshot before the event and the latest
@@ -852,14 +777,12 @@ per-request deadline; the turn as a whole is bounded by the turn timeout, which 
 immediately, such as initialize and session load, keep their per-request deadline.
 
 A session the running process still holds open is never reloaded. The conversation
-never left the process, so there is no history to rehydrate, and Copilot answers a
-second load with `already loaded`. Only a restarted process, which has nothing but the
+never left the process, so there is no history to rehydrate. Only a restarted process, which has nothing but the
 session id stored on the conversation, performs the reload. The turn's settings are
 still re-applied either way.
 
 Exact ACP resume uses `session/resume` when advertised and `session/load`
-otherwise. Neither Grok Build (observed from 0.2.114 through 1.0.44) nor GitHub Copilot
-CLI (observed from 1.0.77 through 1.0.89) advertises `sessionCapabilities.resume`, so both take the `session/load` path. `session/load` replays the whole transcript before it answers, so that
+otherwise. Grok Build (observed from 0.2.114 through 1.0.44) does not advertise `sessionCapabilities.resume`, so it takes the `session/load` path. `session/load` replays the whole transcript before it answers, so that
 response is the boundary: replayed history is excluded from the current turn's events,
 from Slack, and from the normal transcript, and only the replayed count is recorded.
 History replays on the xAI extension channels as well as the standard one and includes
@@ -885,33 +808,6 @@ and takes precedence over the retry delay of `system/api_retry`); Codex uses
 account/rate-limit RPC data. GuildBotics does not parse human stderr text for these
 decisions.
 
-Antigravity is classified from its terminal `result` event: a `status` other than
-`SUCCESS` is a failure, and the accompanying `error` field decides the category.
-`agy` reports quota and credential failures in that one string rather than in a
-separate code field. A real quota exhaustion on 1.2.13 returned the plain message
-`Individual quota reached. ... Resets in 25h57m34s.`. Responses with upstream status
-and HTTP code prefixes (`UNAUTHENTICATED (code 401): ...`,
-`API error (attempt 5): RESOURCE_EXHAUSTED (code 429): ...`) were also observed by
-replacing the inference answer at the gateway. The 1.3.3 release notes name the
-expired-login message `Authentication expired. Please log back in.`; the pattern set
-covers it, but it has not been observed in a real run. That one field is matched against
-a small pattern set kept in the adapter. The recovery time it may carry is passed
-through the same normalization every other tool uses. Joined units such as
-`Resets in 25h57m34s` contribute all hours, minutes, and seconds to the recovery time.
-A rate limit does not rotate the session;
-authentication, protocol, and process failures do.
-
-On 2026-10-02, a real quota exhaustion on 1.2.13 returned a terminal event in about
-nine seconds despite an upstream 429 containing
-`RetryInfo.retryDelay: "93454.995843114s"`. The captured
-[fixture](../tests/guildbotics/guest/fixtures/antigravity_quota_1_2_13.json)
-tests classification, and the opt-in provider contract test replays that 429 and
-requires termination within 30 seconds. Replay rebases only the absolute
-`quotaResetTimeStamp` to the current time plus the captured `retryDelay`, keeping
-the reset in the future as calendar time passes. The captured fixture stays unchanged.
-This observation covers that quota
-response; it does not establish a termination time for every 429 response.
-
 When a reset timestamp is available, ticket selection and the chat pending queue defer
 the next attempt until that exact time. They do not consume in-process completion
 retries. Diagnostics use `agent_runtime.*`, `workflow.rate_limited`,
@@ -929,13 +825,7 @@ Codex capability detection occurs through App Server initialization. ACP capabil
 detection requires protocol version 1 plus either `loadSession` or
 `sessionCapabilities.resume`; every ACP adapter additionally requires HTTP MCP support
 for its trusted member capability transport. It never gates on the version string, so
-any newer CLI that still exposes those capabilities keeps working. Antigravity
-capability detection reads `agy --help` (which prints to stderr and exits 0) and
-requires `--print`,
-`--output-format`, `--conversation`, `--model`, `--effort`, and `--add-dir`. The
-verified baselines are Grok Build 1.0.44 and GitHub Copilot CLI 1.0.77 and 1.0.89. Antigravity
-1.1.11 exposes the required flags, and 1.2.13 was observed loading the MCP configuration
-from the added auxiliary workspace and calling the member broker through it.
+any newer CLI that still exposes those capabilities keeps working.
 
 Grok rate limits are classified as `rate_limited` only when ACP or an xAI extension
 returns structured data; stderr text and assistant prose are never parsed. The xAI
@@ -950,59 +840,5 @@ at or above 100%, drives the existing rate-limit state. Account types that do no
 provide the percentage, including API-key usage, remain unavailable rather than
 synthesizing 0%. Authentication stays inside Grok Build's `cached_token` flow;
 GuildBotics neither reads the authentication file nor adds a direct HTTP fallback.
-
-GitHub Copilot CLI reports its session context (`used` / `size`) with the standard ACP
-`usage_update` (observed on 1.0.86 and 1.0.89; 1.0.77 sent none), so the 90%
-`context_limit` rotation arms for Copilot alongside the TTL and turn-count limits. It
-reports no per-turn token counts -- neither `usage_update` nor a private extension
-channel carries one -- so its input and output token counters stay at 0 and the
-token-total limit does not arm. Copilot rate
-limits are likewise classified only from structured RPC error data -- its weekly quota
-identifier `user_weekly_rate_limited` among them -- and never from stderr text or
-assistant prose; an error that cannot be classified becomes a protocol failure that
-rotates the session.
-
-GitHub Copilot's account quota comes from a different path than that ACP turn: the
-Copilot SDK server protocol (JSON-RPC with `Content-Length` framing) that the same
-CLI serves through `copilot --headless --stdio`. GuildBotics pins GitHub Copilot CLI
-1.0.112 in the isolated environment (the 1.0.83 server had no `account.getQuota`).
-After `connect`, `account.getQuota` answers with `quotaSnapshots`
-keyed by quota type (`premium_interactions`, `chat`, `completions`, ...), each
-carrying `entitlementRequests`, `usedRequests`, `remainingPercentage`, and
-`resetDate`. The keys are runtime strings, so they are not filtered against a list:
-every finite budget becomes a row labelled with its key, normalized as
-`used_percent = 100 - remainingPercentage` with `resetDate` as the reset time when it
-lies ahead of the probe (the API has been measured answering every snapshot with the
-request's own instant as `resetDate`; a reset already passed names no coming reset
-and is dropped). An
-unlimited budget (`isUnlimitedEntitlement`, or a negative `entitlementRequests`; the
-measured unlimited `chat` / `completions` report `entitlementRequests: 0` with
-`remainingPercentage: 100`) gets no meter, and a snapshot whose
-`remainingPercentage` is missing, non-numeric, non-finite, or outside 0-100 is
-dropped. The period length is not reported, so no duration is guessed from the
-reset date. A budget at 0% remaining sets `limit_reached`. The Copilot CLI reads it
-itself, in an environment of its own that holds the login in memory; GuildBotics adds
-no direct HTTP call. The probe starts no turn and spends no quota.
-
-Antigravity reports per-turn token counts (`input_tokens`, `output_tokens`,
-`thinking_tokens`, `cache_read_tokens`, `total_tokens`), which are normalized onto
-the same shared keys every other adapter uses. It reports no absolute session
-context size (observed on 1.2.13), so context-usage rotation does not arm for Antigravity; only the TTL,
-turn-count, and token-total limits do. This is the same situation as Grok.
-
-Account quotas are a separate path from those per-turn counters. From Antigravity
-CLI 1.1.11, `agy -p "/usage" --output-format json` answers the read-only `/usage`
-slash command without starting an agent turn, spending quota, or leaving a
-conversation. GuildBotics pins Antigravity CLI 1.5.9 in the isolated environment
-and verified the structured payload on 1.2.13: `command.data.groups[].buckets[]`
-carries each model group's `window` (`weekly` / `5h`), `remaining_fraction`, and
-`reset_time`. Those buckets become the same usage meters the Activity view already
-shows for Claude, Codex, and Grok. A `window` other than `weekly` / `5h` keeps
-its raw value in the label so rows stay distinguishable; GuildBotics does not
-guess a duration from the name. As with Claude and Codex, `limit_reached` is
-true when any window is exhausted, so the member badge can light while another
-model group still has quota. Accounts that do not expose quotas, and payloads
-that are not that JSON, stay unavailable; GuildBotics does not parse the TUI,
-the status line, or tab-separated text, and it does not synthesize 0% or 100%.
 
 Workflow turns work in member clones; save deliverables in the absolute `Artifact directory` supplied by the workflow prompt, which remains mounted separately.
