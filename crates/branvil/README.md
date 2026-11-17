@@ -603,12 +603,12 @@ artifacts, retry and cancel, states, limits, and the trust model:
 
 The GuildBotics repository's [`.branvil/ci.toml`](../../.branvil/ci.toml) runs
 the checks of "Development": `rust-fmt` and `rust-clippy` for the Cargo
-workspace, and its tests in `rust-test-branvil` (Branvil's crates, which a pull
-request changing only GuildBotics' crates skips) and `rust-test` (the rest),
-`rust-duplicates` (jscpd), `branvil-web` (`npm ci` at the
+workspace, and its tests in `rust-test-branvil` (`branvil` and `loopback-auth`)
+and `rust-test` (the rest,
+including the integration check of "Checking with GuildBotics"),
+`rust-duplicates` (jscpd), and `branvil-web` (`npm ci` at the
 repository root, then `npm run lint`, `npm run typecheck`, and `npm run test`
-in `crates/branvil/web`), and
-`rust-test` (see "Checking with GuildBotics"). Their image is
+in `crates/branvil/web`). Their image is
 GuildBotics' development image
 (`guildbotics/agent-environment:dev`, built by
 `scripts/build-agent-environment-image.sh`): the owner loads its `docker save`
