@@ -4,10 +4,8 @@ import json
 import os
 from pathlib import Path
 
-from guildbotics.guest.antigravity import AntigravityStreamJsonAdapter
 from guildbotics.guest.claude import ClaudeStreamJsonAdapter
 from guildbotics.guest.codex import CodexAppServerAdapter
-from guildbotics.guest.copilot import CopilotAcpAdapter
 from guildbotics.guest.grok import GrokAcpAdapter
 from guildbotics.intelligences.agent_runtime.models import (
     AgentExecutionContext,
@@ -19,10 +17,8 @@ from guildbotics.intelligences.agent_runtime.models import (
 from guildbotics.intelligences.agent_runtime.wire import CommandFacts
 
 _ADAPTERS = {
-    "antigravity": AntigravityStreamJsonAdapter,
     "claude": ClaudeStreamJsonAdapter,
     "codex": CodexAppServerAdapter,
-    "copilot": CopilotAcpAdapter,
     "grok": GrokAcpAdapter,
 }
 

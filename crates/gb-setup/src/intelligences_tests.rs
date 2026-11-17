@@ -169,7 +169,7 @@ fn invalid_brains_and_unknown_tools_never_write_assignments() {
         );
         assert!(stored(&repository, "intelligences/brain_mapping.yml").is_null());
     }
-    for tool in ["codex", "claude", "grok", "copilot", "antigravity"] {
+    for tool in ["codex", "claude", "grok"] {
         let form: Update = serde_json::from_value(json!({"cli_agent_mapping":{"judge":format!("cli_agents/{tool}/default.yml")},"brain_mapping":[{"name":"chat_decision","brain_class":CLI,"engine":"cli","target":"judge"}]})).unwrap();
         let error = service.update(&form, &Revisions::new()).unwrap_err();
         assert_eq!(
@@ -402,11 +402,11 @@ fn native_catalog_and_shadowed_provider_defaults_keep_typed_fields() {
         templates: &templates,
     };
     let mut mapping = Map::new();
-    for tool in ["codex", "claude", "grok", "copilot", "antigravity"] {
+    for tool in ["codex", "claude", "grok"] {
         mapping.insert(tool.into(), json!(format!("cli_agents/{tool}/default.yml")));
     }
     save(&service, json!({"cli_agent_mapping":mapping}));
-    for tool in ["codex", "claude", "grok", "copilot", "antigravity"] {
+    for tool in ["codex", "claude", "grok"] {
         let config = service.read(None).unwrap();
         let agent = config["cli_agents"]
             .as_array()
@@ -424,7 +424,7 @@ fn native_catalog_and_shadowed_provider_defaults_keep_typed_fields() {
             keys,
             BTreeSet::from([
                 "model",
-                if ["grok", "copilot"].contains(&tool) {
+                if tool == "grok" {
                     "reasoning_effort"
                 } else {
                     "effort"

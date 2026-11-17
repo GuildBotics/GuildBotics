@@ -105,7 +105,7 @@ pub(crate) type LoginRunner = std::sync::Arc<
 >;
 
 pub(crate) fn supported(tool: &str) -> bool {
-    ["codex", "claude", "grok", "copilot"].contains(&tool)
+    ["codex", "claude", "grok"].contains(&tool)
 }
 
 #[cfg(test)]

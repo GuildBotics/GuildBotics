@@ -117,9 +117,9 @@ class AcpAdapterBase(JsonRpcAdapter):
 
     #: Adapter identifier recorded on conversations, e.g. ``"grok-acp"``.
     name = ""
-    #: The agent as it acts within a turn ("Grok", "Copilot").
+    #: The agent as it acts within a turn (e.g. "Grok").
     agent_label = ""
-    #: The installed CLI product ("Grok Build", "GitHub Copilot CLI").
+    #: The installed CLI product (e.g. "Grok Build").
     product_label = ""
     #: The provider settings keys this adapter can really impose.
     setting_keys: frozenset[str] = frozenset()

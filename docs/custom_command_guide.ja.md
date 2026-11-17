@@ -233,7 +233,7 @@ inputs:
 
 ## 3. AI CLIツールの利用
 
-YAML フロントマターで `brain: agent` を指定すると、OpenAI Codex や Antigravity CLI などといったAI CLIツールの呼び出しができます。AI CLIツールを用いると、割り当てられた GuildBotics member にファイルの読み込みやシステムコマンドの実行など、より高度な操作を指示できます。
+YAML フロントマターで `brain: agent` を指定すると、OpenAI Codex や Claude Code などといったAI CLIツールの呼び出しができます。AI CLIツールを用いると、割り当てられた GuildBotics member にファイルの読み込みやシステムコマンドの実行など、より高度な操作を指示できます。
 
 例えば、`summarize.md` というファイルを作成し、次のように記述します。
 
@@ -944,7 +944,7 @@ effort:            # low / high のときだけ上書き
 
 `default` や未指定のときはエフォート層が適用されないため、モデルを常に固定したい場合は `parameters:` に書きます。設定として書くのはこの 2 つのキーだけで、ツール自体はビルトインのアダプタが動かします。同梱の既定ファイルはこのほかに `effort_fields:`（前節の型付き編集用の宣言）を持ちますが、これはツールに同梱されるプロバイダ知識であり、利用者が設定する項目ではありません。
 
-同梱ツールはすべて既定のマッピングと `effort_fields:` を持ち、設定なしで `low` / `high` が機能します。codex は `turn/start` の model / effort、Claude Code は `--model` / `--effort`、Grok と Copilot は ACP のセッション設定項目 model / reasoning effort、`agy --print` はコマンドラインの `--model` または `--effort` に翻訳します（この2つは併用できないため、両方を設定したスロットではモデルを採用します）。新しい AI CLI ツールへ対応するには、本リポジトリにネイティブアダプタを実装します。`effort_fields:` もそこで宣言するもので、ワークスペースに YAML を置いてツールを追加する経路はありません。
+同梱ツールはすべて既定のマッピングと `effort_fields:` を持ち、設定なしで `low` / `high` が機能します。codex は `turn/start` の model / effort、Claude Code は `--model` / `--effort`、Grok は ACP のセッション設定項目 model / reasoning effort に翻訳します。新しい AI CLI ツールへ対応するには、本リポジトリにネイティブアダプタを実装します。`effort_fields:` もそこで宣言するもので、ワークスペースに YAML を置いてツールを追加する経路はありません。
 
 ```yaml
 # intelligences/cli_agents/codex/default.yml

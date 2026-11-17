@@ -1,21 +1,9 @@
-# Codex・Claude Code・Grok Build・GitHub Copilot・Antigravityのセッション連携
+# Codex・Claude Code・Grok Buildのセッション連携
 
-GuildBoticsでCodex、Claude Code、Grok Build、GitHub Copilot、Antigravityを利用する場合は、
-Slackスレッドやチケットにセッションを対応付け、前回の続きから作業を再開できます。Codexとの連携には
-[Codex App Server](https://developers.openai.com/codex/app-server)を使用し、Claude Codeとの
-連携には公式の`stream-json`入出力と`--resume <session-id>`を使用します。Grok BuildとGitHub
-Copilotとの連携には、それぞれ`grok agent stdio`と`copilot --acp`が提供する
-[Agent Client Protocol](https://agentclientprotocol.com/protocol/v1/initialization)
-（ACP）v1を使用します。ACPを使う2つのAI CLIツールは共通のACPクライアントを共有し、
-AI CLIツールごとの実装は起動コマンド、認証、セッション設定、独自拡張の通知だけです。
+Codex は App Server、Claude Code は stream-json、Grok Build は ACP v1 の
+`grok agent stdio` で実行します。対応ツールはこの 3 つです。
 
-Antigravityだけは「1プロセスで複数ターンを実行する」形になりません。`agy`には常駐サーバ
-モードがなく、プログラムから使える口は`agy --print --output-format stream-json`の一発実行
-だけです。したがって1ターンが1プロセスであり、セッションの同一性は生きているプロセスでは
-なく`--conversation <id>`が担保します。それ以外（厳密な再開、イベントの逐次配信、
-トークン使用量、構造化されたエラー分類）は他のネイティブ連携と同じです。
-
-GuildBoticsが実行できるAI CLIツールはこの5つだけです。新しいツールへ対応するには、
+GuildBoticsが実行できるAI CLIツールはこの3つだけです。新しいツールへ対応するには、
 本リポジトリにネイティブアダプタを実装します。ワークスペースにYAMLを置いて未対応のツールを
 追加する経路はありません。
 
@@ -28,8 +16,6 @@ default: codex
 codex: codex
 claude: claude
 grok: grok
-copilot: copilot
-antigravity: antigravity
 ```
 
 各AI CLIツールは`intelligences/cli_agents/<tool>/`配下の定義ファイルも読み込みます。
@@ -115,8 +101,6 @@ imageのものを優先し、Debianの0.8.0ではhelperをexecできずセッシ
 （`libwebkit2gtk`などが依存で引き込むので、入った場合はbinaryを消します）。読み込んだimageはregistryへ問い合わせずに使います（pull policy `never`）。ワークスペースのコードホストのCIのジョブが同じimageで動く場合（Branvil）は、CIランナーが動くマシンで`guildbotics environment image load-ci <アーカイブ>`を実行し、CIランナーにも読み込みます（パイプラインはimageをタグだけで指すので、ジョブがどの版で動くかはランナーのキャッシュで決まります）。GuildBotics自身の開発用image（`docker/agent-environment/Dockerfile`、`scripts/build-agent-environment-image.sh`でbuild、この端末とCIランナーへの読み込み、宣言）が実例です。
 
 macOS では、**システム設定 → プライバシーとセキュリティ → ファイルとフォルダ**で、GuildBotics を起動しているアプリに書類フォルダへのアクセスを一度許可してください（ターミナルで `guildbotics server start` を実行したときは、そのターミナルのアプリです）。環境の状態表示と turn の開始前にディレクトリへのアクセスを確認し、許可がなければ CLI と画面に同じ拒否理由を表示します。
-
-
 
 hostのマウント元は、読み取りや作成の前に、パスの各要素をリンクを辿らずに開いて確認します。
 シンボリックリンクを含むパスは拒否するため、実ディレクトリのパスを指定してください。
@@ -334,8 +318,7 @@ mountされたとおりに書き込み可または読み取り専用（`read_wri
 非対話の`never` approval policyで動き、予期しない確認要求は拒否します。Claude Codeは
 `bypassPermissions`と`sandbox.enabled=false`で動きます（microVMの中ではrootなので、Claude Codeが
 rootでの`bypassPermissions`を拒否しないよう`IS_SANDBOX=1`を渡します）。Grok Buildは`--sandbox off`と
-`--always-approve`（LinuxのprofileはLandlockを要し、環境のkernelには無いため。Grokは強制できないprofileでは起動を拒否する）、GitHub Copilotは`--no-remote-export`と`allow_all: on`、Antigravityは
-`--dangerously-skip-permissions`で起動し、設定からフラグは注入されません。読み取り専用ターンも
+`--always-approve`（LinuxのprofileはLandlockを要し、環境のkernelには無いため。Grokは強制できないprofileでは起動を拒否する）で起動し、設定からフラグは注入されません。読み取り専用ターンも
 同じ形で起動します。Codexは同梱のbubblewrapを使います（imageにbubblewrapを入れると同梱のものより
 優先され、Codexのhelperを起動できないため、imageには入れません）。新しい固定版の内側sandboxが
 microVMのkernelで動くかは、任意の実機確認を依頼されたときに確かめます。無人の固定版更新では
@@ -353,18 +336,11 @@ store（`~/.guildbotics/data/agent_environment/<provider>/`）からbindして�
 
 AI CLIツールは隔離環境の中で動くため、hostにインストールする必要はなく、hostでのログインも
 turnには使われません。ログインは環境の中で行います。turnを実行する端末ごとに、ターミナルで
-`guildbotics environment login <tool>`（`codex` / `claude` / `grok` / `copilot` / `antigravity`）を実行すると、そのツール自身の
+`guildbotics environment login <tool>`（`codex` / `claude` / `grok`）を実行すると、そのツール自身の
 ログインコマンドが環境の中で起動し、device code方式でブラウザ承認を案内します。結果は
 端末に暗号化して保存され（後述）、その端末の全メンバー・全ワークスペースで共有します。
 GuildBoticsのセッション情報や診断記録には複製されません。画面はログイン状態と
 実行すべきコマンドを示し、画面自身がログインの対話を行うことはありません。
-
-loginは環境の中の端末（TTY）で動かします。認証情報をファイルに保存する前に確認するツールは端末でしか
-確認しないためで、Copilotは環境にキーチェーンが無いことを検出し、state root配下への平文保存を1回
-確認します。Grok Buildはdevice code方式のloginです。Antigravityにはloginコマンドが無く、保存済み
-loginの無いprint mode実行がGoogleのサインインURLを表示して認可コードを標準入力から受け取ります
-（60秒以内）。Grok Build自身のsandbox profileはLinuxでLandlockを要し、環境のkernelには無いため、
-環境の中では`--sandbox off`で動きます（境界は環境です）。
 
 設定カードには、認証情報が保存済みでもログインコマンドとコピー操作が表示されます。
 コマンドは管理CLIの絶対パスを使います。
@@ -388,8 +364,6 @@ AI CLIツールのログインは、turnのmicroVMにも、この端末の平文
 |---|---|---|---|---|
 | Codex | `~/.codex/auth.json`（ChatGPTアカウントでのログイン） | 置換用の`auth.json`。アクセストークンとIDトークンの位置に、期限とアカウントのclaim（メールアドレス・プラン・アカウントID）だけを持つ署名なしのJWTを置き、refresh tokenは空にする（`chatgpt_base_url`と、GuildBotics独自のmodel provider `guildbotics`の`base_url`でゲートウェイを指す）。連携アプリ用に同じ値を`CODEX_CONNECTORS_TOKEN`でも渡す | `https://chatgpt.com`（推論の`/backend-api/codex/responses`、モデル一覧、`/backend-api/wham/`の利用枠と設定、プラグインの`/backend-api/ps/plugins/*`と`/backend-api/plugins/featured`、連携アプリのMCP `/backend-api/ps/mcp`） | 更新は、期限を過ぎたと伝えたアクセストークンで`codex debug models`を実行する。usageはApp Serverの`account/rateLimits/read` |
 | Claude Code | `~/.claude/.credentials.json` | 置換用の認証ファイル（`ANTHROPIC_BASE_URL`でゲートウェイを指す） | `https://api.anthropic.com` | `claude -p /usage` |
-| Antigravity | `~/.gemini/antigravity-cli/antigravity-oauth-token` | 置換用の認証ファイル（アクセストークン・`token_type`・期限・`auth_method`だけ。refresh tokenとIDトークンは入れない）。`CLOUD_CODE_URL`でHTTPSのゲートウェイを指し、`www.googleapis.com`はturn内の中継でゲートウェイへ向ける | `https://daily-cloudcode-pa.googleapis.com`（`/v1internal:`の8つのメソッド）と`https://www.googleapis.com/oauth2/v2/userinfo` | 更新もusageも`agy -p /usage`（期限を過ぎたと伝えたログインで実行すると更新する） |
-| GitHub Copilot | `~/.copilot/config.json`（先頭にコメント行があるJSON。アカウント名のキーの下にトークン。期限もrefresh tokenも無い。扱えるアカウントは1つ） | 置換用の値（`gho_`で始まる。Copilotはこの形しか受け付けない）を`COPILOT_GITHUB_TOKEN`で渡す。`COPILOT_DEBUG_GITHUB_API_URL`と`COPILOT_API_URL`でゲートウェイを指す | `https://api.github.com`（`/copilot_internal/user`と`/copilot_internal/managed_settings`）と`https://api.individual.githubcopilot.com`（`/models`と推論の`/chat/completions`・`/responses`・`/v1/messages`。モデルが対応する経路へ送られる。ほかにGitHub MCPの`/mcp/readonly`とcustom agentsの`/agents/swe/custom-agents/*`） | 更新は無い（拒否されたら再ログインを求める）。usageはCopilot SDK serverの`account.getQuota` |
 | Grok Build | `~/.grok/auth/auth.json`（アカウント名のキーを1つ持つ） | 外部認証コマンド（`GROK_AUTH_PROVIDER_COMMAND`）が置換用の値を返す（`GROK_CLI_CHAT_PROXY_BASE_URL`でゲートウェイを指す） | `https://cli-chat-proxy.grok.com` | 更新は`grok models`、usageはACPの`_x.ai/billing`（外部認証では読めないため、ログインを持つ環境で読む） |
 
 turnのmicroVMでは、各ツールの接続先を差し替える設定でゲートウェイを指します。これを支える前提は、
@@ -438,7 +412,7 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
 - **TLS**: HTTPSを要求するツールには、ゲートウェイがturnごとに作るCAの証明書でTLSを話します。
   turnは`SSL_CERT_FILE`で、システムのCAにこのCAを加えたファイル
   （`/etc/guildbotics/ca-certificates.crt`）を信頼します。CAの鍵はGuildBoticsプロセスの
-  メモリから出ません。CodexとAntigravityがこの仕組みを使います。
+  メモリから出ません。Codexがこの仕組みを使います。
 - **更新とusage**: トークンの更新と`/usage`はAnthropicのアカウント用endpointへ直接通信するため、
   ゲートウェイでは扱いません。ログインをメモリに持つ専用の環境で、Claude Code自身に実行させます。
   この環境は作業ディレクトリもworkspaceもmountせず、プロバイダのドメインだけに届きます。
@@ -447,8 +421,7 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   ログや画面に渡します。
   更新では期限切れと伝えたログインを渡して`claude -p /usage`を実行し、更新されたログインを
   環境を止める前に取り出して暗号化保存します。期限まで5分を切ったログインは、turnと
-  ツールを起動する前に更新します（ツールは起動直後にAPIへ届く必要があり、Antigravityはその認証を
-  10秒で打ち切るため、最初の要求の中で更新を待たせません）。turnの途中では、ゲートウェイが期限の
+  ツールを起動する前に更新します（ツールは起動直後にAPIへ届く必要があるため、最初の要求の中で更新を待たせません）。turnの途中では、ゲートウェイが期限の
   5分前、またはupstreamに拒否されたときに更新を要求し、その要求は更新を待ちます（refreshするツールはすべて、
   turnの途中の待ちのあともturnを続けることを実アカウントで確認済みです）。この環境はprocessをまたいで端末に1つだけ動くように
   直列化し（`login.sealed.lock`）、同じrefresh tokenを2回使うことはありません。turn全体は
@@ -475,63 +448,20 @@ turnのmicroVMでは、各ツールの接続先を差し替える設定でゲー
   実測した`workspace_backend_origin: NO_CONSTRAINT`では、Codexは設定されたゲートウェイを
   接続先に保ちますが、この場合もHTTPSを要求します。探索の応答は書き換えずに転送します。
   別のbackend originを要求するルーティングポリシーは未検証です。
-- **Antigravity固有**: Cloud Code APIはHTTPSでしか受け付けないため、AntigravityはTLSを使います。
-  起動時の利用資格の確認は、設定で変えられないURL（`www.googleapis.com`の
-  userinfo）を読むため、turnの中の`/etc/hosts`でこのホストを`127.0.0.2`に向け、そこでNodeの
-  TCP中継がゲートウェイへつなぎます（ゲートウェイはこの名前でも証明書を出します）。`HTTPS_PROXY`は
-  ツールの全通信をhostへ通すことになるため使いません。プロフィール画像
-  （`lh3.googleusercontent.com`、認証情報を含まない）だけはturnから直接取得します。
-  トークンを含むテレメトリー（`play.googleapis.com/log`）はturnから届かず、なくても動きます。
-  会話の所有者をGoogle側に登録する`/v1internal:writeTrajectoryAcls`（本文は会話のIDだけ）は転送します。
-  ゲートウェイは転送しなかった経路を`METHOD /path`だけ、
-  同じ経路はturnごとに1回だけログに残します（トークン・query・本文は残しません）。
-- **GitHub Copilot固有**: ログインは期限を持たず、refreshもしません。ゲートウェイは拒否された
-  ログインを更新しようとせず、再ログインを求めます。Copilotがホストする読み取り専用のGitHub
-  MCP server（`/mcp/readonly`。利用者のGitHub権限で動く）と、リポジトリのcustom agentsは転送し、
-  テレメトリーは転送しません。
-  個人プラン以外のアカウント（Business・Enterprise）のAPIの転送先は未確認です。
-- **切り替え**: 旧形式の平文（Codexは`~/.guildbotics/data/agent_environment/codex/.codex/auth.json`、
-  Claude Codeは`~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`、
-  Grok Buildは`~/.guildbotics/data/agent_environment/grok/.grok/auth/`、
-  Antigravityは`~/.guildbotics/data/agent_environment/antigravity/.gemini/antigravity-cli/antigravity-oauth-token`、
-  GitHub Copilotは`~/.guildbotics/data/agent_environment/copilot/.copilot/config.json`と、
-  強制終了したturnが残した`~/.guildbotics/data/agent_environment/copilot/turns/`）は読みもbindもしません。
-  `guildbotics environment login <tool>`で再ログインしてから、これらを削除してください
-  （macOS / Linux: `rm ~/.guildbotics/data/agent_environment/codex/.codex/auth.json`、
-  `rm ~/.guildbotics/data/agent_environment/antigravity/.gemini/antigravity-cli/antigravity-oauth-token`、
-  `rm ~/.guildbotics/data/agent_environment/copilot/.copilot/config.json`、
-  `rm -r ~/.guildbotics/data/agent_environment/copilot/turns`、
-  `rm ~/.guildbotics/data/agent_environment/claude/.claude/.credentials.json`、
-  `rm -r ~/.guildbotics/data/agent_environment/grok/.grok/auth`。
-  GuildBoticsは旧形式を扱うコードを持たないため、自動では削除しません。セッション（`sessions/`・`projects/`・`session-state/`・`antigravity-cli/conversations/`など）や
-  cacheは消さないでください。過去のバックアップに残った平文までは消せません。
+
 - **復旧**: 状態が「ロック中」ならキーチェーンのロックを解除し、「利用できない」ならキーチェーンか
   ディスク（空き容量など）の問題を解消してからやり直します。「開けない」（鍵の欠損・破損）と
   更新失敗は、`guildbotics environment login <tool>`で再ログインすると新しい保存に置き換わります。
-- **残るリスク**: 侵害されたturnは、実行中にゲートウェイ経由で許可されたAPIを使うこと、
-  利用枠を消費すること、許可されたリクエスト本文にデータを載せることができます。許可されたAPIには、
-  GitHub CopilotのGitHub MCP（ログインしたGitHubアカウントの権限での読み取り）と、Codexの連携アプリ
-  （ChatGPTアカウントに連携したサービス）も含まれます。
-  hostのメモリやhost管理者に対する保護ではありません。
-- **この方式による機能制約**: Codexはturnで分析を送信できません。Claude Codeはturnからアカウントのprofile
-  （`/api/oauth/profile`）を読めません。Grok Buildの利用量はturnでは読めず、ログインを持つ環境で
-  読みます。GitHub Copilotはテレメトリーを送れず、
-  Business・Enterpriseのアカウントの転送先は未確認です。Antigravityはトークンを含むテレメトリーを
-  送れません。GitHub Copilotのログインに期限とrefreshが無いのは
-  provider自身の仕様です。
+
+侵害されたturnでも、許可したAPIを通して利用枠を消費し、データを送れます。
+Codexの連携アプリもこの範囲です。hostのメモリや管理者から守る仕組みではありません。
+Codexはanalyticsを送らず、Claudeは`/api/oauth/profile`を読めません。
+Grokのアカウント利用枠はログインを保持する専用環境でだけ読みます。
 
 Grok Buildでは、ACPの`initialize`が提示した認証方式のうち、外部認証コマンドの方式
 （`_meta.external_provider`）だけを選択します。turnが持つ置換用の値はこのコマンドから渡るためです。
 ブラウザを開く対話認証やAPIキー方式は使用しません。利用者のいない環境で対話を待つことになり、
 APIキーは環境へ届かないためです。提示されない場合は認証エラーとして停止します。
-
-GitHub Copilotが提示する認証方式は`copilot-login`の1つだけで、その付随情報には「端末で
-`copilot login`を実行する」と記載されています。GuildBoticsはこの方式でACPの`authenticate`を
-呼びます。turnでは`COPILOT_GITHUB_TOKEN`の置換用の値で認証し、即座に応答が返ります。
-対話的なログイン操作をGuildBotics側から開始することはありません。`authenticate`が拒否された
-場合、認証方式が提示されない場合、応答が返らない場合（利用者のいない環境で端末ログインを待って
-いる状態）は、いずれも認証エラーとして停止し、`copilot login`の実行を案内します。診断記録に
-残すのは認証方式の識別子だけで、Copilotの認証情報保存先の内容は読み取りません。
 
 GitHub、Git、SSHへの書き込みに使う認証情報は、これらのAI CLIツールのプロセスへ届きません。
 隔離環境はhostの環境変数を一切引き継がないためです。メンバー自身の
@@ -541,15 +471,11 @@ helperとsocket（`GIT_ASKPASS`、`SSH_ASKPASS`、`SSH_AUTH_SOCK`）は、どれ
 いずれもhostのGuildBoticsのプロセス内で消費するものであり、member CLIは自分でOSキーチェーンから
 読み込むため、存在しないことの影響を受けません。
 
-Codex、Claude Code、Grok Build、GitHub Copilot、Antigravityには、hostのloopbackでlistenし、
+Codex、Claude Code、Grok Buildには、hostのloopbackでlistenし、
 microVMからは`host.microsandbox.internal`として届くコマンドのHTTP MCP endpointと、
-推測困難なbearer grantを渡します。ACPを使うGrok Buildと
-GitHub Copilotはsessionの`mcpServers`、CodexとClaude Codeはprocess単位のMCP設定を使います。
+推測困難なbearer grantを渡します。Grok BuildはACPの`mcpServers`、CodexとClaude Codeはprocess単位のMCP設定を使います。
 Codexは生のtokenを専用環境変数から`bearer_token_env_var`で読み、必要な
-`Authorization: Bearer` prefixをCodex自身が付けます。Antigravityは`--add-dir`で追加した専用の
-補助workspaceにある`.agents/mcp_config.json`を読みます。process cwdとprimary workspaceは、
-memberの実作業ディレクトリのまま維持します。
-唯一の`guildbotics_member` toolが受け取るのは、固定された
+`Authorization: Bearer` prefixをCodex自身が付けます。唯一の`guildbotics_member` toolが受け取るのは、固定された
 `guildbotics member` entrypointのtoken化済み引数だけです。実行ファイルやshellを選ぶこと、
 workspaceを上書きすること、別personとして動くことはできません。endpointはmicroVMの外、host
 のGuildBotics processで動作し、turn実行中だけ利用でき、毎turn更新する第2のgrantも要求し、
@@ -625,7 +551,7 @@ git自身が解決した送り先が、fetchとpushのどちらもhostの組み�
 実行基盤へ渡します。実行基盤は、AI CLIツールがセッションを引き継げる範囲に応じて、
 実際に送る内容を次のように選びます。
 
-- Codex、Claude Code、Grok Build、GitHub Copilot、Antigravityの既存セッションを引き継ぐ場合は、セッション内に
+- Codex、Claude Code、Grok Buildの既存セッションを引き継ぐ場合は、セッション内に
   保持されている文脈へ最新のイベントだけを追加します。安全に新しいセッションへ切り替えられるよう、
   ワークフロー側でもSlackスレッドの履歴を更新しますが、引き継ぎ中のセッションへその履歴を重ねて
   送りません。
@@ -697,13 +623,12 @@ ACPの`session/prompt`はターンが終了した時点で応答が返るため�
 応答が返る要求にはリクエスト単位の締め切りを維持します。
 
 実行中のプロセスがすでに開いているセッションは、再度読み込みません。会話はプロセス内に残って
-いるため再送すべき履歴がなく、Copilotはこの場合`already loaded`エラーを返します。再読み込みを
+いるため再送すべき履歴がありません。再読み込みを
 行うのは、保存済みのセッションIDしか手掛かりがない再起動後のプロセスだけです。どちらの場合も
 そのターンの設定は改めて適用します。
 
 ACPを使うAI CLIツールの正確な再開には、`initialize`が提示した機能に応じてACPの`session/resume`
-または`session/load`を使用します。Grok Build（0.2.114から1.0.44まで確認）とGitHub Copilot CLI
-（1.0.77から1.0.89まで確認）はどちらも`sessionCapabilities.resume`を提示しないため、`session/load`を使用します。`session/load`はセッション全体の履歴を再送してから応答を返すため、
+または`session/load`を使用します。Grok Build（0.2.114から1.0.44まで確認）は`sessionCapabilities.resume`を提示しないため、`session/load`を使用します。`session/load`はセッション全体の履歴を再送してから応答を返すため、
 その応答を境界として、再送された履歴を現在のturnのイベント、Slackへの投稿、通常の実行記録から
 除外します。再送された件数だけを診断記録に残します。履歴は標準の`session/update`だけでなく
 xAI独自拡張の経路でも再送され、前回turnの`turn_completed`（トークン使用量）が含まれます。
@@ -730,27 +655,6 @@ Claude Codeでは`rate_limit_event`を使用し、そのepoch形式`resetsAt`を
 rate limitに関するRPCデータを使用します。標準エラー出力に表示される、人間向けの
 エラーメッセージには依存しません。
 
-Antigravityでは、終端の`result`イベントで判定します。`status`が`SUCCESS`以外なら異常とみなし、
-同じイベントの`error`フィールドで種別を決めます。`agy`は利用制限と認証エラーを、独立したコードの
-フィールドではなくこの1つの文字列で報告します。1.2.13の実際の利用枠切れでは
-`Individual quota reached. ... Resets in 25h57m34s.` という文章でした。上流の状態名とHTTPコードを
-先頭に付けた形（`UNAUTHENTICATED (code 401): ...`、
-`API error (attempt 5): RESOURCE_EXHAUSTED (code 429): ...`）も、ゲートウェイで推論の応答を
-差し替えて確認しています。ログインの期限切れについては、1.3.3のリリースノートが
-`Authentication expired. Please log back in.` という文章を示しており、照合の対象に含めていますが、実際の実行では
-観測していません。そのため、この1フィールドだけをアダプタ内の限定的な正規表現と照合します。
-文章に含まれる復帰時刻は、他のツールと共通の正規化処理へ渡します。
-`Resets in 25h57m34s` のように単位が連結されていても、時間・分・秒をすべて足して復帰時刻を求めます。
-利用制限ではセッションを切り替えず、認証・プロトコル・プロセスの失敗では切り替えます。
-
-2026-10-02に1.2.13で観測した利用枠切れは、上流の429応答に
-`RetryInfo.retryDelay: "93454.995843114s"` があっても約9秒で終端イベントを返しました。
-この応答を保存した [fixture](../tests/guildbotics/guest/fixtures/antigravity_quota_1_2_13.json)
-で分類を検証し、任意実行のprovider接続テストでは同じ429応答を返して30秒以内の終了を確認します。
-再生時は、絶対時刻の `quotaResetTimeStamp` だけを現在時刻と記録された `retryDelay` の和に置き換え、
-日付が進んでも利用枠の復帰を待つ応答として検証します。採取したfixture自体は変更しません。
-この観測は当該利用枠切れ応答についてのもので、すべての429応答の終了時間を保証するものではありません。
-
 再開可能な時刻を取得できた場合は、その時刻まで対象チケットの選択と保留中のチャット処理を
 延期します。この待機によって、同じプロセス内で行う完了条件未達時の再試行回数を消費することは
 ありません。
@@ -770,11 +674,6 @@ ACPを使うAI CLIツールでは、`initialize`が返すプロトコル版数�
 `loadSession`または`sessionCapabilities.resume`のいずれかが提示されることを確認します。
 ACPを使うadapterではさらに、trusted member capability transportに必要なHTTP MCP対応も確認します。
 バージョン文字列では判定しないため、これらのcapabilityを提示する新しい版はそのまま利用できます。
-Antigravityでは`agy --help`（標準エラー出力へ表示し、終了コード0で終わります）を読み取り、
-`--print`、`--output-format`、`--conversation`、`--model`、`--effort`、`--add-dir`への対応を
-確認します。動作確認済みの基準バージョンは、Grok Build 1.0.44、GitHub Copilot CLI 1.0.77と1.0.89です。
-Antigravity 1.1.11が必要なflagを公開することと、1.2.13が追加した補助workspaceからMCP設定を読み込み、
-そのMCP serverを通してmember brokerを呼べることを確認しています。
 
 Grok Buildの利用制限は、ACPまたはxAI独自拡張が構造化データを返した場合にだけ`rate_limited`
 として分類します。標準エラー出力や応答本文の解析は行いません。xAIのretry-state通知は
@@ -787,49 +686,5 @@ Grok Buildの利用制限は、ACPまたはxAI独自拡張が構造化データ�
 既存の利用制限表示へ反映します。Grok.comの購読ログインで使用率が提供されないアカウント種別や
 API-key利用では、利用率0%を生成せず「使用量情報なし」として扱います。認証にはGrok Build自身の
 `cached_token`方式だけを使い、GuildBoticsが認証ファイルを読み取ったり独自にHTTP通信したりしません。
-
-GitHub Copilot CLIは、ACP標準の`usage_update`でセッション文脈量（`used` / `size`）を報告します
-（1.0.86と1.0.89で確認。1.0.77は送ってきませんでした）。そのため、有効期間・turn数に加えて、
-90%到達時の`context_limit`による切り替えも作動します。一方でturnごとのトークン使用量は、
-`usage_update`にも独自拡張の通知にも含まれないため、入力・出力トークンは0のままとなり、
-トークン累計の上限による切り替えは作動しません。GitHub Copilotの
-利用制限も、RPCエラーの構造化データ（週間上限を示す`user_weekly_rate_limited`など）からのみ
-`rate_limited`として分類し、標準エラー出力や応答本文は解析しません。分類できないエラーは
-プロトコルエラーとして扱い、セッションを切り替えて回復します。
-
-GitHub Copilotのアカウント利用枠は、このACP経路とは別に、同じCLIが`copilot --headless --stdio`で
-提供するCopilot SDK server protocol（Content-Lengthヘッダで区切るJSON-RPC）から取得します。
-GuildBoticsの隔離環境はGitHub Copilot CLI 1.0.112を固定しており（1.0.83のserverには
-`account.getQuota`が存在しません）、`connect`のあとに`account.getQuota`を呼ぶと
-`quotaSnapshots`が種別（`premium_interactions` / `chat` / `completions`など）ごとに
-`entitlementRequests`・`usedRequests`・`remainingPercentage`・`resetDate`を返します。
-種別は実行時の文字列なので一覧で選別せず、有限の枠をすべて種別名をラベルにした行として
-`used_percent = 100 - remainingPercentage`で正規化し、`resetDate`をリセット時刻にします。
-ただし`resetDate`が取得時刻以前のときは次のリセットを示していないので捨てます（実測では、
-APIが3種別すべてに要求時刻そのものを`resetDate`として返すことがありました）。
-無制限の枠（`isUnlimitedEntitlement`、または負の`entitlementRequests`。実測では無制限の
-`chat` / `completions`が`entitlementRequests: 0`と`remainingPercentage: 100`を返します）は
-メーターに載せず、`remainingPercentage`が欠落・非数値・非有限・0〜100の範囲外の枠は捨てます。
-期間の長さは返されないため、リセット日から期間を推測しません。残量0%の枠があれば
-`limit_reached`になります。この取得は、ログインをメモリに持つ専用の環境でCopilot CLI自身に
-実行させ、GuildBoticsが独自にHTTP通信することはありません。この取得はターンを開始せず、利用枠を
-消費しません。
-
-Antigravityはターンごとのトークン使用量（`input_tokens` / `output_tokens` /
-`thinking_tokens` / `cache_read_tokens` / `total_tokens`）を報告するため、共通のトークン項目へ
-正規化して扱います。一方でセッション文脈量の絶対値は報告しない（1.2.13で確認）ため、文脈使用率による切り替えは
-作動せず、有効期間・turn数・トークン累計の上限だけが機能します。これはGrok Buildと同じ状況です。
-
-アカウントの利用枠は、このターン単位のトークン使用量とは別経路です。Antigravity CLI 1.1.11以降は
-`agy -p "/usage" --output-format json` で、エージェントターンを開始せず、利用枠を消費せず、
-会話も残さずに読み取り専用の `/usage` を返します。GuildBoticsの隔離環境は Antigravity CLI 1.5.9
-を固定しており、構造化payloadは1.2.13で確認しています。`command.data.groups[].buckets[]` に
-モデルグループごとの `window`（`weekly` / `5h`）、`remaining_fraction`、`reset_time` が入り、
-既存のアクティビティ画面のメーター（Claude / Codex / Grok と同じ）へ正規化します。`weekly` /
-`5h` 以外の `window` は期間を推測せず、生の値をラベルに残して行を見分けられるようにします。
-Claude / Codex と同様、`limit_reached` はどれか1枠が枯渇したときに真になるので、別グループに
-余裕があってもメンバー見出しの「Rate limit 中」は点灯します。利用枠を提供しないアカウントや、
-そのJSONではない出力は「使用量情報なし」のままにし、TUI・status line・タブ区切り本文の解析や、
-0% / 100% の合成はしません。
 
 workflow の turn は member の clone で作業します。利用者向けの成果物は、別途マウントされているプロンプトの `Artifact directory` の絶対パスへ保存します。

@@ -38,7 +38,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
 
   // LLM / AI CLI tools section: provide an API key for the default OpenAI provider.
   // The section nav buttons share text with option cards (e.g. "GitHub" vs
-  // "GitHub Copilot CLI"), so match the nav buttons exactly.
+  // "Claude Code"), so match the nav buttons exactly.
   await page.getByRole("button", { name: "LLM / AI CLI tools", exact: true }).click();
   await page.getByRole("button", { name: "Configure OpenAI API key" }).click();
   // Use an exact match so the input is not confused with the surrounding

@@ -14,8 +14,8 @@ updating its PR. Do not merge it; real-device checks, if any, happen after the
 merge.
 
 GuildBotics pins its provisioned tools in `CliAgentProvision` in
-`guildbotics/intelligences/cli_agents.py`, and the Node.js that Codex, Claude
-Code and Copilot run on in `node_version` and `node_sha256` in
+`guildbotics/intelligences/cli_agents.py`, and the Node.js that Codex and Claude
+Code run on in `node_version` and `node_sha256` in
 `guildbotics/templates/environment/recipe.json`. The Rust snapshot recipe in
 `crates/gb-environment/src/recipe.rs` reads that file and
 `guildbotics/templates/environment/cli_provision.json`. The snapshot installs
@@ -32,7 +32,7 @@ real device.
   release, and resolve every open dependency alert.** Do only what the user
   names when they name a part (some tools, Node.js, or the dependency
   alerts). "Latest" is what the tool's own default install gives: the npm
-  `latest` dist-tag, Grok Build's `stable` channel, the Antigravity manifest.
+  `latest` dist-tag, Grok Build's `stable` channel.
   Never a prerelease, alpha, or `next` tag. For Node.js it is the newest
   release of the pinned major; moving to another major is a human decision.
 - Fetch current versions and alerts on every run. Decide what is needed
@@ -83,9 +83,7 @@ unchanged: those processes can rebuild snapshots from its pins after restart.
 | --- | --- | --- |
 | Codex | `npm view @openai/codex dist-tags.latest` | `package="@openai/codex@<v>"` |
 | Claude Code | `npm view @anthropic-ai/claude-code dist-tags.latest` | `package="@anthropic-ai/claude-code@<v>"` |
-| GitHub Copilot | `npm view @github/copilot dist-tags.latest` | `package="@github/copilot@<v>"` |
 | Grok Build | `curl -fsSL https://x.ai/cli/stable` | `bash -s <v>` in `install` |
-| Antigravity | the two manifests below | versioned URL and both `sha512` in `install` |
 | Node.js | the release index below | `node_version` and both `node_sha256` in `templates/environment/recipe.json` |
 
 Node.js lists its releases newest first. Take the first one of the pinned
@@ -100,20 +98,6 @@ curl -fsSL "https://nodejs.org/dist/v<v>/SHASUMS256.txt" | grep -E 'node-v<v>-li
 
 Grok Build's installer (`https://x.ai/cli/install.sh`) reads the same
 `stable` pointer when no version is given.
-
-Antigravity's installer (`https://antigravity.google/cli/install.sh`) reads a
-manifest per platform. Take `version`, `url` and `sha512` from both:
-
-```bash
-for platform in linux_amd64 linux_arm64; do
-  curl -fsSL "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/$platform.json"
-done
-```
-
-The `url` carries a build ID (`<version>-<build id>/`). Put that directory into
-the pinned URL, `linux_amd64`'s `sha512` on the `x86_64)` line and
-`linux_arm64`'s on the `aarch64)` line. If the manifests are gone, read the
-current `DOWNLOAD_BASE_URL` from the installer.
 
 ## 2. Update what depends on the version
 
@@ -131,7 +115,7 @@ version, and the documented baselines:
 
 ```bash
 # A tool name next to a version, anywhere in the repository
-git grep -nIiE '(codex|claude[- ]code|grok( build)?|copilot( cli)?|antigravity( cli)?|agy)[^0-9(=_]{0,24}[ @/]v?[0-9]+\.[0-9]+(\.[0-9]+)?([^0-9a-z]|$)' \
+git grep -nIiE '(codex|claude[- ]code|grok( build)?)[^0-9(=_]{0,24}[ @/]v?[0-9]+\.[0-9]+(\.[0-9]+)?([^0-9a-z]|$)' \
   -- . ':!.agents/skills/update-dependencies'
 # Every full version, and every version-named fixture, in the files that describe the tools
 git grep -nIE '(^|[^0-9.])[0-9]+\.[0-9]+\.[0-9]+([^0-9.]|$)|_[0-9]+_[0-9]+_[0-9]+\.json' \
@@ -171,7 +155,7 @@ Also check by hand:
   changes. Attribute new behavior to those notes; keep the previous measured
   limitation and make clear that its behavior on the new pin is unverified.
 - `guildbotics/templates/intelligences/cli_agents/*/default.yml`: choices read
-  from a tool's own answer (Copilot's effort levels, from `session/new`) stay
+  from a tool's own answer (Grok's effort levels, from ACP) stay
   unchanged unless official release information establishes a necessary change.
 - Codex: `docker/agent-environment/Dockerfile` removes the image's bubblewrap
   because Debian's 0.8.0 could not exec Codex's helper, and

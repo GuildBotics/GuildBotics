@@ -23,7 +23,6 @@ fn relocated_client_installs_embedded_skills_and_has_only_client_commands() {
             .env("CODEX_HOME", home.join(".codex"))
             .env_remove("CLAUDE_CONFIG_DIR")
             .env_remove("GROK_HOME")
-            .env_remove("COPILOT_HOME")
             .env("LANGUAGE", "en")
             .output()
             .unwrap()
@@ -120,7 +119,6 @@ fn windows_install_uses_userprofile_and_updates_user_path_once() {
             .env("CODEX_HOME", home.join(".codex"))
             .env_remove("CLAUDE_CONFIG_DIR")
             .env_remove("GROK_HOME")
-            .env_remove("COPILOT_HOME")
             .output()
             .unwrap();
         assert!(result.status.success(), "{result:?}");

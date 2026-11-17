@@ -238,16 +238,6 @@ pub async fn run(
     )
     .map_err(Failure::Command)?;
     network.host_ports.extend(session.ports.iter().copied());
-    for (key, value) in &session.env {
-        if key == "GUILDBOTICS_TURN_DOMAINS" {
-            let domains: Vec<String> = serde_json::from_str(value).map_err(|e| {
-                Failure::Command(Sentence::Text(format!(
-                    "Invalid host-resolved turn domains: {e}"
-                )))
-            })?;
-            network.domains.extend(domains);
-        }
-    }
     let registered = device::registered_workspaces(&host.data)
         .map_err(|e| Failure::Command(Sentence::Text(e)))?;
     let access = contract::resolve(

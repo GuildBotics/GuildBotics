@@ -470,16 +470,12 @@ impl ToolLogin {
             routes,
         };
         let gateway = if broker["tls"] == true {
-            let mut names = vec!["host.microsandbox.internal".into()];
-            names.extend(
-                broker["relayed_hosts"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned),
-            );
-            Gateway::start_tls(policy, source.clone(), names).await
+            Gateway::start_tls(
+                policy,
+                source.clone(),
+                vec!["host.microsandbox.internal".into()],
+            )
+            .await
         } else {
             Gateway::start(policy, source.clone()).await
         }
@@ -569,7 +565,6 @@ impl ToolLogin {
         if broker["stand_in_command_env"]
             .as_str()
             .is_none_or(str::is_empty)
-            && broker["stand_in_env"].as_str().is_none_or(str::is_empty)
         {
             let target = self.host_root.path().join(auth);
             write_turn_file(
@@ -608,7 +603,6 @@ impl ToolLogin {
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
-            .chain(broker["stand_in_env"].as_str().filter(|s| !s.is_empty()))
         {
             env.insert(name.into(), token.clone());
         }
@@ -1899,7 +1893,7 @@ mod tests {
     #[test]
     fn login_problem_guides_every_tool_and_reason_in_both_languages() {
         for language in ["en", "ja"] {
-            for name in ["codex", "claude", "grok", "copilot", "antigravity"] {
+            for name in ["codex", "claude", "grok"] {
                 let catalog = json!({"name": name, "label": "CLI label"});
                 for key in [
                     "credentials_missing",
@@ -1912,8 +1906,7 @@ mod tests {
                     "login_not_an_account",
                 ] {
                     let text = login_problem(&catalog, key, "terminal-only", language);
-                    let browser = name != "antigravity"
-                        && !["credentials_locked", "login_not_an_account"].contains(&key);
+                    let browser = !["credentials_locked", "login_not_an_account"].contains(&key);
                     let expected_key = if browser {
                         format!("{key}_browser")
                     } else {
@@ -2270,12 +2263,9 @@ mod tests {
             let by_command = broker["stand_in_command_env"]
                 .as_str()
                 .is_some_and(|v| !v.is_empty());
-            let by_environment = broker["stand_in_env"]
-                .as_str()
-                .is_some_and(|v| !v.is_empty());
             assert_eq!(
                 tool.host_root.path().join(auth).exists(),
-                !by_command && !by_environment,
+                !by_command,
                 "{}",
                 name
             );
@@ -2285,7 +2275,7 @@ mod tests {
             if by_command {
                 assert!(tool.host_root.path().join("stand-in.json").exists());
             }
-            if !by_command && !by_environment {
+            if !by_command {
                 let stub = std::fs::read(tool.host_root.path().join(auth)).unwrap();
                 assert!(!String::from_utf8_lossy(&stub).contains("synthetic-real"));
                 assert!(!String::from_utf8_lossy(&stub).contains("synthetic-signature"));
@@ -3495,26 +3485,6 @@ fn expire(mut files: Files, catalog: &Value) -> Result<Files, String> {
         serde_json::to_vec(&document).map_err(|_| "Credentials malformed.")?,
     );
     Ok(files)
-}
-impl ToolLogin {
-    pub fn relayed_hosts(&self) -> Vec<String> {
-        self.catalog["provision"]["credential_broker"]["relayed_hosts"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect()
-    }
-    pub fn turn_domains(&self) -> Vec<String> {
-        self.catalog["provision"]["credential_broker"]["turn_domains"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect()
-    }
 }
 
 impl ToolLogin {

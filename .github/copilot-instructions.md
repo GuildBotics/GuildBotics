@@ -1,2 +1,0 @@
-- In this project, treat [AGENTS.md](../AGENTS.md) as the **highest priority code of conduct**.
-- Summarize and confirm important matters before responding.

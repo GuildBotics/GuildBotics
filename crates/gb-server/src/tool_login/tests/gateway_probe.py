@@ -15,12 +15,24 @@ def assert_no_login(turn):
     mark = b"synthetic-device-" + b"login"
     marker = Path("/var/tmp/guildbotics-scan-canary")
     marker.write_bytes(mark)
-    with subprocess.Popen(["sleep", "60"], env={**turn.env, "PROBE": mark.decode()}) as child:
+    with subprocess.Popen(
+        ["sleep", "60"], env={**turn.env, "PROBE": mark.decode()}
+    ) as child:
         try:
             files = subprocess.run(
-                ["grep", "-rlaF", "-f", "-", "/", "--exclude-dir=proc",
-                 "--exclude-dir=sys", "--exclude-dir=dev"],
-                input=mark + b"\n", capture_output=True, timeout=60,
+                [
+                    "grep",
+                    "-rlaF",
+                    "-f",
+                    "-",
+                    "/",
+                    "--exclude-dir=proc",
+                    "--exclude-dir=sys",
+                    "--exclude-dir=dev",
+                ],
+                input=mark + b"\n",
+                capture_output=True,
+                timeout=60,
             )
             assert files.returncode == 0, files.stderr
             assert files.stdout.decode().splitlines() == [str(marker)], files.stdout
@@ -32,7 +44,7 @@ def assert_no_login(turn):
                         try:
                             if mark in path.read_bytes():
                                 hits.append(path)
-                        except (FileNotFoundError, PermissionError, ProcessLookupError):
+                        except FileNotFoundError, PermissionError, ProcessLookupError:
                             pass
             assert hits == [Path(f"/proc/{child.pid}/environ")], hits
         finally:
@@ -48,10 +60,10 @@ def check_routes(probe, turn):
     for entry in probe["persisted"]:
         assert turn.mounts[str(root / entry)] is False
     base = env[probe["base_env"]].removesuffix(probe["base_suffix"])
-    if name := probe["stand_in_env"]:
-        token = env[name]
-    elif name := probe["stand_in_command"]:
-        token = json.loads(subprocess.check_output(env[name], shell=True))["access_token"]
+    if name := probe["stand_in_command"]:
+        token = json.loads(subprocess.check_output(env[name], shell=True))[
+            "access_token"
+        ]
     else:
         value = json.loads((root / probe["auth"]).read_bytes())
         for key in probe["access_path"]:
@@ -70,7 +82,9 @@ def check_routes(probe, turn):
             assert "synthetic-device-" + "login" not in response.headers["x-echo"]
             assert b"synthetic-device-" + b"login" not in response.read()
     try:
-        urlopen(Request(base + "/unlisted", headers=headers), context=context, timeout=10)
+        urlopen(
+            Request(base + "/unlisted", headers=headers), context=context, timeout=10
+        )
     except HTTPError as error:
         assert error.code == 403
     else:

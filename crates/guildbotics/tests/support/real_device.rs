@@ -486,14 +486,6 @@ impl Device {
     }
 }
 
-fn smoke_options(tool: &str) -> Value {
-    match tool {
-        "copilot" => json!({"model": "gpt-5-mini", "reasoning_effort": "low"}),
-        "antigravity" => json!({"model": "gemini-3.6-flash-low"}),
-        _ => json!({}),
-    }
-}
-
 async fn single_turn(tool: &str, prompt: &str, expected: &str) -> Value {
     let device = Device::account(tool);
     let cwd = device.workspace.join("work");
@@ -550,7 +542,7 @@ async fn resume(tool: &str) {
     let device = Device::account(tool);
     let cwd = device.workspace.join("work");
     fs::create_dir(&cwd).unwrap();
-    let options = smoke_options(tool);
+    let options = json!({});
     let first = device
         .turns(
             tool,
@@ -567,18 +559,7 @@ async fn resume(tool: &str) {
         .as_str()
         .filter(|id| !id.is_empty())
         .unwrap();
-    let mut prompts = vec!["Reply with exactly AGAIN."];
-    if tool == "copilot" {
-        assert_eq!(
-            first["settings"],
-            json!({
-                "model": "gpt-5-mini", "reasoning_effort": "low", "allow_all": "on",
-                "requested": {"model": "gpt-5-mini", "reasoning_effort": "low", "allow_all": "on"},
-                "rejected": [],
-            })
-        );
-        prompts.push("Reply with exactly THIRD.");
-    }
+    let prompts = vec!["Reply with exactly AGAIN."];
     let resumed = device
         .turns(tool, &cwd, session, options.clone(), &prompts, false)
         .await;
@@ -586,20 +567,9 @@ async fn resume(tool: &str) {
     for turn in &resumed {
         assert_eq!(turn["session"], session);
         assert_eq!(turn["replayed_ok"], false);
-        if tool != "antigravity" {
-            assert_eq!(turn["rehydrated"], true);
-        }
+        assert_eq!(turn["rehydrated"], true);
     }
     match tool {
-        "antigravity" => {
-            assert_eq!(first["settings"]["model"], options["model"]);
-            assert_eq!(first["initialized"]["model"], options["model"]);
-            assert!(first["usage"]["input_tokens"].as_u64().unwrap() > 0);
-        }
-        "copilot" => {
-            assert_eq!(resumed[0]["settings"]["reasoning_effort"], "low");
-            assert_eq!(resumed[1]["output"], "THIRD");
-        }
         "grok" => {
             let model = first["model"]
                 .as_str()
@@ -628,41 +598,9 @@ async fn resume(tool: &str) {
 }
 
 #[tokio::test]
-#[ignore = "real_device: attended Copilot inference with a verification account"]
-async fn real_device_copilot_resume() {
-    resume("copilot").await;
-}
-
-#[tokio::test]
 #[ignore = "real_device: attended Grok Build inference with a verification account"]
 async fn real_device_grok_resume() {
     resume("grok").await;
-}
-
-#[tokio::test]
-#[ignore = "real_device: attended Antigravity inference with a verification account"]
-async fn real_device_antigravity_resume() {
-    resume("antigravity").await;
-}
-
-#[tokio::test]
-#[ignore = "real_device: attended Antigravity inference with a verification account"]
-async fn real_device_antigravity_cwd() {
-    let device = Device::account("antigravity");
-    let cwd = device.workspace.join("work");
-    fs::create_dir(&cwd).unwrap();
-    fs::write(cwd.join("marker.txt"), "guildbotics-marker\n").unwrap();
-    let results = device
-        .turns(
-            "antigravity",
-            &cwd,
-            "",
-            smoke_options("antigravity"),
-            &["Read marker.txt in the current directory and reply with its contents only."],
-            false,
-        )
-        .await;
-    assert_eq!(results[0]["output"], "guildbotics-marker");
 }
 
 async fn read_only_turn(tool: &str) {
@@ -684,67 +622,29 @@ async fn read_only_turn(tool: &str) {
     )
     .unwrap();
     let path = grant.join("smoke.txt");
-    let mut prompt = format!(
+    let prompt = format!(
         "Try exactly once to create {} with the word HELLO. Reply with WRITE=ok or WRITE=failed.",
         path.display()
     );
-    if tool == "antigravity" {
-        prompt.push_str(" Also run curl -sS --max-time 5 -o /dev/null -w '%{http_code}' https://example.com. Add HTTP=<status or failed> on another line.");
-    }
     let results = device
-        .turns(tool, &cwd, "", smoke_options(tool), &[&prompt], true)
+        .turns(tool, &cwd, "", json!({}), &[&prompt], true)
         .await;
     let output = results[0]["output"].as_str().unwrap();
     assert!(output.lines().any(|line| line == "WRITE=failed"));
     assert!(!path.exists());
-    if tool == "antigravity" {
-        assert!(
-            output
-                .lines()
-                .any(|line| matches!(line, "HTTP=failed" | "HTTP=000"))
-        );
-    } else {
-        assert_eq!(results[0]["settings"]["allow_all"], "on");
-    }
+    assert_eq!(results[0]["settings"]["sandbox"], "off");
 }
 
 #[tokio::test]
-#[ignore = "real_device: attended Copilot inference with a verification account"]
-async fn real_device_copilot_read_only() {
-    read_only_turn("copilot").await;
-}
-
-#[tokio::test]
-#[ignore = "real_device: attended Antigravity inference with a verification account"]
-async fn real_device_antigravity_read_only() {
-    read_only_turn("antigravity").await;
+#[ignore = "real_device: attended Grok Build inference with a verification account"]
+async fn real_device_grok_read_only() {
+    read_only_turn("grok").await;
 }
 
 #[test]
-#[ignore = "real_device: attended Copilot quota request with a verification account"]
-fn real_device_copilot_usage() {
-    let snapshot = Device::account("copilot").usage("copilot");
-    assert_eq!(snapshot["agent"], "copilot");
-    let windows = snapshot["windows"].as_array().unwrap();
-    assert!(!windows.is_empty());
-    for window in windows {
-        assert!((0.0..=100.0).contains(&window["used_percent"].as_f64().unwrap()));
-        assert_eq!(window["label"], window["window"]);
-    }
-}
-
-#[test]
-#[ignore = "real_device: attended Antigravity usage request with a verification account"]
-fn real_device_antigravity_usage() {
-    let device = Device::account("antigravity");
-    let snapshot = device.usage("antigravity");
-    assert_eq!(snapshot["agent"], "antigravity");
+#[ignore = "real_device: attended Grok Build usage request with a verification account"]
+fn real_device_grok_usage() {
+    let snapshot = Device::account("grok").usage("grok");
+    assert_eq!(snapshot["agent"], "grok");
     assert!(!snapshot["windows"].as_array().unwrap().is_empty());
-    assert!(
-        !device
-            .dir
-            .path()
-            .join("home/data/agent_environment/antigravity/sessions")
-            .exists()
-    );
 }

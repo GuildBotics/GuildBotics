@@ -894,7 +894,7 @@ describe("websocket subscriptions", () => {
     MockWebSocket.instances[0].onclose?.();
     expect(done).toHaveBeenCalledWith(false);
     const cancelled = vi.fn();
-    const connection = loginCliAgent("copilot", vi.fn(), cancelled);
+    const connection = loginCliAgent("grok", vi.fn(), cancelled);
     connection.close();
     MockWebSocket.instances[1].onopen?.();
     MockWebSocket.instances[1].onmessage?.({ data: '{"saved":true}' });

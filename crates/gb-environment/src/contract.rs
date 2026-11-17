@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 
 const FILE: &str = "cli_agent_filesystem_grants.yml";
+// Protect host credential stores regardless of which tools GuildBotics supports.
 const SENSITIVE: &[&str] = &[
     ".ssh",
     ".gnupg",
@@ -1601,6 +1602,138 @@ mod frozen_tests {
         std::fs::remove_file(home.join("deny")).unwrap();
         symlink(&home, home.join("deny")).unwrap();
         assert!(resolve(&workspace, &home, &[], false, false).is_err());
+    }
+}
+
+#[cfg(test)]
+mod credential_regression_tests {
+    use super::*;
+
+    // Deliberately independent of SENSITIVE: deleting a protected root must fail.
+    const CREDENTIAL_ROOTS: &[&str] = &[
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".kube",
+        ".docker",
+        ".config/gh",
+        ".local/share/keyrings",
+        ".guildbotics",
+        ".codex",
+        ".claude",
+        ".grok",
+        ".copilot",
+        ".gemini",
+        ".agents",
+    ];
+
+    #[test]
+    fn host_credentials_remain_protected_independently_of_supported_tools() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir(&home).unwrap();
+        for name in CREDENTIAL_ROOTS {
+            let protected = home.join(name);
+            for cwd in [
+                protected.clone(),
+                protected.join("child"),
+                protected.parent().unwrap().into(),
+            ] {
+                assert!(
+                    client_directory(&cwd, &home, &[]).is_err(),
+                    "{name}: {}",
+                    cwd.display()
+                );
+            }
+            for path in [name.to_string(), format!("{name}/child")] {
+                for access in [Access::Read, Access::ReadWrite] {
+                    for local in [false, true] {
+                        let grant = Grant {
+                            path: path.clone(),
+                            access,
+                        };
+                        let (shared, local) = if local {
+                            (
+                                Shared::default(),
+                                Local {
+                                    paths: vec![grant],
+                                    ..Default::default()
+                                },
+                            )
+                        } else {
+                            (
+                                Shared {
+                                    documents: vec![grant],
+                                },
+                                Local::default(),
+                            )
+                        };
+                        let error = resolve_values(
+                            &workspace,
+                            &home,
+                            &[],
+                            shared,
+                            local,
+                            false,
+                            false,
+                            |_| Ok(()),
+                        )
+                        .unwrap_err();
+                        assert!(
+                            matches!(
+                                error.sentence,
+                                Sentence::Key("safe_paths.protected_credentials", _)
+                            ),
+                            "{path}: {error:?}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(client_directory(&home.join("work"), &home, &[]).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credential_alias_targets_remain_protected_independently_of_supported_tools() {
+        for name in CREDENTIAL_ROOTS {
+            let root = tempfile::tempdir().unwrap();
+            let home = root.path().join("home");
+            let protected = home.join(name);
+            let target = root.path().join("credential-store");
+            std::fs::create_dir_all(protected.parent().unwrap()).unwrap();
+            std::fs::create_dir(&target).unwrap();
+            std::os::unix::fs::symlink(&target, &protected).unwrap();
+            assert!(client_directory(&target, &home, &[]).is_err(), "{name}");
+            let error = resolve_values(
+                &root.path().join("workspace"),
+                &home,
+                &[],
+                Shared::default(),
+                Local {
+                    paths: vec![Grant {
+                        path: target.display().to_string(),
+                        access: Access::Read,
+                    }],
+                    ..Default::default()
+                },
+                false,
+                false,
+                |_| Ok(()),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(
+                    error.sentence,
+                    Sentence::Key(
+                        "safe_paths.protected_credentials" | "safe_paths.protected_local",
+                        _
+                    )
+                ),
+                "{name}: {error:?}"
+            );
+        }
     }
 }
 

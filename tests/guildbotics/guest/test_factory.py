@@ -5,10 +5,8 @@ import sys
 
 import pytest
 
-from guildbotics.guest.antigravity import AntigravityStreamJsonAdapter
 from guildbotics.guest.claude import ClaudeStreamJsonAdapter
 from guildbotics.guest.codex import CodexAppServerAdapter
-from guildbotics.guest.copilot import CopilotAcpAdapter
 from guildbotics.guest.factory import (
     NATIVE_ADAPTERS,
     create_native_adapter,
@@ -46,14 +44,6 @@ def test_all_adapters_share_the_three_hour_turn_limit() -> None:
         ("claude", ClaudeStreamJsonAdapter, "claude-stream-json"),
         ("grok", GrokAcpAdapter, "grok-acp"),
         ("grok-acp", GrokAcpAdapter, "grok-acp"),
-        ("copilot", CopilotAcpAdapter, "copilot-acp"),
-        ("copilot-acp", CopilotAcpAdapter, "copilot-acp"),
-        ("antigravity", AntigravityStreamJsonAdapter, "antigravity-stream-json"),
-        (
-            "antigravity-stream-json",
-            AntigravityStreamJsonAdapter,
-            "antigravity-stream-json",
-        ),
     ],
 )
 def test_aliases_resolve_to_their_adapter(

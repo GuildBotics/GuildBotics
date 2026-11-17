@@ -2029,7 +2029,7 @@
           "target.kind": "pull_request",
           "target.label": "#528",
           "target.url": "https://github.com/o/r/pull/528",
-          "target.title": "Copilot の利用枠を表示する"
+          "target.title": "Grok の利用枠を表示する"
         },
         "payload": {
           "pull_request": {
@@ -2295,7 +2295,7 @@
           "target.kind": "pull_request",
           "target.label": "#528",
           "target.url": "https://github.com/o/r/pull/528",
-          "target.title": "Copilot の利用枠を表示する"
+          "target.title": "Grok の利用枠を表示する"
         },
         "payload": {
           "pull_request": {
@@ -2321,7 +2321,7 @@
           "source": "event_listener",
           "command": "workflows/chat_conversation_workflow",
           "workflow": "",
-          "title": "Copilot の利用枠を表示する",
+          "title": "Grok の利用枠を表示する",
           "mode": "workflow",
           "status": "running",
           "started_at": "2026-07-01T10:00:00+00:00",
@@ -2361,7 +2361,7 @@
           "target.kind": "pull_request",
           "target.label": "#528",
           "target.url": "https://github.com/o/r/pull/528",
-          "target.title": "Copilot の利用枠を表示する"
+          "target.title": "Grok の利用枠を表示する"
         },
         "summary": "",
         "has_evidence": true
@@ -2385,7 +2385,7 @@
           "source": "interactive",
           "command": "member pr read",
           "workflow": "",
-          "title": "Copilot の利用枠を表示する",
+          "title": "Grok の利用枠を表示する",
           "mode": "interactive",
           "status": "running",
           "started_at": "2026-07-01T10:00:00+00:00",
@@ -2425,7 +2425,7 @@
           "target.kind": "pull_request",
           "target.label": "#528",
           "target.url": "https://github.com/o/r/pull/528",
-          "target.title": "Copilot の利用枠を表示する"
+          "target.title": "Grok の利用枠を表示する"
         },
         "summary": "",
         "has_evidence": true
@@ -2469,7 +2469,7 @@
           "source": "interactive",
           "command": "member pr read",
           "workflow": "",
-          "title": "Copilot の利用枠を表示する",
+          "title": "Grok の利用枠を表示する",
           "mode": "interactive",
           "status": "running",
           "started_at": "2026-07-01T10:00:00+00:00",
@@ -2534,7 +2534,7 @@
           "target.kind": "pull_request",
           "target.label": "#528",
           "target.url": "https://github.com/o/r/pull/528",
-          "target.title": "Copilot の利用枠を表示する"
+          "target.title": "Grok の利用枠を表示する"
         },
         "payload": {
           "pull_request": {
@@ -2560,7 +2560,7 @@
           "source": "event_listener",
           "command": "workflows/chat_conversation_workflow",
           "workflow": "",
-          "title": "Copilot の利用枠を表示する",
+          "title": "Grok の利用枠を表示する",
           "mode": "workflow",
           "status": "running",
           "started_at": "2026-07-01T10:00:00+00:00",
@@ -2625,7 +2625,7 @@
           "target.kind": "pull_request",
           "target.label": "#528",
           "target.url": "https://github.com/o/r/pull/528",
-          "target.title": "Copilot の利用枠を表示する"
+          "target.title": "Grok の利用枠を表示する"
         },
         "payload": {
           "pull_request": {
@@ -2670,7 +2670,7 @@
           "source": "event_listener",
           "command": "workflows/chat_conversation_workflow",
           "workflow": "",
-          "title": "Copilot の利用枠を表示する",
+          "title": "Grok の利用枠を表示する",
           "mode": "workflow",
           "status": "running",
           "started_at": "2026-07-01T10:00:00+00:00",
@@ -2760,7 +2760,7 @@
           "target.kind": "pull_request",
           "target.label": "#528",
           "target.url": "https://github.com/o/r/pull/528",
-          "target.title": "Copilot の利用枠を表示する"
+          "target.title": "Grok の利用枠を表示する"
         },
         "payload": {
           "pull_request": {
@@ -2786,7 +2786,7 @@
           "source": "event_listener",
           "command": "workflows/chat_conversation_workflow",
           "workflow": "",
-          "title": "Copilot の利用枠を表示する",
+          "title": "Grok の利用枠を表示する",
           "mode": "workflow",
           "status": "running",
           "started_at": "2026-07-01T10:00:00+00:00",
@@ -2857,7 +2857,7 @@
           "target.kind": "pull_request",
           "target.label": "#528",
           "target.url": "https://github.com/o/r/pull/528",
-          "target.title": "Copilot の利用枠を表示する"
+          "target.title": "Grok の利用枠を表示する"
         },
         "payload": {
           "pull_request": {
@@ -2883,7 +2883,7 @@
           "source": "event_listener",
           "command": "workflows/chat_conversation_workflow",
           "workflow": "",
-          "title": "Copilot の利用枠を表示する",
+          "title": "Grok の利用枠を表示する",
           "mode": "workflow",
           "status": "success",
           "started_at": "2026-07-01T10:00:00+00:00",

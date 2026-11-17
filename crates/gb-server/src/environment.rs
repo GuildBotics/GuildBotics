@@ -1071,15 +1071,6 @@ mod tests {
                     "設定 → エージェント実行環境"
                 }));
                 assert!(!browser.contains("terminal-only") && !browser.contains("_browser"));
-                assert!(
-                    tool_sentence(
-                        &json!({"name":"antigravity", "login_command":"terminal-only"}),
-                        "Antigravity",
-                        key,
-                        language
-                    )
-                    .contains("terminal-only")
-                );
             }
         }
     }

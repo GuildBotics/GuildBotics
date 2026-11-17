@@ -11,22 +11,18 @@ import asyncio
 import json
 import os
 import signal
-from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from typing import Any
 
 from guildbotics.intelligences.agent_runtime.usage_snapshots import (
     CliAgentUsageSnapshot,
-    parse_antigravity_usage,
     parse_claude_usage,
     parse_codex_rate_limits,
-    parse_copilot_quota,
     parse_grok_billing,
 )
 from guildbotics.intelligences.agent_runtime.wire import CLIENT_INFO
 from guildbotics.intelligences.cli_agents import (
-    ANTIGRAVITY_USAGE_COMMAND,
     CLAUDE_USAGE_COMMAND,
 )
 from guildbotics.utils.process_limits import STREAM_READ_LIMIT
@@ -64,7 +60,7 @@ class EnvironmentProcess:
 
 
 async def _probe(tool: str, *command: str) -> EnvironmentProcess:
-    if tool not in {"codex", "grok", "copilot", "claude", "antigravity"}:
+    if tool not in {"codex", "grok", "claude"}:
         raise CliAgentUsageError("Unsupported usage probe")
     return EnvironmentProcess(
         await asyncio.create_subprocess_exec(
@@ -76,19 +72,6 @@ async def _probe(tool: str, *command: str) -> EnvironmentProcess:
             limit=STREAM_READ_LIMIT,
         )
     )
-
-
-def _antigravity_command_failure(payload: Any) -> str:
-    data = payload if isinstance(payload, dict) else {}
-    status = data.get("status")
-    error = data.get("error")
-    if isinstance(error, dict):
-        error = error.get("message") or error.get("type") or error
-    if (isinstance(status, str) and status and status != "SUCCESS") or (
-        isinstance(error, str) and error
-    ):
-        return "Antigravity /usage failed"
-    return ""
 
 
 async def read_codex_usage(timeout: float = 20.0) -> CliAgentUsageSnapshot:
@@ -176,82 +159,6 @@ async def read_claude_usage(timeout: float = 30.0) -> CliAgentUsageSnapshot:
     return snapshot
 
 
-async def read_antigravity_usage(timeout: float = 30.0) -> CliAgentUsageSnapshot:
-    """Probe ``agy -p /usage --output-format json`` for account quotas.
-
-    The slash command is read-only: it starts no agent turn, spends no quota,
-    and leaves no conversation. Raises :class:`CliAgentUsageError` when the
-    tool cannot be started, exits non-zero, prints no structured JSON, fails
-    authentication, or reports no usable quota windows. Accounts that do not
-    expose quotas stay unavailable rather than synthesizing 0%.
-    """
-    stdout, returncode = await _print_output(
-        "antigravity",
-        *ANTIGRAVITY_USAGE_COMMAND,
-        timeout=timeout,
-        label="Antigravity",
-    )
-    if returncode:
-        raise CliAgentUsageError(f"Antigravity /usage exited {returncode}.")
-    try:
-        payload = json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise CliAgentUsageError("Antigravity printed no usage JSON.") from exc
-    failure = _antigravity_command_failure(payload)
-    if failure:
-        raise CliAgentUsageError(failure)
-    snapshot = parse_antigravity_usage(payload)
-    if not snapshot.windows:
-        raise CliAgentUsageError("Antigravity reported no usage windows.")
-    return snapshot
-
-
-_COPILOT_LABEL = "GitHub Copilot CLI"
-
-
-async def read_copilot_usage(timeout: float = 30.0) -> CliAgentUsageSnapshot:
-    """Probe the Copilot SDK server for the account quota.
-
-    ``copilot --headless --stdio`` serves the Copilot SDK protocol (JSON-RPC
-    with Content-Length framing) and signs in with the CLI's own saved
-    login, so GuildBotics never reads the credential store. ``connect``
-    opens the connection and ``account.getQuota`` answers with the quota
-    snapshots. Raises :class:`CliAgentUsageError` when the tool cannot be
-    started, does not answer in time, or rejects a request (no saved login,
-    or a CLI too old to know the method).
-    """
-    process = await _probe(
-        "copilot", "copilot", "--headless", "--stdio", "--no-auto-update"
-    )
-    try:
-        async with asyncio.timeout(timeout):
-            await _probe_request(
-                process,
-                1,
-                "connect",
-                {
-                    # No task kind is served here: the probe only asks.
-                    "supportedTaskKinds": [],
-                    "clientInfo": {"editorName": "guildbotics", "editorVersion": "1"},
-                },
-                label=_COPILOT_LABEL,
-                framing=_CONTENT_LENGTH,
-            )
-            result = await _probe_request(
-                process,
-                2,
-                "account.getQuota",
-                {},
-                label=_COPILOT_LABEL,
-                framing=_CONTENT_LENGTH,
-            )
-    except TimeoutError as exc:
-        raise CliAgentUsageError(f"{_COPILOT_LABEL} did not answer in time.") from exc
-    finally:
-        await process.kill()
-    return parse_copilot_quota(result)
-
-
 async def _print_output(
     tool: str, *command: str, timeout: float, label: str
 ) -> tuple[bytes, int | None]:
@@ -266,69 +173,19 @@ async def _print_output(
     return stdout, process.returncode
 
 
-@dataclass(frozen=True)
-class _Framing:
-    """How one JSON-RPC message sits on the stream.
-
-    ``frame`` wraps an encoded message for sending; ``read`` returns the next
-    message body, or ``b""`` once the stream has ended.
-    """
-
-    frame: Callable[[bytes], bytes]
-    read: Callable[[EnvironmentProcess], Awaitable[bytes]]
-
-
-async def _read_line(process: EnvironmentProcess) -> bytes:
-    return await process.stdout.readline()
-
-
-async def _read_content_length(process: EnvironmentProcess) -> bytes:
-    """Read one ``Content-Length`` framed body (the LSP / vscode-jsonrpc form)."""
-    length = 0
-    while True:
-        line = await process.stdout.readline()
-        if not line:
-            return b""
-        if not line.strip():
-            if length:
-                break
-            continue
-        name, _, value = line.partition(b":")
-        if name.strip().lower() == b"content-length":
-            try:
-                length = int(value)
-            except ValueError as exc:
-                raise CliAgentUsageError(f"Malformed frame header: {line!r}") from exc
-    try:
-        return await process.stdout.readexactly(length)
-    except asyncio.IncompleteReadError:
-        return b""
-
-
-#: Newline-delimited JSON (Codex App Server, ACP).
-_JSONL = _Framing(frame=lambda body: body + b"\n", read=_read_line)
-#: ``Content-Length`` headers (the Copilot SDK server).
-_CONTENT_LENGTH = _Framing(
-    frame=lambda body: b"Content-Length: %d\r\n\r\n%s" % (len(body), body),
-    read=_read_content_length,
-)
-
-
 async def _probe_request(
     process: EnvironmentProcess,
     request_id: int,
     method: str,
     params: dict[str, Any],
     label: str = "Codex App Server",
-    framing: _Framing = _JSONL,
 ) -> Any:
     await _probe_send(
         process,
         {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
-        framing,
     )
     while True:
-        body = await framing.read(process)
+        body = await process.stdout.readline()
         if not body:
             raise CliAgentUsageError(f"{label} closed the stream.")
         try:
@@ -346,19 +203,15 @@ async def _probe_request(
         return message.get("result")
 
 
-async def _probe_send(
-    process: EnvironmentProcess, message: dict[str, Any], framing: _Framing = _JSONL
-) -> None:
-    process.stdin.write(framing.frame(json.dumps(message).encode()))
+async def _probe_send(process: EnvironmentProcess, message: dict[str, Any]) -> None:
+    process.stdin.write(json.dumps(message).encode() + b"\n")
     await process.stdin.drain()
 
 
 READERS = {
     "codex": read_codex_usage,
     "grok": read_grok_usage,
-    "copilot": read_copilot_usage,
     "claude": read_claude_usage,
-    "antigravity": read_antigravity_usage,
 }
 
 

@@ -704,11 +704,11 @@ fn validate_cli(mapping: &Value) -> anyhow::Result<()> {
         let parts: Vec<_> = path.split('/').collect();
         if parts.len() < 3
             || parts[0] != "cli_agents"
-            || !["codex", "claude", "grok", "copilot", "antigravity"].contains(&parts[1])
+            || !["codex", "claude", "grok"].contains(&parts[1])
         {
             return Err(SetupError::text(
                 "unknown_cli_agent",
-                format!("AI CLI tool slot '{slot}': '{path}' does not name a supported AI CLI tool (supported: codex, claude, grok, copilot, antigravity)"),
+                format!("AI CLI tool slot '{slot}': '{path}' does not name a supported AI CLI tool (supported: codex, claude, grok)"),
             )
             .into());
         }

@@ -58,7 +58,7 @@ fn effort_overlay(value: Option<&Value>) -> anyhow::Result<Value> {
 }
 
 /// The adapters an AI CLI definition may name.
-const CLI_ADAPTERS: &[&str] = &["codex", "claude", "copilot", "grok", "antigravity"];
+const CLI_ADAPTERS: &[&str] = &["codex", "claude", "grok"];
 
 fn safe(relative: &str) -> anyhow::Result<()> {
     anyhow::ensure!(

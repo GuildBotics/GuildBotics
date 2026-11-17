@@ -8,11 +8,6 @@ use gb_environment::gateway::{Policy, Provider};
 use recorder::{HOST, Recorder, Seen, reply};
 
 const STAND_IN_SUFFIX: &str = "53594e544845544943343539";
-const COPILOT_MODELS: &[(&str, &str, &str)] = &[
-    ("gpt-5.2-codex", "/responses", "OpenAI"),
-    ("claude-sonnet-4.5", "/v1/messages", "Anthropic"),
-    ("gpt-5-mini", "/chat/completions", "OpenAI"),
-];
 
 struct Probe {
     device: Device,
@@ -117,17 +112,13 @@ impl Probe {
         let prefix = broker["stand_in_prefix"].as_str().unwrap();
         let (document, token) =
             stand_in(&document, broker, &format!("{prefix}{STAND_IN_SUFFIX}")).unwrap();
-        let env_token = broker["stand_in_env"].as_str().unwrap();
         let env_command = broker["stand_in_command_env"].as_str().unwrap();
-        let files = if env_token.is_empty() && env_command.is_empty() {
+        let files = if env_command.is_empty() {
             Files::from([(auth.to_owned(), serde_json::to_vec(&document).unwrap())])
         } else {
             Files::new()
         };
         let mut plan = self.prepare(case, files, proxy);
-        if !env_token.is_empty() {
-            plan.env.push((env_token.into(), token.clone()));
-        }
         if !env_command.is_empty() {
             // The command reads a file of its own, as in a brokered turn.
             let path = format!("{}/stand-in.json", plan.root);
@@ -342,202 +333,5 @@ async fn real_device_codex_uses_its_model_provider_and_chatgpt_base() {
             .any(|r| r.path == "/oauth/token"
                 || (r.kind == "connect" && r.host == "auth.openai.com")),
         "{seen:?}"
-    );
-}
-
-fn copilot_answer(request: &Seen) -> Option<hyper::Response<axum::body::Body>> {
-    let body = match request.path.as_str() {
-        "/copilot_internal/user" => json!({
-            "login": "synthetic459", "id": 459, "copilot_plan": "individual", "chat_enabled": true,
-            "endpoints": {
-                "api": "https://api.individual.githubcopilot.com",
-                "telemetry": "https://telemetry.individual.githubcopilot.com",
-            },
-            "quota_snapshots": {"chat": {"unlimited": true}},
-        }),
-        "/copilot_internal/managed_settings" => json!({}),
-        "/models" => json!({"data": COPILOT_MODELS.iter().map(|(name, endpoint, vendor)| json!({
-            "id": name, "name": name, "vendor": vendor, "version": "1", "object": "model",
-            "preview": false, "model_picker_enabled": true, "policy": {"state": "enabled"},
-            "supported_endpoints": [endpoint],
-            "capabilities": {
-                "type": "chat", "family": name, "supports": {"streaming": true, "tool_calls": true},
-                "limits": {"max_prompt_tokens": 100000, "max_output_tokens": 8192},
-            },
-        })).collect::<Vec<_>>()}),
-        _ => return None,
-    };
-    Some(json_reply(200, body))
-}
-
-#[tokio::test]
-#[ignore = "real_device: owner approval, disposable snapshot and loopback recorder"]
-async fn real_device_copilot_uses_github_and_all_three_inference_routes() {
-    let probe = Probe::start("copilot", copilot_answer).await;
-    let (mut plan, token) = probe.turn("copilot", true);
-    plan.argv
-        .extend(COPILOT_MODELS.iter().map(|(model, _, _)| (*model).into()));
-    let (output, _) = probe.run(plan).await;
-    let seen = probe.recorder.seen();
-    for path in ["/copilot_internal/user", "/models"] {
-        assert_bearer(&seen, "GET", path, &token);
-    }
-    for (model, endpoint, _) in COPILOT_MODELS {
-        assert!(
-            seen.iter()
-                .any(|r| r.method == "POST" && r.path == *endpoint),
-            "{model} did not reach {endpoint}: {}",
-            output[model]
-        );
-        assert_bearer(&seen, "POST", endpoint, &token);
-    }
-    let policy = probe.policy();
-    // The CLI can ask for team customizations, which the gateway refuses.
-    let customizations = "/copilot_internal/team_customizations";
-    assert!(policy.target("GET", customizations).is_err());
-    assert!(
-        seen.iter()
-            .filter(|r| !r.authorization.is_empty())
-            .filter(|r| !(r.method == "GET" && r.path == customizations))
-            .all(|r| policy.target(&r.method, &r.path).is_ok()),
-        "{seen:?}"
-    );
-    assert_token_hosts(&seen, &token, &[HOST]);
-}
-
-fn antigravity_answer(request: &Seen) -> Option<hyper::Response<axum::body::Body>> {
-    if request.host == "lh3.googleusercontent.com" {
-        use base64::engine::general_purpose::STANDARD;
-        let image = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==").unwrap();
-        return Some(reply(200, "image/png", image));
-    }
-    let body = match request.path.as_str() {
-        "/v1internal:loadCodeAssist" => json!({
-            "currentTier": {"id":"standard-tier"}, "cloudaicompanionProject":"synthetic-project-459",
-        }),
-        "/v1internal:fetchAvailableModels" => json!({
-            "models": {"synthetic-model":{
-                "displayName":"Synthetic model", "model":"MODEL_PLACEHOLDER_M50",
-                "apiProvider":"API_PROVIDER_GOOGLE_GEMINI", "modelProvider":"MODEL_PROVIDER_GOOGLE",
-                "maxTokens":1048576, "maxOutputTokens":8192,
-            }},
-            "defaultAgentModelId":"synthetic-model",
-            "agentModelSorts":[{"groups":[{"modelIds":["synthetic-model"]}]}],
-        }),
-        "/oauth2/v2/userinfo" => json!({
-            "id":"459", "email":"synthetic@example.com", "picture":"https://lh3.googleusercontent.com/a/synthetic",
-        }),
-        "/token" if request.host == "oauth2.googleapis.com" => json!({
-            "access_token":"NEW-ACCESS-459", "expires_in":3599, "token_type":"Bearer",
-        }),
-        path if path.starts_with("/v1internal:") && !path.contains(":streamGenerateContent") => {
-            json!({})
-        }
-        _ => return None,
-    };
-    Some(json_reply(200, body))
-}
-
-#[tokio::test]
-#[ignore = "real_device: owner approval, disposable snapshot and loopback recorder"]
-async fn real_device_antigravity_reports_quota_without_waiting_for_retry() {
-    let capture: Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/guildbotics/guest/fixtures/antigravity_quota_1_2_13.json"
-    )))
-    .unwrap();
-    let mut upstream = capture["upstream"].clone();
-    let details = upstream["error"]["details"].as_array_mut().unwrap();
-    let delay: f64 = details
-        .iter()
-        .find(|detail| detail["@type"] == "type.googleapis.com/google.rpc.RetryInfo")
-        .unwrap()["retryDelay"]
-        .as_str()
-        .unwrap()
-        .strip_suffix('s')
-        .unwrap()
-        .parse()
-        .unwrap();
-    let reset = chrono::Utc::now() + chrono::Duration::milliseconds((delay * 1000.0) as i64);
-    details
-        .iter_mut()
-        .find(|detail| detail["@type"] == "type.googleapis.com/google.rpc.ErrorInfo")
-        .unwrap()["metadata"]["quotaResetTimeStamp"] = json!(reset.to_rfc3339());
-    let probe = Probe::start("antigravity", move |r| {
-        if r.path == "/v1internal:streamGenerateContent" {
-            Some(json_reply(429, upstream.clone()))
-        } else {
-            antigravity_answer(r)
-        }
-    })
-    .await;
-    let (mut plan, token) = probe.turn("antigravity-quota", false);
-    let broker = probe.broker();
-    let hosts: Vec<_> = ["relayed_hosts", "turn_domains"]
-        .iter()
-        .flat_map(|field| broker[*field].as_array().unwrap())
-        .collect();
-    plan.env.push((
-        "GUILDBOTICS_GATEWAY_RELAYS".into(),
-        json!([{"hosts":hosts,"port":probe.recorder.tls}]).to_string(),
-    ));
-    let (out, _) = probe.run(plan).await;
-    assert!(out["seconds"].as_f64().unwrap() < 30.0, "{out}");
-    for (key, value) in capture["result"].as_object().unwrap() {
-        assert_eq!(&out["result"][key], value, "{key}: {out}");
-    }
-    let seen = probe.recorder.seen();
-    assert_bearer(&seen, "POST", "/v1internal:streamGenerateContent", &token);
-    assert_bearer(&seen, "GET", "/oauth2/v2/userinfo", &token);
-    assert!(
-        seen.iter()
-            .filter(|r| r.path.starts_with("/v1internal:"))
-            .all(|r| r.authorization == format!("Bearer {token}")),
-        "{seen:?}"
-    );
-    assert_token_hosts(&seen, &token, &[HOST, "www.googleapis.com"]);
-    let policy = probe.policy();
-    for request in seen.iter().filter(|r| !r.authorization.is_empty()) {
-        let target = policy.target(&request.method, &request.path).unwrap();
-        let origin = reqwest::Url::parse(&target).unwrap();
-        let expected = if origin.origin().ascii_serialization() == policy.origin {
-            HOST
-        } else {
-            origin.host_str().unwrap()
-        };
-        assert_eq!(request.host, expected, "{request:?}");
-        assert_eq!(request.kind, "tls", "{request:?}");
-    }
-}
-
-#[tokio::test]
-#[ignore = "real_device: owner approval, disposable snapshot and loopback recorder"]
-async fn real_device_antigravity_refreshes_expired_login_when_reading_usage() {
-    let probe = Probe::start("antigravity", antigravity_answer).await;
-    let files = expire(credentials_for(&probe.catalog), &probe.catalog).unwrap();
-    assert!(expiring(&files, &probe.catalog));
-    let mut plan = probe.prepare("antigravity-refresh", files, true);
-    plan.argv.extend(
-        probe.broker()["refresh"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|arg| arg.as_str().unwrap().into()),
-    );
-    let auth = probe.catalog["provision"]["auth"].as_str().unwrap();
-    let guest_auth = format!("{}/{auth}", plan.root);
-    let (_, captured) = probe.run(plan).await;
-    let files = Files::from([(auth.to_owned(), captured[&guest_auth].clone())]);
-    assert_eq!(access(&files, &probe.catalog).unwrap(), "NEW-ACCESS-459");
-    let doc = credential_document(&files[auth]).unwrap();
-    assert!(expiry(&doc, probe.broker()).unwrap() > chrono::Utc::now().timestamp() as f64 + 3000.0);
-    let seen = probe.recorder.seen();
-    let token = seen
-        .iter()
-        .find(|r| r.path == "/token")
-        .expect("OAuth refresh did not reach the recorder");
-    assert_eq!(
-        (token.kind, token.host.as_str(), token.method.as_str()),
-        ("tls", "oauth2.googleapis.com", "POST")
     );
 }

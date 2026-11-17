@@ -340,12 +340,6 @@ fn credentials_for(catalog: &Value) -> Files {
             "key": CANARY, "refresh_token": refresh, "expires_at": "2100-01-01T00:00:00Z",
             "auth_mode": "oidc",
         }}),
-        "copilot" => json!({"authTokens": {"https://github.com:test": {"token": CANARY}}}),
-        "antigravity" => json!({
-            "token": {"access_token": CANARY, "refresh_token": refresh,
-            "expiry": "2100-01-01T00:00:00Z", "token_type": "Bearer"},
-            "auth_method": "consumer", "id_token": format!("{CANARY}-identity"),
-        }),
         _ => panic!("add the provisioned tool's synthetic account shape"),
     };
     Files::from([(
@@ -504,11 +498,10 @@ async fn real_device_provider_turn_keeps_the_login_on_the_host() {
         }
         broker["upstream"] = json!(origin);
         broker["refresh"] = json!([]);
-        broker["turn_domains"] = json!([]);
         probes.push(json!({
             "name": name, "auth": auth, "state_root": state_root, "persisted": persisted,
             "base_env": broker["base_url_env"][0], "base_suffix": broker["base_url_path"],
-            "access_path": broker["access_token"], "stand_in_env": broker["stand_in_env"],
+            "access_path": broker["access_token"],
             "stand_in_command": broker["stand_in_command_env"], "routes": routes,
         }));
     }
@@ -572,15 +565,8 @@ async fn real_device_private_login_keeps_synthetic_credentials_in_memory() {
             format!("{}/{}", plan.root, provision["auth"].as_str().unwrap()),
         ];
         plan.env.push(("GB_DISK_CANARY".into(), DISK_CANARY.into()));
-        if refresh.is_empty() {
-            assert_eq!(catalog["name"], "copilot");
-            plan.argv.extend(
-                ["copilot", "--no-auto-update", "-p", "Synthetic fixture."].map(str::to_owned),
-            );
-        } else {
-            plan.argv
-                .extend(refresh.iter().map(|arg| arg.as_str().unwrap().to_owned()));
-        }
+        plan.argv
+            .extend(refresh.iter().map(|arg| arg.as_str().unwrap().to_owned()));
         let ready = OutputMarker::new(b"scan-ready\n");
         let scanned = Mutex::new(None);
         let result = runtime::run_private_session(
@@ -752,7 +738,7 @@ async fn real_device_turns_share_the_commands_microvm() {
     let mut tools = device
         .catalog()
         .into_iter()
-        .filter(|catalog| matches!(catalog["name"].as_str(), Some("antigravity" | "claude")))
+        .filter(|catalog| matches!(catalog["name"].as_str(), Some("grok" | "claude")))
         .collect::<Vec<_>>();
     for catalog in &mut tools {
         device.seal(catalog, &credentials_for(catalog));
@@ -760,7 +746,6 @@ async fn real_device_turns_share_the_commands_microvm() {
         broker["upstream"] = json!(format!("http://127.0.0.1:{port}"));
         broker["routes"] = json!(["GET /test"]);
         broker["refresh"] = json!([]);
-        broker["turn_domains"] = json!([]);
     }
     let output = device
         .command(
@@ -852,124 +837,23 @@ async fn real_device_codex_refreshes_an_expired_synthetic_login() {
     recorder.abort();
 }
 
-#[tokio::test]
-#[ignore = "real_device: owner approval, disposable snapshot and loopback recorder"]
-async fn real_device_copilot_reads_quota_from_its_synthetic_account() {
-    use axum::Json;
-
-    let device = Device::new();
-    let catalog = device
-        .catalog()
-        .into_iter()
-        .find(|tool| tool["name"] == "copilot")
-        .unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let observed = Arc::new(Mutex::new(Vec::new()));
-    let recorder = {
-        let observed = observed.clone();
-        tokio::spawn(async move {
-            let app = Router::new().fallback(any(move |request: Request| {
-                let observed = observed.clone();
-                async move {
-                    let path = request.uri().path();
-                    let value = if path.starts_with("/copilot_internal/user") {
-                        observed.lock().unwrap().push(
-                            request
-                                .headers()
-                                .get("authorization")
-                                .and_then(|value| value.to_str().ok())
-                                .unwrap_or_default()
-                                .to_owned(),
-                        );
-                        json!({
-                            "login": "synthetic459", "id": 459, "copilot_plan": "individual",
-                            "chat_enabled": true,
-                            "endpoints": {"api": "https://api.individual.githubcopilot.com"},
-                            "quota_snapshots": {"chat": {"unlimited": true}},
-                        })
-                    } else {
-                        json!({})
-                    };
-                    Json(value)
-                }
-            }));
-            axum::serve(listener, app).await.unwrap();
-        })
-    };
-    let account = json!({"host":"https://github.com", "login":"synthetic459"});
-    let auth = json!({
-        "authTokens": {"https://github.com:synthetic459": {"token":"gho_R4"}},
-        "lastLoggedInUser": account,
-        "loggedInUsers": [account],
-    });
-    let files = Files::from([(
-        "config.json".into(),
-        format!("// This file is managed automatically.\n{auth}").into_bytes(),
-    )]);
-    let argv = vec![
-        PYTHON.into(),
-        "-B".into(),
-        "-c".into(),
-        include_str!("copilot_quota.py").into(),
-    ];
-    let mut plan = private_plan(&device.vm, &catalog, files, argv, false).unwrap();
-    plan.network = Network {
-        host_ports: vec![port],
-        ..Network::default()
-    };
-    let base_url = format!("http://host.microsandbox.internal:{port}");
-    plan.env.extend([
-        ("COPILOT_DEBUG_GITHUB_API_URL".into(), base_url.clone()),
-        ("COPILOT_API_URL".into(), base_url),
-    ]);
-    let runtime_home = device.vm.data.join("msb");
-    let diagnostics = Mutex::new(Vec::new());
-    let result = tokio::time::timeout(
-        Duration::from_secs(180),
-        runtime::run_private_session(
-            &plan.boot(&device.vm, &runtime_home),
-            &plan.process(),
-            &plan.injection,
-            &plan.capture,
-            |chunk| diagnostics.lock().unwrap().extend_from_slice(chunk),
-        ),
-    )
-    .await
-    .expect("Copilot quota probe timed out")
-    .unwrap();
-    let ended = result.ended.unwrap();
-    assert_eq!(
-        ended.code,
-        0,
-        "Copilot quota probe failed: {}",
-        String::from_utf8_lossy(&diagnostics.into_inner().unwrap())
-    );
-    assert_eq!(ended.reply, b"quota protocol responded\n");
-    let observed = observed.lock().unwrap();
-    assert!(!observed.is_empty());
-    assert!(observed.iter().all(|value| value == "Bearer gho_R4"));
-    recorder.abort();
-}
-
 /// Attended login contract for each pinned CLI:
 /// 1. Build this checkout's snapshot under GUILDBOTICS_REAL_DEVICE_ROOT.
 /// 2. On a client connected to the Hub, open Setup / Agent execution
-///    environment. Choose Log in for Codex, Claude, Grok and Copilot in turn.
+///    environment. Choose Log in for Codex, Claude, Grok in turn.
 /// 3. Open the URL printed by the CLI in the client's browser. For device auth,
 ///    enter the displayed device code there. For Claude's paste-code flow,
 ///    paste the returned code in the dialog and press Send. Never put codes in
 ///    a ticket, screenshot, trace or test artifact.
 /// 4. Confirm saved status, reload the page, then Check again. Close a second
 ///    in-progress login and confirm that the prior saved login still works.
-/// 5. Antigravity must offer only the existing terminal command.
 /// This probe exercises the same private remote IO with synthetic prompts;
 /// the steps above verify provider-owned browser pages with an attending owner.
 #[tokio::test]
 #[ignore = "requires an attending owner and a prepared real-device snapshot; follow the steps above"]
 async fn browser_login_private_io_contract() {
     let device = Device::new();
-    for tool in ["codex", "claude", "grok", "copilot"] {
+    for tool in ["codex", "claude", "grok"] {
         let catalog = device
             .catalog()
             .into_iter()

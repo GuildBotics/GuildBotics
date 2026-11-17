@@ -374,7 +374,7 @@ async fn init_creates_a_cli_compatible_workspace() {
         assert!(f.config().join(file).is_file(), "{file}");
     }
     let templates = gb_base::home::python_package().join("templates");
-    for tool in ["antigravity", "claude", "codex", "copilot", "grok"] {
+    for tool in ["claude", "codex", "grok"] {
         let relative = format!("intelligences/cli_agents/{tool}/default.yml");
         assert_eq!(
             std::fs::read(f.config().join(&relative)).unwrap(),
