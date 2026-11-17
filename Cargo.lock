@@ -2130,7 +2130,6 @@ dependencies = [
  "gb-config",
  "gb-member",
  "gb-ports",
- "percent-encoding",
  "regex",
  "reqwest",
  "rustls",

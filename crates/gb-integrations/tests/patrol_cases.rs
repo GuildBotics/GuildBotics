@@ -1,14 +1,12 @@
 //! Frozen shared patrol decisions; GitHub GraphQL parsing/query tests belong to its adapter.
+use branvil::test_support::{Fixture, input};
 use chrono::{DateTime, Utc};
 use gb_integrations::*;
 use gb_ports::*;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
-    fs,
-    path::{Path, PathBuf},
-    process::Command,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 const ME: &str = "local-aiko";
 const OTHER: &str = "other";
@@ -366,84 +364,38 @@ fn reviewer_statements_use_full_history_and_ignore_empty_approvals() {
     assert_eq!(work(&p), REVIEW);
 }
 
-struct NoSecrets;
-impl gb_config::secrets::Keychain for NoSecrets {
+#[derive(Default)]
+struct Keys(Mutex<Option<String>>);
+impl gb_config::secrets::Keychain for Keys {
     fn read(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(self.0.lock().unwrap().clone())
     }
-    fn create(&self, _: &str) -> anyhow::Result<()> {
-        anyhow::bail!("the local provider requires no keychain access")
+    fn create(&self, key: &str) -> anyhow::Result<()> {
+        *self.0.lock().unwrap() = Some(key.into());
+        Ok(())
     }
 }
 struct AwaitedFixture {
-    _dir: tempfile::TempDir,
     code: Arc<dyn CodeHostingService>,
-    bare: PathBuf,
-    checks: PathBuf,
+    fixture: Fixture,
     url: String,
     head: String,
-}
-fn git(at: &Path, args: &[&str]) -> String {
-    let mut command = Command::new("git");
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("GIT_") {
-            command.env_remove(key);
-        }
-    }
-    let output = command
-        .args([
-            "-c",
-            "user.name=Fixture",
-            "-c",
-            "user.email=fixture@example.invalid",
-        ])
-        .args(args)
-        .current_dir(at)
-        .env("HOME", at)
-        .env("USERPROFILE", at)
-        .env("XDG_CONFIG_HOME", at)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env(
-            "GIT_CONFIG_GLOBAL",
-            if cfg!(windows) { "NUL" } else { "/dev/null" },
-        )
-        .env("GIT_ALLOW_PROTOCOL", "file")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap().trim().into()
+    base: String,
 }
 impl AwaitedFixture {
     async fn new() -> Self {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        let service_root = root.join("services");
-        let repo = service_root.join("code/acme%2Frepo");
-        let bare = repo.join("repository.git");
-        fs::create_dir_all(&repo).unwrap();
-        git(
-            root,
-            &[
-                "init",
-                "--bare",
-                "--initial-branch=main",
-                bare.to_str().unwrap(),
-            ],
-        );
-        let tree = git(&bare, &["mktree"]);
-        let head = git(&bare, &["commit-tree", &tree, "-m", "initial"]);
-        for branch in ["main", "feature"] {
-            git(
-                &bare,
-                &["update-ref", &format!("refs/heads/{branch}"), &head],
-            );
-        }
+        Self::new_as(false).await
+    }
+    async fn new_as(other: bool) -> Self {
+        let fixture = Fixture::new("owner").await;
+        fixture.workspace("acme").await;
+        fixture.repository("acme/repo").await;
+        let (actor, token) = fixture.member(ME).await;
+        let base = fixture.commit("acme/repo", "main", None, "a.txt", "base");
+        let head = fixture.commit("acme/repo", "feature", Some(&base), "a.txt", "feature");
+        let root = fixture.root();
         let writes = gb_base::shared_writes::SharedWrites::new(root.join("identity"), None);
-        let keys = NoSecrets;
+        let keys = Keys::default();
         let secrets = gb_config::secrets::SecretStore::new(
             &writes,
             gb_config::secrets::Scope::Identity,
@@ -453,42 +405,32 @@ impl AwaitedFixture {
             },
         )
         .unwrap();
+        secrets.set("AIKO_BRANVIL_TOKEN", &token).unwrap();
         let factory = ServiceIntegrationFactory::new(
             IntegrationConfig {
-                local_root: service_root,
+                local_root: root.join("services"),
                 identity_root: root.join("identity"),
                 person_id: "aiko".into(),
                 display_name: "Aiko".into(),
-                accounts: Default::default(),
+                accounts: [("branvil".into(), ActorName(ME.into()))].into(),
                 branvil_members: Default::default(),
-                ticket_provider: "local".into(),
-                code_provider: "local".into(),
                 chat_provider: "local".into(),
-                ticket_scope: "acme".into(),
-                code_scope: "acme".into(),
-                checks: "pending".into(),
                 slack_base_url: String::new(),
             },
             &secrets,
-            None,
+            Some(fixture.data()),
             Arc::new(|_| {}),
         )
         .unwrap();
-        let code = factory.create_code_hosting_service().unwrap();
-        let url = code
-            .create_pull_request(CreatePullRequest {
-                repository: "acme/repo".into(),
-                head: "feature".into(),
-                base: "main".into(),
-                title: "Title".into(),
-                body: "Body".into(),
-                draft: false,
-                tickets: vec![],
-            })
-            .await
-            .unwrap()
-            .target
-            .url;
+        let code = factory.create_code_hosting_service("acme").unwrap();
+        let url = fixture
+            .pull(
+                if other { &fixture.owner } else { &actor },
+                "acme/repo",
+                json!({"head":"feature","base":"main","title":"Title","body":"Body","draft":false}),
+            )
+            .await;
+        fixture.check("acme/repo", "feature", &head, None).await;
         let wait = status(
             "awaiting_checks",
             json!({"head":head,"work_kind":"ticket","work_identity":"local://tickets/acme/team/T-1","subject":"local://tickets/acme/team/T-1"}),
@@ -497,17 +439,28 @@ impl AwaitedFixture {
             .await
             .unwrap();
         Self {
-            _dir: dir,
             code,
-            bare,
-            checks: repo.join("checks"),
+            fixture,
             url,
             head,
+            base,
         }
     }
-    fn conclude(&self, value: &str) {
-        fs::create_dir_all(&self.checks).unwrap();
-        fs::write(self.checks.join(&self.head), value).unwrap();
+    async fn conclude(&self, value: &str) {
+        self.fixture
+            .check("acme/repo", "feature", &self.head, Some(value))
+            .await;
+    }
+    async fn feedback(&self, url: &str) {
+        self.fixture
+            .owner
+            .pulls_add_comment(
+                "acme/repo",
+                url.rsplit('/').next().unwrap().parse().unwrap(),
+                input(json!({"body":"Please fix"})),
+            )
+            .await
+            .unwrap();
     }
     async fn woken(&self) -> Vec<Task> {
         let tasks = self.code.pull_request_candidates().await.unwrap();
@@ -548,7 +501,7 @@ async fn no_work_while_checks_pending() {
 async fn success_and_failure_checks_both_resume_the_member() {
     for conclusion in ["success", "failure"] {
         let f = AwaitedFixture::new().await;
-        f.conclude(conclusion);
+        f.conclude(conclusion).await;
         let tasks = f.woken().await;
         assert_eq!(tasks.len(), 1);
         f.assert_resumes(&tasks[0], "pull_request_checks");
@@ -557,12 +510,8 @@ async fn success_and_failure_checks_both_resume_the_member() {
 #[tokio::test]
 async fn new_head_resumes_work_even_with_pending_checks() {
     let f = AwaitedFixture::new().await;
-    let tree = git(&f.bare, &["mktree"]);
-    let next = git(
-        &f.bare,
-        &["commit-tree", &tree, "-p", &f.head, "-m", "more"],
-    );
-    git(&f.bare, &["update-ref", "refs/heads/feature", &next]);
+    f.fixture
+        .commit("acme/repo", "feature", Some(&f.head), "a.txt", "new head");
     let tasks = f.woken().await;
     assert_eq!(tasks.len(), 1);
     f.assert_resumes(&tasks[0], "pull_request_checks");
@@ -575,20 +524,26 @@ async fn closed_merged_or_draft_prs_never_resume() {
         ("open", false, true),
     ] {
         let f = AwaitedFixture::new().await;
-        f.conclude("success");
-        let p = f.bare.parent().unwrap().join("pulls/1.json");
-        let mut v: Value = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
-        v["state"] = json!(state);
-        v["merged"] = json!(merged);
-        v["draft"] = json!(draft);
-        fs::write(p, serde_json::to_vec(&v).unwrap()).unwrap();
+        f.conclude("success").await;
+        if merged {
+            branvil::test_support::merge(&f.fixture.owner, "acme/repo", 1, &f.head, &f.base).await;
+        } else if draft {
+            f.code.convert_pull_request_to_draft(&f.url).await.unwrap();
+        } else {
+            assert_eq!(state, "closed");
+            f.fixture
+                .owner
+                .pulls_set_open("acme/repo", 1, false)
+                .await
+                .unwrap();
+        }
         assert!(f.woken().await.is_empty());
     }
 }
 #[tokio::test]
 async fn only_next_notice_ends_wait_and_ordinary_comments_do_not() {
     let f = AwaitedFixture::new().await;
-    f.conclude("success");
+    f.conclude("success").await;
     f.code.comment(&f.url, "CI passed", None).await.unwrap();
     assert_eq!(f.woken().await.len(), 1);
     f.notice("checks_settled", json!({})).await;
@@ -596,19 +551,15 @@ async fn only_next_notice_ends_wait_and_ordinary_comments_do_not() {
 }
 #[tokio::test]
 async fn someone_elses_wait_does_not_resume_my_work() {
-    let f = AwaitedFixture::new().await;
-    f.conclude("success");
-    let p = f.bare.parent().unwrap().join("pulls/1.json");
-    let mut v: Value = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
-    v["author"] = json!(OTHER);
-    fs::write(p, serde_json::to_vec(&v).unwrap()).unwrap();
+    let f = AwaitedFixture::new_as(true).await;
+    f.conclude("success").await;
     assert!(f.woken().await.is_empty());
 }
 #[tokio::test]
-async fn failed_check_read_waits_without_hiding_another_pr_feedback() {
+async fn failed_readiness_read_does_not_hide_another_pr_feedback() {
     let f = AwaitedFixture::new().await;
-    fs::create_dir_all(f.checks.join(&f.head)).unwrap();
-    git(&f.bare, &["update-ref", "refs/heads/feedback", &f.head]);
+    f.fixture
+        .git("acme/repo", &["update-ref", "refs/heads/feedback", &f.head]);
     let other = f
         .code
         .create_pull_request(CreatePullRequest {
@@ -624,10 +575,15 @@ async fn failed_check_read_waits_without_hiding_another_pr_feedback() {
         .unwrap()
         .target
         .url;
-    let p = f.bare.parent().unwrap().join("pulls/2.json");
-    let mut v: Value = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
-    v["comments"] = json!([{"id":"comment-1","author":OTHER,"body":"Please fix","created_at":"2026-11-05T00:00:00Z","reactions":[]}]);
-    fs::write(p, serde_json::to_vec(&v).unwrap()).unwrap();
+    f.feedback(&other).await;
+    f.fixture
+        .git("acme/repo", &["update-ref", "-d", "refs/heads/main"]);
+    assert!(
+        f.code
+            .readiness(&f.url, false, MAX_LOG_TAIL_BYTES)
+            .await
+            .is_err()
+    );
     let tasks = f.woken().await;
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].url.as_deref(), Some(other.as_str()));
@@ -635,8 +591,9 @@ async fn failed_check_read_waits_without_hiding_another_pr_feedback() {
         tasks[0].trigger_reason.as_deref(),
         Some("pull_request_feedback")
     );
-    fs::remove_dir(f.checks.join(&f.head)).unwrap();
-    f.conclude("success");
+    f.fixture
+        .git("acme/repo", &["update-ref", "refs/heads/main", &f.base]);
+    f.conclude("success").await;
     assert!(
         f.woken()
             .await
@@ -647,7 +604,8 @@ async fn failed_check_read_waits_without_hiding_another_pr_feedback() {
 #[tokio::test]
 async fn missing_head_resumes_nothing() {
     let f = AwaitedFixture::new().await;
-    git(&f.bare, &["update-ref", "-d", "refs/heads/feature"]);
+    f.fixture
+        .git("acme/repo", &["update-ref", "-d", "refs/heads/feature"]);
     assert!(f.woken().await.is_empty());
 }
 #[tokio::test]
@@ -657,7 +615,7 @@ async fn resumed_rate_limited_run_waits_for_reset() {
         ("2999-01-01T00:00:00Z", false),
     ] {
         let f = AwaitedFixture::new().await;
-        f.conclude("success");
+        f.conclude("success").await;
         f.notice("rate_limited", json!({"retry_after_at":retry}))
             .await;
         let tasks = f.woken().await;
@@ -670,15 +628,12 @@ async fn resumed_rate_limited_run_waits_for_reset() {
 #[tokio::test]
 async fn feedback_and_later_checks_both_resume_original_work() {
     let f = AwaitedFixture::new().await;
-    let p = f.bare.parent().unwrap().join("pulls/1.json");
-    let mut v: Value = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
-    v["comments"].as_array_mut().unwrap().push(json!({"id":"comment-other","author":OTHER,"body":"Please fix","created_at":"2026-01-01T00:00:00Z","reactions":[]}));
-    fs::write(p, serde_json::to_vec(&v).unwrap()).unwrap();
+    f.feedback(&f.url).await;
     let tasks = f.woken().await;
     assert_eq!(tasks.len(), 1);
     f.assert_resumes(&tasks[0], "pull_request_feedback");
     f.code.comment(&f.url, "Thanks", None).await.unwrap();
-    f.conclude("success");
+    f.conclude("success").await;
     let tasks = f.woken().await;
     assert_eq!(tasks.len(), 1);
     f.assert_resumes(&tasks[0], "pull_request_checks");

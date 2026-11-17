@@ -165,15 +165,28 @@ impl Runtime {
             native.branvil.clone(),
             Arc::new(|_| {}),
         )?;
-        let tickets = if config.ticket_provider.is_empty() {
+        let tickets =
+            if crate::member::native::service_workspace(&project, "ticket_service").is_empty() {
+                None
+            } else {
+                Some(
+                    factory.create_ticket_service(crate::member::native::service_workspace(
+                        &project,
+                        "ticket_service",
+                    ))?,
+                )
+            };
+        let code = if crate::member::native::service_workspace(&project, "code_hosting_service")
+            .is_empty()
+        {
             None
         } else {
-            Some(factory.create_ticket_service()?)
-        };
-        let code = if config.code_provider.is_empty() {
-            None
-        } else {
-            Some(factory.create_code_hosting_service()?)
+            Some(
+                factory.create_code_hosting_service(crate::member::native::service_workspace(
+                    &project,
+                    "code_hosting_service",
+                ))?,
+            )
         };
         let (chat, mut chat_error) = if config.chat_provider.is_empty() {
             (None, None)

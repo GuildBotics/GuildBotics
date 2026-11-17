@@ -1,4 +1,3 @@
-use super::store::{lock, text};
 use crate::factory::{IntegrationEvent, IntegrationObserver};
 use gb_ports::*;
 use serde_json::{Value, json};
@@ -14,6 +13,13 @@ use std::{
     thread::{self, JoinHandle},
     time::Duration,
 };
+static LOCK: Mutex<()> = Mutex::new(());
+fn lock() -> Result<std::sync::MutexGuard<'static, ()>, ServiceError> {
+    LOCK.lock().map_err(|_| ServiceError::Failed)
+}
+fn text<'a>(v: &'a Value, k: &str) -> &'a str {
+    v[k].as_str().unwrap_or("")
+}
 pub(in crate::factory) struct LocalChat {
     root: PathBuf,
     actor: String,

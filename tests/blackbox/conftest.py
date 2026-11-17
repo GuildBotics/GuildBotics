@@ -1,4 +1,4 @@
-"""Fresh server and local Git remote fixtures for blackbox journeys."""
+"""Fresh server and embedded Branvil fixtures for blackbox journeys."""
 
 import os
 import subprocess
@@ -59,7 +59,7 @@ class Checkout:
         return self.git("rev-parse", "HEAD")
 
     def push(self, stack):
-        return stack.member(
+        result = stack.member(
             "git",
             "push",
             "--repo-path",
@@ -68,6 +68,12 @@ class Checkout:
             "current",
             cwd=self.path,
         )
+        stack.provider.finish_checks(
+            self.git("rev-parse", "HEAD"),
+            None,
+            branch=self.git("branch", "--show-current"),
+        )
+        return result
 
 
 @pytest.fixture
@@ -75,13 +81,18 @@ def checkout(stack, tmp_path: Path):
     """A throwaway checkout; provider setup alone populates the remote directly."""
     seed = tmp_path / "seed"
     seed.mkdir()
-    setup = Checkout(seed, stack.env)
+    setup = Checkout(seed, stack.env | stack.provider.git_env)
     setup.git("init", "-q", "-b", "main")
+    (seed / ".branvil").mkdir()
+    setup.commit(
+        ".branvil/ci.toml",
+        '[[jobs]]\nname = "test"\nimage = "docker.io/library/alpine:3.22"\ncommands = ["true"]\n',
+    )
     setup.commit("README.md", "base\n")
     stack.provider.provision_repository(setup)
     work = tmp_path / "work"
     setup.git("clone", "-q", stack.provider.clone_url, str(work))
-    result = Checkout(work, stack.env)
+    result = Checkout(work, stack.env | stack.provider.git_env)
     result.git("switch", "-q", "-c", "feature")
     result.commit("README.md", "feature\n")
     return result

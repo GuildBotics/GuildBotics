@@ -262,7 +262,7 @@ async fn failures(host: &Host, c: &dyn CodeHostingService) {
     }
     host.answers.lock().unwrap().failure = None;
 }
-async fn member_alert_command_shows_the_upstreams_alerts(c: &dyn CodeHostingService) {
+async fn member_alert_command_returns_the_upstreams_alerts(c: &dyn CodeHostingService) {
     struct Services<'a>(&'a dyn CodeHostingService);
     impl gb_member::repository::RepositoryServices for Services<'_> {
         fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
@@ -326,38 +326,12 @@ async fn member_alert_command_shows_the_upstreams_alerts(c: &dyn CodeHostingServ
     ]
     .map(str::to_owned);
     let answer = session.execute(&arguments, "").await.unwrap();
-    let expected = json!({"repo":REPO,"alerts":answer.payload["items"],"continuation":answer.payload["continuation"]});
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut child = Command::new("uv")
-        .args(["run", "--locked", "python"])
-        .arg(repo.join("tests/guildbotics/guest/alert_command_fixture.py"))
-        .current_dir(&repo)
-        .env("PYTHONPATH", &repo)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(serde_json::to_string(&answer.payload).unwrap().as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let shown: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(shown, expected);
-    assert!(
-        shown["alerts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v["patched_version"].is_null())
+    assert_eq!(
+        answer.payload,
+        json!({
+            "items": [expected_alert(1, "open", Some("2.0")), expected_alert(3, "open", Some("2.0")), expected_alert(5, "open", None)],
+            "continuation": null,
+        })
     );
 }
 pub(super) async fn contract(
@@ -383,7 +357,7 @@ pub(super) async fn contract(
     )
     .await;
     state_pages(host, c).await;
-    member_alert_command_shows_the_upstreams_alerts(c).await;
+    member_alert_command_returns_the_upstreams_alerts(c).await;
     single_id(c).await;
     failures(host, c).await;
     empty_and_unsupported(host, c, base, token).await;

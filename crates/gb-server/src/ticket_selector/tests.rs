@@ -446,12 +446,9 @@ impl Fixture {
                 display_name: "Aiko".into(),
                 accounts: BTreeMap::from([("branvil".into(), ActorName("local-aiko".into()))]),
                 branvil_members: Default::default(),
-                ticket_provider: "branvil".into(),
-                code_provider: "branvil".into(),
+
                 chat_provider: "local".into(),
-                ticket_scope: "acme".into(),
-                code_scope: "acme".into(),
-                checks: "success".into(),
+
                 slack_base_url: String::new(),
             },
             &secrets,
@@ -459,8 +456,8 @@ impl Fixture {
             Arc::new(|_| {}),
         )
         .unwrap();
-        let ticket = factory.create_ticket_service().unwrap();
-        let code = factory.create_code_hosting_service().unwrap();
+        let ticket = factory.create_ticket_service("acme").unwrap();
+        let code = factory.create_code_hosting_service("acme").unwrap();
         let diagnostics = Diagnostics::open(root.path());
         Self {
             root,

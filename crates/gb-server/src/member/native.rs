@@ -195,7 +195,8 @@ impl Native {
             code: OnceLock::new(),
             tickets: OnceLock::new(),
             chat: OnceLock::new(),
-            code_configured: !config.code_provider.is_empty(),
+            code_workspace: service_workspace(&project, "code_hosting_service"),
+            ticket_workspace: service_workspace(&project, "ticket_service"),
         };
         let lifecycle = if self.invocation.is_none()
             && (request.phase.is_none()
@@ -218,6 +219,8 @@ impl Native {
         let result: anyhow::Result<Reply> = async {
         let peer = Peers {
             config: &config,
+            code_workspace: service_workspace(&project, "code_hosting_service"),
+            ticket_workspace: service_workspace(&project, "ticket_service"),
             secrets: &secrets,
             branvil: self.branvil.clone(),
             roster: &roster,
@@ -242,19 +245,7 @@ impl Native {
                     v.person_id.clone(),
                     ActorName(
                         v.accounts
-                            .get(if config.ticket_provider == "branvil" {
-                                "branvil"
-                            } else {
-                                "local"
-                            })
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                if config.ticket_provider == "local" {
-                                    format!("local-{}", v.person_id)
-                                } else {
-                                    String::new()
-                                }
-                            }),
+                            .get("branvil").cloned().unwrap_or_default(),
                     ),
                 )
             })
@@ -279,12 +270,7 @@ impl Native {
             let mut events = vec![];
             if payload["target"].is_object() {
                 let mut target = payload["target"].clone();
-                target["provider"] = if target["kind"] == "ticket" {
-                    config.ticket_provider.as_str()
-                } else {
-                    config.code_provider.as_str()
-                }
-                .into();
+                target["provider"] = "branvil".into();
                 let event=gb_member::events::inspected(&target, read_only);
                 *target_attributes.lock().unwrap()=serde_json::from_value(event["attributes"].clone()).unwrap_or_default();
                 events.push(event);
@@ -299,7 +285,7 @@ impl Native {
                 "ticket update" => events.extend(gb_member::events::ticket_closed(payload)),
                 "ticket comment" => events.push(gb_member::events::ticket_commented(payload)),
                 "git push" | "git publish" => {
-                    events.extend(gb_member::events::pushed(payload, &config.code_provider))
+                    events.extend(gb_member::events::pushed(payload, "branvil"))
                 }
                 _ => {}
             }
@@ -359,8 +345,8 @@ impl Native {
             correlation.clone(),
         )?)}else{None};
         let providers = [
-            config.code_provider.clone(),
-            config.ticket_provider.clone(),
+            project["services"]["code_hosting_service"]["name"].as_str().unwrap_or("").into(),
+            project["services"]["ticket_service"]["name"].as_str().unwrap_or("").into(),
             config.chat_provider.clone(),
         ];
         let context = if parsed.command=="context" {gb_member::context::member_context(
@@ -368,7 +354,7 @@ impl Native {
             &roster,
             &providers,
             memory.as_ref().expect("context memory").context()?,
-            if parsed.command == "context" && !config.code_provider.is_empty() {
+            if parsed.command == "context" && !services.code_workspace.is_empty() {
                 Some(services.code()?)
             } else {
                 None
@@ -857,6 +843,11 @@ pub(crate) fn public(member: &Value) -> PublicMember {
         accounts,
     }
 }
+pub(crate) fn service_workspace<'a>(project: &'a Value, kind: &str) -> &'a str {
+    project["services"][kind]["workspace"]
+        .as_str()
+        .unwrap_or("")
+}
 pub(crate) fn integration(
     workspace: &Path,
     identity: &Path,
@@ -866,16 +857,6 @@ pub(crate) fn integration(
 ) -> IntegrationConfig {
     let services = &project["services"];
     let name = |kind: &str| services[kind]["name"].as_str().unwrap_or("").to_lowercase();
-    let scope = |kind: &str| {
-        services[kind][if name(kind) == "branvil" {
-            "workspace"
-        } else {
-            "owner"
-        }]
-        .as_str()
-        .unwrap_or("")
-        .to_owned()
-    };
     IntegrationConfig {
         local_root: workspace.join(".guildbotics/local/services"),
         identity_root: identity.into(),
@@ -894,15 +875,9 @@ pub(crate) fn integration(
                     .map(|a| (a.clone(), v.name.clone()))
             })
             .collect(),
-        ticket_provider: name("ticket_service"),
-        code_provider: name("code_hosting_service"),
+
         chat_provider: name("chat_service"),
-        ticket_scope: scope("ticket_service"),
-        code_scope: scope("code_hosting_service"),
-        checks: services["code_hosting_service"]["checks"]
-            .as_str()
-            .unwrap_or("")
-            .into(),
+
         slack_base_url: services["chat_service"]["base_url"]
             .as_str()
             .unwrap_or("")
@@ -910,7 +885,8 @@ pub(crate) fn integration(
     }
 }
 struct Services<'a> {
-    code_configured: bool,
+    code_workspace: &'a str,
+    ticket_workspace: &'a str,
     factory: ServiceIntegrationFactory<'a>,
     code: OnceLock<std::result::Result<Arc<dyn CodeHostingService>, ServiceError>>,
     tickets: OnceLock<std::result::Result<Arc<dyn TicketService>, ServiceError>>,
@@ -918,18 +894,21 @@ struct Services<'a> {
 }
 impl RepositoryServices for Services<'_> {
     fn code_configured(&self) -> bool {
-        self.code_configured
+        !self.code_workspace.is_empty()
     }
     fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
         self.code
-            .get_or_init(|| self.factory.create_code_hosting_service())
+            .get_or_init(|| {
+                self.factory
+                    .create_code_hosting_service(self.code_workspace)
+            })
             .as_ref()
             .map(|v| v.as_ref())
             .map_err(|e| e.clone().into())
     }
     fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
         self.tickets
-            .get_or_init(|| self.factory.create_ticket_service())
+            .get_or_init(|| self.factory.create_ticket_service(self.ticket_workspace))
             .as_ref()
             .map(|v| v.as_ref())
             .map_err(|e| e.clone().into())
@@ -1014,6 +993,8 @@ impl gb_member::git::Guest for Guest<'_> {
     }
 }
 struct Peers<'a> {
+    code_workspace: &'a str,
+    ticket_workspace: &'a str,
     config: &'a IntegrationConfig,
     secrets: &'a SecretStore<'a>,
     branvil: Option<branvil::api::DataApi>,
@@ -1049,10 +1030,10 @@ impl Recipients for Peers<'_> {
                 self.branvil.clone(),
                 Arc::new(|_| {}),
             )?;
-            let result = if self.config.code_provider.is_empty() {
+            let result = if self.code_workspace.is_empty() {
                 Err(ServiceError::NotFound)
             } else {
-                let code = factory.create_code_hosting_service()?;
+                let code = factory.create_code_hosting_service(self.code_workspace)?;
                 let result = code.can_receive_work(subject).await;
                 code.aclose().await?;
                 result
@@ -1060,7 +1041,7 @@ impl Recipients for Peers<'_> {
             match result {
                 Ok(value) => Ok(value),
                 Err(error) if error.is_not_found() => {
-                    let tickets = factory.create_ticket_service()?;
+                    let tickets = factory.create_ticket_service(self.ticket_workspace)?;
                     let result = tickets.can_receive_work(subject).await;
                     tickets.aclose().await?;
                     match result {
@@ -4996,12 +4977,9 @@ pub(crate) mod tests {
             display_name: "Aiko".into(),
             accounts: BTreeMap::from([("branvil".into(), ActorName("local-aiko".into()))]),
             branvil_members: Default::default(),
-            ticket_provider: "branvil".into(),
-            code_provider: "branvil".into(),
+
             chat_provider: "local".into(),
-            ticket_scope: "acme".into(),
-            code_scope: "acme".into(),
-            checks: String::new(),
+
             slack_base_url: String::new(),
         };
         let factory = ServiceIntegrationFactory::new(
@@ -5011,7 +4989,7 @@ pub(crate) mod tests {
             Arc::new(|_| {}),
         )
         .unwrap();
-        let tickets = factory.create_ticket_service().unwrap();
+        let tickets = factory.create_ticket_service("acme").unwrap();
         let ticket = tickets
             .create_ticket(CreateTicket {
                 tracker: "acme/demo".into(),
@@ -5038,6 +5016,8 @@ pub(crate) mod tests {
             accounts: BTreeMap::from([("branvil".into(), "local-aiko".into())]),
         }];
         let mut peers = Peers {
+            code_workspace: "acme",
+            ticket_workspace: "acme",
             config: &config,
             secrets: &secrets,
             branvil: native.branvil.clone(),

@@ -288,13 +288,13 @@ fn ci_image_load_requires_a_workspace_and_a_real_archive_before_looking_for_a_ru
     let workspace = root.path().join("workspace");
     let team = workspace.join(".guildbotics/config/team");
     std::fs::create_dir_all(&team).unwrap();
+    std::fs::write(team.join("project.yml"), "name: Test\n").unwrap();
+    let archive = root.path().join("image.tar");
     std::fs::write(
-        team.join("project.yml"),
-        "name: Test\nservices:\n  code_hosting_service:\n    name: local\n",
+        &archive,
+        "An unconfigured code host must not read this archive.",
     )
     .unwrap();
-    let archive = root.path().join("image.tar");
-    std::fs::write(&archive, "The local provider must not read this archive.").unwrap();
     let invoke = |workspace: Option<&std::path::Path>, archive: &std::path::Path| {
         let mut cli = Command::new(env!("CARGO_BIN_EXE_guildbotics"));
         cli.env("HOME", root.path())

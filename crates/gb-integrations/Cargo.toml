@@ -22,7 +22,6 @@ gb-base = { path = "../gb-base" }
 branvil = { path = "../branvil" }
 regex = "1"
 url = "2"
-percent-encoding = "2"
 uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form"] }
 tokio = { version = "1", features = ["sync", "rt", "time", "macros", "net"] }
@@ -42,11 +41,6 @@ serde-saphyr = "2.0.0"
 syn = { version = "2", features = ["full", "visit"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
-
-[[test]]
-name = "branvil-integration"
-path = "tests/branvil/main.rs"
-harness = false
 
 [[test]]
 name = "main"

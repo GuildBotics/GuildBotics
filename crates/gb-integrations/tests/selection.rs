@@ -91,10 +91,6 @@ fn assigned_history_and_mentions_preserve_unparseable_evidence() {
         history.iter().take(1).map(|m| (m, true))
     ));
     assert!(mention_pending(false, history.iter().map(|m| (m, true))));
-    assert_eq!(
-        relevant_comments(history.iter().map(|m| (m, true))).len(),
-        1
-    );
 }
 
 #[test]

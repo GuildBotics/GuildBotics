@@ -24,14 +24,7 @@ const PROVIDERS: &[(&str, &[ServiceKind])] = &[
         "branvil",
         &[ServiceKind::CodeHostingService, ServiceKind::TicketService],
     ),
-    (
-        "local",
-        &[
-            ServiceKind::ChatService,
-            ServiceKind::CodeHostingService,
-            ServiceKind::TicketService,
-        ],
-    ),
+    ("local", &[ServiceKind::ChatService]),
     ("slack", &[ServiceKind::ChatService]),
 ];
 

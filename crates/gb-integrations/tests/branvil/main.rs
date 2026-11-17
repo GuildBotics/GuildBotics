@@ -1,7 +1,8 @@
-//! Frozen integration/branvil/test_smoke.py, using the real in-process provider.
-//! Pass --board-order-only, --code-parity-only, or --repair-only for one contract.
+//! Behavior contracts through the embedded Branvil service.
 mod alerts;
-mod code_parity;
+#[path = "../support/chat.rs"]
+mod chat_contracts;
+mod code_behavior;
 #[path = "../support/contracts.rs"]
 mod contracts;
 mod driver;
@@ -14,7 +15,7 @@ use gb_ports::*;
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
-    process::{Command, ExitCode},
+    process::Command,
     sync::{Arc, Mutex},
 };
 const REPO: &str = "acme/demo";
@@ -300,10 +301,11 @@ async fn ticket_relations(t: &dyn TicketService) {
             .is_empty()
     );
 }
-async fn scenario(board_order_only: bool, code_parity_only: bool) {
+async fn scenario(board_order_only: bool, code_behavior_only: bool, repair_only: bool) {
     let temp = tempfile::tempdir().unwrap();
     let (fixture, alert_host) =
         ::branvil::test_support::Fixture::configured("owner", alerts::Host::configure).await;
+    fixture.install_test_hooks("branvil::hook");
     let owner_token = fixture.owner_token.clone();
     let running = &fixture.running;
     let base = running.data.base_url().to_owned();
@@ -358,12 +360,7 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
         display_name: "Aiko".into(),
         accounts: [("branvil".into(), ActorName("aiko-service".into()))].into(),
         branvil_members: Default::default(),
-        ticket_provider: "branvil".into(),
-        code_provider: "branvil".into(),
         chat_provider: "local".into(),
-        ticket_scope: "acme".into(),
-        code_scope: "acme".into(),
-        checks: String::new(),
         slack_base_url: String::new(),
     };
     let factory = ServiceIntegrationFactory::new(
@@ -373,9 +370,10 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
         Arc::new(|_| {}),
     )
     .unwrap();
-    let t = factory.create_ticket_service().unwrap();
-    let c = factory.create_code_hosting_service().unwrap();
-    if std::env::args_os().any(|arg| arg == "--repair-only") {
+    let t = factory.create_ticket_service("acme").unwrap();
+    let c = factory.create_code_hosting_service("acme").unwrap();
+
+    if repair_only {
         readiness::retry_main_verification(
             temp.path(),
             &owner,
@@ -389,9 +387,8 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
         fixture.stop().await;
         return;
     }
-
-    if code_parity_only {
-        code_parity::contract(
+    if code_behavior_only {
+        code_behavior::contract(
             temp.path(),
             &owner,
             c.as_ref(),
@@ -429,7 +426,8 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
         return;
     }
     ticket_relations(t.as_ref()).await;
-    contracts::chat_contract(factory.create_chat_service().unwrap().as_ref(), "contract").await;
+    chat_contracts::chat_contract(factory.create_chat_service().unwrap().as_ref(), "contract")
+        .await;
     let git = Git::new(temp.path());
     // An empty runner queue is temporary while push processing registers jobs.
     assert!(
@@ -798,7 +796,7 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
     contracts::code_other_actor_contract(
         c.as_ref(),
         other_factory
-            .create_code_hosting_service()
+            .create_code_hosting_service("acme")
             .unwrap()
             .as_ref(),
         &next.target.url,
@@ -843,14 +841,6 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
         &runner.token,
     )
     .await;
-    code_parity::contract(
-        temp.path(),
-        &owner,
-        c.as_ref(),
-        t.as_ref(),
-        owner_token.trim(),
-    )
-    .await;
     c.aclose().await.unwrap();
     t.aclose().await.unwrap();
     drop(c);
@@ -859,27 +849,24 @@ async fn scenario(board_order_only: bool, code_parity_only: bool) {
     drop(factory);
     fixture.stop().await;
 }
-fn main() -> ExitCode {
-    let args: Vec<_> = std::env::args_os().collect();
-    if args.get(1).is_some_and(|a| a == "hook") {
-        return ::branvil::main(
-            ::branvil::Invocation::standalone(),
-            std::sync::Arc::new(::branvil::vault::Memory::default()),
-            args,
-        );
-    }
-    if args.iter().any(|a| a == "--list") {
-        println!("branvil_three_paths: test");
-        return ExitCode::SUCCESS;
-    }
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(4)
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(scenario(
-            args.iter().any(|a| a == "--board-order-only"),
-            args.iter().any(|a| a == "--code-parity-only"),
-        ));
-    ExitCode::SUCCESS
+#[test]
+fn hook() {
+    ::branvil::test_support::hook();
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ticket_code_scope_links_and_readiness() {
+    scenario(false, false, false).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn board_order() {
+    scenario(true, false, false).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn code_patrol() {
+    scenario(false, true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn retry_main_verification() {
+    scenario(false, false, true).await;
 }

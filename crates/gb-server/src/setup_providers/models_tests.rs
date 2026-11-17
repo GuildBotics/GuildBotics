@@ -137,11 +137,11 @@ fn registry_declares_exact_provider_accounts_secrets_and_service_models() {
     assert_eq!(
         registry
             .service(
-                ServiceKind::CodeHostingService,
-                &json!({"name":"Local","tracker":"acme","anything":[1,2]})
+                ServiceKind::ChatService,
+                &json!({"name":"Local","anything":[1,2]})
             )
             .unwrap(),
-        json!({"name":"local","tracker":"acme","anything":[1,2]})
+        json!({"name":"local","anything":[1,2]})
     );
     for provider in ["local", "github", "unknown"] {
         assert!(registry.account(provider, &json!({})).is_err());
@@ -255,4 +255,17 @@ fn registry_declares_exact_provider_accounts_secrets_and_service_models() {
         .unwrap();
     assert!(blank.account_info.is_empty());
     assert!(blank.secrets.is_empty());
+}
+
+#[test]
+fn local_is_only_a_chat_provider() {
+    let registry = Registry(None);
+    assert!(
+        registry
+            .service(ServiceKind::ChatService, &json!({"name":"local"}))
+            .is_ok()
+    );
+    for kind in [ServiceKind::TicketService, ServiceKind::CodeHostingService] {
+        assert!(registry.service(kind, &json!({"name":"local"})).is_err());
+    }
 }

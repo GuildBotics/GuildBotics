@@ -203,3 +203,32 @@ async fn target_results_ignore_other_heads_priority_class() {
         }
     }
 }
+
+#[tokio::test]
+async fn a_failed_check_can_be_retried_on_the_same_head() {
+    let f = Fixture::new("owner").await;
+    f.workspace("fixture").await;
+    f.repository("fixture/repo").await;
+    let (agent, _) = f.member("agent").await;
+    let base = f.commit("fixture/repo", "main", None, "README.md", "base");
+    let head = f.commit(
+        "fixture/repo",
+        "feature",
+        Some(&base),
+        "feature.txt",
+        "feature",
+    );
+    f.pull(
+        &agent,
+        "fixture/repo",
+        json!({"head":"feature","title":"Work"}),
+    )
+    .await;
+    for conclusion in [None, Some("failure"), Some("success")] {
+        f.check("fixture/repo", "feature", &head, conclusion).await;
+        let checks = f.owner.pulls_checks("fixture/repo", 1).await.unwrap();
+        assert_eq!(checks.head_sha, head);
+        assert_eq!(checks.checks[0].conclusion.as_deref(), conclusion);
+    }
+    f.stop().await;
+}

@@ -36,17 +36,12 @@ fn config(root: &std::path::Path) -> IntegrationConfig {
         display_name: "Aiko".into(),
         accounts: BTreeMap::new(),
         branvil_members: Default::default(),
-        ticket_provider: "local".into(),
-        code_provider: "local".into(),
         chat_provider: "local".into(),
-        ticket_scope: "acme".into(),
-        code_scope: "acme".into(),
-        checks: "success".into(),
         slack_base_url: String::new(),
     }
 }
 #[tokio::test]
-async fn public_factory_constructs_local_services_and_shares_listener_identity() {
+async fn public_factory_constructs_local_chat_and_shares_listener_identity() {
     let d = tempfile::tempdir().unwrap();
     let writes = SharedWrites::new(d.path().join("identity"), Some(d.path().join("workspace")));
     let key = FakeKeychain::default();
@@ -63,13 +58,18 @@ async fn public_factory_constructs_local_services_and_shares_listener_identity()
         ServiceIntegrationFactory::new(config(d.path()), &secrets, None, Arc::new(|_| {})).unwrap();
     let chat = factory.create_chat_service().unwrap();
     assert_eq!(chat.get_bot_identity().await.unwrap().user_id, "local-aiko");
-    factory.create_ticket_service().unwrap();
-    let code = factory.create_code_hosting_service().unwrap();
-    assert!(matches!(
-        code.read(Resource::DependencyAlerts, "acme/demo", None, "")
-            .await,
-        Err(ServiceError::Unsupported)
-    ));
+    assert_eq!(
+        (
+            factory.create_ticket_service("").err(),
+            factory.create_code_hosting_service("").err()
+        ),
+        (
+            Some(ServiceError::Unsupported),
+            Some(ServiceError::Unsupported)
+        )
+    );
+    assert!(factory.create_ticket_service("acme").is_err());
+    assert!(factory.create_code_hosting_service("acme").is_err());
     let mut another = config(d.path());
     another.person_id = "bob".into();
     let another =
@@ -115,16 +115,9 @@ fn factory_refuses_workspace_secrets_and_unknown_providers() {
         .set("AIKO_SLACK_BOT_TOKEN", "synthetic-secret-do-not-display")
         .unwrap();
     let mut c = config(d.path());
-    c.ticket_provider = "unknown".into();
-    c.code_provider = "unknown".into();
     c.chat_provider = "unknown".into();
     let f = ServiceIntegrationFactory::new(c, &identity, None, Arc::new(|_| {})).unwrap();
     for (service, error) in [
-        ("ticket_service", f.create_ticket_service().err().unwrap()),
-        (
-            "code_hosting_service",
-            f.create_code_hosting_service().err().unwrap(),
-        ),
         ("chat_service", f.create_chat_service().err().unwrap()),
         ("chat_service", f.verify_chat_credentials().unwrap_err()),
         ("chat_service", f.listener_key().unwrap_err()),
@@ -265,15 +258,9 @@ fn member_scoped_secrets_and_collision_withholding() {
 #[tokio::test]
 async fn branvil_factory_supplies_roster_names_to_task_comments() {
     let d = tempfile::tempdir().unwrap();
-    let data_root = d.path().join("branvil");
-    let token = branvil::api::initialize(&data_root, "owner1").unwrap();
-    let running = branvil::api::Running::start(
-        &data_root,
-        std::sync::Arc::new(::branvil::vault::Memory::default()),
-    )
-    .await
-    .unwrap();
-    let owner = running.data.authenticate(token.clone()).await.unwrap();
+    let fixture = branvil::test_support::Fixture::new("owner1").await;
+    let running = &fixture.running;
+    let owner = &fixture.owner;
     owner
         .repos_create_workspace(serde_json::from_value(serde_json::json!({"name":"acme"})).unwrap())
         .await
@@ -318,7 +305,6 @@ async fn branvil_factory_supplies_roster_names_to_task_comments() {
     .unwrap();
     secrets.set("AIKO_BRANVIL_TOKEN", &member.token).unwrap();
     let mut c = config(d.path());
-    c.ticket_provider = "branvil".into();
     c.accounts
         .insert("branvil".into(), ActorName("aiko-service".into()));
     // Deliberately vary case and include account whitespace as in saved identities.
@@ -327,7 +313,7 @@ async fn branvil_factory_supplies_roster_names_to_task_comments() {
         ServiceIntegrationFactory::new(c, &secrets, Some(running.data.clone()), Arc::new(|_| {}))
             .unwrap();
     let tasks = factory
-        .create_ticket_service()
+        .create_ticket_service("acme")
         .unwrap()
         .candidates()
         .await
@@ -335,7 +321,7 @@ async fn branvil_factory_supplies_roster_names_to_task_comments() {
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].comments[0].author, "Otota");
     assert_eq!(tasks[0].comments[0].author_type, "User");
-    running.stop().await.unwrap();
+    fixture.stop().await;
 }
 
 #[test]
