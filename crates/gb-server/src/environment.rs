@@ -798,6 +798,26 @@ fn snapshot_dirs(
         .collect())
 }
 
+/// Remove obsolete recipes and then images after the caller commits activation.
+/// Both the CLI and automatic update loop enter through this operation.
+pub async fn prune(
+    host: &gb_environment::Host,
+    workspace: &std::path::Path,
+    language: &str,
+) -> anyhow::Result<()> {
+    let device = gb_environment::device::read(host, workspace).await;
+    let name = device.view["snapshot"]["name"].as_str().unwrap_or_default();
+    gb_environment::snapshot::ready(workspace, name)
+        .map_err(|sentence| anyhow::anyhow!(i18n::say(sentence, language)))?;
+    gb_environment::snapshot::prune(workspace, name, |path| async {
+        gb_environment::runtime::remove_snapshot(path).await?;
+        Ok(true)
+    })
+    .await
+    .map_err(anyhow::Error::msg)?;
+    sweep_images(&host.data, workspace).await
+}
+
 /// Remove the images and layers no snapshot and no running microVM uses.
 pub async fn sweep_images(
     data: &std::path::Path,

@@ -214,6 +214,10 @@ impl Hub {
     }
 
     fn save(&self) -> anyhow::Result<()> {
+        self.save_state(&self.state)
+    }
+
+    fn save_state(&self, state: &Map<String, Value>) -> anyhow::Result<()> {
         let path = self.state_dir.join("auto-update.json");
         let pending = self.state_dir.join("auto-update.json.new");
         std::fs::OpenOptions::new()
@@ -222,7 +226,7 @@ impl Hub {
             .truncate(true)
             .mode(0o600)
             .open(&pending)?
-            .write_all(Value::Object(self.state.clone()).to_string().as_bytes())?;
+            .write_all(Value::Object(state.clone()).to_string().as_bytes())?;
         std::fs::rename(pending, path)?;
         Ok(())
     }
@@ -411,6 +415,93 @@ impl Hub {
         }
     }
 
+    /// Finish only the activation we recorded, under the script's operation lock.
+    /// Upkeep builds snapshots but never owns this post-activation cleanup.
+    fn finish_snapshot(&mut self, sha: &str) {
+        match self.try_finish_snapshot() {
+            Ok(()) => self.clear_blocker("snapshot"),
+            Err(error) => self.blocker(
+                sha,
+                "snapshot",
+                &format!("Snapshot cleanup failed: {error}"),
+                "inspect environment status and environment prune; cleanup will retry automatically while update checks continue",
+                None,
+                0,
+            ),
+        }
+    }
+
+    fn try_finish_snapshot(&mut self) -> anyhow::Result<()> {
+        let Some(request) = self.state.get("snapshotCleanup").cloned() else {
+            return Ok(());
+        };
+        let operation = self.state_dir.join("operation");
+        match std::fs::create_dir(&operation) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(error) => return Err(error.into()),
+        }
+        let result = self.finish_snapshot_locked(&request);
+        std::fs::remove_dir(operation)?;
+        result
+    }
+
+    fn finish_snapshot_locked(&mut self, request: &Value) -> anyhow::Result<()> {
+        let sha = request["sha"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing cleanup revision"))?;
+        let workspace = request["workspace"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing cleanup workspace"))?;
+        if self.state_dir.join("builds/update-from").try_exists()? {
+            return Ok(());
+        }
+        let current = self.current.clone();
+        let source = self.run(&current, &["server", "hub-probe", "--source"], None, None)?;
+        if Path::new(&source).file_name().and_then(|s| s.to_str()) != Some(sha) {
+            // Rollback (or a later manual activation) superseded this request.
+            self.state.remove("snapshotCleanup");
+            return self.save();
+        }
+        let after = self.cli(&[
+            "environment",
+            "status",
+            "--format",
+            "json",
+            "--workspace",
+            workspace,
+        ])?;
+        match after["snapshot"]["state"].as_str() {
+            Some("ready") => {
+                self.run(
+                    &current,
+                    &["environment", "prune", "--workspace", workspace],
+                    None,
+                    None,
+                )?;
+                self.state.remove("snapshotCleanup");
+                self.save()?;
+            }
+            Some("building") => {}
+            Some(snapshot @ ("missing" | "stale" | "failed")) => {
+                let next = format!(
+                    "run {} environment build --workspace {}; cleanup will retry automatically",
+                    self.guildbotics(),
+                    quote(workspace)
+                );
+                self.notify(
+                    sha,
+                    "snapshot",
+                    &format!("Snapshot is {snapshot}"),
+                    &next,
+                    Some(format!("{sha}:snapshot:{snapshot}")),
+                );
+            }
+            _ => anyhow::bail!("Snapshot state is unavailable"),
+        }
+        Ok(())
+    }
+
     fn inspect(&mut self, sha: &mut String, stage: &mut &'static str) -> anyhow::Result<()> {
         let pending: Vec<(String, String)> = self
             .object("pendingNotices")
@@ -453,6 +544,11 @@ impl Hub {
         }
         self.clear_blocker("recovery");
         self.restore_service()?;
+        self.finish_snapshot(sha);
+        // A cleanup that could not release the shared operation lock is still active.
+        if operation.try_exists()? {
+            return Ok(());
+        }
         self.git(&["fetch", "origin", "main"])?;
         let head = self.git(&["rev-parse", "--verify", "HEAD^{commit}"])?;
         let repo = self.checkout.to_string_lossy().into_owned();
@@ -631,13 +727,23 @@ impl Hub {
             return Ok(());
         }
         self.clear_blocker(stage);
-        // Persist intent before moving HEAD: a terminated update must not retry.
-        self.state.insert("attempt".into(), sha.as_str().into());
-        self.state.insert("result".into(), "updating".into());
-        self.save()?;
-        *stage = "update";
+        let workspace = self.cli(&["workspace", "current", "--format", "json"])?;
+        let workspace = workspace["workspace"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Workspace is unavailable"))?;
         let previous_failure = self.failure_record()?;
         let subject = self.git(&["show", "-s", "--format=%s", sha])?;
+        // Do not expose an unstarted attempt to blocker persistence on save failure.
+        let mut intent = self.state.clone();
+        intent.insert("attempt".into(), sha.as_str().into());
+        intent.insert("result".into(), "updating".into());
+        intent.insert(
+            "snapshotCleanup".into(),
+            json!({"sha":sha,"workspace":workspace}),
+        );
+        self.save_state(&intent)?;
+        self.state = intent;
+        *stage = "update";
         if let Err(error) = self.run(
             &current,
             &[
@@ -698,18 +804,7 @@ impl Hub {
         }
         if self.state.get("result").and_then(Value::as_str) == Some("success") {
             *stage = "snapshot";
-            let after = self.cli(&["environment", "status", "--format", "json"])?;
-            self.clear_blocker(stage);
-            if let Some(snapshot) = after["snapshot"]["state"]
-                .as_str()
-                .filter(|state| ["missing", "stale", "failed", "building"].contains(state))
-            {
-                let cli = self.guildbotics();
-                let next = format!(
-                    "run {cli} environment build (or wait for the running build), then {cli} environment prune"
-                );
-                self.notify(sha, stage, &format!("Snapshot is {snapshot}"), &next, None);
-            }
+            self.finish_snapshot(sha);
         }
         Ok(())
     }
