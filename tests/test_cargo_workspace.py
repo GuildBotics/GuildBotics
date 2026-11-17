@@ -14,6 +14,23 @@ def _load(path: str) -> dict:
     return tomllib.loads((ROOT / path).read_text(encoding="utf-8"))
 
 
+def test_the_blackbox_ci_selects_every_ordinary_journey() -> None:
+    job = next(
+        j for j in _load(".branvil/ci.toml")["jobs"] if j["name"] == "rust-cli-blackbox"
+    )
+    selected = {word for command in job["commands"] for word in shlex.split(command)}
+    # These journeys require an attending owner or an offline production copy.
+    optional = {"test_run.py", "test_record_golden.py"}
+    expected = {
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / "tests/blackbox").glob("test_*.py")
+        if path.name not in optional
+    }
+    assert expected <= selected, (
+        f"Blackbox journeys missing from CI: {expected - selected}"
+    )
+
+
 def test_the_toolchain_is_the_rust_of_the_ci_image() -> None:
     dockerfile = (ROOT / "docker/agent-environment/Dockerfile").read_text("utf-8")
     [image_rust] = re.findall(r"^ARG RUST_VERSION=(\S+)$", dockerfile, re.MULTILINE)

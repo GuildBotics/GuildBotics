@@ -644,7 +644,7 @@ Usage: guildbotics member chat updates [OPTIONS]
 Await CI checks or retry a job.
 
 Usage: guildbotics member checks [OPTIONS]
-  await  End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle.
+  await  End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle, and the resumed run carries on with any of that work still unfinished.
   retry  Retry a CI job by its page URL.
   --help  Print help
 ```
@@ -652,7 +652,7 @@ Usage: guildbotics member checks [OPTIONS]
 ### guildbotics member checks await
 
 ```text
-End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle.
+End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle, and the resumed run carries on with any of that work still unfinished.
 
 Usage: guildbotics member checks await [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]

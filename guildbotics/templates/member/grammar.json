@@ -1710,7 +1710,7 @@
     ],
     "read_only": false,
     "content_required": true,
-    "help": "End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle."
+    "help": "End any run -- a ticket's, a chat thread's, or a command's -- to await its own PRs' pending checks: a notice on each PR, from which the patrol resumes the run's work once they settle, and the resumed run carries on with any of that work still unfinished."
   },
   "ticket read": {
     "read_only": true,
