@@ -51,12 +51,7 @@ pub struct IntegrationConfig {
     pub accounts: BTreeMap<String, ActorName>,
     /// Branvil logins and display names of the workspace team.
     pub branvil_members: BTreeMap<String, String>,
-    pub ticket_provider: String,
-    pub code_provider: String,
     pub chat_provider: String,
-    pub ticket_scope: String,
-    pub code_scope: String,
-    pub checks: String,
     pub slack_base_url: String,
 }
 /// Chat capabilities shared by receive-state selection and service construction.
@@ -138,16 +133,6 @@ impl<'a> ServiceIntegrationFactory<'a> {
             Ok(value)
         }
     }
-    fn local(&self, scope: &str) -> local::LocalService {
-        local::LocalService::new(
-            self.config.local_root.clone(),
-            scope,
-            &self.actor("local").0,
-            &self.config.person_id,
-            &self.config.display_name,
-            &self.config.checks,
-        )
-    }
     fn branvil(&self, scope: &str) -> Result<branvil::BranvilService, ServiceError> {
         Ok(branvil::BranvilService::new(
             self.branvil.clone().ok_or(ServiceError::Unavailable)?,
@@ -170,25 +155,23 @@ impl<'a> ServiceIntegrationFactory<'a> {
             .into(),
         }
     }
-    pub fn create_ticket_service(&self) -> Result<Arc<dyn TicketService>, ServiceError> {
-        match self.config.ticket_provider.as_str() {
-            "local" => Ok(Arc::new(self.local(&self.config.ticket_scope))),
-            "branvil" => Ok(Arc::new(self.branvil(&self.config.ticket_scope)?)),
-            _ => Err(Self::unsupported_provider(
-                "ticket_service",
-                &self.config.ticket_provider,
-            )),
+    pub fn create_ticket_service(
+        &self,
+        workspace: &str,
+    ) -> Result<Arc<dyn TicketService>, ServiceError> {
+        if workspace.is_empty() {
+            return Err(ServiceError::Unsupported);
         }
+        Ok(Arc::new(self.branvil(workspace)?))
     }
-    pub fn create_code_hosting_service(&self) -> Result<Arc<dyn CodeHostingService>, ServiceError> {
-        match self.config.code_provider.as_str() {
-            "local" => Ok(Arc::new(self.local(&self.config.code_scope))),
-            "branvil" => Ok(Arc::new(self.branvil(&self.config.code_scope)?)),
-            _ => Err(Self::unsupported_provider(
-                "code_hosting_service",
-                &self.config.code_provider,
-            )),
+    pub fn create_code_hosting_service(
+        &self,
+        workspace: &str,
+    ) -> Result<Arc<dyn CodeHostingService>, ServiceError> {
+        if workspace.is_empty() {
+            return Err(ServiceError::Unsupported);
         }
+        Ok(Arc::new(self.branvil(workspace)?))
     }
     pub fn create_chat_service(&self) -> Result<Arc<dyn ChatService>, ServiceError> {
         match ChatProvider::parse(&self.config.chat_provider) {

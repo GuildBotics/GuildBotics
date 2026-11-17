@@ -26,14 +26,6 @@ pub fn mention_pending<'a>(
             (pending || mentioned) && m.author_type != "Assistant"
         })
 }
-pub fn relevant_comments<'a>(
-    comments: impl IntoIterator<Item = (&'a TaskMessage, bool)>,
-) -> Vec<&'a TaskMessage> {
-    comments
-        .into_iter()
-        .filter_map(|(m, elsewhere)| (!elsewhere || m.author_type == "Assistant").then_some(m))
-        .collect()
-}
 pub fn linked_pull_state<'a>(
     pulls: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> Option<&'a str> {

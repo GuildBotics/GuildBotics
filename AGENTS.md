@@ -46,7 +46,7 @@ scripts/dev.sh --data-dir /absolute/path/to/dev-data
 ### メンバー・provider・実行
 
 - `gb-ports` の契約でコードホスト、チケット、チャットを扱う。チケットとPRはURL、コメント・レビュー・ジョブなどは項目のURLと組で意味を持つ不透明なID。任意機能に対応しないときはunsupportedを返す。空の成功は実際に0件の場合だけに使う。
-- providerの選択は `gb-integrations/src/factory.rs` に置く。書き込みは対象サービスの設定が指す範囲を検査し、member gitはpushの資格情報を渡す前に同じ境界を通す。member gitにはユーザーのcredential helperを継承しない。判定は共通の巡回・readiness・選択処理に置き、providerは読み取った状態を渡す。契約テストではprovider間で同じ操作を確かめる。参照providerの `local` は実サービス固有のIDや名前空間をまねない。
+- providerの選択は `gb-integrations/src/factory.rs` に置く。書き込みは対象サービスの設定が指す範囲を検査し、member gitはpushの資格情報を渡す前に同じ境界を通す。member gitにはユーザーのcredential helperを継承しない。判定は共通の巡回・readiness・選択処理に置き、providerは読み取った状態を渡す。チャットの契約テストではprovider間で同じ操作を確かめる。チャットの参照providerの `local` は実サービス固有のIDや名前空間をまねない。
 - チケットの候補選択と実行前後の処理はticket selectorを通す。チャットは発生時刻を時間窓、`position` を順序に使う。返信や外部書き込みの前に依頼元スレッドの新着を確認する。実行が止まったときは作業の出どころに記録する。接続できないサービスで見送った予定は消化せず、連続失敗に数えない。
 - 実行の記録とメンバー単位の排他は共通の実行境界に置く。手動・定期・巡回・イベントで別の完了判定を作らない。PRの完了判定は現在のheadのreadinessを使う。
 - メンバーの手順の正本は [参照カタログ](guildbotics/templates/member/reference.md)。workflowの封筒、起動元ごとの情報、手順の本文を分ける。複数のプロンプトが同じ規則を使うときは共通の層に置く。
@@ -120,7 +120,7 @@ CLIを変更したら `cargo run --locked -p guildbotics -- generate-cli-referen
 
 - 確認コマンドは、CI とこのファイルに明記された範囲、および変更内容に直接対応する関連テストに限定する。指定範囲より広い確認（例: CI で `ruff check` 対象外の `tests/` に対する `ruff check`、関連範囲を超える全量 E2E、LaunchAgent の実機での登録など）は、ユーザーが明示した場合、または事前に目的・追加コストを説明して承認を得た場合だけ実行する。「念のため」の広範囲チェックを無断で追加しない。
 - Python コードを変更したら、原則として `ruff format --check` と `ruff check` と `mypy` と `lint-imports` と関連 `pytest` を実行してから完了報告する（`ruff check` と `ruff format --check` は別物。`ruff format --check` の対象は `guildbotics` と `tests`、`ruff check` / `mypy` / `pylint` の対象は `guildbotics` のみ。整形漏れは CI の `test` ジョブで落ちるため、`ruff format --check` を必ず含める。整形が必要なら `uv run --no-sync ruff format guildbotics tests` を実行）
-- Rust のコードを変更したら、原則として `cargo fmt --all --check` と `cargo clippy --locked --workspace --all-targets -- -D warnings` と関連する `cargo nextest run` を実行してから完了報告する（複数ファイルの通常の結合テストは `tests/main.rs` のモジュールにまとめる。1 ファイルだけなら `cargo nextest run -p <crate> --test main -E 'test(/^<file>::/)'`。位置引数の `<file>::` は部分一致なので、名前が重なる別モジュールも選ばれる。`gb-integrations` の専用ハーネス `branvil-integration` は別 target）。重複は `npx --yes jscpd@5.0.14 --config jscpd.rust.json` で確かめる。`crates/branvil/web` を変更したら、そこで `npm run lint`・`npm run typecheck`・関連する `npm run test` を実行する
+- Rust のコードを変更したら、原則として `cargo fmt --all --check` と `cargo clippy --locked --workspace --all-targets -- -D warnings` と関連する `cargo nextest run` を実行してから完了報告する（複数ファイルの通常の結合テストは `tests/main.rs` のモジュールにまとめる。1 ファイルだけなら `cargo nextest run -p <crate> --test main -E 'test(/^<file>::/)'`。位置引数の `<file>::` は部分一致なので、名前が重なる別モジュールも選ばれる）。重複は `npx --yes jscpd@5.0.14 --config jscpd.rust.json` で確かめる。`crates/branvil/web` を変更したら、そこで `npm run lint`・`npm run typecheck`・関連する `npm run test` を実行する
 - 重複コード確認は `uv run --no-sync pylint guildbotics` を使う（`pyproject.toml` で `duplicate-code` のみ有効化）
 - 対象範囲（リポジトリ直下、`docs/`、`desktop/`、`skills/`、`crates/`）の Markdown を変更したら、上記の `lychee` コマンドを実行する
 - 最低限の確認コマンドは上記「開発時の基本コマンド（CI 準拠）」と同じ（`pytest` は関連範囲に絞ってよい）

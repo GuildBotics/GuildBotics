@@ -328,12 +328,9 @@ mod tests {
             display_name: "Aiko".into(),
             accounts: Default::default(),
             branvil_members: Default::default(),
-            ticket_provider: String::new(),
-            code_provider: String::new(),
+
             chat_provider: "local".into(),
-            ticket_scope: String::new(),
-            code_scope: String::new(),
-            checks: String::new(),
+
             slack_base_url: String::new(),
         };
         let factory = gb_integrations::ServiceIntegrationFactory::new(

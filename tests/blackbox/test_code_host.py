@@ -185,9 +185,9 @@ def test_checks_follow_the_head_and_base(stack, checkout, repository):
 
     checkout.git("switch", "-q", "main")
     base = checkout.commit("base.txt", "new base\n")
-    checkout.push(stack)
+    stack.provider.advance_base(stack, checkout)
     stale = readiness(stack, url)
-    assert_blocked(stale, head, "success", "base_out_of_date")
+    assert_ready(stale, head)
     assert stale["base_sha"] == stale["current_base_sha"] == base
     assert stale["behind_by"] == 1
 

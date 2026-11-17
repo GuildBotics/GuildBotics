@@ -212,10 +212,3 @@ def test_environment_adoption_and_cleanup_leave_the_source_intact(tmp_path, syml
     shutil.rmtree(home)
     assert (source / snapshots / "ready/disk").read_bytes() == b"snapshot"
     assert (source_home / runtime / "runtime").read_bytes() == b"runtime"
-
-
-def test_unknown_provider_does_not_silently_run_local(tmp_path, monkeypatch):
-    monkeypatch.setenv("GUILDBOTICS_BLACKBOX_PROVIDER", "unknown")
-    with pytest.raises(ValueError, match="Unknown blackbox provider"):
-        with running_stack(tmp_path):
-            pytest.fail("An unknown provider must fail before starting the server")

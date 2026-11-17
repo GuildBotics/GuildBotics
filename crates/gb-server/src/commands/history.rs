@@ -47,7 +47,10 @@ async fn service(
         api.branvil.get().cloned(),
         Arc::new(|_| {}),
     )?
-    .create_code_hosting_service()?)
+    .create_code_hosting_service(crate::member::native::service_workspace(
+        &project,
+        "code_hosting_service",
+    ))?)
 }
 
 pub(super) async fn recognized(

@@ -18,8 +18,8 @@ from pathlib import Path
 import httpx
 import yaml
 
-REPOSITORY = "acme/team/demo"
-TRACKER = "acme/team/demo-tickets"
+REPOSITORY = "acme/demo"
+TRACKER = REPOSITORY
 PERSON = "blackbox"
 SUPPORT = Path(__file__).parent / "support"
 ROOT = Path(__file__).resolve().parents[2]
@@ -80,7 +80,7 @@ def _yaml(path: Path, value: dict) -> None:
 
 
 def _seed(workspace: Path, home: Path, provider) -> None:
-    """Write only documented configuration and local-provider seed files."""
+    """Write only documented GuildBotics configuration."""
     config = workspace / ".guildbotics/config"
     _yaml(
         config / "team/project.yml",
@@ -115,7 +115,6 @@ def _seed(workspace: Path, home: Path, provider) -> None:
         {"scheduled": True, "routine": False, "event_queue": False},
     )
     block_runtime(home)
-    provider.seed()
 
 
 def block_runtime(home: Path) -> None:
@@ -153,7 +152,10 @@ def _environment(root: Path, workspace: Path, home: Path, port: int) -> dict[str
         PYTHONUTF8="1",
         GIT_CONFIG_NOSYSTEM="1",
         GIT_CONFIG_GLOBAL=os.devnull,
-        GIT_ALLOW_PROTOCOL="file",
+        GIT_ALLOW_PROTOCOL="file:http",
+        GUILDBOTICS_BROWSER_TEST_BRANVIL="1",
+        GUILDBOTICS_BLACKBOX_CONTROL="1",
+        BRANVIL_DATA_DIR=str(home / "branvil"),
         HTTP_PROXY="http://127.0.0.1:1",
         HTTPS_PROXY="http://127.0.0.1:1",
         ALL_PROXY="http://127.0.0.1:1",
@@ -182,16 +184,13 @@ def _stop(process: subprocess.Popen) -> None:
 
 @contextmanager
 def running_stack(tmp_path: Path, *, environment=None):
-    from tests.blackbox.providers import PROVIDERS
+    from tests.blackbox.providers import BranvilProvider
 
     # The run directory is HOME itself: the runtime opens unix sockets under
     # HOME/.guildbotics/data/msb, and macOS caps their paths at 103 bytes.
     workspace, home = tmp_path / "workspace", tmp_path
     workspace.mkdir()
-    selected = os.environ.get("GUILDBOTICS_BLACKBOX_PROVIDER", "local")
-    if selected not in PROVIDERS:
-        raise ValueError(f"Unknown blackbox provider: {selected}")
-    provider = PROVIDERS[selected](workspace)
+    provider = BranvilProvider()
     _seed(workspace, home, provider)
     if environment is not None:
         environment.adopt(workspace, home)
@@ -212,6 +211,7 @@ def serving(tmp_path: Path, workspace: Path, home: Path, provider=None, **overri
             command,
             cwd=workspace,
             env=env,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=log,
             text=True,
@@ -266,8 +266,34 @@ def serving(tmp_path: Path, workspace: Path, home: Path, provider=None, **overri
                     )
                     time.sleep(0.05)
                 api.timeout = httpx.Timeout(10)
-                yield Stack(workspace, env, api, provider, tmp_path / "server.log")
+                stack = Stack(workspace, env, api, provider, tmp_path / "server.log")
+
+                def control(**request):
+                    # The server reserves stdout for its listen notice, then
+                    # redirects it to stderr. Test acknowledgements share that log.
+                    offset = stack.log.stat().st_size
+                    process.stdin.write(json.dumps(request) + "\n")
+                    process.stdin.flush()
+                    deadline = time.monotonic() + 10
+                    while True:
+                        with stack.log.open("rb") as output:
+                            output.seek(offset)
+                            if b"BLACKBOX_CONTROL_OK\n" in output.read():
+                                return
+                        assert process.poll() is None and time.monotonic() < deadline, (
+                            f"Test control timed out{stack._server_log()}"
+                        )
+                        time.sleep(0.01)
+
+                try:
+                    if provider is not None:
+                        provider.seed(stack, control)
+                    yield stack
+                finally:
+                    if provider is not None:
+                        provider.close()
         finally:
             _stop(process)
             reader.join(timeout=2)
             process.stdout.close()
+            process.stdin.close()

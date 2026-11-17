@@ -399,7 +399,7 @@ async fn sync(
             person,
             &roster,
         );
-        if config.ticket_provider == "branvil" {
+        if !crate::member::native::service_workspace(&project, "ticket_service").is_empty() {
             let prefix =
                 gb_config::team::person_secret_prefix(&api.identity_root, &person.person_id)?;
             if secrets
@@ -408,7 +408,7 @@ async fn sync(
             {
                 continue;
             }
-        } else if config.ticket_provider != "local" {
+        } else {
             continue;
         }
         tickets = Some(
@@ -418,7 +418,10 @@ async fn sync(
                 api.branvil.get().cloned(),
                 Arc::new(|_| {}),
             )?
-            .create_ticket_service()?,
+            .create_ticket_service(crate::member::native::service_workspace(
+                &project,
+                "ticket_service",
+            ))?,
         );
         break;
     }

@@ -21,6 +21,21 @@ impl gb_config::secrets::Keychain for Vault {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if arguments.first().is_some_and(|a| a == "branvil") {
+        let result = tokio::task::spawn_blocking(move || {
+            branvil::main(
+                branvil::Invocation::under(&["branvil"]),
+                Arc::new(branvil::vault::Memory::default()),
+                arguments.into_iter().map(std::ffi::OsString::from),
+            )
+        })
+        .await?;
+        std::process::exit(if result == std::process::ExitCode::SUCCESS {
+            0
+        } else {
+            1
+        });
+    }
     if !arguments.is_empty() {
         anyhow::ensure!(
             arguments[0] == "member",
@@ -51,7 +66,14 @@ async fn main() -> anyhow::Result<()> {
         );
         let base = server.base_url();
         let session = server.browser_session();
-        Some(async move { branvil::prepare_embedded(invocation, vault, &base, session).await })
+        Some(async move {
+            let embedded = branvil::prepare_embedded(invocation, vault, &base, session).await?;
+            if std::env::var_os("GUILDBOTICS_BLACKBOX_CONTROL").is_some() {
+                let data = embedded.data_api();
+                tokio::spawn(async move { controls(data).await.expect("test controls") });
+            }
+            Ok(embedded)
+        })
     } else {
         None
     };
@@ -72,4 +94,50 @@ async fn main() -> anyhow::Result<()> {
             .await
     };
     result
+}
+
+// This protocol belongs only to this example process, never the product router.
+async fn controls(data: branvil::api::DataApi) -> anyhow::Result<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let root = std::path::PathBuf::from(std::env::var_os("BRANVIL_DATA_DIR").unwrap());
+    let owner = data
+        .authenticate(
+            std::fs::read_to_string(root.join("secrets/owner.token"))?
+                .trim()
+                .into(),
+        )
+        .await?;
+    let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+    while let Some(line) = lines.next_line().await? {
+        let request: serde_json::Value = serde_json::from_str(&line)?;
+        let field = |name: &str| request[name].as_str().unwrap();
+        match field("action") {
+            "check" => {
+                branvil::test_support::check(
+                    &data,
+                    &root,
+                    field("repo"),
+                    field("branch"),
+                    field("sha"),
+                    request["conclusion"].as_str(),
+                )
+                .await
+            }
+            "merge" => {
+                branvil::test_support::merge(
+                    &owner,
+                    field("repo"),
+                    request["number"].as_u64().unwrap(),
+                    field("head"),
+                    field("base"),
+                )
+                .await
+            }
+            _ => anyhow::bail!("unknown test control"),
+        }
+        tokio::io::stdout()
+            .write_all(b"BLACKBOX_CONTROL_OK\n")
+            .await?;
+    }
+    Ok(())
 }

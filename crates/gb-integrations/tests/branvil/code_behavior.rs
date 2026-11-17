@@ -1,6 +1,6 @@
-//! Frozen code-host behavior through the public Branvil provider.
+//! Code-host behavior through the public Branvil provider.
 use super::*;
-const REPOSITORY: &str = "acme/code-parity";
+const REPOSITORY: &str = "acme/code-behavior";
 struct Fixture<'a> {
     owner: &'a ::branvil::api::MemberApi,
     code: &'a dyn CodeHostingService,
@@ -828,7 +828,7 @@ pub(super) async fn contract(
         .repos_create(input(json!({"path":REPOSITORY})))
         .await
         .unwrap();
-    let git = Git::new(&root.join("code-parity"));
+    let git = Git::new(&root.join("code-behavior"));
     let base = git.commit("", "a.py", "keep\nold\n");
     let remote = code.clone_url(REPOSITORY).await.unwrap();
     git.push(&remote, &base, "main", "owner", owner_token);

@@ -201,7 +201,6 @@ target/debug/guildbotics generate-cli-reference --check
 export GUILDBOTICS_BLACKBOX_CLI="$PWD/target/debug/guildbotics"
 export GUILDBOTICS_BLACKBOX_MEMBER_CLI="$PWD/target/debug/examples/browser-test-server"
 export GUILDBOTICS_BLACKBOX_SERVER="$PWD/target/debug/examples/browser-test-server"
-export GUILDBOTICS_BLACKBOX_PROVIDER=local
 uv run --no-sync python -m pytest tests/blackbox/test_member.py tests/blackbox/test_code_host.py tests/blackbox/test_config_service.py tests/blackbox/test_harness.py tests/blackbox/test_golden.py tests/integration/test_worktree_transfer.py
 ''']
 timeout_secs = 1800
@@ -210,11 +209,11 @@ cache = { paths = [".ci/cargo-home/registry", "target", ".ci/uv"], key_files = [
 # Exercise the Rust provider and Branvil in the same process.
 [[jobs]]
 name = "branvil-integration"
-paths = ["crates/branvil/**", "crates/gb-integrations/**", "crates/gb-member/**", "crates/gb-workspace/**", "crates/gb-observability/**", "crates/gb-ports/**", "crates/gb-config/**", "crates/gb-base/**", "guildbotics/**", "tests/guildbotics/guest/alert_command_fixture.py", "pyproject.toml", "uv.lock", "scripts/branvil-integration.sh", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**"]
+paths = ["crates/branvil/**", "crates/gb-integrations/**", "crates/gb-member/**", "crates/gb-workspace/**", "crates/gb-observability/**", "crates/gb-ports/**", "crates/gb-config/**", "crates/gb-base/**", "guildbotics/**", "scripts/branvil-integration.sh", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**"]
 image = "guildbotics/agent-environment:dev"
-commands = ["find crates -exec touch -c {} +", "UV_CACHE_DIR=/work/.ci/uv CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 bash scripts/branvil-integration.sh"]
+commands = ["find crates -exec touch -c {} +", "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 bash scripts/branvil-integration.sh"]
 timeout_secs = 1800
-cache = { paths = [".ci/cargo-home/registry", "target", ".ci/uv"], key_files = ["rust-toolchain.toml", "uv.lock"] }
+cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
 
 # Duplicated Rust code, by the same jscpd as desktop's `npm run duplicates`.
 [[jobs]]
