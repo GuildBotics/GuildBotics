@@ -417,12 +417,19 @@ pub(super) async fn retry_main_verification(
     ));
     let repair = tokio::time::timeout(std::time::Duration::from_secs(15), async {
         loop {
-            if let Some(ticket) = tickets
-                .repair_tickets()
+            let page = owner
+                .tickets_cards(
+                    "acme",
+                    input(json!({"repair":true,"state":"open","comments":"none"})),
+                    owner.page("repairs".into(), Some(100), None).unwrap(),
+                )
                 .await
-                .unwrap()
+                .unwrap();
+            if let Some(ticket) = page
+                .items
                 .into_iter()
-                .find(|ticket| ticket.repository.as_deref() == Some(&repo))
+                .map(|c| c.ticket)
+                .find(|t| t.repository == repo)
             {
                 break ticket;
             }
@@ -432,15 +439,7 @@ pub(super) async fn retry_main_verification(
     .await
     .expect("failed verification did not create its repair ticket");
     assert!(repair.repair);
-    tickets.assign_to_me(&repair.url).await.unwrap();
-    tickets
-        .comment_takeover(
-            &repair.url,
-            "The previous assignee cannot work here; taking over.",
-        )
-        .await
-        .unwrap();
-
+    assert_eq!(repair.assignee.as_ref().unwrap().name, "aiko");
     let tasks = tickets.candidates().await.unwrap();
     let task = tasks
         .iter()
@@ -448,7 +447,7 @@ pub(super) async fn retry_main_verification(
         .unwrap();
     assert!(
         tickets.refresh(task).await.unwrap().is_some(),
-        "a neutral takeover fact must not suppress work on a fresh patrol"
+        "a repair is assigned to an active agent at creation"
     );
 
     assert!(

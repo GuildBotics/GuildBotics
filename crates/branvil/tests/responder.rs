@@ -12,13 +12,13 @@ async fn responder_patch_is_owner_only_validated_canonical_and_revisioned() {
     assert_eq!(st, 201);
     assert_eq!(
         fresh["responder"],
-        json!({"member": "ken", "chosen": false, "automatic": "ken"})
+        json!({"member": "aiko", "chosen": false, "automatic": "aiko"})
     );
     let path = w.repo_path();
     let original = w.server.ok(&path, &w.owner).await;
     assert_eq!(
         original["responder"],
-        json!({"member": "ken", "chosen": false, "automatic": "ken"})
+        json!({"member": "aiko", "chosen": false, "automatic": "aiko"})
     );
     let revision = original["revision"].as_u64().unwrap();
     w.server.member(&w.owner, "runner", "runner").await;
@@ -57,7 +57,7 @@ async fn responder_patch_is_owner_only_validated_canonical_and_revisioned() {
     assert_eq!(st, 200, "{chosen}");
     assert_eq!(
         chosen["responder"],
-        json!({"member": "aiko", "chosen": true, "automatic": "ken"})
+        json!({"member": "aiko", "chosen": true, "automatic": "aiko"})
     );
     assert_eq!(
         w.server.ok(&path, &w.owner).await["responder"],
@@ -100,6 +100,6 @@ async fn responder_patch_is_owner_only_validated_canonical_and_revisioned() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|r| r["responder"]["automatic"] == "ken")
+            .all(|r| r["responder"]["automatic"] == "aiko")
     );
 }

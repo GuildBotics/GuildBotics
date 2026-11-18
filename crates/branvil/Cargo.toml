@@ -14,6 +14,8 @@ autotests = false
 test-support = ["dep:tempfile"]
 
 [dependencies]
+gb-ports = { path = "../gb-ports" }
+unicode-casefold = "0.2"
 tempfile = { version = "3.27.0", optional = true }
 anyhow = "1"
 axum = { version = "0.8.9", features = ["macros"] }

@@ -1,5 +1,6 @@
 //! Frozen URL and member-credential failures without the removed HTTP client.
 use super::*;
+use branvil::api::AppError;
 use branvil::api::{Running, initialize};
 
 #[test]

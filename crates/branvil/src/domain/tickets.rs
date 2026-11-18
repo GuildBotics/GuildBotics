@@ -1792,7 +1792,7 @@ pub async fn mentioned(
         .await
 }
 
-fn card_view(
+pub(crate) fn card_view(
     r: &impl Rd,
     base_url: &str,
     repo: &Repo,

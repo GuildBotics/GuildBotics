@@ -234,7 +234,7 @@ pub async fn patrol(
         assignee: Some(person_id.into()),
         pull_request_url: Some(pr.url.clone()),
         trigger_reason: work.map(str::to_owned),
-        created_at: crate::parse_timestamp(&pr.created_at),
+        created_at: gb_ports::parse_timestamp(&pr.created_at),
         resumes,
         ..Default::default()
     })

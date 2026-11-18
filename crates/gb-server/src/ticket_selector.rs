@@ -138,7 +138,7 @@ pub struct Selector<'a> {
 }
 
 impl Selector<'_> {
-    /// Adopt unavailable repair assignments before refreshing work for the
+    /// Refresh selected work for the
     /// caller's execution boundary. An idle patrol opens neither a trace nor a run.
     pub async fn next(&self) -> Result<Option<(Task, WorkflowInvocation)>, ServiceError> {
         for candidate in self.candidates().await? {
@@ -154,7 +154,6 @@ impl Selector<'_> {
         if let (Some(quota), Some(code)) = (self.quota, self.code) {
             quota.observe(code).await;
         }
-        self.adopt_repairs().await?;
         let mut candidates = Vec::new();
         if let Some(code) = self.code {
             for task in code.pull_request_candidates().await? {
@@ -168,30 +167,6 @@ impl Selector<'_> {
         candidates.extend(self.ticket.candidates().await?);
         candidates.sort_by_key(|task| !task.repair);
         Ok(candidates)
-    }
-
-    async fn adopt_repairs(&self) -> Result<(), ServiceError> {
-        if self.code.is_none() {
-            return Ok(());
-        }
-        let active = repair_members(self.roster, "branvil");
-        for ticket in self.ticket.repair_tickets().await? {
-            if !ticket.repair || ticket.state != "open" {
-                continue;
-            }
-            let assignees: Vec<_> = ticket
-                .assignees
-                .iter()
-                .map(|name| name.0.as_str())
-                .collect();
-            let leader = repair_owner(&active, &assignees);
-            if leader == Some(self.person) {
-                self.ticket.assign_to_me(&ticket.url).await?;
-                let body = crate::i18n::t(self.language, "integrations.repair.adopted", &[]);
-                self.ticket.comment_takeover(&ticket.url, &body).await?;
-            }
-        }
-        Ok(())
     }
 
     pub async fn refresh(&self, task: &Task) -> Result<Option<WorkflowInvocation>, ServiceError> {
@@ -562,34 +537,6 @@ impl Selector<'_> {
             "review_limit.finished"
         });
     }
-}
-
-fn repair_members<'a>(
-    roster: &'a [gb_member::context::PublicMember],
-    provider: &str,
-) -> Vec<(&'a str, &'a str)> {
-    roster
-        .iter()
-        .filter(|member| member.is_active && member.person_type != "human")
-        .filter_map(|member| {
-            member
-                .accounts
-                .get(provider)
-                .filter(|name| !name.is_empty())
-                .map(|name| (member.person_id.as_str(), name.as_str()))
-        })
-        .collect()
-}
-
-fn repair_owner<'a>(active: &[(&'a str, &str)], assignees: &[&str]) -> Option<&'a str> {
-    if assignees.iter().any(|name| {
-        active
-            .iter()
-            .any(|(_, account)| account.eq_ignore_ascii_case(name))
-    }) {
-        return None;
-    }
-    active.iter().min_by_key(|(id, _)| *id).map(|(id, _)| *id)
 }
 
 pub fn task_attributes(task: &Task) -> serde_json::Map<String, Value> {

@@ -5,7 +5,6 @@ mod chat_contracts;
 mod code_behavior;
 #[path = "../support/contracts.rs"]
 mod contracts;
-mod driver;
 mod extra;
 mod readiness;
 use gb_base::shared_writes::SharedWrites;
@@ -263,7 +262,6 @@ async fn merge_checked(
     .expect("fixture merge did not become ready");
 }
 async fn ticket_relations_contract(t: &dyn TicketService) {
-    contracts::ticket_contract(t, REPO, "bug", "aiko").await;
     let parent = create(t, "Parent").await;
     let blocker = create(t, "Blocker").await;
     let child = create(t, "Child").await;
@@ -469,50 +467,7 @@ async fn chat() {
     chat_contracts::chat_contract(f.chat.as_ref(), "contract").await;
     f.stop().await;
 }
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn ticket_placement() {
-    let f = Context::new().await;
-    let Context { owner, t, .. } = &f;
-    owner
-        .repos_create(input(json!({"path":"acme/order-other"})))
-        .await
-        .unwrap();
-    contracts::ticket_placement_tracker_contract(t.as_ref(), REPO, "acme/order-other").await;
 
-    f.stop().await;
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn board_order() {
-    let f = Context::new().await;
-    let Context {
-        temp,
-        owner,
-        base,
-        runner,
-        t,
-        c,
-        ..
-    } = &f;
-    let git = Git::new(temp.path());
-    let driver = driver::Driver {
-        owner,
-        code: c.as_ref(),
-        git: &git,
-        base,
-        runner,
-        sequence: std::sync::atomic::AtomicUsize::new(0),
-    };
-    contracts::ticket_board_order_contract(
-        t.as_ref(),
-        &driver,
-        REPO,
-        &ActorName("aiko".into()),
-        &ActorName("owner".into()),
-    )
-    .await;
-
-    f.stop().await;
-}
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn code_patrol() {
     let f = Context::new().await;
@@ -767,12 +722,8 @@ async fn code_contract_and_boundaries() {
         .remove(0);
     contracts::code_utf8_files_contract(c.as_ref(), &contract_pr, "日本.md", "Unicode content")
         .await;
-    let comment = c
-        .comment(&contract_pr, "Wrong subject fixture", None)
-        .await
-        .unwrap();
+
     contracts::code_kind_boundary_contract(c.as_ref(), t.as_ref(), REPO, &contract_pr).await;
-    contracts::ticket_wrong_subject_contract(t.as_ref(), &contract_pr, &comment.id).await;
 
     f.stop().await;
 }
@@ -904,45 +855,7 @@ async fn code_links() {
 
     f.stop().await;
 }
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn ticket_attachments() {
-    let f = Context::new().await;
-    let Context { owner, t, .. } = &f;
-    let screen = owner
-        .attachments_upload(
-            REPO,
-            Some("screen.png".into()),
-            b"\x89PNG\r\n\x1a\nscreen".to_vec(),
-        )
-        .await
-        .unwrap();
-    let log = owner
-        .attachments_upload(REPO, Some("log.gif".into()), b"GIF89alog".to_vec())
-        .await
-        .unwrap();
-    let unused = owner
-        .attachments_upload(
-            REPO,
-            Some("unused.png".into()),
-            b"\x89PNG\r\n\x1a\nunused".to_vec(),
-        )
-        .await
-        .unwrap();
-    contracts::ticket_attachment_contract(
-        t.as_ref(),
-        REPO,
-        contracts::TicketAttachmentFixture {
-            screen_url: screen.url,
-            screen_id: screen.id,
-            log_url: log.url,
-            log_id: log.id,
-            unused_id: unused.id,
-        },
-    )
-    .await;
 
-    f.stop().await;
-}
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn code_other_actor() {
     let f = Context::new().await;
@@ -1124,41 +1037,11 @@ async fn pending_closed_and_advanced_heads() {
     .await;
     f.stop().await;
 }
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn ticket_patrol() {
-    let f = Context::new().await;
-    let Context {
-        owner,
-        base,
-        runner,
-        t,
-        c,
-        ..
-    } = &f;
-    let (git, _, _) = f.git().await;
-    let driver = driver::Driver {
-        owner,
-        code: c.as_ref(),
-        git: &git,
-        base,
-        runner,
-        sequence: std::sync::atomic::AtomicUsize::new(0),
-    };
-    contracts::ticket_patrol_contract(
-        t.as_ref(),
-        &driver,
-        REPO,
-        "bug",
-        ActorName("aiko".into()),
-        ActorName("owner".into()),
-    )
-    .await;
-    f.stop().await;
-}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ticket_and_code_scope() {
     let f = Context::new().await;
-    let Context { owner, t, c, .. } = &f;
+    let Context { owner, c, .. } = &f;
     let (_, _, next) = f.open().await;
     owner
         .repos_create_workspace(input(json!({"name":"elsewhere"})))
@@ -1172,7 +1055,7 @@ async fn ticket_and_code_scope() {
         .tickets_create_ticket("elsewhere/repo", input(json!({"title":"Their ticket"})))
         .await
         .unwrap();
-    let their_comment = owner
+    let _their_comment = owner
         .tickets_add_comment(
             "elsewhere/repo",
             &their.key,
@@ -1180,14 +1063,6 @@ async fn ticket_and_code_scope() {
         )
         .await
         .unwrap();
-    contracts::ticket_scope_contract(
-        t.as_ref(),
-        REPO,
-        "elsewhere/repo",
-        &their.url,
-        &their_comment.id,
-    )
-    .await;
     contracts::code_cross_repo_link_contract(c.as_ref(), &next.target.url, &their.url).await;
     f.stop().await;
 }

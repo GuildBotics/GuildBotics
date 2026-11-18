@@ -2,9 +2,8 @@
 mod code;
 pub(super) mod owner_git;
 mod patrol;
-mod tickets;
 use crate::WriteScope;
-use branvil::api::{AppError, DataApi, MemberApi};
+use branvil::api::{DataApi, MemberApi};
 use gb_ports::*;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -21,7 +20,6 @@ pub(super) struct BranvilService {
     git_token: tokio::sync::Mutex<Option<branvil::api::members::IssuedToken>>,
     /// Set once the roster's members all exist, so any of them can be named.
     roster_ready: tokio::sync::OnceCell<()>,
-    workspace: String,
     scope: WriteScope,
     members: std::collections::BTreeMap<String, String>,
 }
@@ -39,7 +37,6 @@ impl BranvilService {
             git_token: Default::default(),
             roster_ready: Default::default(),
             scope: WriteScope::new(&workspace),
-            workspace,
             members: Default::default(),
         }
     }
@@ -114,13 +111,6 @@ impl BranvilService {
             );
         })
     }
-    fn related(&self, urls: impl IntoIterator<Item = String>) -> Result<(), ServiceError> {
-        for url in urls {
-            let (repo, _) = self.item(&url, "tickets")?;
-            self.writable(&repo)?;
-        }
-        Ok(())
-    }
     fn target(&self, v: &Value, kind: WorkKind) -> WorkTarget {
         let key = if kind == WorkKind::Ticket {
             text(v, "key")
@@ -137,18 +127,6 @@ impl BranvilService {
                 key.into()
             },
         }
-    }
-    fn relative(&self, v: &Value) -> Value {
-        json!({"kind":"ticket","url":v["url"],"title":v["title"],"label":format!("#{}",text(v,"key")),"state":v["state"]})
-    }
-    fn on_board(&self, v: &Value) -> bool {
-        text(v, "repository")
-            .rsplit_once('/')
-            .is_some_and(|(workspace, _)| workspace.eq_ignore_ascii_case(&self.workspace))
-    }
-    fn ticket_value(&self, v: Value) -> Value {
-        let target = self.target(&v, WorkKind::Ticket);
-        json!({"repair":v["repair"],"kind":"ticket","url":target.url,"title":target.title,"label":target.label,"key":v["key"],"tracker":v["repository"],"repository":v["repository"],"body":v["body"],"state":v["state"],"author":v["author"],"assignees":v["assignee"]["name"].as_str().map(|s|vec![s]).unwrap_or_default(),"labels":v["labels"],"lane":if self.on_board(&v){v["lane"].clone()}else{Value::Null},"parent":v["parent"].as_object().map(|_|self.relative(&v["parent"])),"children":v["children"].as_array().into_iter().flatten().map(|x|self.relative(x)).collect::<Vec<_>>(),"blocked_by":v["blocked_by"].as_array().into_iter().flatten().map(|x|self.relative(x)).collect::<Vec<_>>(),"blocks":v["blocks"].as_array().into_iter().flatten().map(|x|self.relative(x)).collect::<Vec<_>>(),"interactive":v["interactive"],"interactive_ancestor":v["interactive_ancestor"]["url"].as_str()})
     }
     fn comment_body(&self, body: &str, status: Option<&WorkflowStatus>, author: &str) -> String {
         let body = body.trim_end();
@@ -187,13 +165,16 @@ impl BranvilService {
         .map_err(|e| error(e, "page"))
     }
     async fn ticket(&self, url: &str) -> Result<Value, ServiceError> {
-        let (r, k) = self.item(url, "tickets")?;
         value(
-            self.member()
-                .await?
-                .tickets_get_ticket(&r, &k)
-                .await
-                .map_err(|e| error(e, "tickets_get_ticket"))?,
+            ::branvil::agent::TicketAgent::new(
+                self.api.clone(),
+                String::new(),
+                self.person_id.clone(),
+                self.display_name.clone(),
+            )
+            .with_members(&self.members)
+            .ticket_view(url)
+            .await?,
         )
     }
     async fn pull(&self, url: &str) -> Result<Value, ServiceError> {
@@ -263,60 +244,13 @@ fn diagnostic<const N: usize>(key: &'static str, args: [(&str, String); N]) -> S
         "integrations.branvil.api.stopped" => ServiceErrorClass::Unavailable,
         _ => ServiceErrorClass::Failure,
     };
-    classified_diagnostic(class, key, args)
-}
-fn classified_diagnostic<const N: usize>(
-    class: ServiceErrorClass,
-    key: &'static str,
-    args: [(&str, String); N],
-) -> ServiceError {
     ServiceError::Diagnostic {
         class,
         key,
         args: args.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
     }
 }
-/// Translate Branvil failures into the diagnostics shared by service and setup callers.
-pub fn error(e: AppError, operation: &str) -> ServiceError {
-    // AppError's contract guarantees secret-free messages; never substitute a raw transport body.
-    if e.code == "unavailable" && e.message == "integrations.branvil.api.stopped" {
-        return diagnostic("integrations.branvil.api.stopped", []);
-    }
-    let message = e.message.chars().take(500).collect();
-    match e.status.as_u16() {
-        401 => return diagnostic("integrations.branvil.api.authentication", []),
-        404 => return diagnostic("integrations.branvil.api.not_found", [("message", message)]),
-        422 => {
-            return diagnostic(
-                "integrations.branvil.api.unsupported",
-                [("message", message)],
-            );
-        }
-        _ => {}
-    }
-    match e.code {
-        "head_moved" => diagnostic("integrations.branvil.api.head_moved", []),
-        "label_undefined" => diagnostic(
-            "integrations.branvil.api.label_undefined",
-            [("message", message)],
-        ),
-        "invalid_cursor" => ServiceError::InvalidContinuation,
-        _ => classified_diagnostic(
-            if e.code == "unavailable" {
-                ServiceErrorClass::Unavailable
-            } else {
-                ServiceErrorClass::Failure
-            },
-            "integrations.branvil.api.refused",
-            [
-                ("operation", operation.to_owned()),
-                ("status", e.status.as_u16().to_string()),
-                ("code", e.code.to_owned()),
-                ("message", message),
-            ],
-        ),
-    }
-}
+use ::branvil::agent::error;
 fn reaction(r: SemanticReaction) -> &'static str {
     match r {
         SemanticReaction::Ack => "ack",
@@ -327,8 +261,6 @@ fn reaction(r: SemanticReaction) -> &'static str {
 }
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod ticket_parity;
 
 #[cfg(test)]
 mod code_parity;

@@ -232,6 +232,27 @@ impl Server {
     }
 
     pub fn attach_branvil(&mut self, branvil: branvil::api::DataApi) -> anyhow::Result<()> {
+        let roster_api = Arc::downgrade(&self.api);
+        branvil.attach_active_agents(Arc::new(move || {
+            let api = roster_api
+                .upgrade()
+                .ok_or_else(|| "Host stopped".to_owned())?;
+            let selected = api.selected();
+            let Some(workspace) = &selected.workspace else {
+                return Ok(vec![]);
+            };
+            let team = gb_config::team::Team::load(
+                &workspace.join(".guildbotics/config"),
+                &api.identity_root,
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(team
+                .members
+                .into_iter()
+                .filter(|m| m.is_active && m.person_type == "agent")
+                .map(|m| m.person_id)
+                .collect())
+        }));
         let weak = Arc::downgrade(&self.api);
         branvil.attach_hub_status(Arc::new(move || {
             let api = weak.upgrade();

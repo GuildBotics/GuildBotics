@@ -57,7 +57,7 @@ impl DataApi {
     pub(crate) fn new(app: Shared) -> Self {
         Self { app }
     }
-    fn guard(&self) -> AppResult<tokio::sync::OwnedRwLockReadGuard<bool>> {
+    pub(crate) fn guard(&self) -> AppResult<tokio::sync::OwnedRwLockReadGuard<bool>> {
         let guard = self
             .app
             .api_requests
@@ -267,7 +267,7 @@ impl MemberApi {
         }
         Ok(bytes)
     }
-    async fn caller(&self) -> AppResult<Caller> {
+    pub(crate) async fn caller(&self) -> AppResult<Caller> {
         let name = self.name.clone();
         let member = self
             .api

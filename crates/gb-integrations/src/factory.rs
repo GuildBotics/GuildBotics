@@ -1,6 +1,7 @@
 //! The only provider selection boundary; provider modules stay private.
 mod branvil;
-pub use branvil::{GIT_TOKEN_LABEL, error as branvil_error};
+pub use ::branvil::agent::error as branvil_error;
+pub use branvil::GIT_TOKEN_LABEL;
 mod local;
 mod slack;
 use gb_config::secrets::SecretStore;
@@ -159,7 +160,15 @@ impl<'a> ServiceIntegrationFactory<'a> {
         if workspace.is_empty() {
             return Err(ServiceError::Unsupported);
         }
-        Ok(Arc::new(self.branvil(workspace)?))
+        Ok(Arc::new(
+            ::branvil::agent::TicketAgent::new(
+                self.branvil.clone().ok_or(ServiceError::Unavailable)?,
+                workspace.into(),
+                self.config.person_id.clone(),
+                self.config.display_name.clone(),
+            )
+            .with_members(&self.config.branvil_members),
+        ))
     }
     pub fn create_code_hosting_service(
         &self,

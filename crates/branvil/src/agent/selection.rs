@@ -101,3 +101,7 @@ pub fn select_ticket(
             && finish_merged,
     }
 }
+
+#[cfg(test)]
+#[path = "selection_tests.rs"]
+mod tests;

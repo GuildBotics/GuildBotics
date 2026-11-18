@@ -315,6 +315,10 @@ fn head_result(r: &impl Rd, a: Option<&queue::Attempt>) -> AppResult<(String, bo
     ))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Repair evidence and the host roster snapshot are consumed in one transaction."
+)]
 fn create(
     w: &Wtx,
     repo: &Repo,
@@ -323,12 +327,20 @@ fn create(
     pulls: &[Pull],
     verified: &str,
     base_url: &str,
+    active: Option<&[String]>,
 ) -> AppResult<Ticket> {
     let first = pulls.first();
     let author = first
-        .map(|p| crate::domain::member_by_name(w, &p.author))
-        .transpose()?;
-    let (name, reason) = if let Some(m) = author.filter(|m| m.kind == MemberKind::Agent) {
+        .map(|p| w.get::<model::Member>(store::MEMBERS, &model::Member::key(&p.author)))
+        .transpose()?
+        .flatten();
+    let (name, reason) = if let Some(m) = author.filter(|m| {
+        m.kind == MemberKind::Agent
+            && active.is_none_or(|a| {
+                a.iter()
+                    .any(|n| crate::util::fold(n) == crate::util::fold(&m.name))
+            })
+    }) {
         (
             m.name,
             format!(
@@ -337,7 +349,7 @@ fn create(
             ),
         )
     } else {
-        let responder = super::responder(w, repo)?;
+        let responder = super::responder_for(w, repo, active)?;
         let why = first.map_or_else(
             || {
                 "no commit after the last verified commit is from a pull request of this Branvil"
@@ -345,7 +357,7 @@ fn create(
             },
             |p| {
                 format!(
-                    "the first pull request after the last verified commit (!{}) is the owner's",
+                    "the first pull request after the last verified commit (!{}) is not by an active agent",
                     p.number
                 )
             },
@@ -361,6 +373,10 @@ fn create(
                         && p.merged_at.is_some()
                         && members.iter().any(|m| {
                             m.kind == MemberKind::Agent
+                                && active.is_none_or(|a| {
+                                    a.iter()
+                                        .any(|n| crate::util::fold(n) == crate::util::fold(&m.name))
+                                })
                                 && crate::util::fold(&m.name) == crate::util::fold(&p.author)
                         })
                 });
@@ -370,12 +386,17 @@ fn create(
                 if has_merged {
                     "authored its most recently merged pull request by a member"
                 } else {
-                    "is its first member"
+                    "is its first active agent by person_id"
                 }
             ));
         }
         (responder.member, reason)
     };
+    if name.is_empty() {
+        return Err(crate::error::AppError::unavailable(
+            "No active agent is available for repair work.",
+        ));
+    }
     body.push_str(&format!("\n## Assignee\n\n{}: {reason}\n", text(&name)));
     body.push_str("\nHints from running the failed jobs on the commits in between are added as comments. They do not change the assignee.\n");
     let now = crate::util::now();
@@ -468,6 +489,29 @@ pub async fn sweep(app: &App) -> AppResult<()> {
 }
 
 async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
+    let active = super::active_agents(app)?;
+    if let Some(names) = &active {
+        let names = names.clone();
+        app.store
+            .write(move |w| {
+                for name in names {
+                    if w.get::<model::Member>(store::MEMBERS, &model::Member::key(&name))?
+                        .is_none()
+                    {
+                        crate::domain::members::insert_member(
+                            w,
+                            &crate::domain::members::NewMember {
+                                name: name.clone(),
+                                display_name: Some(name),
+                                kind: MemberKind::Agent,
+                            },
+                        )?;
+                    }
+                }
+                Ok(())
+            })
+            .await?;
+    }
     let id = p.repo.clone();
     let repo = app
         .store
@@ -592,7 +636,19 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
                 }
             } else {
                 let (body, pulls, verified) = evidence.unwrap();
-                Some(create(w, &repo, &p, body, &pulls, &verified, &base_url)?.number)
+                Some(
+                    create(
+                        w,
+                        &repo,
+                        &p,
+                        body,
+                        &pulls,
+                        &verified,
+                        &base_url,
+                        active.as_deref(),
+                    )?
+                    .number,
+                )
             };
             w.del(store::REPAIR_PENDING, &key)?;
             Ok(changed)
@@ -632,6 +688,33 @@ mod tests {
         .unwrap()
     }
     #[tokio::test]
+    async fn creation_chooses_only_active_agents_and_never_takes_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store::Store::open(&dir.path().join("test.redb"), 1 << 20, 1).unwrap();
+        store.write(|w| {
+            let mut repo=repo();
+            w.put(store::REPOS,&Repo::key(&repo.id),&repo)?;
+            for (name,kind) in [("owner",MemberKind::Owner),("absent",MemberKind::Agent),("bob",MemberKind::Agent),("alice",MemberKind::Agent),("runner",MemberKind::Runner)] {
+                crate::domain::members::insert_member(w,&crate::domain::members::NewMember{name:name.into(),display_name:None,kind})?;
+            }
+            let active=vec!["bob".into(),"alice".into()];
+            let pending=Pending{repo:repo.id.clone(),sha:"failed0".into(),failures:vec![]};
+            for responder in ["owner","absent","runner","unknown","bob"] {
+                repo.responder=Some(responder.into());
+                for author in ["owner","absent","runner","unknown","bob"] {
+                    let pull:Pull=serde_json::from_value(json!({"repo":"repo","number":1,"title":"test","body":"","state":"closed","merged":true,"draft":false,"author":author,"head":"feature","base":"main","reviewers":[],"tickets":[],"labels":[],"reviewed_by":[],"ready_at":null,"created_at":"0","updated_at":"0","closed_at":null,"merged_at":"1","merge_sha":null,"merged_head":null,"merged_base":null,"upstream":null,"revision":1})).unwrap();
+                    let t=create(w,&repo,&pending,String::new(),&[pull],"verified","http://example.test",Some(&active))?;
+                    assert_eq!(t.assignee.as_ref().unwrap().name,if author=="bob" || responder=="bob" {"bob"} else {"alice"});
+                    assert!(comments(w,&t).is_empty(),"no takeover comment is needed");
+                    passed(w,&repo.id,"passed0")?;
+                }
+            }
+            assert!(create(w,&repo,&pending,String::new(),&[],"verified","http://example.test",Some(&[])).is_err());
+            Ok(())
+        }).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn hints_before_and_after_creation_are_unique_and_leave_ticket_unchanged() {
         for state in [
             "found",
@@ -660,7 +743,7 @@ mod tests {
                     };
                     if before { save(w)?; }
                     let pending = Pending { repo: repo.id.clone(), sha: n.failed_sha.clone(), failures: vec![verify::FailedJob { name: n.job.clone(), attempt_id: None, details: None }] };
-                    let t = create(w, &repo, &pending, "Evidence".into(), &[], "aaaaaaa", "http://example.test")?;
+                    let t = create(w, &repo, &pending, "Evidence".into(), &[], "aaaaaaa", "http://example.test", None)?;
                     assert!(t.body.contains("Hints from running the failed jobs"));
                     assert_eq!(comments(w, &t).len(), usize::from(before && super::super::Hint::from_conclusion(&n).is_some()));
                     if !before { save(w)?; }
@@ -819,6 +902,7 @@ mod tests {
                     &pulls,
                     "1234567",
                     "http://127.0.0.1:7878",
+                    None,
                 )
             })
             .unwrap();
@@ -902,6 +986,7 @@ mod tests {
                     &[],
                     "no verified commit",
                     "http://127.0.0.1:7878",
+                    None,
                 )
             })
             .unwrap();

@@ -6,6 +6,7 @@
 //! service in its own process (`serve_with_data_api`), each with the vault
 //! of that executable (`vault::Vault`).
 
+pub mod agent;
 pub mod api;
 mod app;
 mod auth;

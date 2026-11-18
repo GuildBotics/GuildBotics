@@ -1,13 +1,13 @@
 //! Ticket-specific frozen host assertions at the provider and selection boundaries.
 use super::*;
-use branvil::api::MemberApi;
-use branvil::test_support::Fixture as Embedded;
+use crate::api::MemberApi;
+use crate::test_support::Fixture as Embedded;
 
 struct Fixture {
     running: Embedded,
     owner: MemberApi,
-    service: BranvilService,
-    sequence: std::cell::Cell<usize>,
+    service: TicketAgent,
+    sequence: std::sync::atomic::AtomicUsize,
 }
 impl Fixture {
     async fn new() -> Self {
@@ -25,7 +25,7 @@ impl Fixture {
                 .await
                 .unwrap();
         }
-        let service = BranvilService::new(
+        let service = TicketAgent::new(
             running.data(),
             "test".into(),
             "agent1".into(),
@@ -35,7 +35,7 @@ impl Fixture {
             running,
             owner,
             service,
-            sequence: std::cell::Cell::new(0),
+            sequence: std::sync::atomic::AtomicUsize::new(0),
         }
     }
     fn request(&self) -> CreateTicket {
@@ -87,9 +87,9 @@ fn card() -> Value {
 fn comment(author: &str, body: &str) -> Value {
     json!({"author":author,"body":body,"created_at":"2026-01-03T00:00:00Z","mentions":[]})
 }
-async fn reason(service: &BranvilService, card: &Value) -> Option<String> {
+async fn reason(service: &TicketAgent, card: &Value) -> Option<String> {
     service
-        .select_card(card, false)
+        .select_card(&typed_card(card), false)
         .await
         .unwrap()
         .and_then(|t| t.trigger_reason)
@@ -167,7 +167,12 @@ async fn ready_and_working_triggers_observe_member_words_and_assignment() {
         Some("issue_comment")
     );
     c["lane"] = json!("ready");
-    let task = f.service.select_card(&c, false).await.unwrap().unwrap();
+    let task = f
+        .service
+        .select_card(&typed_card(&c), false)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(task.trigger_reason.as_deref(), Some("ready_lane"));
     assert_eq!(
         (
@@ -309,7 +314,7 @@ async fn assignment_filters_mentions_without_dropping_visible_comments() {
             if !pull.is_null() {
                 c["pull_requests"] = json!([pull]);
             }
-            let task = f.service.select_card(&c, false).await.unwrap();
+            let task = f.service.select_card(&typed_card(&c), false).await.unwrap();
             let expected = if !before {
                 Some("issue_comment")
             } else if pull.is_null() {
@@ -840,8 +845,9 @@ impl Fixture {
         self.running.git("test/repo", args)
     }
     async fn linked(&self, url: Option<&str>, closes: bool, merged: bool) -> String {
-        let sequence = self.sequence.get();
-        self.sequence.set(sequence + 1);
+        let sequence = self
+            .sequence
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let branch = format!("feature-{sequence}");
         let mut base = self.git(&["for-each-ref", "--format=%(objectname)", "refs/heads/main"]);
         if base.is_empty() {
@@ -856,27 +862,9 @@ impl Fixture {
             &format!("feature-{sequence}.txt"),
             &format!("feature {sequence}"),
         );
-        let pull = self
-            .service
-            .create_pull_request(CreatePullRequest {
-                repository: "test/repo".into(),
-                head: branch,
-                base: String::new(),
-                title: "Work".into(),
-                body: String::new(),
-                draft: false,
-                tickets: url
-                    .into_iter()
-                    .map(|url| TicketLink {
-                        url: url.into(),
-                        closes,
-                    })
-                    .collect(),
-            })
-            .await
-            .unwrap();
+        let pull = self.service.member().await.unwrap().pulls_create("test/repo",decode(json!({"head":branch,"base":"main","title":"Work","body":"","tickets":url.into_iter().map(|u|json!({"url":u,"closes":closes})).collect::<Vec<_>>()})).unwrap()).await.unwrap();
         if merged {
-            let n = pull.target.url.rsplit('/').next().unwrap().parse().unwrap();
+            let n = pull.pull.url.rsplit('/').next().unwrap().parse().unwrap();
             self.owner
                 .pulls_review(
                     "test/repo",
@@ -894,7 +882,7 @@ impl Fixture {
                 .await
                 .unwrap();
         }
-        pull.target.url
+        pull.pull.url
     }
 }
 
@@ -1238,5 +1226,394 @@ async fn repository_ticket_numbers_and_assignee_projection_are_independent() {
         assert_eq!(f.read(&url).await["assignees"], expected);
         assert_eq!(f.read(&url).await["author"], "agent1");
     }
+    f.running.stop().await;
+}
+
+fn typed_card(v: &Value) -> tickets::CardView {
+    let strv = |k: &str| text(v, k).to_owned();
+    let refs = |k: &str| {
+        v[k].as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| tickets::TicketRef {
+                url: text(r, "url").into(),
+                repository: text(r, "repository").into(),
+                key: text(r, "key").into(),
+                title: text(r, "title").into(),
+                state: text(r, "state").into(),
+                state_reason: None,
+            })
+            .collect()
+    };
+    tickets::CardView {
+        ticket: tickets::TicketView {
+            repair: v["repair"] == true,
+            url: strv("url"),
+            repository: strv("repository"),
+            key: strv("key"),
+            title: strv("title"),
+            body: strv("body"),
+            mentions: serde_json::from_value(v["mentions"].clone()).unwrap_or_default(),
+            state: strv("state"),
+            state_reason: None,
+            author: strv("author"),
+            assignee: v["assignee"].is_object().then(|| crate::model::Assignee {
+                name: text(&v["assignee"], "name").into(),
+                assigned_at: text(&v["assignee"], "assigned_at").into(),
+            }),
+            labels: vec![],
+            interactive: v["interactive"] == true,
+            interactive_ancestor: v["interactive_ancestor"].is_object().then(|| {
+                tickets::TicketRef {
+                    url: String::new(),
+                    repository: String::new(),
+                    key: String::new(),
+                    title: String::new(),
+                    state: String::new(),
+                    state_reason: None,
+                }
+            }),
+            upstream_issue: None,
+            lane: strv("lane"),
+            rank: strv("rank"),
+            parent: None,
+            children: vec![],
+            blocked_by: refs("blocked_by"),
+            blocks: vec![],
+            created_at: strv("created_at"),
+            updated_at: strv("updated_at"),
+            closed_at: None,
+            revision: 1,
+        },
+        comments: v["comments"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|c| crate::api::CommentView {
+                id: text(c, "id").into(),
+                author: text(c, "author").into(),
+                body: text(c, "body").into(),
+                mentions: serde_json::from_value(c["mentions"].clone()).ok(),
+                meta: Some(c["meta"].clone()),
+                created_at: text(c, "created_at").into(),
+                reactions: vec![],
+                url: text(c, "url").into(),
+            })
+            .collect(),
+        pull_requests: v["pull_requests"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| tickets::LinkedPull {
+                url: text(p, "url").into(),
+                label: text(p, "label").into(),
+                title: text(p, "title").into(),
+                state: text(p, "state").into(),
+                merged: p["merged"] == true,
+                closes: None,
+                updated_at: text(p, "updated_at").into(),
+            })
+            .collect(),
+    }
+}
+
+use crate::api::{Running, initialize};
+#[tokio::test]
+async fn ticket_task_comments_use_roster_names_and_role_fallbacks() {
+    let temp = tempfile::tempdir().unwrap();
+    initialize(temp.path(), "owner1").unwrap();
+    let running = Running::start(
+        temp.path(),
+        std::sync::Arc::new(crate::vault::Memory::default()),
+    )
+    .await
+    .unwrap();
+    let mut service = TicketAgent::new(
+        running.data.clone(),
+        "test".into(),
+        "aiko-service".into(),
+        "Aiko".into(),
+    );
+    for key in ["1", "9999999999"] {
+        assert!(
+            service
+                .item(
+                    &format!("{}/test/repo/-/pulls/{key}", running.data.base_url()),
+                    "pulls"
+                )
+                .is_ok()
+        );
+    }
+    for key in ["0", "01", "+1", "10000000000", "-1", "１"] {
+        assert!(
+            service
+                .item(
+                    &format!("{}/test/repo/-/pulls/{key}", running.data.base_url()),
+                    "pulls"
+                )
+                .is_err(),
+            "{key}"
+        );
+    }
+    // Supply the roster at the same boundary as the integration factory.
+    service.members = [
+        ("aiko-service".into(), "Aiko".into()),
+        ("otota".into(), "Otota".into()),
+        ("strasse".into(), "Street".into()),
+        ("nameless".into(), String::new()),
+    ]
+    .into();
+    let card = json!({"repository":"test/repo","state":"open","lane":"ready","assignee":{"name":"aiko-service"},"interactive_ancestor":null,"comments":[
+        {"author":"AIKO-SERVICE","body":"started"},
+        {"author":"OTOTA","body":"continue"},
+        {"author":"external","body":"hello"},
+        {"author":"Straße","body":"hello"},
+        {"author":"nameless","body":"hello"},
+        {"author":"","body":"anonymous"}
+    ]});
+    let task = service
+        .select_card(&typed_card(&card), false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        task.comments
+            .iter()
+            .map(|c| (c.author.as_str(), c.author_type.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("Aiko", "Assistant"),
+            ("Otota", "User"),
+            ("User", "User"),
+            ("Street", "User"),
+            ("User", "User"),
+            ("", "")
+        ]
+    );
+    service.person_id = "Straße".into();
+    assert_eq!(service.author_type("STRASSE"), "Assistant");
+    service.person_id.clear();
+    assert_eq!(service.author_type(""), "");
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_roster_member_that_never_acted_can_be_assigned() {
+    let temp = tempfile::tempdir().unwrap();
+    initialize(temp.path(), "owner1").unwrap();
+    let running = Running::start(
+        temp.path(),
+        std::sync::Arc::new(crate::vault::Memory::default()),
+    )
+    .await
+    .unwrap();
+    let data = &running.data;
+    let owner = data.owner();
+    owner
+        .repos_create_workspace(decode(json!({"name":"test"})).unwrap())
+        .await
+        .unwrap();
+    owner
+        .repos_create(decode(json!({"path":"test/repo"})).unwrap())
+        .await
+        .unwrap();
+    // The roster names the owner (the human), the acting agent, an agent
+    // that has never acted, and a name no member may have.
+    let roster = [
+        ("owner1", "Owner"),
+        ("aiko", "Aiko"),
+        ("kenji", "Kenji"),
+        ("branvil", "Reserved"),
+    ]
+    .map(|(login, name)| (login.to_owned(), name.to_owned()))
+    .into();
+    let service = TicketAgent::new(data.clone(), "test".into(), "aiko".into(), "Aiko".into())
+        .with_members(&roster);
+    let created = service
+        .create_ticket(CreateTicket {
+            tracker: "test/repo".into(),
+            title: "for kenji".into(),
+            body: String::new(),
+            labels: vec![],
+            add_to_board: true,
+            interactive: false,
+            assignee: Some(ActorName("kenji".into())),
+            lane: None,
+            parent: None,
+            blocked_by: vec![],
+        })
+        .await
+        .unwrap();
+    let ticket = service.ticket_view(&created.target.url).await.unwrap();
+    assert_eq!(ticket.assignee.unwrap().name, "kenji");
+    let kenji = owner.members_get("kenji".into()).await.unwrap();
+    assert_eq!(
+        (kenji.kind, kenji.display_name.as_str()),
+        (crate::api::MemberKind::Agent, "Kenji")
+    );
+    assert_eq!(
+        owner.members_get("owner1".into()).await.unwrap().kind,
+        crate::api::MemberKind::Owner
+    );
+    assert_eq!(
+        owner
+            .members_get("branvil".into())
+            .await
+            .err()
+            .unwrap()
+            .code,
+        "not_found"
+    );
+    running.stop().await.unwrap();
+}
+
+#[path = "contracts.rs"]
+mod contracts;
+struct Driver<'a>(&'a Fixture);
+impl contracts::TicketContractDriver for Driver<'_> {
+    fn human_comment<'a>(&'a self, url: &'a str, body: &'a str) -> ServiceFuture<'a, ()> {
+        Box::pin(async move {
+            self.0
+                .owner
+                .tickets_add_comment(
+                    "test/repo",
+                    url.rsplit('/').next().unwrap(),
+                    decode(json!({"body":body})).unwrap(),
+                )
+                .await
+                .map_err(|e| error(e, "comment"))?;
+            Ok(())
+        })
+    }
+    fn assign<'a>(&'a self, url: &'a str, actor: &'a ActorName) -> ServiceFuture<'a, ()> {
+        Box::pin(async move {
+            let k = url.rsplit('/').next().unwrap();
+            self.0
+                .owner
+                .tickets_set_assignee("test/repo", k, Some(actor.0.clone()))
+                .await
+                .map_err(|e| error(e, "assign"))?;
+            self.0
+                .owner
+                .tickets_put_on_board("test/repo", k, decode(json!({"lane":"ready"})).unwrap())
+                .await
+                .map_err(|e| error(e, "move"))?;
+            Ok(())
+        })
+    }
+    fn merge_reference<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, ()> {
+        Box::pin(async move {
+            self.0.linked(Some(url), false, true).await;
+            Ok(())
+        })
+    }
+}
+#[tokio::test]
+async fn ticket_behavior_contract() {
+    let f = Fixture::new().await;
+    contracts::ticket_contract(&f.service, "test/repo", "bug", "agent1").await;
+    f.running.stop().await;
+}
+#[tokio::test]
+async fn ticket_patrol_contract() {
+    let f = Fixture::new().await;
+    contracts::ticket_patrol_contract(
+        &f.service,
+        &Driver(&f),
+        "test/repo",
+        "bug",
+        ActorName("agent1".into()),
+        ActorName("owner1".into()),
+    )
+    .await;
+    f.running.stop().await;
+}
+#[tokio::test]
+async fn ticket_placement_contract() {
+    let f = Fixture::new().await;
+    f.owner
+        .repos_create(decode(json!({"path":"test/other"})).unwrap())
+        .await
+        .unwrap();
+    contracts::ticket_placement_tracker_contract(&f.service, "test/repo", "test/other").await;
+    f.running.stop().await;
+}
+#[tokio::test]
+async fn ticket_scope_contract() {
+    let f = Fixture::new().await;
+    let t = f
+        .owner
+        .tickets_create_ticket(
+            "other/repo",
+            decode(json!({"title":"Their ticket"})).unwrap(),
+        )
+        .await
+        .unwrap();
+    let c = f
+        .owner
+        .tickets_add_comment(
+            "other/repo",
+            &t.key,
+            decode(json!({"body":"Their comment"})).unwrap(),
+        )
+        .await
+        .unwrap();
+    contracts::ticket_scope_contract(&f.service, "test/repo", "other/repo", &t.url, &c.id).await;
+    f.running.stop().await;
+}
+#[tokio::test]
+async fn ticket_wrong_subject_contract() {
+    let f = Fixture::new().await;
+    let url = f.linked(None, false, false).await;
+    let c = f
+        .owner
+        .pulls_add_comment(
+            "test/repo",
+            url.rsplit('/').next().unwrap().parse().unwrap(),
+            decode(json!({"body":"Wrong subject"})).unwrap(),
+        )
+        .await
+        .unwrap();
+    contracts::ticket_wrong_subject_contract(&f.service, &url, &c.id).await;
+    f.running.stop().await;
+}
+#[tokio::test]
+async fn ticket_attachment_contract() {
+    let f = Fixture::new().await;
+    let a = f
+        .owner
+        .attachments_upload(
+            "test/repo",
+            Some("screen.png".into()),
+            b"\x89PNG\r\n\x1a\nscreen".to_vec(),
+        )
+        .await
+        .unwrap();
+    let b = f
+        .owner
+        .attachments_upload("test/repo", Some("log.gif".into()), b"GIF89alog".to_vec())
+        .await
+        .unwrap();
+    let c = f
+        .owner
+        .attachments_upload(
+            "test/repo",
+            Some("unused.png".into()),
+            b"\x89PNG\r\n\x1a\nunused".to_vec(),
+        )
+        .await
+        .unwrap();
+    contracts::ticket_attachment_contract(
+        &f.service,
+        "test/repo",
+        contracts::TicketAttachmentFixture {
+            screen_url: a.url,
+            screen_id: a.id,
+            log_url: b.url,
+            log_id: b.id,
+            unused_id: c.id,
+        },
+    )
+    .await;
     f.running.stop().await;
 }

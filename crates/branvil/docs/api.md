@@ -396,9 +396,12 @@ member's canonical spelling), or `null` to return to automatic selection.
 Omission keeps the setting. Owner, runner, and unknown names return 400
 `invalid` without changing the record or revision; non-owners receive 403.
 New repositories use automatic selection. The effective responder is resolved
-at read time: the agent author of the repository's most recently merged agent
-PR (`merged_at`), otherwise the oldest agent (`created_at`), otherwise the
-owner. An explicit name has `chosen: true` and overrides that ordering.
+at read time from the host's current active agents: the author of the
+repository's most recently merged eligible PR (`merged_at`), otherwise the
+first eligible agent by person_id. An eligible explicit name has `chosen: true`
+and overrides that ordering. Humans and unavailable members are excluded.
+When no agent is available, `member` and `automatic` are empty; repair creation
+remains pending until an agent is available, rather than assigning a human.
 
 
 ## Tickets and the board

@@ -814,6 +814,7 @@ dependencies = [
  "ctor",
  "directories",
  "futures-util",
+ "gb-ports",
  "libc",
  "loopback-auth",
  "mime_guess",
@@ -836,6 +837,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ulid",
+ "unicode-casefold",
 ]
 
 [[package]]
