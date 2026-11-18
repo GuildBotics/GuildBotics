@@ -177,26 +177,14 @@ async def test_code_host_reads_are_the_members_read_command_of_the_subject(
 
 @pytest.mark.asyncio
 async def test_ticket_reads_are_the_members_ticket_read_command():
-    client = _answering(
-        {
-            "items": [_COMMENT],
-            "continuation": None,
-            "target": {
-                "kind": "ticket",
-                "url": _TICKET_URL,
-                "title": "Fix it",
-                "label": "T-1",
-            },
-        }
-    )
+    client = _answering({"items": [_COMMENT], "continuation": "c2"})
 
     page = await _ticket_service(client).read(
         "ticket_comments", _TICKET_URL, parameters={"page_size": 10}, continuation="c1"
     )
 
     assert page.items == [_COMMENT]
-    assert page.target is not None
-    assert page.target.label == "T-1"
+    assert page.continuation == "c2"
     client.acall.assert_awaited_once_with(
         "member",
         arguments=_read_arguments("ticket", "ticket_comments", _TICKET_URL),
@@ -205,10 +193,14 @@ async def test_ticket_reads_are_the_members_ticket_read_command():
 
 
 @pytest.mark.asyncio
-async def test_a_read_answer_out_of_the_resources_shape_is_refused():
-    client = _answering({"items": [{"id": "comment-1"}]})
+async def test_a_read_answer_out_of_the_pages_shape_is_refused():
+    """A page is its items and continuation: the work target the host records
+    for its trace never reaches a command."""
+    client = _answering(
+        {"items": [_COMMENT], "target": {"kind": "ticket", "url": _TICKET_URL}}
+    )
 
-    with pytest.raises(ValueError, match="body"):
+    with pytest.raises(ValueError, match="target"):
         await _ticket_service(client).read("ticket_comments", _TICKET_URL)
 
 
