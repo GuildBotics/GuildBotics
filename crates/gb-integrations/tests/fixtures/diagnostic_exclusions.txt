@@ -1,2 +1,3 @@
 # Retained translations for the removed Python HTTP client; never count these as live Rust usage.
 integrations.branvil.api.not_branvil	The embedded DataApi is statically Branvil, so no HTTP server identity probe remains after #81/#88.
+integrations.branvil.api.closes_foreign	PR links now use the domain transaction resolver; foreign closing links report its unsupported diagnostic instead of a separate provider preflight.

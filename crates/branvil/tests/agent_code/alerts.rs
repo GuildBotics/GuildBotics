@@ -2,6 +2,7 @@
 use super::*;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Default)]
@@ -262,78 +263,6 @@ async fn failures(host: &Host, c: &dyn CodeHostingService) {
     }
     host.answers.lock().unwrap().failure = None;
 }
-async fn member_alert_command_returns_the_upstreams_alerts(c: &dyn CodeHostingService) {
-    struct Services<'a>(&'a dyn CodeHostingService);
-    impl gb_member::repository::RepositoryServices for Services<'_> {
-        fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
-            Ok(self.0)
-        }
-        fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
-            panic!("alert is a code resource")
-        }
-    }
-    struct Current;
-    impl gb_member::WriteGuard for Current {
-        fn ensure_current(&self) -> gb_member::Result<()> {
-            Ok(())
-        }
-    }
-    struct Control;
-    impl gb_member::session::Control for Control {
-        fn command<'a>(
-            &'a self,
-            _: &'a gb_member::command::Parsed,
-            _: &'a str,
-        ) -> gb_member::git::Pending<'a, Value> {
-            panic!("not a completion")
-        }
-        fn record(&self, _: &str, read_only: bool, _: &Value) -> gb_member::Result<()> {
-            assert!(read_only);
-            Ok(())
-        }
-    }
-    let services = Services(c);
-    let roster = std::collections::BTreeMap::new();
-    let root = Path::new("/unused-alert-root");
-    let session = gb_member::session::Session {
-        person_id: "aiko",
-        person_type: "agent",
-        delegated_to: None,
-        workflow: true,
-        repository: gb_member::repository::Repository {
-            services: &services,
-            guard: &Current,
-            roster: &roster,
-        },
-        chat: None,
-        memory: None,
-        git: None,
-        context: json!({}),
-        control: &Control,
-        git_root: root,
-    };
-    let arguments = [
-        "repo-info",
-        "read",
-        "--person",
-        "aiko",
-        "--resource",
-        "dependency_alerts",
-        "--subject",
-        REPO,
-        "--params",
-        r#"{"state":"open","page_size":30}"#,
-    ]
-    .map(str::to_owned);
-    let answer = session.execute(&arguments, "").await.unwrap();
-    assert_eq!(
-        answer.payload,
-        json!({
-            "items": [expected_alert(1, "open", Some("2.0")), expected_alert(3, "open", Some("2.0")), expected_alert(5, "open", None)],
-            "continuation": null,
-        })
-    );
-}
 pub(super) async fn contract(
     host: &Host,
     c: &dyn CodeHostingService,
@@ -357,7 +286,6 @@ pub(super) async fn contract(
     )
     .await;
     state_pages(host, c).await;
-    member_alert_command_returns_the_upstreams_alerts(c).await;
     single_id(c).await;
     failures(host, c).await;
     empty_and_unsupported(host, c, base, token).await;

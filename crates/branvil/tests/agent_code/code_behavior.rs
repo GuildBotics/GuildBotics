@@ -692,37 +692,32 @@ async fn body_updates_preserve_or_drop_links_before_validation(f: &mut Fixture<'
             .read(Resource::PullRequests, &p.url, None, "")
             .await
             .unwrap();
+        let error = f
+            .code
+            .update_pull_request(
+                &p.url,
+                UpdatePullRequest {
+                    title: Some("Changed".into()),
+                    body: Some("Changed".into()),
+                    tickets: Some(vec![
+                        TicketLink {
+                            url: ticket.clone(),
+                            closes: true,
+                        },
+                        TicketLink {
+                            url: foreign.clone(),
+                            closes: true,
+                        },
+                    ]),
+                },
+            )
+            .await
+            .unwrap_err();
         assert_eq!(
-            f.code
-                .update_pull_request(
-                    &p.url,
-                    UpdatePullRequest {
-                        title: Some("Changed".into()),
-                        body: Some("Changed".into()),
-                        tickets: Some(vec![
-                            TicketLink {
-                                url: ticket.clone(),
-                                closes: true
-                            },
-                            TicketLink {
-                                url: foreign.clone(),
-                                closes: true
-                            }
-                        ])
-                    }
-                )
-                .await
-                .unwrap_err(),
-            ServiceError::Diagnostic {
-                class: ServiceErrorClass::Unsupported,
-                key: "integrations.branvil.api.closes_foreign",
-                args: [
-                    ("repository".into(), REPOSITORY.into()),
-                    ("url".into(), foreign)
-                ]
-                .into()
-            }
+            error.translation_key(),
+            "integrations.branvil.api.unsupported"
         );
+        assert!(error.translation_args()["message"].contains(&foreign));
         assert_eq!(
             f.code
                 .read(Resource::PullRequests, &p.url, None, "")

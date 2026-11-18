@@ -1,7 +1,7 @@
 //! Frozen URL and member-credential failures without the removed HTTP client.
 use super::*;
-use branvil::api::AppError;
-use branvil::api::{Running, initialize};
+use crate::api::AppError;
+use crate::api::{Running, initialize};
 
 #[test]
 fn frozen_error_classifications_preserve_branvil_guidance_and_arguments() {
@@ -90,11 +90,11 @@ async fn frozen_remote_and_pull_address_population() {
     initialize(temp.path(), "owner1").unwrap();
     let running = Running::start(
         temp.path(),
-        std::sync::Arc::new(::branvil::vault::Memory::default()),
+        std::sync::Arc::new(crate::vault::Memory::default()),
     )
     .await
     .unwrap();
-    let service = BranvilService::new(
+    let service = CodeAgent::new(
         running.data.clone(),
         "acme".into(),
         "aiko".into(),
@@ -160,7 +160,7 @@ async fn draft_conflicts_reread_both_human_writer_states() {
         }));
         let read_state = state.clone();
         let write_state = state.clone();
-        let result = patrol::draft_transition(
+        let result = code_patrol::draft_transition(
             move || {
                 let state = read_state.clone();
                 Box::pin(async move {
@@ -213,7 +213,7 @@ async fn draft_refusals_propagate_without_retry_or_success() {
         writes.store(0, Ordering::SeqCst);
         let r = reads.clone();
         let w = writes.clone();
-        let result = patrol::draft_transition(
+        let result = code_patrol::draft_transition(
             move || {
                 r.fetch_add(1, Ordering::SeqCst);
                 Box::pin(async move {

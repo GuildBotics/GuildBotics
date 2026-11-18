@@ -763,14 +763,22 @@ pub(crate) fn unanswered(r: &impl Rd, p: &Pull, pull_url: &str) -> AppResult<Vec
     {
         return Ok(Vec::new());
     }
+    if interactive(r, p)? {
+        return Ok(Vec::new());
+    }
+    Ok(unanswered_in(&p.author, &activity_of(r, p, "", pull_url)?))
+}
+
+/// Whether a linked local ticket is being worked interactively.
+pub(crate) fn interactive(r: &impl Rd, p: &Pull) -> AppResult<bool> {
     for id in p.tickets.iter().filter_map(|l| l.local.as_ref()) {
         if let Some(t) = r.get::<model::Ticket>(store::TICKETS, &model::Ticket::key(&id.0, id.1))?
             && (t.interactive || tickets::interactive_ancestor(r, &t)?.is_some())
         {
-            return Ok(Vec::new());
+            return Ok(true);
         }
     }
-    Ok(unanswered_in(&p.author, &activity_of(r, p, "", pull_url)?))
+    Ok(false)
 }
 
 /// The statements of `a` that wait on `author`: an unresolved thread whose

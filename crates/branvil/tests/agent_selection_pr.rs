@@ -1,5 +1,5 @@
+use branvil::agent::pr_patrol::*;
 use chrono::Utc;
-use gb_integrations::*;
 #[test]
 fn patrol_reviews_statements_individually_and_limits_only_new_heads() {
     let mut pr = PatrolPullRequest {

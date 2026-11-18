@@ -9,15 +9,14 @@ and the callers in `capabilities/member_repository.py`, `capabilities/member_git
 `drivers/ticket_selector.py`, `capabilities/activity_events.py`,
 `templates/commands/repository/*`.
 
-The provider is `guildbotics/integrations/branvil/` in GuildBotics. It translates
-port calls into the API of [`api.md`](api.md) and the answers into the port's
-models. The Rust provider (`crates/gb-integrations/src/factory/branvil/`) calls
-the same operations in-process, without a token: `DataApi::agent(person_id,
-display_name)` acts as the member, whose Branvil agent is named by its
-person_id and created when the team is read or a member first acts, and `DataApi::owner()` acts as the owner. Branvil keeps the data; the provider keeps none. Selection rules that are
-GuildBotics' own (workflow status, mentions, the review limit) are applied by the
-provider to the raw activity Branvil returns, as the GitHub provider applies them
-to GitHub's.
+The Rust agent module (`crates/branvil/src/agent/`) implements the ticket and
+code-hosting ports in-process. `TicketAgent` and `CodeAgent` use
+`DataApi::agent(person_id, display_name)` to act as the member; the embedding
+host supplies the workspace roster. Git credentials are temporary tokens,
+revoked when the agent closes. The module shares the domain's transactional
+link validation and interactive-ticket ancestry. PR readiness retains the
+existing port decisions until their separate removal; landing remains owned
+by the domain. `gb-integrations` constructs agents but has no code-host provider.
 
 "Errors" below lists what the provider raises; every API failure maps as:
 `404 → ServiceNotFound`, `422 unsupported → ServiceUnsupported`, any other
@@ -31,7 +30,7 @@ service may be down; see `README.md`, "Several machines").
 (`tests/guildbotics/integrations/contracts/`) for `branvil`, which run against
 `BranvilDouble`, a Python double of this API; "smoke" means the operation is
 driven against an embedded Branvil fixture by
-`cargo nextest run --locked -p gb-integrations --test main -E 'test(/^branvil::/)'`, which
+`cargo nextest run --locked -p branvil --features test-support -E 'test(/^agent/)'`, which
 walks three paths (tickets and their relations, a push with a pull request and
 its merge, checks deciding readiness; see "Checking with GuildBotics" in the
 README); "provider unit tests on the double" are GuildBotics'
