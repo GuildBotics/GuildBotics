@@ -1205,9 +1205,9 @@ nothing.
 ## Events (GUI)
 
 `GET /api/v1/events` is a Server-Sent Events stream. Each event is
-`event: change` with `data: {"kind": "ticket"|"pull"|"board"|"check"|"upstream"|"repo", "path": "...", "id": "..."}`.
+`event: change` with `data: {"kind": "ticket"|"pull"|"board"|"check"|"upstream"|"repo", "path": "...", "id": "...", "actor": "owner"|"agent"|"runner"|null}`.
 `path`/`id` by kind: `ticket` repository / key, `pull` repository / number, `board` workspace / —, `check`
-repository / commit sha, `upstream` repository / — (what following its upstream found changed), `repo` repository / — (its settings, its upstream, or its refs changed, or a member's account on its upstream host was set). Events only say what changed; the GUI refetches it. On reconnect (or after a
+repository / commit sha, `upstream` repository / — (what following its upstream found changed), `repo` repository / — (its settings, its upstream, or its refs changed, or a member's account on its upstream host was set). The actor is the authenticated writer’s member kind, or null for system changes. Events only say what changed; the GUI refetches it. On reconnect (or after a
 `event: reset`, sent when the client fell behind) the GUI refetches what it shows.
 The stream ends when the service shuts down. The service subscribes to the
 same changes itself to land pull requests automatically ("Landing

@@ -101,6 +101,7 @@ pub struct NewRepo {
 }
 
 pub async fn create(app: &App, caller: &Caller, input: NewRepo) -> AppResult<RepoView> {
+    let event_actor = Some(caller.member.kind);
     caller.require_owner()?;
     let NewRepo {
         path,
@@ -121,7 +122,7 @@ pub async fn create(app: &App, caller: &Caller, input: NewRepo) -> AppResult<Rep
             create_locked(&app, path, default_branch, labels).await
         })
         .await?;
-    app.events.publish("repo", &repo.path, "");
+    app.events.publish_as("repo", &repo.path, "", event_actor);
     repo_view(app, &repo).await
 }
 
@@ -225,6 +226,7 @@ pub async fn update(
     path: &str,
     patch: RepoPatch,
 ) -> AppResult<RepoView> {
+    let event_actor = Some(caller.member.kind);
     caller.require_owner()?;
     let repo = visible(app, caller, path).await?;
     if let Some(b) = &patch.default_branch
@@ -266,7 +268,8 @@ pub async fn update(
             AppResult::Ok(updated)
         })
         .await?;
-    app.events.publish("repo", &updated.path, "");
+    app.events
+        .publish_as("repo", &updated.path, "", event_actor);
     repo_view(app, &updated).await
 }
 

@@ -27,6 +27,7 @@ pub struct Generation {
     pub draining: CancellationToken,
     pub cancelled: CancellationToken,
     pub work: TaskTracker,
+    pub wakes: Arc<crate::scheduler::Wakes>,
     active: std::sync::Mutex<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 impl Default for Generation {
@@ -36,6 +37,7 @@ impl Default for Generation {
             draining: CancellationToken::new(),
             cancelled: CancellationToken::new(),
             work: TaskTracker::new(),
+            wakes: Arc::default(),
             active: Default::default(),
         }
     }
@@ -261,7 +263,7 @@ impl Drop for Execution {
 }
 
 fn settle(admission: Admission, lease: Option<FileLock>, state: RunState) -> anyhow::Result<()> {
-    let _lease = lease;
+    let generation = admission.generation.clone();
     let manual = admission.record.source == "manual";
     let result = admission.writes.transaction(|writer| {
         RunStore::open(&admission.workspace).finish(
@@ -281,6 +283,10 @@ fn settle(admission: Admission, lease: Option<FileLock>, state: RunState) -> any
         )?;
         Ok(())
     });
+    drop(lease);
+    if let Some(generation) = generation {
+        generation.wakes.all();
+    }
     if manual && result.is_err() {
         tracing::warn!("cannot record manual command completion");
         Ok(())

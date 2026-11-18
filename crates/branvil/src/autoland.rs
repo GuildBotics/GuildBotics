@@ -404,6 +404,7 @@ mod tests {
     fn verification_marks_its_repository_dirty() {
         let mut dirty = Dirty::default();
         dirty.add(Notice::Change(crate::events::Change {
+            actor: None,
             kind: "verification",
             path: "acme/demo".into(),
             id: "".into(),

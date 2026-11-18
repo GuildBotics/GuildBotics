@@ -18,7 +18,7 @@ mod cli;
 mod config;
 mod domain;
 mod error;
-mod events;
+pub mod events;
 mod git;
 mod hooks;
 mod http;

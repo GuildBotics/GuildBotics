@@ -68,6 +68,7 @@ pub struct PreReceive {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct PostReceive {
     pub repo: String,
+    pub member: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -122,7 +123,7 @@ pub async fn run_hook(name: &str) -> i32 {
         client
             .post(format!("{url}/-/hooks/post-receive"))
             .header(SECRET_HEADER, &secret)
-            .json(&PostReceive { repo })
+            .json(&PostReceive { repo, member })
             .send()
             .await
     };

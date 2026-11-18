@@ -336,12 +336,16 @@ pub(crate) async fn stop(
     axum::Json(api.selected().service.view().await)
 }
 
+type BranvilEvents =
+    std::pin::Pin<Box<dyn futures_util::Stream<Item = branvil::events::Notice> + Send>>;
+
 pub struct NativeWorker {
     service: std::sync::OnceLock<crate::service::Service>,
     service_instance_id: String,
     scheduler: crate::scheduler::Scheduler,
     quotas: BTreeMap<String, Arc<crate::ticket_selector::PullRequestQuota>>,
     groups: Vec<Arc<crate::chat_receiver::Group>>,
+    branvil_events: std::sync::Mutex<Option<BranvilEvents>>,
     started: OnceCell<()>,
     receivers: TaskTracker,
     cleanup: TaskTracker,
@@ -369,7 +373,7 @@ impl NativeWorker {
         let cleanup = TaskTracker::new();
         let draining = generation.draining.child_token();
         let cancelled = generation.cancelled.clone();
-        let mut scheduler = crate::scheduler::Scheduler::default();
+        let mut scheduler = crate::scheduler::Scheduler::with_wakes(generation.wakes.clone());
         let mut listeners = BTreeMap::<String, crate::chat_receiver::Connection>::new();
         let mut groups = BTreeMap::<String, Vec<Arc<crate::chat_receiver::Receiver>>>::new();
         let mut members = vec![];
@@ -477,6 +481,12 @@ impl NativeWorker {
                 scheduler,
                 quotas,
                 groups,
+                branvil_events: std::sync::Mutex::new(
+                    native
+                        .branvil
+                        .as_ref()
+                        .map(|api| Box::pin(api.subscribe()) as _),
+                ),
                 started: OnceCell::new(),
                 receivers: TaskTracker::new(),
                 cleanup,
@@ -581,6 +591,11 @@ impl Worker for NativeWorker {
         Box::pin(async move {
             self.started
                 .get_or_init(|| async {
+                    if let Some(events) = self.branvil_events.lock().unwrap().take() {
+                        let wakes = self.scheduler.wakes.clone();
+                        let stop = self.stop_reception.clone();
+                        self.receivers.spawn(listen_branvil(events, wakes, stop));
+                    }
                     for group in &self.groups {
                         let (group, stop) = (group.clone(), self.stop_reception.clone());
                         let failed = self.reception_failed.clone();
@@ -638,9 +653,77 @@ async fn supervise_reception(
     }
 }
 
+pub(crate) async fn listen_branvil(
+    events: impl futures_util::Stream<Item = branvil::events::Notice>,
+    wakes: Arc<crate::scheduler::Wakes>,
+    stop: CancellationToken,
+) {
+    use futures_util::StreamExt;
+    tokio::pin!(events);
+    loop {
+        tokio::select! {
+            _ = stop.cancelled() => break,
+            notice = events.next() => match notice {
+                Some(notice) => { if wakes_patrol(&notice) { wakes.all(); } }
+                None => break,
+            }
+        }
+    }
+}
+
+fn wakes_patrol(notice: &branvil::events::Notice) -> bool {
+    match notice {
+        branvil::events::Notice::Reset => true,
+        branvil::events::Notice::Change(change) => {
+            change.actor != Some(branvil::events::MemberKind::Agent)
+                && matches!(
+                    change.kind,
+                    "ticket" | "pull" | "repo" | "check" | "verification" | "upstream"
+                )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn patrol_wakes_for_people_system_changes_and_reset_but_not_agent_writes() {
+        use branvil::{
+            events::MemberKind,
+            events::{Change, Notice},
+        };
+        assert!(wakes_patrol(&Notice::Reset));
+        for kind in [
+            "ticket",
+            "pull",
+            "repo",
+            "check",
+            "verification",
+            "upstream",
+        ] {
+            for actor in [None, Some(MemberKind::Owner), Some(MemberKind::Agent)] {
+                let notice = Notice::Change(Change {
+                    kind,
+                    path: "org/repo".into(),
+                    id: "1".into(),
+                    actor,
+                });
+                assert_eq!(
+                    wakes_patrol(&notice),
+                    actor != Some(MemberKind::Agent),
+                    "{kind} {actor:?}"
+                );
+            }
+        }
+        assert!(!wakes_patrol(&Notice::Change(Change {
+            kind: "hub_status_changed",
+            path: "hub".into(),
+            id: String::new(),
+            actor: None
+        })));
+    }
 
     #[tokio::test]
     async fn queued_start_is_refused_inside_gate_after_shutdown() {
@@ -968,6 +1051,7 @@ mod tests {
             scheduler: Default::default(),
             quotas: Default::default(),
             groups: vec![],
+            branvil_events: Default::default(),
             started: OnceCell::new(),
             receivers: TaskTracker::new(),
             cleanup: TaskTracker::new(),
