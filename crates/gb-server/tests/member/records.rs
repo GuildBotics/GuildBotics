@@ -3,9 +3,9 @@ use gb_member::{
     archive,
     audit::Audit,
     context::{self, PublicMember},
-    events,
 };
 use gb_observability::{activity::ActivityEvents, redaction::Redactor};
+use gb_server::member::events;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,

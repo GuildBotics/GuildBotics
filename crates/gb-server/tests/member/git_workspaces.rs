@@ -1,9 +1,7 @@
 use crate::support;
-use gb_member::{
-    WriteGuard,
-    git::{Guest, Output, Pending, Workspace},
-};
+use gb_member::WriteGuard;
 use gb_ports::*;
+use gb_server::member::git::{Guest, Output, Pending, Workspace};
 use serde_json::json;
 use std::{
     collections::BTreeMap,
@@ -644,7 +642,7 @@ async fn show_validates_literal_paths_kinds_limits_default_changes_and_failures(
         "absent",
     ]
     .map(String::from);
-    let result = gb_member::git::show(
+    let result = gb_server::member::git::show(
         &root,
         &f.services,
         "owner/repo",
@@ -674,7 +672,7 @@ async fn show_validates_literal_paths_kinds_limits_default_changes_and_failures(
         git(&f.seed, &["add", "."]);
         git(&f.seed, &["commit", "-qm", "escape"]);
         git(&f.seed, &["push", "-q", "origin", "main"]);
-        let result = gb_member::git::show(
+        let result = gb_server::member::git::show(
             &root,
             &f.services,
             "owner/repo",
@@ -702,7 +700,7 @@ async fn show_validates_literal_paths_kinds_limits_default_changes_and_failures(
         vec!["".into()],
     ] {
         assert!(
-            gb_member::git::show(
+            gb_server::member::git::show(
                 &root,
                 &f.services,
                 "owner/repo",
@@ -718,7 +716,7 @@ async fn show_validates_literal_paths_kinds_limits_default_changes_and_failures(
     git(&f.seed, &["commit", "-qm", "new default"]);
     git(&f.seed, &["push", "-q", "origin", "new-default"]);
     *f.services.git_default.lock().unwrap() = "new-default".into();
-    let next = gb_member::git::show(
+    let next = gb_server::member::git::show(
         &root,
         &f.services,
         "owner/repo",
@@ -730,7 +728,7 @@ async fn show_validates_literal_paths_kinds_limits_default_changes_and_failures(
     assert_eq!(next["items"][0]["content"], "new default\n");
     std::fs::remove_dir_all(&f.remote).unwrap();
     assert!(
-        gb_member::git::show(
+        gb_server::member::git::show(
             &root,
             &f.services,
             "owner/repo",
@@ -987,7 +985,7 @@ async fn public_tracking_refs_do_not_keep_idle_work_and_shallow_history_is_not_a
         ],
     );
     let w = f.workspace("two");
-    let origin = gb_member::git::Origin::open(
+    let origin = gb_server::member::git::Origin::open(
         &w.host_root,
         "owner/repo",
         f.remote.to_string_lossy().into(),
@@ -1045,7 +1043,7 @@ async fn show_omits_oversized_tree_contents_and_keeps_metadata_within_budget() {
         &["fetch", "-q", f.seed.to_str().unwrap(), sha.trim()],
     );
     git(&f.remote, &["update-ref", "refs/heads/main", sha.trim()]);
-    let result = gb_member::git::show(
+    let result = gb_server::member::git::show(
         &f.temp.path().join("host"),
         &f.services,
         "owner/repo",
@@ -1058,7 +1056,7 @@ async fn show_omits_oversized_tree_contents_and_keeps_metadata_within_budget() {
     assert!(result["items"][0].get("entries").is_none());
 }
 struct NoRecord;
-impl gb_member::session::Control for NoRecord {
+impl gb_server::member::session::Control for NoRecord {
     fn command<'a>(
         &'a self,
         _: &'a gb_member::command::Parsed,
@@ -1087,12 +1085,12 @@ async fn prepare_dispatch_resolves_ticket_and_fork_heads_and_rejects_invalid_anc
     git(&f.remote, &["branch", "review", "main"]);
     let roster = BTreeMap::new();
     let w = f.workspace("ticket");
-    let session = gb_member::session::Session {
+    let session = gb_server::member::session::Session {
         person_id: "aiko",
         person_type: "agent",
         delegated_to: Some("aiko"),
         workflow: true,
-        repository: gb_member::repository::Repository {
+        repository: gb_server::member::repository::Repository {
             services: &f.services,
             guard: &Current,
             roster: &roster,

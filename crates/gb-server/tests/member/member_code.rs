@@ -4,7 +4,7 @@ use serde_json::json;
 pub async fn member_show_contract(service: &dyn CodeHostingService, repository: &str) {
     let temp = tempfile::tempdir().unwrap();
     let branch = service.default_branch(repository).await.unwrap();
-    let result = gb_member::git::show(
+    let result = gb_server::member::git::show(
         temp.path(),
         service,
         repository,
@@ -92,7 +92,7 @@ async fn author_ticket_requires_exactly_one_open_assigned_link() {
         .await
         .unwrap();
         assert_eq!(
-            gb_member::repository::author_ticket(code, tickets, &pr.target.url)
+            gb_server::member::repository::author_ticket(code, tickets, &pr.target.url)
                 .await
                 .unwrap(),
             if links.len() == 1 {
@@ -113,7 +113,7 @@ async fn author_ticket_requires_exactly_one_open_assigned_link() {
         .await
         .unwrap();
     assert_eq!(
-        gb_member::repository::author_ticket(code, tickets, &pr.target.url)
+        gb_server::member::repository::author_ticket(code, tickets, &pr.target.url)
             .await
             .unwrap(),
         Some(one)

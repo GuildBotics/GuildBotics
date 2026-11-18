@@ -2812,9 +2812,9 @@ fn record_entry_detail(
             let payload = &entry["payload"];
             let attempt = payload["attempt"].as_u64()?;
             let event = if name == "record_completed" {
-                gb_member::events::completed(run, attempt, false, payload["status"].as_str()?)
+                crate::member::events::completed(run, attempt, false, payload["status"].as_str()?)
             } else {
-                gb_member::events::completion_missing(
+                crate::member::events::completion_missing(
                     run,
                     attempt,
                     payload["max_attempts"].as_u64()?,

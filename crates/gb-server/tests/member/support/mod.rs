@@ -327,7 +327,7 @@ impl CodeHostingService for Probe {
     }
 }
 
-impl gb_member::repository::RepositoryServices for Probe {
+impl gb_server::member::repository::RepositoryServices for Probe {
     fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
         Ok(self)
     }

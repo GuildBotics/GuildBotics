@@ -1,18 +1,17 @@
 //! Assembly above member capabilities, providers, records, and the VM channel.
 use super::{Backend, Execution, Executor, MemberRequest, Phase, Result as Reply};
+use super::{
+    control::{Identity, Recipients, RunControl},
+    repository::{Repository, RepositoryServices},
+    session::Session,
+};
 use gb_base::shared_writes::SharedWrites;
 use gb_config::{
     commands::CommandRoots,
     secrets::{DeviceKey, Keychain, Scope, SecretStore, SystemKeychain},
 };
 use gb_integrations::{IntegrationConfig, ServiceIntegrationFactory};
-use gb_member::{
-    MemberError, command,
-    context::PublicMember,
-    control::{Identity, Recipients, RunControl},
-    repository::{Repository, RepositoryServices},
-    session::Session,
-};
+use gb_member::{MemberError, command, context::PublicMember};
 use gb_observability::{
     redaction::Redactor,
     runs::{RunRecord, RunStore},
@@ -31,7 +30,7 @@ pub struct Native {
     #[cfg(test)]
     pub(crate) fixture: Option<Arc<tests::Support>>,
     pub runtime_work: Option<tokio_util::task::TaskTracker>,
-    pub chat_subject: Option<gb_member::chat_updates::Subject>,
+    pub chat_subject: Option<crate::member::chat_updates::Subject>,
     pub workspace: PathBuf,
     pub data: PathBuf,
     pub identity_root: PathBuf,
@@ -237,7 +236,7 @@ impl Native {
         let subject_type=if self.chat_subject.is_some(){"chat"}else if kind=="chat"{"chat_thread"}else{kind};
         let chat_now=||chrono::Utc::now().timestamp_millis() as f64 / 1000.0;
         let chat_render=|key:&str|crate::i18n::t(&team.language,key,&[]);
-        let guard=gb_member::chat_updates::Gate{workspace:&self.workspace,writes:&writes,person:&person.person_id,run_id,subject:self.chat_subject.as_ref(),redactor:&masks,now:&chat_now,render:&chat_render};
+        let guard=crate::member::chat_updates::Gate{workspace:&self.workspace,writes:&writes,person:&person.person_id,run_id,subject:self.chat_subject.as_ref(),redactor:&masks,now:&chat_now,render:&chat_render};
         let actors = roster
             .iter()
             .map(|v| {
@@ -271,21 +270,21 @@ impl Native {
             if payload["target"].is_object() {
                 let mut target = payload["target"].clone();
                 target["provider"] = "branvil".into();
-                let event=gb_member::events::inspected(&target, read_only);
+                let event=crate::member::events::inspected(&target, read_only);
                 *target_attributes.lock().unwrap()=serde_json::from_value(event["attributes"].clone()).unwrap_or_default();
                 events.push(event);
             }
             match command {
-                "pr create" => events.extend(gb_member::events::pr_created(payload)),
-                "ticket create" => events.push(gb_member::events::target(
+                "pr create" => events.extend(crate::member::events::pr_created(payload)),
+                "ticket create" => events.push(crate::member::events::target(
                     &payload["target"],
                     "opened",
                     None,
                 )),
-                "ticket update" => events.extend(gb_member::events::ticket_closed(payload)),
-                "ticket comment" => events.push(gb_member::events::ticket_commented(payload)),
+                "ticket update" => events.extend(crate::member::events::ticket_closed(payload)),
+                "ticket comment" => events.push(crate::member::events::ticket_commented(payload)),
                 "git push" | "git publish" => {
-                    events.extend(gb_member::events::pushed(payload, "branvil"))
+                    events.extend(crate::member::events::pushed(payload, "branvil"))
                 }
                 _ => {}
             }
@@ -293,7 +292,7 @@ impl Native {
             writes
                 .transaction(|writer| {
                     for event in events {
-                        gb_member::events::record(
+                        crate::member::events::record(
                             &self.workspace,
                             writer,
                             event,
@@ -369,7 +368,7 @@ impl Native {
             error.render(|key, args| crate::i18n::t(&team.language, key, &args.iter().map(|(key, value)| (key.as_str(), value.as_str())).collect::<Vec<_>>()))
         };
         let git = if parsed.command.starts_with("git ") || request.phase.is_some() {
-            Some(gb_member::git::Workspace {
+            Some(crate::member::git::Workspace {
                 host_root: git_root.clone(),
                 cwd:invocation.map(|v|v.cwd.clone()).unwrap_or_else(||self.workspace.clone()),
                 clones: self
@@ -418,7 +417,7 @@ impl Native {
                 tokio::fs::write(outgoing, &bytes).await?;
             }
             if phase == "push" || phase == "record" && parsed.command == "git commit" {
-                use gb_member::session::Control;
+                use crate::member::session::Control;
                 control.record(
                     if phase == "push" {
                         "git push"
@@ -435,7 +434,7 @@ impl Native {
             });
         }
         let chat = if parsed.command=="context" && parsed.flag("check-credentials") || matches!(parsed.command.as_str(),"chat identity"|"chat resolve-channel"|"chat inspect thread"|"chat inspect channel"|"chat post"|"chat reply"|"chat reaction add") {
-            (if parsed.command=="context"{services.chat().ok()}else{Some(services.chat()?)}).map(|service|gb_member::chat::Chat {
+            (if parsed.command=="context"{services.chat().ok()}else{Some(services.chat()?)}).map(|service|crate::member::chat::Chat {
                 service,
                 service_name: &config.chat_provider,
                 person_id: &person.person_id,
@@ -530,7 +529,7 @@ impl Executor for Native {
             invocation
                 .chat_subject
                 .as_ref()
-                .map(|s| gb_member::chat_updates::Subject {
+                .map(|s| crate::member::chat_updates::Subject {
                     service: s.service.clone(),
                     channel_id: s.channel_id.clone(),
                     thread_id: s.thread_id.clone(),
@@ -768,7 +767,7 @@ impl<'a> Lifecycle<'a> {
     }
     fn write(&self, status: &str, attributes: BTreeMap<String, String>) {
         let _ = self.writes.transaction(|writer| {
-            gb_member::events::record(self.workspace,writer,json!({"type":if status=="running"{"member.command.started"}else if status=="succeeded"{"member.command.finished"}else{"member.command.failed"},"payload":{"command":self.command},"attributes":attributes}),&json!({"trace_id":self.session.trace_id,"person_id":self.session.person_id,"source":"interactive"}),self.masks)?;
+            crate::member::events::record(self.workspace,writer,json!({"type":if status=="running"{"member.command.started"}else if status=="succeeded"{"member.command.finished"}else{"member.command.failed"},"payload":{"command":self.command},"attributes":attributes}),&json!({"trace_id":self.session.trace_id,"person_id":self.session.person_id,"source":"interactive"}),self.masks)?;
             gb_observability::interactive::InteractiveSessions::open(self.workspace).record(
                 writer,
                 &self.session,
@@ -969,7 +968,7 @@ struct Guest<'a> {
     channel: Option<&'a gb_environment::guest_process::Channel>,
     deadline: Instant,
 }
-impl gb_member::git::Guest for Guest<'_> {
+impl crate::member::git::Guest for Guest<'_> {
     fn path(&self, path: &Path) -> gb_member::Result<String> {
         gb_environment::guest_path(path)
             .map_err(|_| MemberError::Capability("capabilities.member_git.invalid_path"))
@@ -981,7 +980,7 @@ impl gb_member::git::Guest for Guest<'_> {
         env: BTreeMap<String, String>,
         stdin: Vec<u8>,
         limit: usize,
-    ) -> gb_member::git::Pending<'a, gb_member::git::Output> {
+    ) -> crate::member::git::Pending<'a, crate::member::git::Output> {
         Box::pin(async move {
             let channel = self.channel.ok_or(MemberError::Capability(
                 "capabilities.member_git.work_required",
@@ -1008,7 +1007,7 @@ impl gb_member::git::Guest for Guest<'_> {
                     )]
                     .into(),
                 })?;
-            Ok(gb_member::git::Output {
+            Ok(crate::member::git::Output {
                 code: result.code,
                 stdout: result.stdout,
                 stderr: result.stderr,
@@ -1030,7 +1029,7 @@ impl Recipients for Peers<'_> {
         &'a self,
         person: &'a str,
         subject: &'a str,
-    ) -> gb_member::git::Pending<'a, bool> {
+    ) -> crate::member::git::Pending<'a, bool> {
         Box::pin(async move {
             if !self.eligible.contains(person) {
                 return Ok(false);
@@ -2117,7 +2116,7 @@ pub(crate) mod tests {
                 let stop = stop.clone();
                 async move { receiver.run(stop).await }
             });
-            let subject = gb_member::chat_updates::Subject {
+            let subject = crate::member::chat_updates::Subject {
                 service: "local".into(),
                 channel_id: "C1".into(),
                 thread_id: "M1".into(),
@@ -2128,7 +2127,7 @@ pub(crate) mod tests {
                 loop {
                     receiver.drain().await;
                     if !store.pending("local", "aiko", "C1").unwrap().is_empty()
-                        && gb_member::chat_updates::Heartbeat::new(&native.workspace).state(
+                        && crate::member::chat_updates::Heartbeat::new(&native.workspace).state(
                             &subject,
                             "aiko",
                             chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
@@ -2509,14 +2508,14 @@ pub(crate) mod tests {
                 .store
                 .receive("local", "aiko", event, "strict")
                 .unwrap();
-            let subject = gb_member::chat_updates::Subject {
+            let subject = crate::member::chat_updates::Subject {
                 service: "local".into(),
                 channel_id: "C1".into(),
                 thread_id: "M1".into(),
                 event_id: "C1:M1".into(),
                 self_user_id: "local-aiko".into(),
             };
-            gb_member::chat_updates::Heartbeat::new(&native.workspace)
+            crate::member::chat_updates::Heartbeat::new(&native.workspace)
                 .save(
                     &subject,
                     "aiko",
@@ -3008,7 +3007,8 @@ pub(crate) mod tests {
                 .unwrap()
                 .person("aiko")
                 .command(crate::chat_dispatch::COMMAND);
-                let mut original = gb_member::events::completed(&pending.run_id, 2, false, "done");
+                let mut original =
+                    crate::member::events::completed(&pending.run_id, 2, false, "done");
                 original["attributes"]["service_run_id"] = json!("prior-service");
                 let trace = original["attributes"]
                     .as_object()
@@ -4521,14 +4521,14 @@ pub(crate) mod tests {
                 } else {
                     driver.failures.lock().unwrap().push_back(failure);
                 }
-                let subject = gb_member::chat_updates::Subject {
+                let subject = crate::member::chat_updates::Subject {
                     service: "local".into(),
                     channel_id: "C1".into(),
                     thread_id: "M1".into(),
                     event_id: "C1:M1".into(),
                     self_user_id: "local-aiko".into(),
                 };
-                let heartbeat = gb_member::chat_updates::Heartbeat::new(&native.workspace);
+                let heartbeat = crate::member::chat_updates::Heartbeat::new(&native.workspace);
                 heartbeat
                     .save(
                         &subject,
@@ -6044,7 +6044,7 @@ pub(crate) mod tests {
 #[cfg(test)]
 mod guest_failure_tests {
     use super::*;
-    use gb_member::git::Guest as _;
+    use crate::member::git::Guest as _;
 
     #[tokio::test]
     async fn member_git_preserves_the_localized_guest_failure() {

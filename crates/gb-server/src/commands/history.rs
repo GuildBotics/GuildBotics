@@ -117,7 +117,7 @@ pub(super) async fn complete(api: &Shared, request: &mut RunRequest) -> anyhow::
         }
         let mut origins = Vec::new();
         for repository in repositories {
-            let origin = gb_member::git::Origin::open(
+            let origin = crate::member::git::Origin::open(
                 &root,
                 &repository,
                 code.clone_url(&repository).await?,

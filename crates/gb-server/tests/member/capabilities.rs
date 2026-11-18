@@ -1,6 +1,7 @@
 use crate::support;
-use gb_member::{MemberError, WriteGuard, repository::*};
+use gb_member::{MemberError, WriteGuard};
 use gb_ports::*;
+use gb_server::member::repository::*;
 use serde_json::json;
 use std::collections::BTreeMap;
 struct Stale;
@@ -453,14 +454,14 @@ async fn closed_board_imports_are_idempotent_and_keep_merge_identity() {
     let start = "2026-01-01T00:00:00Z".parse().unwrap();
     let end = "2026-01-02T00:00:00Z".parse().unwrap();
     assert_eq!(
-        gb_member::events::refresh(d.path(), &writes, None, "", start, end, &redactor)
+        gb_server::member::events::refresh(d.path(), &writes, None, "", start, end, &redactor)
             .await
             .unwrap(),
         0
     );
     for expected in [2, 0] {
         assert_eq!(
-            gb_member::events::refresh(
+            gb_server::member::events::refresh(
                 d.path(),
                 &writes,
                 Some(&provider),
@@ -525,11 +526,11 @@ async fn approval_diagnostics_are_localized_before_service_access() {
     for (language, source) in [
         (
             "en",
-            include_str!("../../../guildbotics/templates/locales/cli/member.en.yml"),
+            include_str!("../../../../guildbotics/templates/locales/cli/member.en.yml"),
         ),
         (
             "ja",
-            include_str!("../../../guildbotics/templates/locales/cli/member.ja.yml"),
+            include_str!("../../../../guildbotics/templates/locales/cli/member.ja.yml"),
         ),
     ] {
         let catalog: serde_json::Value = serde_saphyr::from_str(source).unwrap();

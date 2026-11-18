@@ -1,5 +1,6 @@
 //! History crosses the host/guest boundary as bundles, never as a repository.
-use crate::{MemberError, Result, WriteGuard};
+pub use crate::member_protocol::{MAX_BUNDLE, object};
+use gb_member::{MemberError, Result, WriteGuard};
 use gb_ports::{CodeHostingService, GitCredential};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -13,7 +14,6 @@ use std::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-pub const MAX_BUNDLE: usize = 1 << 30;
 const MAX_OUTPUT: usize = 1 << 24;
 const PUBLIC: &str = "refs/guildbotics/published/";
 pub type Pending<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
@@ -96,17 +96,6 @@ fn remaining(deadline: Instant) -> Result<Duration> {
     deadline
         .checked_duration_since(Instant::now())
         .ok_or_else(|| failure("timeout"))
-}
-pub fn object(value: &str) -> Result<&str> {
-    if matches!(value.len(), 40 | 64)
-        && value
-            .bytes()
-            .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
-    {
-        Ok(value)
-    } else {
-        Err(failure("bundle"))
-    }
 }
 /// Only the running command can implement this authority. Credentials are
 /// deliberately absent from its arguments and result.
@@ -713,7 +702,7 @@ pub struct Workspace<'a> {
     pub cwd: PathBuf,
     pub work: Option<(&'a str, &'a str)>,
     pub guest: &'a dyn Guest,
-    pub services: &'a dyn crate::repository::RepositoryServices,
+    pub services: &'a dyn super::repository::RepositoryServices,
     pub guard: &'a dyn WriteGuard,
     pub name: &'a str,
     pub email: &'a str,
@@ -722,7 +711,7 @@ pub struct Workspace<'a> {
 }
 fn digest(value: impl Serialize) -> String {
     use sha2::{Digest, Sha256};
-    Sha256::digest(crate::identity::bytes(value))
+    Sha256::digest(super::identity::bytes(value))
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
@@ -892,7 +881,7 @@ impl Workspace<'_> {
             )
             .await?;
         let mut receipt = json!({"repo_path":data["repo_path"],"branch":branch,"pushed":pushed,"status":if pushed{"pushed"}else{"up_to_date"},"commits":commits,"pull_requests":[]});
-        match crate::repository::open_pull_request_readiness(self.code()?, &repository, branch)
+        match super::repository::open_pull_request_readiness(self.code()?, &repository, branch)
             .await
         {
             Ok(prs) => {
@@ -1585,7 +1574,7 @@ impl Workspace<'_> {
             .await?;
         }
         let mut result = json!({"repo_path":path,"branch":branch,"pushed":pushed,"status":if pushed{"pushed"}else{"up_to_date"},"commits":commits,"pull_requests":[]});
-        match crate::repository::open_pull_request_readiness(
+        match super::repository::open_pull_request_readiness(
             self.code()?,
             &assignment.repository,
             &branch,

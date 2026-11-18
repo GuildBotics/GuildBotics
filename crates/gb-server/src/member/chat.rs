@@ -1,5 +1,5 @@
 //! The member's chat output, independent of the configured provider.
-use crate::{MemberError, Result, WriteGuard};
+use gb_member::{MemberError, Result, WriteGuard};
 use gb_ports::*;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

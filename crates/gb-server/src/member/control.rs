@@ -1,13 +1,11 @@
 //! Run completion is authorized here, before persistence in RunStore. The
 //! invocation owns every identifier and the evidence checked at completion.
-use crate::{
-    MemberError, Result,
-    command::Parsed,
-    context::PublicMember,
+use super::{
     repository::{self, AwaitWork, Repository},
     session::Control,
 };
 use gb_base::shared_writes::SharedWrites;
+use gb_member::{MemberError, Result, command::Parsed, context::PublicMember};
 use gb_observability::{
     redaction::Redactor,
     runs::{Completion, RunCompletion, RunRecord, RunResult, RunStore},
@@ -16,7 +14,7 @@ use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::Path};
 
 pub trait Recipients: Send + Sync {
-    fn receives<'a>(&'a self, person: &'a str, subject: &'a str) -> crate::git::Pending<'a, bool>;
+    fn receives<'a>(&'a self, person: &'a str, subject: &'a str) -> super::git::Pending<'a, bool>;
 }
 pub struct Identity<'a> {
     pub repair: bool,
@@ -29,7 +27,7 @@ pub struct Identity<'a> {
     pub subject_url: &'a str,
 }
 pub struct RunControl<'a> {
-    pub chat: Option<&'a crate::chat_updates::Gate<'a>>,
+    pub chat: Option<&'a super::chat_updates::Gate<'a>>,
     pub identity: Identity<'a>,
     pub workspace: &'a Path,
     pub writes: &'a SharedWrites,
@@ -453,7 +451,7 @@ impl RunControl<'_> {
     }
 }
 impl Control for RunControl<'_> {
-    fn command<'a>(&'a self, p: &'a Parsed, content: &'a str) -> crate::git::Pending<'a, Value> {
+    fn command<'a>(&'a self, p: &'a Parsed, content: &'a str) -> super::git::Pending<'a, Value> {
         Box::pin(async move {
             if p.command == "task status" {
                 if self.identity.subject_type == "chat" {

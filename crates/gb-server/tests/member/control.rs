@@ -1,16 +1,16 @@
 use crate::support;
 use gb_base::shared_writes::SharedWrites;
-use gb_member::{
-    MemberError, WriteGuard, command,
-    control::{Identity, Recipients, RunControl},
-    repository::{Repository, RepositoryServices},
-    session::Control,
-};
+use gb_member::{MemberError, WriteGuard, command};
 use gb_observability::{
     redaction::Redactor,
     runs::{RunRecord, RunStore},
 };
 use gb_ports::*;
+use gb_server::member::{
+    control::{Identity, Recipients, RunControl},
+    repository::{Repository, RepositoryServices},
+    session::Control,
+};
 use serde_json::json;
 use std::collections::BTreeMap;
 struct Services(support::Probe);
@@ -30,7 +30,7 @@ impl WriteGuard for Current {
 }
 struct Receives;
 impl Recipients for Receives {
-    fn receives<'a>(&'a self, _: &'a str, _: &'a str) -> gb_member::git::Pending<'a, bool> {
+    fn receives<'a>(&'a self, _: &'a str, _: &'a str) -> gb_server::member::git::Pending<'a, bool> {
         Box::pin(async { Ok(true) })
     }
 }
@@ -269,7 +269,7 @@ impl Recipients for Routing<'_> {
         &'a self,
         person: &'a str,
         subject: &'a str,
-    ) -> gb_member::git::Pending<'a, bool> {
+    ) -> gb_server::member::git::Pending<'a, bool> {
         Box::pin(async move {
             if let Some((writes, workspace)) = self.mutate {
                 writes
@@ -668,7 +668,11 @@ async fn awaiting_checks_returns_pending_and_ready_prs_and_retains_the_chat_gate
 async fn recipient_service_failures_propagate_without_completing() {
     struct Failed;
     impl Recipients for Failed {
-        fn receives<'a>(&'a self, _: &'a str, _: &'a str) -> gb_member::git::Pending<'a, bool> {
+        fn receives<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+        ) -> gb_server::member::git::Pending<'a, bool> {
             Box::pin(async { Err(ServiceError::Unavailable.into()) })
         }
     }

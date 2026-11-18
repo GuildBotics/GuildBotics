@@ -1,12 +1,14 @@
 //! Native member command dispatch. Invocation authority is injected by the
 //! host, rather than reconstructed from caller-controlled arguments or cwd.
-use crate::{
-    MemberError,
+use super::{
     chat::{Chat, Reference},
-    command::{self, Parsed},
     git::Workspace,
-    memory::{Edit, Memory, Scope},
     repository::Repository,
+};
+use gb_member::{
+    MemberError,
+    command::{self, Parsed},
+    memory::{Edit, Memory, Scope},
 };
 use gb_ports::*;
 use serde::Serialize;
@@ -21,8 +23,8 @@ pub trait Control: Send + Sync {
         &'a self,
         parsed: &'a Parsed,
         content: &'a str,
-    ) -> crate::git::Pending<'a, Value>;
-    fn record(&self, command: &str, read_only: bool, payload: &Value) -> crate::Result<()>;
+    ) -> super::git::Pending<'a, Value>;
+    fn record(&self, command: &str, read_only: bool, payload: &Value) -> gb_member::Result<()>;
 }
 pub struct Session<'a> {
     pub person_id: &'a str,
@@ -87,7 +89,7 @@ impl Session<'_> {
         let p = command::parse(arguments)?;
         if p.help || p.command == "help" {
             return Ok(Answer {
-                text: Some(crate::context::help().into()),
+                text: Some(gb_member::context::help().into()),
                 ..Default::default()
             });
         }
@@ -354,7 +356,7 @@ impl Session<'_> {
                 }
             }
             "git show" => {
-                crate::git::show(
+                super::git::show(
                     self.git_root,
                     r.services.code()?,
                     p.text("repo"),

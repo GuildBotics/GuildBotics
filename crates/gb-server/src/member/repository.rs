@@ -1,5 +1,5 @@
 //! Provider-independent ticket, PR and repository operations.
-use crate::{MemberError, Result, WriteGuard};
+use gb_member::{MemberError, Result, WriteGuard};
 use gb_ports::*;
 use serde::Serialize;
 use serde_json::Value;

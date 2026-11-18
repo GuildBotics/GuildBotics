@@ -637,7 +637,7 @@ impl Runner for Runtime {
     }
     fn activity(&self, trace: &Trace, kind: &str, payload: Value) {
         let attributes = if kind == "workflow.rate_limited" {
-            gb_member::events::rate_limited(
+            crate::member::events::rate_limited(
                 trace.id(),
                 "",
                 "",
@@ -911,7 +911,7 @@ impl crate::chat_dispatch::Runner for Runtime {
         let Some(result) = &record.result else {
             return Ok(());
         };
-        let mut event = gb_member::events::completed(
+        let mut event = crate::member::events::completed(
             &record.run_id,
             u64::from(pending.attempt_count),
             recovered,
@@ -978,7 +978,7 @@ impl crate::chat_dispatch::Runner for Runtime {
             let mut attributes = crate::chat_dispatch::attributes(&self.chat_provider, pending);
             if kind == "workflow.rate_limited" {
                 attributes.extend(
-                    gb_member::events::rate_limited(
+                    crate::member::events::rate_limited(
                         trace.id(),
                         "",
                         "",

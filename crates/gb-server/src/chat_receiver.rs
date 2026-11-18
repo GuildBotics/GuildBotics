@@ -1,8 +1,8 @@
 //! Live reception stays responsive while paginated history catches up.
 
+use crate::member::chat_updates::{Heartbeat, Subject};
 use crate::{chat_state::Store, work_stops::Subscription};
 use chrono::{DateTime, Duration, Utc};
-use gb_member::chat_updates::{Heartbeat, Subject};
 use gb_ports::{ChannelEventsQuery, ChatEvent, ChatService, EventListener, ServiceError};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},

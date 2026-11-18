@@ -194,7 +194,7 @@ impl Selector<'_> {
                 .pull_request_url
                 .as_deref()
                 .ok_or(ServiceError::InvalidResult)?;
-            if let Some(ticket) = gb_member::repository::author_ticket(code, self.ticket, url)
+            if let Some(ticket) = crate::member::repository::author_ticket(code, self.ticket, url)
                 .await
                 .unwrap_or(None)
             {
@@ -641,7 +641,7 @@ pub fn max_attempts(raw: &str) -> usize {
 mod tests;
 
 fn rate_limit_attributes(at: &str, hint: &str) -> serde_json::Map<String, Value> {
-    gb_member::events::rate_limited("", "", "", at, hint)["attributes"]
+    crate::member::events::rate_limited("", "", "", at, hint)["attributes"]
         .as_object()
         .unwrap()
         .clone()

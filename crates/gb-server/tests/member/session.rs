@@ -4,11 +4,13 @@ use gb_member::{
     MemberError, WriteGuard,
     command::Parsed,
     memory::{Memory, Scope},
-    repository::{Repository, RepositoryServices},
-    session::{Control, Session},
 };
 use gb_observability::redaction::Redactor;
 use gb_ports::*;
+use gb_server::member::{
+    repository::{Repository, RepositoryServices},
+    session::{Control, Session},
+};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path, sync::Mutex};
 struct Services(support::Probe);
@@ -33,7 +35,7 @@ impl Control for Records {
         &'a self,
         parsed: &'a Parsed,
         content: &'a str,
-    ) -> gb_member::git::Pending<'a, Value> {
+    ) -> gb_server::member::git::Pending<'a, Value> {
         Box::pin(async move { Ok(json!({"command":parsed.command,"summary":content})) })
     }
     fn record(&self, command: &str, read_only: bool, payload: &Value) -> gb_member::Result<()> {

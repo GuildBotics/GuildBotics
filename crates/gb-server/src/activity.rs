@@ -464,7 +464,7 @@ async fn sync(
                 continue;
             }
             target["provider"] = project["services"]["ticket_service"]["name"].clone();
-            let mut record = gb_member::events::target(&target, "closed", Some(item.merged));
+            let mut record = crate::member::events::target(&target, "closed", Some(item.merged));
             record["attributes"]["target.activity_id"] = id.into();
             record["timestamp"] = item.closed_at.into();
             record["kind"] = "event".into();

@@ -140,7 +140,7 @@ impl Checkout {
     async fn bundle(&self, reference: &str, known: &[String], path: &str) -> anyhow::Result<bool> {
         let candidates = known
             .iter()
-            .map(|sha| gb_member::git::object(sha))
+            .map(|sha| crate::member_protocol::object(sha))
             .collect::<Result<Vec<_>, _>>()?;
         let present = self
             .checked(
@@ -215,7 +215,7 @@ impl Checkout {
             );
             self.text(&["check-ref-format", reference]).await?;
             let sha = sha.as_str().ok_or_else(|| client.invalid_response())?;
-            let sha = gb_member::git::object(sha)?;
+            let sha = crate::member_protocol::object(sha)?;
             updates.push_str(&format!("update {reference} {sha}\n"));
         }
         if let Some(bundle) = bundle {
@@ -388,7 +388,7 @@ impl Client {
         if let Some(path) = upload {
             let file = tokio::fs::File::open(path).await?;
             anyhow::ensure!(
-                file.metadata().await?.len() <= gb_member::git::MAX_BUNDLE as u64,
+                file.metadata().await?.len() <= crate::member_protocol::MAX_BUNDLE as u64,
                 self.invalid_response()
             );
             let metadata = stream::once(async { Ok(metadata.into()) });
@@ -407,7 +407,7 @@ impl Client {
             let mut file = tokio::fs::File::create(path).await?;
             let size = size(&result)?;
             anyhow::ensure!(
-                size <= gb_member::git::MAX_BUNDLE && stream.prefix.len() <= size,
+                size <= crate::member_protocol::MAX_BUNDLE && stream.prefix.len() <= size,
                 self.invalid_response()
             );
             let mut transferred = stream.prefix.len();

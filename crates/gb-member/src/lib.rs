@@ -1,18 +1,10 @@
 //! Member capabilities. CLI parsing and member git belong to their callers.
 pub mod archive;
 pub mod audit;
-pub mod chat;
-pub mod chat_updates;
 pub mod command;
 pub mod context;
-pub mod control;
-pub mod events;
-pub mod git;
-mod identity;
 pub mod memory;
 pub mod output;
-pub mod repository;
-pub mod session;
 
 use gb_ports::ServiceError;
 

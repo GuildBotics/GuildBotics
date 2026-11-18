@@ -1,8 +1,6 @@
-use gb_member::{
-    WriteGuard,
-    chat::{Chat, Reference},
-};
+use gb_member::WriteGuard;
 use gb_ports::*;
+use gb_server::member::chat::{Chat, Reference};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Mutex};
 type Posted = (String, String, Option<String>);
@@ -320,7 +318,7 @@ async fn credential_status_handles_empty_unconfigured_mixed_and_failed_checks() 
 #[tokio::test]
 async fn channel_inspection_parses_naive_times_from_cli_arguments_before_the_provider() {
     use chrono::TimeZone;
-    use gb_member::{
+    use gb_server::member::{
         repository::{Repository, RepositoryServices},
         session::{Control, Session},
     };
@@ -339,7 +337,7 @@ async fn channel_inspection_parses_naive_times_from_cli_arguments_before_the_pro
             &'a self,
             _: &'a gb_member::command::Parsed,
             _: &'a str,
-        ) -> gb_member::git::Pending<'a, serde_json::Value> {
+        ) -> gb_server::member::git::Pending<'a, serde_json::Value> {
             Box::pin(async { panic!("no run command") })
         }
         fn record(&self, _: &str, _: bool, _: &serde_json::Value) -> gb_member::Result<()> {

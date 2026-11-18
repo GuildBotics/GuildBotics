@@ -1,6 +1,14 @@
 //! Interactive member transport. A worker owns the invocation until it has
 //! settled, even when the HTTP caller disconnects or its response times out.
+pub mod chat;
+pub mod chat_updates;
+pub mod control;
+pub mod events;
+pub mod git;
+mod identity;
 pub mod native;
+pub mod repository;
+pub mod session;
 use crate::api::{ApiError, Shared};
 use axum::{
     body::Body,

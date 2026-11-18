@@ -467,7 +467,7 @@ impl Dispatcher {
             })
             .unwrap_or("");
         let mut ids =
-            gb_member::chat_updates::completed_event_ids(&record.provider_evidence, status);
+            crate::member::chat_updates::completed_event_ids(&record.provider_evidence, status);
         ids.push(pending.event.event_id.clone());
         let channel = &pending.event.message.channel_id;
         let thread = &pending.event.message.thread_id;

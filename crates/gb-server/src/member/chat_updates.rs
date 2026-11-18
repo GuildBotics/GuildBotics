@@ -1,7 +1,7 @@
 //! Queue-only refresh and source-thread publication checks. Reading updates
 //! neither consumes the queue nor advances the processed-event cursor.
-use crate::{MemberError, Result, WriteGuard};
 use gb_base::{files, shared_writes::SharedWrites};
+use gb_member::{MemberError, Result, WriteGuard};
 use gb_observability::{
     redaction::Redactor,
     runs::{RunRecord, RunStore},
@@ -124,7 +124,7 @@ impl Heartbeat {
         }
     }
     pub fn path(&self, service: &str, person: &str, channel: &str) -> PathBuf {
-        let hash = Sha256::digest(crate::identity::bytes((service, person, channel)))
+        let hash = Sha256::digest(super::identity::bytes((service, person, channel)))
             .iter()
             .map(|v| format!("{v:02x}"))
             .collect::<String>();

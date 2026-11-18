@@ -3,5 +3,3 @@
 mod diagnostic_inventory;
 mod factory;
 mod scope;
-
-mod member_code;
