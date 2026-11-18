@@ -59,7 +59,7 @@ pub async fn prepare_embedded(
 ) -> anyhow::Result<Embedded> {
     let base_url = config::normalize_base_url(base_url)?;
     let embedded = service::prepare(
-        config::Config::load(None, data_dir)?,
+        service::load_config(data_dir)?,
         vault,
         base_url.clone(),
         base_url,

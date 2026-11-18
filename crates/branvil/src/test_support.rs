@@ -1,5 +1,5 @@
 //! Embedded service fixtures for downstream tests. No external runner is needed.
-mod routes;
+pub(crate) mod routes;
 mod service;
 pub use service::{
     FileVault, OWNER_TOKEN, Running, SESSION_COOKIE, SESSION_CSRF, TestHost, initialize, serve,

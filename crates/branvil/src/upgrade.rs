@@ -18,7 +18,15 @@ pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
         return Ok(None);
     };
     // Read before anything changes: an unreadable file leaves all as it was.
-    let config = configuration(layout)?;
+    // The configuration goes first, whole or not at all: the previous build
+    // reads it without these keys, and a run cut after it converts the
+    // database the next time.
+    if let Some(text) = configuration(layout)? {
+        let path = layout.config_file();
+        let partial = path.with_extension("toml.partial");
+        std::fs::write(&partial, text)?;
+        std::fs::rename(&partial, &path)?;
+    }
     let upgraded = db.finish(|w| {
         let mut revoked = 0;
         for token in w.prefix_all::<Token>(store::TOKENS, &[])? {
@@ -32,9 +40,6 @@ pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
             "removed the browser sessions and revoked {revoked} owner file token(s)"
         ))
     })?;
-    if let Some(text) = config {
-        std::fs::write(layout.config_file(), text)?;
-    }
     let secrets = layout.root.join("secrets");
     match std::fs::remove_file(secrets.join("owner.token")) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
@@ -131,6 +136,33 @@ mod tests {
         assert!(s.read_sync(|r| r.get_raw(SESSIONS, b"fixture")).is_err());
         drop(s);
         assert!(upgrade(&layout).unwrap().is_none());
+    }
+
+    /// The configuration is converted first: a run cut before the database
+    /// leaves the previous build a configuration it reads, and the next run
+    /// converts the database.
+    #[test]
+    fn a_run_cut_after_the_configuration_converts_the_database_next_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(dir.path());
+        layout.create().unwrap();
+        std::fs::write(layout.config_file(), "[limits]\ngit_concurrency = 3\n").unwrap();
+        let s = store::Store::open(&layout.db(), 1 << 20, 1).unwrap();
+        s.write_sync(|w| {
+            w.put(
+                store::META,
+                &store::Key::new().s("schema_version").bytes(),
+                &FROM,
+            )
+        })
+        .unwrap();
+        drop(s);
+        assert!(upgrade(&layout).unwrap().is_some());
+        assert_eq!(
+            std::fs::read_to_string(layout.config_file()).unwrap(),
+            "[limits]\ngit_concurrency = 3\n"
+        );
+        assert!(!dir.path().join("branvil.toml.partial").exists());
     }
 
     #[test]

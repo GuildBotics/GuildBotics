@@ -8,7 +8,7 @@ use std::sync::Arc;
 use anyhow::Context;
 
 use crate::api::DataApi;
-use crate::config::{Config, Layout};
+use crate::config::Layout;
 use crate::domain::members::{self, NewMember};
 use crate::model::MemberKind;
 use crate::service::{open_service, recover};
@@ -160,7 +160,7 @@ pub async fn serve(
     announce: bool,
     ready: Option<tokio::sync::oneshot::Sender<DataApi>>,
 ) -> anyhow::Result<u8> {
-    let config = Config::load(None, data_dir)?;
+    let config = crate::service::load_config(data_dir)?;
     let (mut interrupt, mut terminate) = (Box::pin(interrupt), Box::pin(terminate));
     let store = tokio::select! {
         store = open_service(&config) => store?,

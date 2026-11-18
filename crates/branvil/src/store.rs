@@ -599,10 +599,7 @@ impl Store {
             None => wtx
                 .put(META, &version_key(), &SCHEMA_VERSION)
                 .map_err(|e| anyhow::anyhow!("{}", e.message))?,
-            Some(v) if v == crate::upgrade::FROM => anyhow::bail!(
-                "{} has schema version {v}; this build reads version {SCHEMA_VERSION}. Take a backup with the previous build (`guildbotics server hub-data backup`), stop the server, and run `guildbotics server hub-data upgrade`",
-                path.display()
-            ),
+            Some(crate::upgrade::FROM) => return Err(previous_version(path)),
             Some(v) if v != SCHEMA_VERSION => anyhow::bail!(
                 "{} has schema version {v}; this build reads only version {SCHEMA_VERSION} and upgrades only version {} (start from a new data directory)",
                 path.display(),
@@ -745,6 +742,23 @@ impl Store {
             .await
             .map_err(|e| AppError::internal(format!("storage task: {e}")))?
     }
+}
+
+/// Refuses a database this build does not read as it is, naming the upgrade
+/// when it has the previous version.
+pub fn check_version(path: &Path) -> anyhow::Result<()> {
+    match Upgrading::open(path)? {
+        Some(_) => Err(previous_version(path)),
+        None => Ok(()),
+    }
+}
+
+fn previous_version(path: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{} has schema version {}; this build reads version {SCHEMA_VERSION}. Take a backup with the previous build (`guildbotics server hub-data backup`), stop the server, and run `guildbotics server hub-data upgrade`",
+        path.display(),
+        crate::upgrade::FROM
+    )
 }
 
 /// What an upgrade did to `db`, for the command's output.

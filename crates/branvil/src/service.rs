@@ -161,6 +161,17 @@ pub(crate) async fn recover(
     Ok(Embedded { app })
 }
 
+/// The configuration of `data_dir`, read once its database is known to have
+/// this build's version: the previous version's configuration may not read
+/// until the upgrade converts it, and its refusal names the upgrade.
+pub(crate) fn load_config(data_dir: &Path) -> anyhow::Result<Config> {
+    let db = crate::config::Layout::new(data_dir).db();
+    if db.exists() {
+        store::check_version(&db)?;
+    }
+    Config::load(None, data_dir)
+}
+
 /// Maintains the data directory `data_dir` while no server opens it. A
 /// directory without a database has nothing yet: the server's first start
 /// creates it.
@@ -170,8 +181,8 @@ pub fn maintain(operation: Maintenance, data_dir: &Path) -> anyhow::Result<()> {
         println!("{} has no data yet", data_dir.display());
         return Ok(());
     }
-    // Without the configuration: the previous version's may not read as
-    // this build's until the upgrade converts it.
+    // The database's version first: the previous version's configuration
+    // may not read as this build's until the upgrade converts it.
     let cache = crate::config::StorageConfig::default().cache_size_mib << 20;
     let open = || Store::open(&layout.db(), cache, 1);
     match operation {
@@ -182,6 +193,10 @@ pub fn maintain(operation: Maintenance, data_dir: &Path) -> anyhow::Result<()> {
         }
         Maintenance::Check => {
             let store = open()?;
+            // The configuration the server reads next, now that the
+            // database has this build's version.
+            Config::load(None, data_dir)?;
+            println!("configuration: ok");
             let problems = store.read_sync(crate::model::index_problems)?;
             let pending = store.read_sync(|r| Ok(r.prefix_keys(store::JOURNAL, &[])?.len()))?;
             let structure = store.check_integrity()?;

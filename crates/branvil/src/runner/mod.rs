@@ -1452,7 +1452,9 @@ mod tests {
             std::sync::Arc::new(crate::vault::Memory::default()),
             url.clone(),
         );
-        let mut router = crate::http::router(app.clone());
+        // The test server's routes too: the test opens its PR over HTTP.
+        let mut router =
+            crate::http::router_with(app.clone(), crate::test_support::routes::routes());
         if let Some(gate) = gate {
             router = router.layer(axum::middleware::from_fn(
                 move |request: axum::extract::Request, next: axum::middleware::Next| {

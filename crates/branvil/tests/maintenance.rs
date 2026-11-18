@@ -60,6 +60,28 @@ async fn an_upgraded_database_serves_only_after_a_successful_check() {
             .output()
             .unwrap()
     };
+    async fn refuses_to_serve(data: &std::path::Path, why: &str) {
+        let mut serve = async_branvil_command();
+        serve
+            .args(["serve", "--listen", "127.0.0.1:0", "--data-dir"])
+            .arg(data)
+            .env("BRANVIL_TEST_VAULT", data.with_file_name("vault"))
+            .kill_on_drop(true);
+        let out = tokio::time::timeout(std::time::Duration::from_secs(20), serve.output())
+            .await
+            .expect("serve did not refuse the database")
+            .unwrap();
+        assert!(!out.status.success(), "{}", text(&out));
+        assert!(text(&out).contains(why), "{}", text(&out));
+    }
+    let unchecked = "has not passed `guildbotics server hub-data check` since";
+    // The previous version's data, its configuration included, is refused
+    // with the upgrade named, before the configuration is read.
+    let upgrade = "run `guildbotics server hub-data upgrade`";
+    refuses_to_serve(&data, upgrade).await;
+    let out = admin("check");
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains(upgrade), "{}", text(&out));
     let out = admin("upgrade");
     assert!(out.status.success(), "{}", text(&out));
     assert!(text(&out).contains("upgraded"), "{}", text(&out));
@@ -70,25 +92,7 @@ async fn an_upgraded_database_serves_only_after_a_successful_check() {
         "{}",
         text(&out)
     );
-    async fn refuses_to_serve(data: &std::path::Path) {
-        let mut serve = async_branvil_command();
-        serve
-            .args(["serve", "--listen", "127.0.0.1:0", "--data-dir"])
-            .arg(data)
-            .env("BRANVIL_TEST_VAULT", data.with_file_name("vault"))
-            .kill_on_drop(true);
-        let out = tokio::time::timeout(std::time::Duration::from_secs(20), serve.output())
-            .await
-            .expect("serve did not refuse an unchecked database")
-            .unwrap();
-        assert!(!out.status.success(), "{}", text(&out));
-        assert!(
-            text(&out).contains("has not passed `guildbotics server hub-data check` since"),
-            "{}",
-            text(&out)
-        );
-    }
-    refuses_to_serve(&data).await;
+    refuses_to_serve(&data, unchecked).await;
     {
         let database = redb::Database::open(&db).unwrap();
         let txn = database.begin_write().unwrap();
@@ -111,11 +115,19 @@ async fn an_upgraded_database_serves_only_after_a_successful_check() {
     let out = admin("check");
     assert_eq!(out.status.code(), Some(1), "{}", text(&out));
     assert!(text(&out).contains("index problem"), "{}", text(&out));
-    refuses_to_serve(&data).await;
+    refuses_to_serve(&data, unchecked).await;
     let out = admin("reindex");
     assert!(out.status.success(), "{}", text(&out));
     // A reindex does not mark the database checked.
-    refuses_to_serve(&data).await;
+    refuses_to_serve(&data, unchecked).await;
+    // The check reads the configuration the server reads next.
+    let config = data.join("branvil.toml");
+    let converted = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, format!("{converted}\nunknown = 1\n")).unwrap();
+    let out = admin("check");
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("unknown field"), "{}", text(&out));
+    std::fs::write(&config, converted).unwrap();
     let out = admin("check");
     assert!(out.status.success(), "{}", text(&out));
     assert!(text(&out).contains("indexes: ok"), "{}", text(&out));
