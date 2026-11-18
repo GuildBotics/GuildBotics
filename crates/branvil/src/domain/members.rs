@@ -1,16 +1,12 @@
-//! Members, tokens, GUI sessions, and the single-use codes of entry links
-//! and local apps.
+//! Members and their tokens.
 
-use std::time::Instant;
-
-use loopback_auth::CODE_SECONDS;
 use serde::{Deserialize, Serialize};
 
 use crate::app::App;
 use crate::auth::{self, Caller};
 use crate::domain::{Page, PageReq, image_type, member_by_name};
 use crate::error::{AppError, AppResult};
-use crate::model::{Account, Member, MemberKind, Session, Token};
+use crate::model::{Account, Member, MemberKind, Token};
 use crate::store::{self, Key, Rd, Wtx};
 use crate::util::{self, fold};
 
@@ -168,7 +164,7 @@ pub async fn list(app: &App, caller: &Caller, page: PageReq) -> AppResult<Page<M
     Ok(Page { items, next_cursor })
 }
 
-/// Creates an agent or a runner; the one owner comes from `branvil init`.
+/// Creates an agent or a runner; the one owner comes from the first start.
 pub async fn create(app: &App, caller: &Caller, input: NewMember) -> AppResult<MemberView> {
     caller.require_owner()?;
     if input.kind == MemberKind::Owner {
@@ -365,86 +361,7 @@ pub async fn revoke_token(app: &App, caller: &Caller, name: String, id: String) 
 pub struct SessionView {
     pub me: MemberView,
     pub csrf: String,
-    pub host_navigation: Option<crate::browser_session::Navigation>,
-}
-
-#[derive(Serialize, Debug)]
-pub struct EntryLink {
-    pub url: String,
-    pub expires_at: String,
-}
-
-/// Makes a single-use link that opens a GUI session of the owner
-/// (`branvil open`). The code travels in the URL fragment, so it is in no
-/// request line, log, or Referer; only its hash is kept, in memory.
-pub fn entry_link(app: &App, caller: &Caller) -> AppResult<EntryLink> {
-    caller.require_owner()?;
-    if let Some(host) = app.browser_session.get() {
-        let (url, expires_at) = host.entry_link();
-        return Ok(EntryLink { url, expires_at });
-    }
-    let code = app
-        .entry_codes
-        .lock()
-        .unwrap()
-        .issue(caller.name().to_string(), Instant::now());
-    Ok(EntryLink {
-        url: format!("{}/-/enter#{code}", app.base_url),
-        expires_at: util::format_time(
-            chrono::Utc::now() + chrono::Duration::seconds(CODE_SECONDS as i64),
-        ),
-    })
-}
-
-/// Exchanges an entry link's code (once) for a session. Returns the view and
-/// the session id for the cookie.
-pub async fn enter(app: &App, code: String) -> AppResult<(SessionView, String)> {
-    let found = app.entry_codes.lock().unwrap().take(&code, Instant::now());
-    let name = found.ok_or_else(AppError::unauthorized)?;
-    let id = util::random_secret::<32>();
-    let csrf = util::random_secret::<32>();
-    let hours = app.config.limits.session_hours;
-    let session = Session {
-        member: fold(&name),
-        csrf: csrf.clone(),
-        created_at: util::now(),
-        expires_at: util::format_time(chrono::Utc::now() + chrono::Duration::hours(hours)),
-    };
-    let key = auth::session_key(&id);
-    let member = app
-        .store
-        .write(move |w| {
-            let member = member_by_name(w, &name)?;
-            // Drop expired sessions while here, so the table stays small.
-            let now = util::now();
-            for (k, v) in w.prefix_raw(store::SESSIONS, &[], None, usize::MAX)? {
-                let s: Session = store::decode(&v)?;
-                if s.expires_at < now {
-                    w.del(store::SESSIONS, &k)?;
-                }
-            }
-            w.put(store::SESSIONS, &key, &session)?;
-            Ok(member)
-        })
-        .await?;
-    Ok((
-        SessionView {
-            me: member_view(&member),
-            csrf,
-            host_navigation: None,
-        },
-        id,
-    ))
-}
-
-pub async fn current_session(app: &App, id: String) -> AppResult<SessionView> {
-    let found = app.store.read(move |r| auth::check_session(r, &id)).await?;
-    let (member, session) = found.ok_or_else(AppError::unauthorized)?;
-    Ok(SessionView {
-        me: member_view(&member),
-        csrf: session.csrf,
-        host_navigation: None,
-    })
+    pub host_navigation: crate::host::Navigation,
 }
 
 /// Register valid missing roster agents without overwriting existing identities.

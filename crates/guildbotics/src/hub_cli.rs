@@ -30,9 +30,12 @@ pub async fn verified(
         })
         .transpose()
         .map_err(|e| error(language, e))?;
-    let result = branvil::hub::verified(repo.as_deref(), origin.as_deref(), &since)
-        .await
-        .map_err(|e| error(language, e))?;
+    let result = async {
+        let (base, token) = gb_server::client::local_owner().await?;
+        branvil::hub::verified(&base, &token, repo.as_deref(), origin.as_deref(), &since).await
+    }
+    .await
+    .map_err(|e| error(language, e))?;
     println!("{result}");
     Ok(())
 }
@@ -41,10 +44,14 @@ pub async fn notify() -> anyhow::Result<()> {
     let language = gb_server::client::language().await;
     let mut text = String::new();
     std::io::stdin().read_to_string(&mut text)?;
-    let sent = branvil::hub::notify(
-        Arc::new(gb_server::branvil_vault::IdentityVault::system()),
-        &text,
-    )
+    let sent = async {
+        branvil::hub::notify(
+            Arc::new(gb_server::branvil_vault::IdentityVault::system()),
+            &gb_server::endpoint::code_host_data()?,
+            &text,
+        )
+        .await
+    }
     .await
     .map_err(|e| error(language, e))?;
     println!("{}", json!({"sent":sent}));
@@ -117,7 +124,10 @@ pub async fn clients(checkout: PathBuf, sha: String) -> anyhow::Result<()> {
         .args(["remote", "get-url", "origin"])
         .output()?;
     anyhow::ensure!(output.status.success(), "could not read origin");
+    let (base, token) = gb_server::client::local_owner().await?;
     let archive = branvil::hub::artifact(
+        &base,
+        &token,
         std::str::from_utf8(&output.stdout)?.trim(),
         &sha,
         gb_server::client_release::ARTIFACT,

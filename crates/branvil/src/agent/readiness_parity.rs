@@ -1,6 +1,7 @@
 //! Normalize independent check and current-pull observations at the provider boundary.
 use super::*;
-use crate::api::{Running, initialize, pulls};
+use crate::api::pulls;
+use crate::test_support::{Running, initialize};
 
 fn report() -> pulls::ChecksView {
     let mut report = pulls::ChecksView {

@@ -1317,7 +1317,7 @@ fn typed_card(v: &Value) -> tickets::CardView {
     }
 }
 
-use crate::api::{Running, initialize};
+use crate::test_support::{Running, initialize};
 #[tokio::test]
 async fn ticket_task_comments_use_roster_names_and_role_fallbacks() {
     let temp = tempfile::tempdir().unwrap();

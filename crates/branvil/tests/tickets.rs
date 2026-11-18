@@ -1087,7 +1087,12 @@ async fn the_board_lists_the_closed_items_of_its_workspace() {
         .await;
     s.post("/repos", &w.owner, json!({"path": "beta/x"})).await;
     let remote = s.remote("beta/x");
-    git_as_ok(&w.work, "alice", &w.owner, &["push", "-q", &remote, "main"]);
+    git_as_ok(
+        &w.work,
+        "alice",
+        &w.owner_git,
+        &["push", "-q", &remote, "main"],
+    );
     git_as_ok(
         &w.work,
         "aiko",
@@ -1501,79 +1506,6 @@ async fn idempotency_keys_replay_and_conflict() {
         .ok(&format!("{}?state=all", tickets_path()), &w.aiko)
         .await;
     assert_eq!(all["items"].as_array().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn sessions_need_csrf_and_hosts_are_checked() {
-    let w = World::new().await;
-    let s = &w.server;
-    let http = reqwest::Client::new();
-    let resp = s.enter(&s.entry_code(&w.owner).await).await;
-    assert_eq!(resp.status(), 200);
-    let cookie = resp.headers()["set-cookie"].to_str().unwrap().to_string();
-    assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
-    // Named by the port, so another service on the machine keeps its own.
-    let port = s.url.rsplit_once(':').unwrap().1;
-    assert!(
-        cookie.starts_with(&format!("branvil_session_{port}=")),
-        "{cookie}"
-    );
-    let cookie = cookie.split(';').next().unwrap().to_string();
-    let body: Value = resp.json().await.unwrap();
-    let csrf = body["csrf"].as_str().unwrap();
-    // GET with the cookie works; a write without the CSRF header does not.
-    let me = http
-        .get(format!("{}/api/v1/me", s.url))
-        .header("cookie", &cookie)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(me.status(), 200);
-    let url = format!("{}/api/v1{}", s.url, tickets_path());
-    let no_csrf = http
-        .post(&url)
-        .header("cookie", &cookie)
-        .json(&json!({"title": "x"}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(no_csrf.status(), 403);
-    let with_csrf = http
-        .post(&url)
-        .header("cookie", &cookie)
-        .header("x-branvil-csrf", csrf)
-        .json(&json!({"title": "x"}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(with_csrf.status(), 201);
-    // DNS rebinding: another Host is misdirected; another Origin is refused.
-    let wrong_host = http
-        .get(format!("{}/api/v1/health", s.url))
-        .header("host", "evil.example")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(wrong_host.status(), 421);
-    let wrong_origin = http
-        .get(format!("{}/api/v1/me", s.url))
-        .bearer_auth(&w.ken)
-        .header("origin", "http://evil.example")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(wrong_origin.status(), 403);
-    // Responses carry the security headers; the SPA serves web URLs.
-    let page = http
-        .get(format!("{}/{REPO}/-/tickets/1", s.url))
-        .send()
-        .await
-        .unwrap();
-    // Scripts only from the GUI's own files; inline styles are allowed for its components.
-    let csp = page.headers()["content-security-policy"].to_str().unwrap();
-    assert!(csp.contains("script-src 'self';"), "{csp}");
-    assert!(csp.contains("style-src 'self' 'unsafe-inline';"), "{csp}");
-    assert_eq!(page.headers()["x-content-type-options"], "nosniff");
 }
 
 /// The URL path of ticket `t` (a ticket of `REPO`).

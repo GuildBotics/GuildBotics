@@ -269,7 +269,7 @@ describe("kanban board", () => {
       lane: "ready",
       after: "acme/web#2",
     });
-    expect(fake.calls("PUT", "/api/v1/repos/acme/demo/tickets/1/board")[0]?.headers["X-Branvil-CSRF"]).toBe("csrf-123");
+    expect(fake.calls("PUT", "/api/v1/repos/acme/demo/tickets/1/board")[0]?.headers["X-GuildBotics-CSRF"]).toBe("csrf-123");
     expect(await screen.findByText("acme/demo#1 moved to Ready.")).toBeInTheDocument();
   });
 

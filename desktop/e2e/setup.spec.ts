@@ -203,7 +203,7 @@ test("one entry opens both screens, APIs and the consent page", async ({ page, c
     const write = (csrf: string) =>
       fetch("/api/v1/workspaces", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-branvil-csrf": csrf },
+        headers: { "Content-Type": "application/json", "x-guildbotics-csrf": csrf },
         body: JSON.stringify({ name: "shared-session" }),
       });
     return {
@@ -221,9 +221,10 @@ test("one entry opens both screens, APIs and the consent page", async ({ page, c
   expect(result.created).toBe(201);
   const link = await page.evaluate(async () => {
     const session = await fetch("/api/v1/session").then((r) => r.json());
-    return fetch("/api/v1/session/links", {
+    return fetch("/-/guildbotics/api/session/links", {
       method: "POST",
-      headers: { "x-branvil-csrf": session.csrf },
+      headers: { "Content-Type": "application/json", "x-guildbotics-csrf": session.csrf },
+      body: JSON.stringify({ next: "/" }),
     }).then((r) => r.json());
   });
   expect(new URL(link.url).pathname).toBe("/-/guildbotics/-/enter");

@@ -253,9 +253,9 @@ async fn upgrade_preserves_resolved_mentions_and_their_index() {
     let before = w.server.ok(&query(), &w.aiko).await;
     w.server.stop();
     let db = w.server.data.join("branvil.redb");
-    as_schema_35(&db);
+    as_schema_36(&db);
     let old = tables(&db);
-    for (command, expected) in [("upgrade", 3), ("check", 0), ("upgrade", 0)] {
+    for (command, expected) in [("upgrade", 0), ("check", 0), ("upgrade", 0)] {
         let out = branvil_command()
             .args(["admin", command, "--data-dir"])
             .arg(&w.server.data)
@@ -284,7 +284,7 @@ async fn upgrade_preserves_resolved_mentions_and_their_index() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-35-")
+                .starts_with("branvil-schema-36-")
         })
         .unwrap();
     assert_eq!(tables(&copy), old);

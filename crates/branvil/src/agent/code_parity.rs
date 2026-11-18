@@ -1,7 +1,7 @@
 //! Frozen URL and member-credential failures without the removed HTTP client.
 use super::*;
 use crate::api::AppError;
-use crate::api::{Running, initialize};
+use crate::test_support::{Running, initialize};
 
 #[test]
 fn frozen_error_classifications_preserve_branvil_guidance_and_arguments() {

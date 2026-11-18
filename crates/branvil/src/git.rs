@@ -66,7 +66,7 @@ pub async fn hold(layout: &Layout) -> anyhow::Result<()> {
             }
         }
     }
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     let file = match crate::test_support::hold_fixture(layout, file) {
         Ok(()) => return Ok(()),
         Err(file) => file,
@@ -121,7 +121,7 @@ pub fn base_command(global_config: &Path) -> tokio::process::Command {
     let fd = {
         use std::os::fd::AsRawFd;
         let fd = HELD.get().map(AsRawFd::as_raw_fd);
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         let fd = crate::test_support::lock_fd(global_config).or(fd);
         fd
     };

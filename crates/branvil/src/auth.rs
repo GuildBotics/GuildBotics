@@ -1,18 +1,17 @@
 //! Members' credentials and permissions: tokens (stored as SHA-256 only and
-//! compared in constant time), the owner's token file, GUI sessions with a
-//! CSRF secret, and the checks of what a member's kind may do.
+//! compared in constant time), the host's owner credentials, and the checks
+//! of what a member's kind may do.
 
 use axum::http::{HeaderMap, Method};
+use loopback_auth::CSRF_HEADER;
 
 use crate::app::App;
-use crate::config::{Layout, restrict};
 use crate::error::{AppError, AppResult};
-use crate::model::{self, Member, MemberKind, Session, Token};
+use crate::model::{self, Member, MemberKind, Token};
 use crate::store::{self, Key, Rd, Wtx};
 use crate::util::{self, fold};
 
 pub const TOKEN_PREFIX: &str = "bvt_";
-pub const CSRF_HEADER: &str = "x-branvil-csrf";
 
 /// The authenticated member of a request.
 #[derive(Clone, Debug)]
@@ -108,45 +107,20 @@ pub fn replace_token(w: &Wtx, member: &str, label: &str) -> AppResult<(Token, St
     issue_token(w, member, label)
 }
 
-/// Label of the owner token whose text is kept in `secrets/owner.token`.
-const OWNER_FILE_LABEL: &str = "owner-file";
 /// Label of the automatic runner's token.
 pub const AUTO_LABEL: &str = "auto";
 
 /// Labels Branvil issues itself, never through the tokens endpoint.
 pub fn is_reserved_label(label: &str) -> bool {
-    label == OWNER_FILE_LABEL || label == AUTO_LABEL
+    label == AUTO_LABEL
 }
 
-/// Keeps `secrets/owner.token` holding a token of the owner. When the file is
-/// missing or its token no longer authenticates the owner (a restored backup
-/// has no `secrets/`), the previous file tokens are revoked, every GUI
-/// session ends, and a new token is written to the file.
-pub fn ensure_owner_token(store: &store::Store, layout: &Layout) -> anyhow::Result<()> {
-    let path = layout.owner_token();
-    let current = std::fs::read_to_string(&path).unwrap_or_default();
-    let current = current.trim();
-    let valid = store.read_sync(|r| {
-        Ok(check_token(r, current)?.is_some_and(|(m, _)| m.kind == MemberKind::Owner))
-    })?;
-    if !valid {
-        let text = store.write_sync(|w| {
-            let owner = owner(w)?;
-            w.clear(store::SESSIONS)?;
-            Ok(replace_token(w, &owner.name, OWNER_FILE_LABEL)?.1)
-        })?;
-        std::fs::write(&path, text)?;
-    }
-    // Also a kept file: one copied back with looser permissions is tightened.
-    restrict(&path, false)
-}
-
-/// The owner, whom `branvil init` creates.
+/// The owner, whom the service creates when it first opens its data.
 pub fn owner(r: &impl Rd) -> AppResult<Member> {
     r.prefix_all::<Member>(store::MEMBERS, &[])?
         .into_iter()
         .find(|m| m.kind == MemberKind::Owner)
-        .ok_or_else(|| AppError::internal("there is no owner; run `branvil init`"))
+        .ok_or_else(|| AppError::internal("there is no owner"))
 }
 
 /// Splits `bvt_<id>_<secret>` into the stored token id and the secret.
@@ -218,42 +192,9 @@ pub async fn authenticate_token(app: &App, text: &str) -> AppResult<Member> {
     Ok(member)
 }
 
-pub fn session_key(id: &str) -> Vec<u8> {
-    Key::new().s(&loopback_auth::digest(id)).bytes()
-}
-
-/// The session cookie's name, which carries the port of the base URL: a
-/// browser sends a cookie to every port of a host, so one name would let two
-/// services on one machine end each other's sessions.
-pub fn session_cookie_name(base_url: &str) -> String {
-    match base_url.rsplit_once(':') {
-        Some((_, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
-            format!("branvil_session_{port}")
-        }
-        _ => "branvil_session".into(),
-    }
-}
-
-pub fn session_cookie(app: &App, headers: &HeaderMap) -> Option<String> {
-    loopback_auth::cookie_value(headers, &session_cookie_name(&app.base_url))
-}
-
-/// Loads a valid session and its member.
-pub fn check_session(r: &impl Rd, id: &str) -> AppResult<Option<(Member, Session)>> {
-    let Some(session) = r.get::<Session>(store::SESSIONS, &session_key(id))? else {
-        return Ok(None);
-    };
-    if session.expires_at < util::now() {
-        return Ok(None);
-    }
-    let Some(member) = r.get::<Member>(store::MEMBERS, &Member::key(&session.member))? else {
-        return Ok(None);
-    };
-    Ok(Some((member, session)))
-}
-
-/// Authenticates an API request: a Bearer token, or the session cookie (with
-/// the CSRF header on anything but GET/HEAD).
+/// Authenticates an API request: a member's Bearer token, the host owner's
+/// Bearer token, or the host's browser session (with the CSRF header on
+/// anything but GET/HEAD).
 pub async fn authenticate(app: &App, method: &Method, headers: &HeaderMap) -> AppResult<Caller> {
     if let Some(value) = headers.get(axum::http::header::AUTHORIZATION) {
         let text = value.to_str().map_err(|_| AppError::unauthorized())?;
@@ -261,35 +202,20 @@ pub async fn authenticate(app: &App, method: &Method, headers: &HeaderMap) -> Ap
             .strip_prefix("Bearer ")
             .ok_or_else(AppError::unauthorized)?
             .trim();
+        if !token.starts_with(TOKEN_PREFIX)
+            && let Some(host) = app.host.get()
+            && host.owner_token(token)
+        {
+            return Ok(Caller {
+                member: app.store.read(owner).await?,
+            });
+        }
         let member = authenticate_token(app, token).await?;
         return Ok(Caller { member });
     }
-    if app.browser_session.get().is_some() {
-        return Ok(Caller {
-            member: host_session(app, method, headers).await?.0,
-        });
-    }
-    let Some(id) = session_cookie(app, headers) else {
-        return Err(AppError::unauthorized());
-    };
-    let found = app.store.read(move |r| check_session(r, &id)).await?;
-    let Some((member, session)) = found else {
-        return Err(AppError::unauthorized());
-    };
-    if method != Method::GET && method != Method::HEAD {
-        let sent = headers
-            .get(CSRF_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if !loopback_auth::csrf_matches(sent, &session.csrf) {
-            return Err(AppError::new(
-                axum::http::StatusCode::FORBIDDEN,
-                "csrf_mismatch",
-                "The X-Branvil-CSRF header does not match the current session.",
-            ));
-        }
-    }
-    Ok(Caller { member })
+    Ok(Caller {
+        member: host_session(app, method, headers).await?.0,
+    })
 }
 
 /// Resolve a host browser session without accepting a Bearer credential.
@@ -298,10 +224,7 @@ pub(crate) async fn host_session(
     method: &Method,
     headers: &HeaderMap,
 ) -> AppResult<(Member, String)> {
-    let host = app
-        .browser_session
-        .get()
-        .ok_or_else(AppError::unauthorized)?;
+    let host = app.host.get().ok_or_else(AppError::unauthorized)?;
     let cookie = headers
         .get("cookie")
         .and_then(|v| v.to_str().ok())
@@ -317,11 +240,11 @@ pub(crate) async fn host_session(
         )
     };
     let csrf = host.check(cookie, csrf).map_err(|e| match e {
-        crate::browser_session::Denied::Unauthorized => AppError::unauthorized(),
-        crate::browser_session::Denied::CsrfMismatch => AppError::new(
+        crate::host::Denied::Unauthorized => AppError::unauthorized(),
+        crate::host::Denied::CsrfMismatch => AppError::new(
             axum::http::StatusCode::FORBIDDEN,
             "csrf_mismatch",
-            "The X-Branvil-CSRF header does not match the current session.",
+            "The X-GuildBotics-CSRF header does not match the current session.",
         ),
     })?;
     let member = app.store.read(owner).await?;
@@ -332,137 +255,54 @@ pub(crate) async fn host_session(
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn csrf_refusal_is_distinct_from_permissions_and_expired_sessions() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = crate::config::Config::load(None, Some(dir.path()), None, None).unwrap();
-        config.layout().create().unwrap();
-        let store = store::Store::open(&config.layout().db(), 1 << 20, 1).unwrap();
-        store
-            .write_sync(|w| {
-                w.put(
-                    store::MEMBERS,
-                    &Member::key("test-agent"),
-                    &Member {
-                        name: "test-agent".into(),
-                        display_name: "Test Agent".into(),
-                        kind: MemberKind::Agent,
-                        accounts: Vec::new(),
-                        reviewers: Vec::new(),
-                        created_at: util::now(),
-                        avatar: None,
-                    },
-                )?;
-                w.put(
-                    store::SESSIONS,
-                    &session_key("test-session"),
-                    &Session {
-                        member: "test-agent".into(),
-                        csrf: "test-csrf".into(),
-                        created_at: util::now(),
-                        expires_at: util::format_time(
-                            chrono::Utc::now() + chrono::Duration::minutes(1),
-                        ),
-                    },
-                )
-            })
-            .unwrap();
-        let app = App::new(
-            config,
-            "http://127.0.0.1:7878".into(),
-            store,
-            std::sync::Arc::new(crate::vault::Memory::default()),
-            "http://127.0.0.1:7878".into(),
-        );
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "cookie",
-            "branvil_session=other; branvil_session_7878=test-session"
-                .parse()
-                .unwrap(),
-        );
-        for method in [Method::POST, Method::PATCH, Method::PUT, Method::DELETE] {
-            for sent in [None, Some("wrong"), Some("test-csrf")] {
-                headers.remove(CSRF_HEADER);
-                if let Some(value) = sent {
-                    headers.insert(CSRF_HEADER, value.parse().unwrap());
-                }
-                let result = authenticate(&app, &method, &headers).await;
-                if sent == Some("test-csrf") {
-                    assert_eq!(
-                        result.unwrap().require_owner().unwrap_err().code,
-                        "forbidden"
-                    );
-                } else {
-                    let error = result.unwrap_err();
-                    assert_eq!(error.status, axum::http::StatusCode::FORBIDDEN);
-                    assert_eq!(error.code, "csrf_mismatch");
-                }
+    struct Host;
+    impl crate::host::Host for Host {
+        fn check(&self, cookie: &str, csrf: Option<&str>) -> Result<String, crate::host::Denied> {
+            if cookie != "host_session_7878=fixture" {
+                return Err(crate::host::Denied::Unauthorized);
+            }
+            if csrf.is_some_and(|v| v != "host-csrf") {
+                return Err(crate::host::Denied::CsrfMismatch);
+            }
+            Ok("host-csrf".into())
+        }
+        fn owner_token(&self, token: &str) -> bool {
+            token == "host-owner-token"
+        }
+        fn navigation(&self) -> crate::host::Navigation {
+            crate::host::Navigation {
+                label: "Host".into(),
+                url: "/host/".into(),
             }
         }
-        headers.remove(CSRF_HEADER);
-        for method in [Method::GET, Method::HEAD] {
-            assert!(authenticate(&app, &method, &headers).await.is_ok());
+        fn entry_path(&self) -> &str {
+            "/host-entry"
         }
-        headers.insert("cookie", "branvil_session_7878=expired".parse().unwrap());
-        assert_eq!(
-            authenticate(&app, &Method::POST, &headers)
-                .await
-                .unwrap_err()
-                .code,
-            "unauthorized"
-        );
     }
 
     #[tokio::test]
-    async fn embedding_replaces_sessions_but_preserves_bearer_authentication() {
+    async fn the_host_identifies_the_owner_and_member_tokens_their_members() {
         use std::sync::Arc;
-        struct Host;
-        impl crate::browser_session::BrowserSession for Host {
-            fn check(
-                &self,
-                cookie: &str,
-                csrf: Option<&str>,
-            ) -> Result<String, crate::browser_session::Denied> {
-                if cookie != "host_session_7878=fixture" {
-                    return Err(crate::browser_session::Denied::Unauthorized);
-                }
-                if csrf.is_some_and(|v| v != "host-csrf") {
-                    return Err(crate::browser_session::Denied::CsrfMismatch);
-                }
-                Ok("host-csrf".into())
-            }
-            fn entry_link(&self) -> (String, String) {
-                (
-                    "http://127.0.0.1:7878/host-entry#fixture".into(),
-                    "expiry".into(),
-                )
-            }
-            fn navigation(&self) -> crate::browser_session::Navigation {
-                crate::browser_session::Navigation {
-                    label: "Host".into(),
-                    url: "/host/".into(),
-                }
-            }
-            fn entry_path(&self) -> &str {
-                "/host-entry"
-            }
-        }
         let dir = tempfile::tempdir().unwrap();
-        let config = crate::config::Config::load(None, Some(dir.path()), None, None).unwrap();
+        let config = crate::config::Config::load(None, dir.path()).unwrap();
         config.layout().create().unwrap();
         let store = store::Store::open(&config.layout().db(), 1 << 20, 1).unwrap();
-        let token = store
+        let agent = store
             .write_sync(|w| {
-                crate::domain::members::insert_member(
-                    w,
-                    &crate::domain::members::NewMember {
-                        name: "fixture-owner".into(),
-                        display_name: None,
-                        kind: MemberKind::Owner,
-                    },
-                )?;
-                Ok(issue_token(w, "fixture-owner", "fixture")?.1)
+                for (name, kind) in [
+                    ("fixture-owner", MemberKind::Owner),
+                    ("fixture-agent", MemberKind::Agent),
+                ] {
+                    crate::domain::members::insert_member(
+                        w,
+                        &crate::domain::members::NewMember {
+                            name: name.into(),
+                            display_name: None,
+                            kind,
+                        },
+                    )?;
+                }
+                Ok(issue_token(w, "fixture-agent", "fixture")?.1)
             })
             .unwrap();
         let app = App::new(
@@ -472,83 +312,65 @@ mod tests {
             Arc::new(crate::vault::Memory::default()),
             "http://127.0.0.1:7878".into(),
         );
-        let owner = Caller {
-            member: authenticate_token(&app, &token).await.unwrap(),
+        let bearer = |token: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
+            headers
         };
-        let old_link = crate::domain::members::entry_link(&app, &owner).unwrap();
-        let (_, old_cookie) =
-            crate::domain::members::enter(&app, old_link.url.split_once('#').unwrap().1.into())
-                .await
-                .unwrap();
-        let _ = app.browser_session.set(Arc::new(Host));
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "cookie",
-            format!("branvil_session_7878={old_cookie}")
-                .parse()
-                .unwrap(),
-        );
+        let mut session = HeaderMap::new();
+        session.insert("cookie", "host_session_7878=fixture".parse().unwrap());
+        // Without a host, only member tokens authenticate.
         assert_eq!(
-            authenticate(&app, &Method::GET, &headers)
+            authenticate(&app, &Method::GET, &session)
                 .await
                 .unwrap_err()
                 .code,
             "unauthorized"
         );
-        headers.insert("cookie", "host_session_7878=fixture".parse().unwrap());
+        let _ = app.host.set(Arc::new(Host));
         assert!(
-            authenticate(&app, &Method::GET, &headers)
+            authenticate(&app, &Method::GET, &session)
                 .await
                 .unwrap()
                 .is_owner()
         );
         for method in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
-            headers.remove(CSRF_HEADER);
+            session.remove(CSRF_HEADER);
             assert_eq!(
-                authenticate(&app, &method, &headers)
+                authenticate(&app, &method, &session)
                     .await
                     .unwrap_err()
                     .code,
                 "csrf_mismatch"
             );
-            headers.insert(CSRF_HEADER, "host-csrf".parse().unwrap());
+            session.insert(CSRF_HEADER, "host-csrf".parse().unwrap());
             assert!(
-                authenticate(&app, &method, &headers)
+                authenticate(&app, &method, &session)
                     .await
                     .unwrap()
                     .is_owner()
             );
         }
-        headers.clear();
-        headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
         assert!(
-            authenticate(&app, &Method::POST, &headers)
+            authenticate(&app, &Method::POST, &bearer("host-owner-token"))
                 .await
                 .unwrap()
                 .is_owner()
         );
-        assert!(
-            crate::domain::members::entry_link(&app, &owner)
-                .unwrap()
-                .url
-                .contains("/host-entry#")
-        );
-    }
-
-    #[test]
-    fn the_session_cookie_is_named_by_the_port() {
-        assert_eq!(
-            session_cookie_name("http://127.0.0.1:7879"),
-            "branvil_session_7879"
-        );
-        assert_eq!(
-            session_cookie_name("https://hub.example"),
-            "branvil_session"
-        );
-        assert_eq!(
-            session_cookie_name("http://[::1]:7878"),
-            "branvil_session_7878"
-        );
+        let member = authenticate(&app, &Method::POST, &bearer(&agent))
+            .await
+            .unwrap();
+        assert_eq!(member.name(), "fixture-agent");
+        for refused in ["other-token", "bvt_host-owner-token", ""] {
+            assert_eq!(
+                authenticate(&app, &Method::GET, &bearer(refused))
+                    .await
+                    .unwrap_err()
+                    .code,
+                "unauthorized",
+                "{refused}"
+            );
+        }
     }
 
     #[test]

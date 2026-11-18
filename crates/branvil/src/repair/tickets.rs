@@ -852,10 +852,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     fn app(path: &std::path::Path) -> crate::app::Shared {
-        let config = crate::config::Config::load(None, Some(path), None, None).unwrap();
+        let config = crate::config::Config::load(None, path).unwrap();
         config.layout().create().unwrap();
         let store = store::Store::open(&config.layout().db(), 1 << 20, 1).unwrap();
-        let vault = crate::vault::Sealed::new(&path.join("vault"), &[7; 32]).unwrap();
+        let vault = crate::test_support::FileVault(path.join("vault"));
         App::new(
             config,
             "http://127.0.0.1:7878".into(),

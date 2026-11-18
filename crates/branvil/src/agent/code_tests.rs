@@ -1,6 +1,7 @@
 use super::mentions;
 use super::*;
-use crate::api::{MemberApi, Running, initialize};
+use crate::api::MemberApi;
+use crate::test_support::{Running, initialize};
 #[tokio::test]
 async fn member_identity_scope_and_resource_boundaries() {
     let temp = tempfile::tempdir().unwrap();

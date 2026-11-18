@@ -741,7 +741,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_removal_during_a_setting_leaves_the_vault_and_the_record_agreeing() {
         let dir = tempfile::tempdir().unwrap();
-        let config = crate::config::Config::load(None, Some(dir.path()), None, None).unwrap();
+        let config = crate::config::Config::load(None, dir.path()).unwrap();
         config.layout().create().unwrap();
         let store = store::Store::open(&config.layout().db(), 1 << 20, 1).unwrap();
         store

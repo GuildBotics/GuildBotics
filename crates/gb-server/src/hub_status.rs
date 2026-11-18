@@ -257,8 +257,8 @@ mod tests {
         )
         .unwrap();
         let data = root.path().join("branvil");
-        let _ = branvil::api::initialize(&data, "owner").unwrap();
-        let running = branvil::api::Running::start(
+        branvil::test_support::initialize(&data, "owner").unwrap();
+        let running = branvil::test_support::Running::start(
             &data,
             std::sync::Arc::new(branvil::vault::Memory::default()),
         )

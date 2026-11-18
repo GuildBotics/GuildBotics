@@ -66,7 +66,7 @@ function buildUrl(path: string, query?: Query): string {
 
 const transport = createApiClient({
   prefix: API_PREFIX,
-  csrfHeader: "X-Branvil-CSRF",
+  csrfHeader: "X-GuildBotics-CSRF",
   readError: async (response) => {
     let code = "http_error";
     let message = `${response.status} ${response.statusText}`.trim();

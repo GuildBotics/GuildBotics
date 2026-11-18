@@ -751,8 +751,10 @@ pub async fn build(
         workspace,
         &name,
         build_timeout(language),
+        // On the heap: the build's future outgrows a worker's stack in a
+        // debug build.
         move |directory, cancelled| async move {
-            runtime::build_snapshot(
+            Box::pin(runtime::build_snapshot(
                 runtime::Build {
                     home: &runtime_home,
                     directory: &directory,
@@ -764,7 +766,7 @@ pub async fn build(
                 },
                 on_line,
                 cancelled,
-            )
+            ))
             .await
         },
     )

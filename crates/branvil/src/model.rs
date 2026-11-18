@@ -3,7 +3,7 @@
 //! Records are the stored form, not the API shape: views are assembled in
 //! `domain` from these records plus live Git state. Every derived index entry
 //! of a record comes from one function here, used both when the record is
-//! written and when `branvil admin check` / `reindex` rebuilds the indexes, so
+//! written and when `server hub-data check` / `reindex` rebuilds the indexes, so
 //! the two cannot disagree.
 
 use redb::TableHandle;
@@ -17,7 +17,7 @@ use crate::util::fold;
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MemberKind {
-    /// The one person who uses Branvil, created by `branvil init`: may do
+    /// The one person who uses Branvil, created at the first start: may do
     /// everything.
     Owner,
     /// A GuildBotics AI member: reads everything and works on tickets, pull
@@ -87,14 +87,6 @@ impl Token {
     pub fn key(id: &str) -> Vec<u8> {
         Key::new().s(id).bytes()
     }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Session {
-    pub member: String,
-    pub csrf: String,
-    pub created_at: String,
-    pub expires_at: String,
 }
 
 /// A workspace: the repositories under it and its one board.

@@ -797,7 +797,7 @@ fn held_approved_work_is_normal_until_main_recovers_or_repair_closes() {
     }).unwrap();
 }
 
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 #[test]
 fn fixture_target_is_not_hidden_by_another_reusable_attempt() {
     let (_d, s) = store();

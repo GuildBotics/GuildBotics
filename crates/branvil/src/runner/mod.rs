@@ -1,4 +1,4 @@
-//! `branvil runner`: the CI runner, a separate process from the service. It
+//! `guildbotics runner`: the CI runner, a separate process from the service. It
 //! claims attempts over the runner API, checks the commit out of a Git bundle
 //! made by the service (it never touches the service's repositories or the
 //! database), runs the job in a microVM, streams the log, uploads artifacts,
@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
-use clap::Subcommand;
+use clap::{Args, Subcommand};
 use serde::Deserialize;
 use tokio::sync::{mpsc, watch};
 
@@ -24,8 +24,62 @@ use crate::ci::pipeline::JobDef;
 use crate::ci::queue::{Basis, ResultInfo, Reuse};
 use executor::{Executor, Health, JobRun, Microsandbox, Outcome};
 
+/// The runner's command line: run it, or one of its subcommands.
+#[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub struct RunnerArgs {
+    #[command(subcommand)]
+    command: Option<RunnerCommand>,
+    /// Per-job work directories and the dependency cache [default: ci.executor.work_dir of the configuration, else ~/.branvil/runner]
+    #[arg(long)]
+    work_dir: Option<PathBuf>,
+    /// Base URL of the server [default: the server on this machine]
+    #[arg(long, env = "BRANVIL_URL")]
+    url: Option<String>,
+    /// The runner's token
+    #[arg(long, env = "BRANVIL_TOKEN", hide_env_values = true)]
+    token: Option<String>,
+    /// Configuration file whose limits apply to every job, read again before each [default: the one of the data directory]
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// Data directory of the configuration [default: the server's]
+    #[arg(long, env = "BRANVIL_DATA_DIR")]
+    data_dir: Option<PathBuf>,
+}
+
+/// Runs the runner command `args`: `url` and `data_dir` are the server's on
+/// this machine, used when `args` names none, and `owner_token` gives the
+/// owner's token for `register`.
+pub async fn main(
+    args: RunnerArgs,
+    url: String,
+    data_dir: PathBuf,
+    owner_token: impl Future<Output = anyhow::Result<String>>,
+) -> anyhow::Result<u8> {
+    let data_dir = args.data_dir.unwrap_or(data_dir);
+    // A configuration named explicitly (the supervised runner gets the
+    // service's) has to be read: its limits apply to every job.
+    let config = match &args.config {
+        Some(file) => Some(crate::config::Config::load(Some(file), &data_dir)?),
+        None => crate::config::Config::load(None, &data_dir).ok(),
+    };
+    let url = args.url.unwrap_or(url);
+    let settings = Settings::new(url, args.token, args.work_dir, config.as_ref())?;
+    match args.command {
+        None => run(settings).await.map(|_| 0),
+        Some(RunnerCommand::Register { name }) => {
+            register(&settings.url, &owner_token.await?, &name)
+                .await
+                .map(|_| 0)
+        }
+        Some(RunnerCommand::Pull { image }) => pull(&settings, &image).await.map(|_| 0),
+        Some(RunnerCommand::Doctor) => doctor(&settings).await,
+        Some(RunnerCommand::InstallMsb { from }) => install_msb(&from).map(|_| 0),
+    }
+}
+
 #[derive(Subcommand)]
-pub enum RunnerCommand {
+enum RunnerCommand {
     /// Create a runner member and print its token once (needs the owner's token)
     Register {
         /// Name of the runner member, e.g. runner1
@@ -62,15 +116,12 @@ pub struct Settings {
 
 impl Settings {
     pub fn new(
-        url: Option<String>,
+        url: String,
         token: Option<String>,
         work_dir: Option<PathBuf>,
         config: Option<&crate::config::Config>,
     ) -> anyhow::Result<Self> {
         let ci = config.map(|c| c.ci.clone()).unwrap_or_default();
-        let url = url
-            .or_else(|| config.and_then(|c| c.base_url.clone()))
-            .unwrap_or_else(|| format!("http://{}", crate::config::DEFAULT_LISTEN));
         Ok(Self {
             url: crate::config::normalize_base_url(&url)?,
             token,
@@ -100,7 +151,7 @@ impl Settings {
         let token = self
             .token
             .clone()
-            .context("a runner token is needed: pass --token or set BRANVIL_TOKEN (`branvil runner register`)")?;
+            .context("a runner token is needed: pass --token or set BRANVIL_TOKEN (`guildbotics runner register`)")?;
         Ok(Api {
             url: self.url.clone(),
             token,
@@ -328,7 +379,7 @@ pub async fn register(url: &str, owner_token: &str, name: &str) -> anyhow::Resul
         serde_json::json!({"name": name, "kind": "runner"}),
     )
     .await
-    .with_context(|| format!("Branvil is not reachable at {url}"))?;
+    .with_context(|| format!("the server is not reachable at {url}"))?;
     if !resp.status().is_success() {
         let v: serde_json::Value = resp.json().await.unwrap_or_default();
         bail!(
@@ -454,7 +505,7 @@ pub async fn run(settings: Settings) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("cannot reach Branvil at {}: {e}", settings.url))?;
     if me["kind"] != "runner" {
         bail!(
-            "the token belongs to a {} member; the runner needs a runner member's token (`branvil runner register`)",
+            "the token belongs to a {} member; the runner needs a runner member's token (`guildbotics runner register`)",
             me["kind"]
         );
     }
@@ -517,7 +568,7 @@ impl Runner {
         let mut last = self.limits.lock().unwrap();
         let (limits, problem) = &mut *last;
         if let Some((file, data_dir)) = self.config.as_ref().filter(|(f, _)| f.is_file()) {
-            match crate::config::Config::load(Some(file), Some(data_dir), None, None) {
+            match crate::config::Config::load(Some(file), data_dir) {
                 Ok(c) => (*limits, *problem) = (c.ci.executor, None),
                 Err(e) => {
                     let e = format!("{e:#}");
@@ -751,7 +802,7 @@ impl Runner {
         };
         let Some(digest) = held else {
             let why = format!(
-                "The image {} is not in the runner's image cache (jobs never pull); pull or load it under Settings → CI for the runner on the Branvil machine, or run `branvil runner pull {}` on the runner's machine.",
+                "The image {} is not in the runner's image cache (jobs never pull); pull or load it under Settings → CI for the runner on the Hub, or run `guildbotics runner pull {}` on the runner's machine.",
                 job.image, job.image
             );
             say(why.clone()).await;
@@ -1365,8 +1416,7 @@ mod tests {
         let data = dir.path().join("data");
         std::fs::create_dir_all(&data).unwrap();
         std::fs::write(data.join("branvil.toml"), "[ci]\nlease_secs = 3\n").unwrap();
-        let config =
-            crate::config::Config::load(None, Some(&data), Some("127.0.0.1:0"), None).unwrap();
+        let config = crate::config::Config::load(None, &data).unwrap();
         let layout = config.layout();
         layout.create().unwrap();
         let store = crate::store::Store::open(&layout.db(), 1 << 20, 2).unwrap();
@@ -1402,7 +1452,9 @@ mod tests {
             std::sync::Arc::new(crate::vault::Memory::default()),
             url.clone(),
         );
-        let mut router = crate::http::router(app.clone());
+        // The test server's routes too: the test opens its PR over HTTP.
+        let mut router =
+            crate::http::router_with(app.clone(), crate::test_support::routes::routes());
         if let Some(gate) = gate {
             router = router.layer(axum::middleware::from_fn(
                 move |request: axum::extract::Request, next: axum::middleware::Next| {

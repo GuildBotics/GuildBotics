@@ -145,8 +145,8 @@ async fn accounts_are_checked_with_the_host_and_their_tokens_never_returned() {
     let aiko = |n: &branvil::vault::Secrets| n.account("aiko", "github");
     let kept: Value = serde_json::from_str(&s.kept(aiko).unwrap()).unwrap();
     assert_eq!(kept, json!({"token": AIKO_TOKEN}));
-    assert!(!s.vault_shows(AIKO_TOKEN));
-    assert_eq!(s.secret_files(), ["owner.token"]);
+    assert!(!s.data_shows(AIKO_TOKEN));
+    assert!(!s.data.join("secrets").exists());
     let (st, _) = s.delete("/members/aiko/accounts/../x", &w.owner).await;
     assert_ne!(st, StatusCode::OK);
     let (st, v) = s.delete("/members/aiko/accounts/gitlab", &w.owner).await;
@@ -200,7 +200,7 @@ async fn a_repository_follows_its_upstream_and_its_default_branch_changes_only_t
     // Nobody pushes main any more, not even the owner; merges go upstream.
     std::fs::write(w.work.join("README.md"), "direct\n").unwrap();
     git_ok(&w.work, &["commit", "-qam", "direct"]);
-    let out = git_as(&w.work, "alice", &w.owner, &["push", "origin", "main"]);
+    let out = git_as(&w.work, "alice", &w.owner_git, &["push", "origin", "main"]);
     assert!(!out.status.success());
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("follows the upstream"),
@@ -1515,13 +1515,14 @@ async fn a_vault_that_cannot_keep_or_open_secrets_stops_them_with_the_reason() {
     let account = "/members/aiko/accounts/github";
     let webhook = json!({"url": "https://hooks.example.test/services/T0/hook-5e1a"});
 
-    // Vault files the key does not open: reads report it as a missing
+    // Vault entries that cannot be read: reads report it as a missing
     // credential does, and the service starts all the same.
     for file in [
         w.server.vault_file(|n| n.account("alice", "github")),
         w.server.vault_file(|n| n.webhook()),
     ] {
-        std::fs::write(file, b"twelve bytes and some more").unwrap();
+        let _ = std::fs::remove_file(&file);
+        std::fs::create_dir_all(file).unwrap();
     }
     w.restart(&[]);
     let s = &w.server;
@@ -1532,14 +1533,10 @@ async fn a_vault_that_cannot_keep_or_open_secrets_stops_them_with_the_reason() {
     );
     let message = v["error"]["message"].as_str().unwrap();
     assert!(message.contains("cannot be read"), "{message}");
-    assert!(message.contains("vault file"), "{message}");
     let view = s.ok("/admin/webhook", &w.owner).await;
     assert_eq!(view["set"], false, "{view}");
-    assert!(
-        view["problem"].as_str().unwrap().contains("vault file"),
-        "{view}"
-    );
-    assert_eq!(s.secret_files(), ["owner.token"]);
+    assert!(!view["problem"].as_str().unwrap().is_empty(), "{view}");
+    assert!(!s.data.join("secrets").exists());
 
     // The embedding host cannot provide a vault: report its reason.
     w.restart(&[("BRANVIL_TEST_NO_VAULT", "1")]);
@@ -1571,8 +1568,8 @@ async fn a_vault_that_cannot_keep_or_open_secrets_stops_them_with_the_reason() {
         v["error"]["message"].as_str().unwrap().contains("no vault"),
         "{v}"
     );
-    assert!(!s.vault_shows(AIKO_TOKEN) && !s.vault_shows("hook-5e1a"));
-    assert_eq!(s.secret_files(), ["owner.token"]);
+    assert!(!s.data_shows(AIKO_TOKEN) && !s.data_shows("hook-5e1a"));
+    assert!(!s.data.join("secrets").exists());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1625,8 +1622,8 @@ async fn an_app_account_is_checked_with_an_installation_token_and_replaces_a_tok
     // The vault now holds the app (the token is gone), sealed.
     let kept: Value = serde_json::from_str(&s.kept(aiko).unwrap()).unwrap();
     assert_eq!(kept, app_body(&key.pem, INSTALLATION));
-    assert!(!s.vault_shows(&key_line(&key)));
-    assert_eq!(s.secret_files(), ["owner.token"]);
+    assert!(!s.data_shows(&key_line(&key)));
+    assert!(!s.data.join("secrets").exists());
     // Never in an answer: neither the key nor an installation token.
     let me = s.ok("/me", &w.aiko).await.to_string();
     let members = s.ok("/members?limit=100", &w.owner).await.to_string();

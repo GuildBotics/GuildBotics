@@ -1,19 +1,19 @@
 # Architecture
 
 The Rust host embeds Branvil. Branvil starts Git child processes and a
-separate CI runner process (`guildbotics branvil runner`) that executes jobs in microVMs. It
+separate CI runner process (`guildbotics runner`) that executes jobs in microVMs. It
 listens on loopback only; other machines reach it through OpenSSH port forwarding
 managed by an OS service (see `README.md`). The data API is the
 boundary into the data. The GUI and CLI use HTTP; an embedded provider uses
 `api::DataApi` directly in the service process. Both call the same domain
 operations, with the same member permissions, locks, events and CI triggers.
-`prepare_embedded` takes the host origin, vault and `browser_session::BrowserSession`
+`prepare_embedded` takes the data directory, the host origin, vault and `host::Host`
 authenticator and returns an `Embedded` service with
 its router, `DataApi`, and shutdown methods. It never binds. The host installs a
 503 fallback until Git locking, hook installation and ref recovery finish,
 then mounts that router behind its own routes on one listener (7878 by default).
 The origin is used for public links, hook callbacks and runner supervision.
-`api::Running` remains a standalone test host using the configured `listen`.
+`test_support::Running` is the tests' server, with a host of its own (`TestHost`) on a free loopback port.
 The host shares the process, so it acts without a token: `DataApi::owner()`
 acts as the owner, and `DataApi::agent(name, display_name)` as the agent
 `name`, which it creates with that display name when missing (GuildBotics
@@ -31,7 +31,7 @@ provider ────┼─ HTTP (axum) ─ domain ──┤
 branvil CLI ─┘        │                └─ git (bare repos, argv only)
 git client ── Smart HTTP ─ git http-backend ─ receive-pack ─ Branvil hooks ─┐
                                                                             └─ loopback callback ─ refs
-guildbotics branvil runner ── runner API (HTTP) ─ ci ─ redb queue · ci/ files      (no database, no repositories)
+guildbotics runner ── runner API (HTTP) ─ ci ─ redb queue · ci/ files      (no database, no repositories)
      └─ msb run ─ microVM per job (only its work and log directories mounted, no network)
 ```
 
@@ -42,25 +42,24 @@ The pieces of the authentication that do not depend on Branvil's records (single
 | Module | Responsibility |
 | --- | --- |
 | `lib.rs`, `main.rs`, `cli.rs` | clap commands (`main.rs` is the `branvil` executable; another one runs the same commands under its own, and the service in its process, through `lib.rs`): `init`, `serve`, `admin check|reindex|upgrade` (offline, on the data directory), and `member`/`workspace`/`repo`/`backup`/`open` (clients of the running API, with the owner's token file by default) |
-| `config.rs` | `branvil.toml`, data directory layout, loopback-only listen, fixed base URL |
+| `config.rs` | `branvil.toml` and the data directory layout |
 | `store.rs` | redb tables, order-preserving keys, JSON records, bounded blocking executor (`Store::read` / `Store::write`), the schema version and the upgrade frame (exclusive open, reads, then a copy and one write transaction) |
 | `upgrade.rs` | what the upgrade from the previous schema version changes in the records (replaced at each version) |
 | `model.rs` | stored records and the one function per record that derives its index entries; consistency check and rebuild |
-| `auth.rs` | tokens (`bvt_<id>_<secret>`, SHA-256 stored, constant-time compare), the owner's token file (`secrets/owner.token`, replaced at start when missing or invalid), sessions with CSRF secret, the checks of what a member's kind may do |
-| `domain/` | the operations: `members` (also entry links and sessions), `repos` (workspaces and their repositories), `tickets` (a repository's tickets, comments, the workspace's board and its cards), `attachments` (images of a repository's tickets, files in `<data>/attachments/`, and the hourly deletion of those no ticket refers to), `pulls` (PRs, reviews, threads, diffs, checks, merge) |
+| `auth.rs` | tokens (`bvt_<id>_<secret>`, SHA-256 stored, constant-time compare), the host's owner token and browser session (`host.rs`), the checks of what a member's kind may do |
+| `domain/` | the operations: `members`, `repos` (workspaces and their repositories), `tickets` (a repository's tickets, comments, the workspace's board and its cards), `attachments` (images of a repository's tickets, files in `<data>/attachments/`, and the hourly deletion of those no ticket refers to), `pulls` (PRs, reviews, threads, diffs, checks, merge) |
 | `git.rs` | Git commands with a sanitized environment (no `GIT_*` of the service, no system/global config), time/output/concurrency limits |
 | `smart_http.rs` | `git http-backend` as CGI with Basic auth and streaming bodies |
-| `hooks.rs` | Branvil-owned hook scripts and the `branvil hook` entry point they exec |
-| `invocation.rs` | how Branvil's commands are started again on the running executable (the hook scripts, the automatic runner): none before them on `branvil`, the prefix another executable installed (`guildbotics branvil`) |
+| `hooks.rs` | Branvil-owned hook scripts and the `guildbotics server git-hook` entry point they exec |
 | `refs.rs` | the ref-change boundary: snapshot recording, journal, startup recovery, push policy |
 | `ci/` | CI in the service (see below and `docs/ci.md`): `pipeline` (schema), `queue` (runs, attempts, every state change), `files` (logs, artifacts, retention), `api` (job and runner endpoints), `supervise` (`[ci] runner = "auto"`) |
-| `runner/` | `guildbotics branvil runner`: the claim/heartbeat/finish loop, `executor` (the `Executor` trait and the microsandbox implementation over the `msb` CLI), `workspace` (source checkout, artifacts without links, dependency cache), `zip` |
+| `runner/` | `guildbotics runner`: the claim/heartbeat/finish loop, `executor` (the `Executor` trait and the microsandbox implementation over the `msb` CLI), `workspace` (source checkout, artifacts without links, dependency cache), `zip` |
 | `upstream/` | the upstream code host: the provider boundary (`host.rs`, `github.rs`), members' accounts, following the default branch, publishing pull requests, carrying changes both ways, the host's check runs (see below) |
 | `landing.rs` | per-pull landing conditions, pair checks and conflict/host failure comments |
 | `ci/notify.rs` | sends indexed repair-ticket notices outside transactions and clears them after delivery |
 | `webhook.rs` | bounded webhook delivery shared by the service and offline CLI; never exposes the URL in errors |
 | `autoland.rs` | the task that checks every open PR, automatically merges or publishes with `auto_land`, and tells the webhook when host checks pass; creates repair tickets then delivers their pending notices (`ci/notify.rs`) |
-| `backup.rs` | `POST /admin/backup` (online, consistent) and the offline `guildbotics branvil restore` (`docs/backup-restore.md`) |
+| `backup.rs` | `POST /admin/backup` (online, consistent) and the offline `guildbotics server hub-data restore` (`docs/backup-restore.md`) |
 | `events.rs` | bounded broadcast for SSE and the landing task |
 | `http.rs` | router, Host/Origin guard, security headers, idempotency middleware, extractors, SSE, GUI files |
 | `references.rs` | Markdown reference syntax and prose ranges, shared by display and upstream rewriting |
@@ -71,7 +70,7 @@ The pieces of the authentication that do not depend on Branvil's records (single
 `http.rs` applies, in order: the Host/Origin guard (every route except the
 hook callbacks), then for `/api/v1` the idempotency middleware (POST with
 `Idempotency-Key`), then the handler. Handlers authenticate through the
-`Caller` extractor (Bearer token, or session cookie plus `X-Branvil-CSRF` on
+`Caller` extractor (Bearer token, or session cookie plus `X-GuildBotics-CSRF` on
 writes), parse the request, and call one `domain` function. Domain functions
 check what the caller's kind may do (`Caller::require_owner`,
 `Caller::require_agent_or_owner`: `403` otherwise), read Git when they need tips
@@ -145,7 +144,7 @@ are atomic together.
    command and host request is bounded by its own time limit (see
    `docs/ci.md`, "Stopping the service").
 2. **Pushes** are checked before and recorded after:
-   - `pre-receive` (Branvil's script → `branvil hook pre-receive` → `POST
+   - `pre-receive` (Branvil's script → `guildbotics server git-hook pre-receive` → `POST
      /-/hooks/pre-receive` on the bound loopback address with a per-process
      secret from the Git child's environment) applies `refs::check_push`:
      no runner, branches and tags only, protected branches never pushed,
@@ -510,7 +509,7 @@ repository lock (in id order), copies the database as of one read transaction
 its own Git runner (Smart HTTP children may hold the shared Git permits while
 their post-receive waits for those locks). Then it releases the locks and
 copies CI logs and artifacts, tickets' attachments, and the configuration, and
-writes a manifest with checksums. `guildbotics branvil restore` is offline. See `docs/backup-restore.md`.
+writes a manifest with checksums. `guildbotics server hub-data restore` is offline. See `docs/backup-restore.md`.
 
 ## Events
 
@@ -523,21 +522,11 @@ The landing task is a subscriber of the same channel inside the service
 
 ## Entering the GUI
 
-There is one person, the owner, and no sign-in screen. The owner's token text
-is kept in `<data>/secrets/owner.token`; whoever can read that file (the Hub
-machine's OS user) is the owner. A browser gets a session only through an
-entry link:
-
-1. A client holding the owner's token calls `POST /api/v1/session/links` and
-   receives `{base_url}/-/enter#<code>` (single use, 60 s, kept in memory as a
-   hash; the code is in the fragment, so it is in no request line, log, or
-   Referer).
-2. The browser opens the link; `/-/enter` removes the code from the address bar
-   and exchanges it at `POST /api/v1/session` for the session cookie
-   (`HttpOnly`, `SameSite=Strict`) and its CSRF value.
-
-`POST /api/v1/session/links` is the only way a GUI session starts, for every
-client present and future. On the Hub machine the client is `guildbotics branvil open`.
+There is one person, the owner, and GuildBotics authenticates them: the
+browser enters through GuildBotics' single-use entry link (`guildbotics open`),
+and the session cookie it gets is accepted here as the owner's
+(`host::Host`), with GuildBotics' CSRF value. The service keeps no sessions
+and no owner token of its own.
 Agents never enter the GUI. An agent outside GuildBotics uses its own token
 with the API and Git; GuildBotics acts as its agents in-process and, for
 member Git, issues the agent a token for the run (labelled `guildbotics-git`)

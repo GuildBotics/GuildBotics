@@ -121,7 +121,7 @@ case "$name" in
     current|guildbotics-bin|update-from|update-to|guildbotics)
         build=$(sed -n 's/^# build: //p' "$0")
         # The settings this program runs with, as pasted guidance gives them.
-        printf 'home=%s branvil=%s identity=%s port=%s\n' "${GUILDBOTICS_HOME-unset}" \
+        printf 'home=%s code-host=%s identity=%s port=%s\n' "${GUILDBOTICS_HOME-unset}" \
             "${BRANVIL_DATA_DIR-unset}" "${GUILDBOTICS_IDENTITY_ROOT-unset}" "${GUILDBOTICS_SERVER_PORT-unset}" \
             >"$FAKE_ROOT/settings"
         printf '%s' "$build" >>"$FAKE_ROOT/actions"
@@ -133,15 +133,26 @@ case "$name" in
             server:hub-data)
                 case "$3" in
                     backup) touch "$5/manifest.json" ;;
+                    restore)
+                        [ -f "$5/manifest.json" ] || exit 1
+                        mkdir "$7"
+                        touch "$7/manifest.json" "$7/rehearsed"
+                        ;;
                     upgrade|check)
                         if [ "$#" -gt 3 ]; then
-                            [ -f "$5/manifest.json" ] || exit 1
+                            # A restored backup: the rehearsal.
+                            [ -f "$5/rehearsed" ] || exit 1
+                            [ ! -f "$FAKE_ROOT/fail-rehearsal" ] || exit 1
                             [ ! -f "$FAKE_ROOT/fail-gb-rehearsal" ] || exit 1
                         else
                             [ ! -f "$FAKE_ROOT/holder" ] || exit 1
+                            if [ "$3" = upgrade ] && [ -f "$FAKE_ROOT/change-schema" ]; then touch "$FAKE_ROOT/new-schema"; fi
                             if [ "$build" = old ]; then
                                 [ ! -f "$FAKE_ROOT/gb-new-schema" ] || exit 1
+                                [ "$3" != check ] || [ ! -f "$FAKE_ROOT/new-schema" ] || exit 1
                             else
+                                # The new build reads only converted data.
+                                if [ "$3" = check ] && [ -f "$FAKE_ROOT/change-schema" ] && [ ! -f "$FAKE_ROOT/new-schema" ]; then exit 1; fi
                                 if [ "$3" = upgrade ] && [ -f "$FAKE_ROOT/change-gb-schema" ]; then touch "$FAKE_ROOT/gb-new-schema"; fi
                                 [ ! -f "$FAKE_ROOT/fail-gb-live" ] || exit 1
                             fi
@@ -245,34 +256,6 @@ case "$name" in
                 # Like guildbotics install, copy this executable to the machine root.
                 mkdir -p "$GUILDBOTICS_HOME/bin"
                 cp "$0" "$GUILDBOTICS_HOME/bin/guildbotics"
-                ;;
-            branvil:backup) touch "$6/manifest.json" ;;
-            branvil:restore)
-                [ -f "$4/manifest.json" ] || exit 1
-                mkdir "$6"
-                touch "$6/rehearsed"
-                ;;
-            branvil:admin)
-                case "$3:$5" in
-                    upgrade:*/operation/rehearsal)
-                        [ -f "$5/rehearsed" ] || exit 1
-                        touch "$5/upgraded"
-                        exit 3
-                        ;;
-                    upgrade:*)
-                        [ ! -f "$FAKE_ROOT/holder" ] || exit 1
-                        if [ -f "$FAKE_ROOT/change-schema" ]; then touch "$FAKE_ROOT/new-schema"; fi
-                        exit 0
-                        ;;
-                    check:*/operation/rehearsal)
-                        [ -f "$5/upgraded" ] && [ ! -f "$FAKE_ROOT/fail-rehearsal" ]
-                        ;;
-                    check:*)
-                        [ ! -f "$FAKE_ROOT/holder" ] &&
-                        { [ "$build" != old ] || [ ! -f "$FAKE_ROOT/new-schema" ]; }
-                        ;;
-                    *) exit 2 ;;
-                esac
                 ;;
             *) exit 2 ;;
         esac

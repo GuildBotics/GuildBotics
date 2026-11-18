@@ -11,11 +11,71 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Copy)]
-pub enum Operation {
-    Backup,
-    Check,
-    Upgrade,
+/// Where a backup keeps the code host's data, beside the numbered copies.
+const CODE_HOST: &str = "code-host";
+
+/// Writes a backup of the Hub's records into `to`, a new or empty directory:
+/// the running server writes the code host's, and the records are copied.
+/// The manifest, written last, marks the backup complete.
+pub async fn backup(to: &Path) -> anyhow::Result<()> {
+    let to = std::path::absolute(to)?;
+    fs::create_dir_all(&to)?;
+    anyhow::ensure!(
+        fs::read_dir(&to)?.next().is_none(),
+        "backup destination must be empty"
+    );
+    let (url, token) = crate::client::local_owner().await?;
+    branvil::request_backup(&url, &token, &to.join(CODE_HOST)).await?;
+    records_backup(&roots()?, &to)
+}
+
+/// Restores the backup `from` into `data_dir`, a new or empty directory,
+/// and checks it: the result is a backup that `check` and `upgrade` take as
+/// `--data-dir`.
+pub async fn restore(from: &Path, data_dir: &Path) -> anyhow::Result<()> {
+    let roots = archive_roots(from)?;
+    let data_dir = host_path::directory(data_dir, true)?;
+    fs::create_dir_all(&data_dir)?;
+    anyhow::ensure!(
+        fs::read_dir(&data_dir)?.next().is_none(),
+        "restore destination must be empty"
+    );
+    for (index, root) in roots.iter().enumerate() {
+        let copied = data_dir.join(index.to_string()).join(".guildbotics");
+        fs::create_dir_all(&copied)?;
+        each(root, &mut |source, relative| {
+            let target = copied.join(relative);
+            if source.is_dir() {
+                fs::create_dir_all(&target)?;
+            } else {
+                fs::create_dir_all(target.parent().expect("data file has parent"))?;
+                fs::copy(source, &target)?;
+            }
+            Ok(())
+        })?;
+    }
+    anyhow::ensure!(
+        branvil::restore(&from.join(CODE_HOST), &data_dir.join(CODE_HOST)).await? == 0,
+        "the restored code host data has problems"
+    );
+    fs::copy(from.join("manifest.json"), data_dir.join("manifest.json"))?;
+    for root in archive_roots(&data_dir)? {
+        check_root(&root, files::SHARED_RECORD_SCHEMA_VERSION)?;
+    }
+    Ok(())
+}
+
+/// Checks, upgrades, or reindexes the Hub's records with no server running:
+/// the backup `archive` when given, else this machine's.
+pub fn maintain(operation: branvil::Maintenance, archive: Option<&Path>) -> anyhow::Result<()> {
+    let code_host = match archive {
+        Some(archive) => archive.join(CODE_HOST),
+        None => crate::endpoint::code_host_data()?,
+    };
+    if !matches!(operation, branvil::Maintenance::Reindex) {
+        records(matches!(operation, branvil::Maintenance::Upgrade), archive)?;
+    }
+    branvil::maintain(operation, &code_host)
 }
 
 fn roots() -> anyhow::Result<Vec<PathBuf>> {
@@ -32,41 +92,23 @@ fn registered_roots(data: &Path, identity: &Path) -> anyhow::Result<Vec<PathBuf>
     Ok([vec![identity], workspaces].concat())
 }
 
-pub fn execute(
-    operation: Operation,
-    archive: Option<&Path>,
-    to: Option<&Path>,
-) -> anyhow::Result<()> {
-    match operation {
-        Operation::Backup => {
-            anyhow::ensure!(
-                archive.is_none(),
-                "backup cannot select an archive as input"
-            );
-            backup(
-                &roots()?,
-                to.ok_or_else(|| anyhow::anyhow!("backup requires --to"))?,
-            )
-        }
-        Operation::Check | Operation::Upgrade => {
-            anyhow::ensure!(to.is_none(), "--to is only valid for backup");
-            let roots = match archive {
-                Some(archive) => archive_roots(archive)?,
-                None => roots()?,
-            };
-            if let Operation::Upgrade = operation {
-                let device = DeviceKey {
-                    machine_root: home::machine_root()?,
-                    keychain: &SystemKeychain,
-                };
-                upgrade(&roots, &device)?;
-            }
-            for root in &roots {
-                check_root(root, files::SHARED_RECORD_SCHEMA_VERSION)?;
-            }
-            Ok(())
-        }
+/// Checks the shared records, upgrading them first with `upgrade`.
+fn records(upgrade_first: bool, archive: Option<&Path>) -> anyhow::Result<()> {
+    let roots = match archive {
+        Some(archive) => archive_roots(archive)?,
+        None => roots()?,
+    };
+    if upgrade_first {
+        let device = DeviceKey {
+            machine_root: home::machine_root()?,
+            keychain: &SystemKeychain,
+        };
+        upgrade(&roots, &device)?;
     }
+    for root in &roots {
+        check_root(root, files::SHARED_RECORD_SCHEMA_VERSION)?;
+    }
+    Ok(())
 }
 
 /// Converts the identity root, the first of `roots`: every record the
@@ -235,7 +277,7 @@ fn each(
 }
 
 /// Copies `roots`, the identity root first, as `registered_roots` lists them.
-fn backup(roots: &[PathBuf], destination: &Path) -> anyhow::Result<()> {
+fn records_backup(roots: &[PathBuf], destination: &Path) -> anyhow::Result<()> {
     backup_with(roots, destination, &mut |file| {
         fs::File::open(file)?.sync_all()
     })
@@ -250,8 +292,9 @@ fn backup_with(
     let destination = host_path::directory(destination, true)?;
     let destination = destination.as_path();
     fs::create_dir_all(destination)?;
+    // Only the code host's data may be there already.
     anyhow::ensure!(
-        fs::read_dir(destination)?.next().is_none(),
+        fs::read_dir(destination)?.all(|entry| entry.is_ok_and(|e| e.file_name() == CODE_HOST)),
         "backup destination must be empty"
     );
     #[cfg(unix)]
@@ -383,7 +426,7 @@ mod tests {
     }
 
     fn check_archive(archive: &Path) -> anyhow::Result<()> {
-        execute(Operation::Check, Some(archive), None)
+        records(false, Some(archive))
     }
 
     /// A keychain holding the device key in memory, never the machine's.
@@ -492,7 +535,7 @@ mod tests {
         version_4_identity(&identity, &keys);
         write(&workspace, "config/project.yml", "name: test");
         let archive = temp.path().join("backup");
-        backup(&[identity.clone(), workspace.clone()], &archive).unwrap();
+        records_backup(&[identity.clone(), workspace.clone()], &archive).unwrap();
         let originals = [snapshot(&identity), snapshot(&workspace)];
 
         let roots = archive_roots(&archive).unwrap();
@@ -573,7 +616,7 @@ mod tests {
         let roots = registered_roots(&data, &identity).unwrap();
         assert_eq!(roots, [identity.clone(), workspace.clone()]);
         let archive = temp.join("backup");
-        backup(&roots, &archive).unwrap();
+        records_backup(&roots, &archive).unwrap();
         let copies = archive_roots(&archive).unwrap();
         let workspace_before = snapshot(&copies[1]);
 
@@ -671,7 +714,7 @@ mod tests {
             .unwrap();
         }
         let archive = temp.path().join("backup");
-        backup(std::slice::from_ref(&source), &archive).unwrap();
+        records_backup(std::slice::from_ref(&source), &archive).unwrap();
         write(&source, "state/run.json", r#"{"schema_version":99}"#);
         check_archive(&archive).unwrap();
         assert!(check(&source).is_err());
@@ -741,7 +784,7 @@ mod tests {
             write(root, "state/item.json", r#"{"schema_version":4}"#);
         }
         let archive = temp.join("archive");
-        backup(&roots, &archive).unwrap();
+        records_backup(&roots, &archive).unwrap();
         check_archive(&archive).unwrap();
         for i in 0..3 {
             assert!(
@@ -751,7 +794,7 @@ mod tests {
                     .is_file()
             );
         }
-        assert!(backup(&roots, &archive).is_err());
+        assert!(records_backup(&roots, &archive).is_err());
         fs::write(data.join("workspaces.json"), "invalid").unwrap();
         assert!(registered_roots(&data, &identity).is_err());
     }

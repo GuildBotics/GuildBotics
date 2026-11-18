@@ -2,10 +2,10 @@
 use super::*;
 const SLACK_PICTURE: &[u8] = b"\x89PNG\r\n\x1a\nfixture";
 /// The embedded service, without any connection setup.
-async fn branvil(f: &Fixture) -> branvil::api::Running {
+async fn branvil(f: &Fixture) -> branvil::test_support::Running {
     let path = f.root.join("branvil");
-    branvil::api::initialize(&path, "owner1").unwrap();
-    let running = branvil::api::Running::start(
+    branvil::test_support::initialize(&path, "owner1").unwrap();
+    let running = branvil::test_support::Running::start(
         &path,
         std::sync::Arc::new(branvil::vault::Memory::default()),
     )

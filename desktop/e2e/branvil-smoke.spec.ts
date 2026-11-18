@@ -38,10 +38,7 @@ async function fromCardMenu(page: Page, ref: RegExp, item: RegExp) {
   await page.getByRole("menuitem", { name: item }).click();
 }
 
-test("enters with a single-use link and keeps the session across reloads", async ({
-  page,
-  context,
-}) => {
+test("enters through the host session and keeps it across reloads", async ({ page, context }) => {
   await enter(page);
   await page.reload();
   await expect(page.getByRole("link", { name: /^(Settings|設定)$/ })).toBeVisible();
@@ -51,7 +48,7 @@ test("enters with a single-use link and keeps the session across reloads", async
   // Without the session cookie every page shows how to get one; an unknown code is refused.
   await context.clearCookies();
   await page.goto("/-/settings");
-  await expect(page.getByText("guildbotics branvil open --print", { exact: true })).toBeVisible();
+  await expect(page.getByText("guildbotics open --print", { exact: true })).toBeVisible();
   await expect(
     page.getByText(/address bar of this same browser|この画面と同じブラウザのアドレスバー/),
   ).toBeVisible();
@@ -107,7 +104,7 @@ test("shows a change made elsewhere without a reload (event stream)", async ({ p
   const repo = repos.items.find((r) => r.path.startsWith(`${env.workspace}/`))?.path as string;
   const title = `Made elsewhere ${Date.now()}`;
   const created = await api.post(`/api/v1/repos/${encodeURIComponent(repo)}/tickets`, {
-    headers: { "X-Branvil-CSRF": csrf },
+    headers: { "X-GuildBotics-CSRF": csrf },
     data: { title, body: "", labels: [], lane: "ready" },
   });
   expect(created.status()).toBe(201);

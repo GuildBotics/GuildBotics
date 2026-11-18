@@ -22,15 +22,14 @@ pub type Tbl = TableDefinition<'static, &'static [u8], &'static [u8]>;
 
 /// The schema version this build reads and writes. A database of any other
 /// version is refused instead of being misread; one of the previous version
-/// is upgraded by `upgrade` (`branvil admin upgrade`, `branvil restore`).
-pub const SCHEMA_VERSION: u64 = 36;
+/// is upgraded by `upgrade` (`guildbotics server hub-data upgrade` and `restore`).
+pub const SCHEMA_VERSION: u64 = 37;
 
 pub const META: Tbl = TableDefinition::new("meta");
 pub const COUNTERS: Tbl = TableDefinition::new("counters");
 pub const MEMBERS: Tbl = TableDefinition::new("members");
 pub const AVATARS: Tbl = TableDefinition::new("avatars");
 pub const TOKENS: Tbl = TableDefinition::new("tokens");
-pub const SESSIONS: Tbl = TableDefinition::new("sessions");
 pub const REPOS: Tbl = TableDefinition::new("repos");
 pub const WORKSPACES: Tbl = TableDefinition::new("workspaces");
 pub const TICKETS: Tbl = TableDefinition::new("tickets");
@@ -56,7 +55,7 @@ pub const CI_VERIFICATIONS: Tbl = TableDefinition::new("ci_verifications");
 pub const CI_RUNS: Tbl = TableDefinition::new("ci_runs");
 pub const CI_ATTEMPTS: Tbl = TableDefinition::new("ci_attempts");
 
-// Derived indexes: rebuilt from the tables above by `branvil admin reindex`.
+// Derived indexes: rebuilt from the tables above by `guildbotics server hub-data reindex`.
 pub const IX_MEMBER_TOKENS: Tbl = TableDefinition::new("ix_member_tokens");
 pub const IX_PATHS: Tbl = TableDefinition::new("ix_paths");
 pub const IX_CARDS: Tbl = TableDefinition::new("ix_cards");
@@ -91,7 +90,6 @@ pub const PRIMARY_TABLES: &[Tbl] = &[
     MEMBERS,
     AVATARS,
     TOKENS,
-    SESSIONS,
     REPOS,
     WORKSPACES,
     TICKETS,
@@ -601,10 +599,7 @@ impl Store {
             None => wtx
                 .put(META, &version_key(), &SCHEMA_VERSION)
                 .map_err(|e| anyhow::anyhow!("{}", e.message))?,
-            Some(v) if v == crate::upgrade::FROM => anyhow::bail!(
-                "{} has schema version {v}; this build reads version {SCHEMA_VERSION}. Take a backup with the previous build (`branvil backup`), stop the service, and run `branvil admin upgrade`",
-                path.display()
-            ),
+            Some(crate::upgrade::FROM) => return Err(previous_version(path)),
             Some(v) if v != SCHEMA_VERSION => anyhow::bail!(
                 "{} has schema version {v}; this build reads only version {SCHEMA_VERSION} and upgrades only version {} (start from a new data directory)",
                 path.display(),
@@ -625,13 +620,13 @@ impl Store {
         &self.stats
     }
 
-    /// Whether an upgrade changed the database and no `branvil admin check`
+    /// Whether an upgrade changed the database and no `server hub-data check`
     /// has passed since.
     pub fn needs_check(&self) -> AppResult<bool> {
         self.read_sync(is_unchecked)
     }
 
-    /// Records that the database has passed `branvil admin check`.
+    /// Records that the database has passed `server hub-data check`.
     pub fn checked(&self) -> AppResult<()> {
         self.write_sync(|w| w.del(META, &unchecked_key()).map(|_| ()))
     }
@@ -749,6 +744,23 @@ impl Store {
     }
 }
 
+/// Refuses a database this build does not read as it is, naming the upgrade
+/// when it has the previous version.
+pub fn check_version(path: &Path) -> anyhow::Result<()> {
+    match Upgrading::open(path)? {
+        Some(_) => Err(previous_version(path)),
+        None => Ok(()),
+    }
+}
+
+fn previous_version(path: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{} has schema version {}; this build reads version {SCHEMA_VERSION}. Take a backup with the previous build (`guildbotics server hub-data backup`), stop the server, and run `guildbotics server hub-data upgrade`",
+        path.display(),
+        crate::upgrade::FROM
+    )
+}
+
 /// What an upgrade did to `db`, for the command's output.
 pub fn upgrade_report(db: &Path, done: &Option<Upgraded>) -> String {
     match done {
@@ -768,11 +780,12 @@ pub fn upgrade_report(db: &Path, done: &Option<Upgraded>) -> String {
 }
 
 /// The next step for the upgraded database `db`: it is marked until
-/// `branvil admin check` passes, and `branvil serve` refuses it till then.
+/// `guildbotics server hub-data check` passes, and the server refuses it
+/// till then.
 pub fn check_step(db: &Path) -> String {
-    let dir = db.parent().unwrap_or(Path::new(".")).display();
     format!(
-        "`branvil admin check --data-dir {dir}` has to pass before `branvil serve --data-dir {dir}` starts it"
+        "`guildbotics server hub-data check` has to pass before the server opens {}",
+        db.display()
     )
 }
 
@@ -868,7 +881,7 @@ impl Upgrading {
         })?;
         wtx.put(META, &version_key(), &SCHEMA_VERSION)
             .map_err(|e| anyhow::anyhow!("{}", e.message))?;
-        // Until `branvil admin check` passes, `branvil serve` refuses it.
+        // Until `server hub-data check` passes, the server refuses it.
         wtx.put(META, &unchecked_key(), &true)
             .map_err(|e| anyhow::anyhow!("{}", e.message))?;
         wtx.0.commit()?;
@@ -886,7 +899,7 @@ fn open_db(path: &Path, cache_bytes: usize) -> anyhow::Result<Database> {
         .create(path)
         .map_err(|e| match e {
             redb::DatabaseError::DatabaseAlreadyOpen => anyhow::anyhow!(
-                "{} is already open by another Branvil process (stop `branvil serve` first)",
+                "{} is already open by another Branvil process (stop the server first)",
                 path.display()
             ),
             other => anyhow::anyhow!("cannot open {}: {other}", path.display()),
@@ -909,7 +922,7 @@ fn version_of(r: &impl Rd) -> AppResult<Option<u64>> {
 }
 
 /// Set by an upgrade, in the transaction that applies it, and removed by a
-/// passing `branvil admin check`; absent in a database no upgrade changed.
+/// passing `server hub-data check`; absent in a database no upgrade changed.
 fn unchecked_key() -> Vec<u8> {
     Key::new().s("unchecked").bytes()
 }
@@ -919,7 +932,7 @@ fn is_unchecked(r: &impl Rd) -> AppResult<bool> {
 }
 
 /// Whether the database at `path` was upgraded and has not passed
-/// `branvil admin check` since.
+/// `server hub-data check` since.
 pub fn needs_check(path: &Path) -> anyhow::Result<bool> {
     let db = open_db(path, 1 << 20)?;
     is_unchecked(&db.begin_read()?).map_err(|e| anyhow::anyhow!("{}", e.message))
@@ -978,7 +991,7 @@ mod tests {
             let err = Store::open(&path, 1 << 20, 1).err().unwrap().to_string();
             assert!(err.contains(&format!("schema version {other}")), "{err}");
             assert_eq!(
-                err.contains("branvil admin upgrade"),
+                err.contains("guildbotics server hub-data upgrade"),
                 other == crate::upgrade::FROM,
                 "{err}"
             );

@@ -17,7 +17,7 @@ import { theme } from "@guildbotics/ui/theme";
 import { AppShell } from "@guildbotics/ui/AppShell";
 import { BoardView } from "./views/BoardView";
 import { CommitView } from "./views/CommitView";
-import { EnterView, GuidanceView } from "./views/EnterView";
+import { GuidanceView } from "./views/GuidanceView";
 import { JobView } from "./views/JobView";
 import { PullsView } from "./views/PullsView";
 import { PullView } from "./views/PullView";
@@ -44,16 +44,10 @@ export function App({ client, language, test }: { client: QueryClient; language?
 }
 
 function Shell() {
-  const route = parseRoute(usePathname());
-  // The entry page makes the session, so it does not wait for one.
-  if (route.name === "enter") return <EnterView />;
-  return <Gate route={route} />;
+  return <Gate route={parseRoute(usePathname())} />;
 }
 
-/** Every route but the entry page, which never reaches the gate. */
-type AppRoute = Exclude<Route, { name: "enter" }>;
-
-function Gate({ route }: { route: AppRoute }) {
+function Gate({ route }: { route: Route }) {
   const session = useSession();
   if (session.isPending) return <Loading />;
   if (session.isError) return <GuidanceView error={session.error} onRetry={() => void session.refetch()} />;
@@ -61,7 +55,7 @@ function Gate({ route }: { route: AppRoute }) {
   return <SignedIn route={route} />;
 }
 
-function SignedIn({ route }: { route: AppRoute }) {
+function SignedIn({ route }: { route: Route }) {
   const client = useQueryClient();
   const streamLost = useChangeStream(client, true);
   const current = useCurrentWorkspace(route);
@@ -82,7 +76,7 @@ function SignedIn({ route }: { route: AppRoute }) {
 }
 
 function RouteView({ route, workspace, workspaces, showBoard, setShowBoard }: {
-  route: AppRoute;
+  route: Route;
   workspace: string | null;
   workspaces: string[] | null;
   showBoard: boolean;

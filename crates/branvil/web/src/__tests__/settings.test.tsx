@@ -429,7 +429,7 @@ describe("settings", () => {
     expect(screen.queryByRole("menuitem", { name: /^ci/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("menuitem", { name: /^ken/ }));
     await waitFor(() => expect(fake.calls("PUT", "/api/v1/members/aiko/reviewers/ken")).toHaveLength(1));
-    expect(fake.calls("PUT", "/api/v1/members/aiko/reviewers/ken")[0]?.headers["X-Branvil-CSRF"]).toBe("csrf-123");
+    expect(fake.calls("PUT", "/api/v1/members/aiko/reviewers/ken")[0]?.headers["X-GuildBotics-CSRF"]).toBe("csrf-123");
     expect(await within(row).findByRole("button", { name: "Reviewers of aiko's pull requests: ken — click to change" })).toBeInTheDocument();
     expect(within(row).getByText("ken", { selector: "p" })).toBeInTheDocument();
     expect(await screen.findByRole("menuitem", { name: /^ken/ })).toHaveAttribute("aria-checked", "true");

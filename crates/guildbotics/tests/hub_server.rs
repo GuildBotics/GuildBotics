@@ -242,7 +242,7 @@ impl Hub {
 
     fn settings(&self, home: &Path) -> String {
         format!(
-            "home={} branvil={} identity=unset port=unset\n",
+            "home={} code-host={} identity=unset port=unset\n",
             home.display(),
             self.root().join("branvil").display()
         )
@@ -510,19 +510,12 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
             "npm|ci",
             "npm|run|build|--workspace|desktop|--workspace|crates/branvil/web",
             "cargo|build|--release|--locked|-p|guildbotics|--target-dir|",
-            "current|branvil|backup|",
-            "guildbotics-bin|server|hub-data|backup|--to|",
-            "current|branvil|restore|",
-            "guildbotics-bin|branvil|admin|upgrade|",
-            "guildbotics-bin|branvil|admin|check|",
+            "current|server|hub-data|backup|--to|",
+            "guildbotics-bin|server|hub-data|restore|--from|",
             "guildbotics-bin|server|hub-data|upgrade|--data-dir|",
-            "guildbotics-bin|server|hub-data|check|--data-dir|",
             "current|server|stop",
             "launchctl|bootout|",
-            "guildbotics-bin|branvil|admin|upgrade|",
-            "guildbotics-bin|branvil|admin|check|",
             "guildbotics-bin|server|hub-data|upgrade\n",
-            "guildbotics-bin|server|hub-data|check\n",
             "launchctl|bootstrap|",
             "current|install",
             "current|environment|prune",
@@ -535,7 +528,7 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
             "security|find-identity|",
             "cargo|build|",
             &format!("codesign|--force|-s|{IDENTITY}|-i|local.guildbotics|"),
-            "current|branvil|backup|",
+            "current|server|hub-data|backup|",
         ],
     );
     hub.assert_runs_signed("new");
@@ -545,6 +538,41 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
     assert!(plist.contains(&format!("<key>PATH</key><string>{}</string>", hub.path)));
     assert_ne!(hub.installed_build(), old);
     assert!(!hub.builds().join("update-from").exists());
+}
+
+/// When the running build cannot take the backup (a renamed command), the
+/// owner takes it by hand and the update rehearses on it.
+#[test]
+fn an_update_rehearses_on_a_backup_taken_by_hand() {
+    let hub = Hub::new();
+    hub.install();
+    hub.commit("new");
+    let manual = hub.root().join("by-hand");
+    fs::create_dir_all(&manual).unwrap();
+    let path = manual.to_str().unwrap();
+    // An incomplete backup stops the update before the server stops.
+    hub.run_with("update", &[("GUILDBOTICS_HUB_MANUAL_BACKUP", path)], false);
+    assert!(!hub.lines("calls").contains("current|server|stop"));
+    fs::create_dir_all(manual.join("code-host")).unwrap();
+    for file in ["manifest.json", "code-host/manifest.json"] {
+        fs::write(manual.join(file), "").unwrap();
+    }
+    let out = hub.run_with("update", &[("GUILDBOTICS_HUB_MANUAL_BACKUP", path)], true);
+    assert!(text(&out).contains(&format!("Backup taken by hand: {path}")));
+    assert!(
+        !hub.lines("calls")
+            .contains("current|server|hub-data|backup")
+    );
+    in_order(
+        &hub.lines("calls"),
+        &[
+            &format!("guildbotics-bin|server|hub-data|restore|--from|{path}|"),
+            "guildbotics-bin|server|hub-data|upgrade|--data-dir|",
+            "current|server|stop",
+            "guildbotics-bin|server|hub-data|upgrade\n",
+        ],
+    );
+    assert!(manual.join("manifest.json").exists());
 }
 
 #[test]
@@ -1002,7 +1030,7 @@ fn update_keeps_only_three_complete_backup_generations() {
         ("2002", true),
         ("2003", false),
     ] {
-        let path = backups.join(format!("branvil-update-{stamp}"));
+        let path = backups.join(format!("hub-update-{stamp}"));
         fs::create_dir_all(&path).unwrap();
         if complete {
             fs::write(path.join("manifest.json"), "").unwrap();
@@ -1010,12 +1038,12 @@ fn update_keeps_only_three_complete_backup_generations() {
     }
     hub.commit("new");
     hub.run("update", None, true);
-    assert!(!backups.join("branvil-update-2000").exists());
+    assert!(!backups.join("hub-update-2000").exists());
     for stamp in ["2001", "2002"] {
-        assert!(backups.join(format!("branvil-update-{stamp}")).exists());
+        assert!(backups.join(format!("hub-update-{stamp}")).exists());
     }
-    assert!(!backups.join("branvil-update-2003").exists());
-    assert_eq!(fs::read_dir(backups).unwrap().count(), 4);
+    assert!(!backups.join("hub-update-2003").exists());
+    assert_eq!(fs::read_dir(backups).unwrap().count(), 3);
 }
 
 #[test]
@@ -2137,27 +2165,6 @@ fn guildbotics_live_failure_checks_old_data_and_reports_backups() {
     assert!(hub.lines("calls").contains("launchctl|disable|"));
     assert!(hub.lines("calls").contains("current|server|hub-data|check"));
     assert!(hub.builds().join("update-from").exists());
-}
-
-#[test]
-fn guildbotics_backup_rotation_retains_three_complete_generations() {
-    let hub = Hub::new();
-    hub.install();
-    let backups = hub.builds().parent().unwrap().join("backups");
-    for stamp in ["2000", "2001", "2002", "2003"] {
-        let path = backups.join(format!("guildbotics-update-{stamp}"));
-        fs::create_dir_all(&path).unwrap();
-        if stamp != "2003" {
-            fs::write(path.join("manifest.json"), "").unwrap();
-        }
-    }
-    hub.commit("new");
-    hub.run("update", None, true);
-    assert!(!backups.join("guildbotics-update-2000").exists());
-    assert!(!backups.join("guildbotics-update-2003").exists());
-    for stamp in ["2001", "2002"] {
-        assert!(backups.join(format!("guildbotics-update-{stamp}")).exists());
-    }
 }
 
 #[test]

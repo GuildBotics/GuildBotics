@@ -359,7 +359,7 @@ fn stream_file(
 fn require_runner(app: &Shared, c: &Caller) -> AppResult<()> {
     if c.member.kind != MemberKind::Runner {
         return Err(AppError::forbidden(
-            "The runner API needs a token of a runner member (`branvil runner register`).",
+            "The runner API needs a token of a runner member (`guildbotics runner register`).",
         ));
     }
     app.ci.saw_runner(c.name(), None);
@@ -802,7 +802,7 @@ mod tests {
     async fn retry_waits_for_ref_cleanup_and_keeps_the_new_attempt_claimable() {
         for branch in ["gate/3", "feature"] {
             let temp = tempfile::tempdir().unwrap();
-            let config = Config::load(None, Some(temp.path()), None, None).unwrap();
+            let config = Config::load(None, temp.path()).unwrap();
             let layout = config.layout();
             layout.create().unwrap();
             let store = Store::open(&layout.db(), 1 << 20, 2).unwrap();

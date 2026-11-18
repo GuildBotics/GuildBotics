@@ -1,12 +1,12 @@
-//! The real executor, end to end: a real `branvil serve`, a real
-//! `branvil runner` process, and microVMs started by the pinned `msb`.
+//! The real executor, end to end: a real test server, a real
+//! `guildbotics runner` process, and microVMs started by the pinned `msb`.
 //!
 //! Opt-in (it needs the msb 0.6.17 runtime, a hypervisor, and the images
 //! below already in Branvil's image cache):
 //!
 //! ```sh
-//! branvil runner pull docker.io/library/alpine:3.22
-//! branvil runner pull docker.io/library/node:22.23.2-bookworm
+//! guildbotics runner pull docker.io/library/alpine:3.22
+//! guildbotics runner pull docker.io/library/node:22.23.2-bookworm
 //! BRANVIL_REAL_EXECUTOR=1 cargo test --test main real_executor:: -- --nocapture
 //! ```
 

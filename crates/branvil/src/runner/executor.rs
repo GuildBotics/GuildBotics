@@ -225,7 +225,7 @@ pub fn resolve_msb(configured: Option<&Path>) -> Msb {
         }
     }
     Msb::Missing(format!(
-        "No usable msb {MSB_VERSION} found ({}). Install GuildBotics' runtime or run `branvil runner install-msb --from <msb>`.",
+        "No usable msb {MSB_VERSION} found ({}). Install GuildBotics' runtime or run `guildbotics runner install-msb --from <msb>`.",
         notes.join("; ")
     ))
 }
@@ -427,7 +427,7 @@ impl Microsandbox {
 
     /// Locks the image cache. The lock is a file of `MSB_HOME`, so that it
     /// holds across the processes sharing the cache (the service, its
-    /// runner, `branvil runner pull`). Pulls and loads hold it exclusively; a
+    /// runner, `guildbotics runner pull`). Pulls and loads hold it exclusively; a
     /// job holds it shared from checking its image until its VM has started.
     /// Waiting polls (`waiting` is called once when it starts), so that it
     /// ends with the future: a cancelled job or a stopping service leaves no

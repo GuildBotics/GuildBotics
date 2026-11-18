@@ -107,7 +107,7 @@ async fn three_ready_pulls_publish_without_waiting_for_a_host_merge() {
         git_as_ok(
             &w.work,
             "alice",
-            &w.owner,
+            &w.owner_git,
             &[
                 "ls-remote",
                 "origin",

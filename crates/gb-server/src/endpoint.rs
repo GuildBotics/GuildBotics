@@ -10,6 +10,19 @@ pub(crate) const DEFAULT_PORT: u16 = 7878;
 /// The line on stdout that tells a launcher the server listens on the port.
 pub const PORT_NOTICE_PREFIX: &str = "GUILDBOTICS_APP_API_PORT=";
 
+/// Names the code host's data directory.
+pub const CODE_HOST_DATA_ENV: &str = "BRANVIL_DATA_DIR";
+
+/// The code host's data directory: `BRANVIL_DATA_DIR`, else `code-host` in
+/// the machine's data.
+pub fn code_host_data() -> anyhow::Result<std::path::PathBuf> {
+    match std::env::var_os(CODE_HOST_DATA_ENV) {
+        Some(dir) if dir.is_empty() => anyhow::bail!("{CODE_HOST_DATA_ENV} is empty"),
+        Some(dir) => Ok(dir.into()),
+        None => Ok(gb_base::home::data()?.join("code-host")),
+    }
+}
+
 /// The port as this machine names it.
 pub fn port() -> anyhow::Result<u16> {
     parse_port(&std::env::var(PORT_ENV).unwrap_or_default())

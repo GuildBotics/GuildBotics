@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// one name would let the servers of two ports end each other's sessions,
 /// as Branvil's does too.
 const COOKIE_PREFIX: &str = "guildbotics_session";
-pub const CSRF_HEADER: &str = "x-guildbotics-csrf";
+pub use loopback_auth::CSRF_HEADER;
 pub const SESSION_SECONDS: i64 = 30 * 24 * 3600;
 const OWNER_FILE: &str = "owner-file";
 /// The owner token file, beside the records.
@@ -385,13 +385,9 @@ impl ServerAuth {
     }
 }
 
-impl branvil::browser_session::BrowserSession for ServerAuth {
-    fn check(
-        &self,
-        cookie: &str,
-        csrf: Option<&str>,
-    ) -> Result<String, branvil::browser_session::Denied> {
-        use branvil::browser_session::Denied;
+impl branvil::host::Host for ServerAuth {
+    fn check(&self, cookie: &str, csrf: Option<&str>) -> Result<String, branvil::host::Denied> {
+        use branvil::host::Denied;
         let mut headers = HeaderMap::new();
         headers.insert("cookie", cookie.parse().map_err(|_| Denied::Unauthorized)?);
         let expected = self.session_csrf(&headers).ok_or(Denied::Unauthorized)?;
@@ -402,12 +398,11 @@ impl branvil::browser_session::BrowserSession for ServerAuth {
         }
         Ok(expected)
     }
-    fn entry_link(&self) -> (String, String) {
-        let link = self.entry_link("/");
-        (link.url, link.expires_at)
+    fn owner_token(&self, token: &str) -> bool {
+        self.known_token(token, false)
     }
-    fn navigation(&self) -> branvil::browser_session::Navigation {
-        branvil::browser_session::Navigation {
+    fn navigation(&self) -> branvil::host::Navigation {
+        branvil::host::Navigation {
             label: "GuildBotics".into(),
             url: "/-/guildbotics/".into(),
         }
@@ -449,8 +444,8 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn branvil_uses_only_the_live_owner_cookie_and_its_csrf() {
-        use branvil::browser_session::{BrowserSession, Denied as HostDenied};
+    fn branvil_uses_only_the_live_owner_cookie_its_csrf_and_the_owner_file_token() {
+        use branvil::host::{Denied as HostDenied, Host};
         let data = tempfile::tempdir().unwrap();
         let auth = ServerAuth::open(data.path(), 8765).unwrap();
         let link = auth.entry_link("/");
@@ -482,6 +477,13 @@ mod tests {
             auth.check(&header, None),
             Err(HostDenied::Unauthorized)
         ));
+        let owner = std::fs::read_to_string(auth.owner_token_path()).unwrap();
+        assert!(auth.owner_token(owner.trim()));
+        // A consent token does not reach the code host's owner routes.
+        let consent = auth.test_consent();
+        for refused in [consent.as_str(), "", "gbt_unknown_token"] {
+            assert!(!auth.owner_token(refused), "{refused}");
+        }
     }
 
     #[test]

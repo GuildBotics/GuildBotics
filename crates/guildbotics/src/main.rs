@@ -1,8 +1,6 @@
-//! The `guildbotics` executable: the server, with Branvil in the same
-//! process, and Branvil's commands as `guildbotics branvil`.
+//! The `guildbotics` executable: the server, with the code host (Branvil) in
+//! the same process, and its runner, Git hooks, and data maintenance.
 
-#[cfg(feature = "hub")]
-use std::ffi::OsString;
 use std::future::Future;
 use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
@@ -12,11 +10,6 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 #[cfg(feature = "hub")]
 use tokio::sync::watch;
-
-/// How Branvil's commands are started on this executable: the hook scripts
-/// and the automatic runner start them again.
-#[cfg(feature = "hub")]
-const BRANVIL: branvil::Invocation = branvil::Invocation::under(&["branvil"]);
 
 #[derive(Parser)]
 #[command(name = "guildbotics", version = gb_base::BUILD_VERSION, about = "GuildBotics")]
@@ -112,13 +105,9 @@ enum Command {
         #[arg(long)]
         branvil: bool,
     },
-    /// Branvil's commands (code hosting: `guildbotics branvil --help`)
-    #[command(disable_help_flag = true)]
+    /// Run the CI runner, a separate process that executes jobs in microVMs
     #[cfg(feature = "hub")]
-    Branvil {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<OsString>,
-    },
+    Runner(branvil::RunnerArgs),
 }
 
 #[cfg(feature = "hub")]
@@ -173,16 +162,14 @@ enum ServerCommand {
         #[arg(long)]
         sha: String,
     },
-    /// Back up or validate Hub records without starting a server.
-    #[command(hide = true)]
+    /// Back up, restore, check, upgrade, or reindex the Hub's records
     HubData {
-        #[arg(value_enum)]
-        operation: hub_data::Operation,
-        #[arg(long)]
-        data_dir: Option<std::path::PathBuf>,
-        #[arg(long)]
-        to: Option<std::path::PathBuf>,
+        #[command(subcommand)]
+        command: hub_data::HubDataCommand,
     },
+    /// Git hook entry point (run by Git inside a push; not for direct use)
+    #[command(hide = true)]
+    GitHook { name: String },
     /// Read verified commits on the local Hub; credentials are read only from disk
     #[command(hide = true)]
     HubVerified {
@@ -226,10 +213,9 @@ enum ServerCommand {
     /// SIGINT waits for the commands running, SIGTERM or a second SIGINT
     /// cancels them): GuildBotics
     /// on GUILDBOTICS_SERVER_PORT (default 7878) with its records under
-    /// GUILDBOTICS_HOME (default ~/.guildbotics), and Branvil, once
-    /// `guildbotics branvil init` has set it up, on the same listener
-    /// (BRANVIL_DATA_DIR chooses its data directory; Branvil's listen setting
-    /// is used only by `guildbotics branvil serve`)
+    /// GUILDBOTICS_HOME (default ~/.guildbotics), and the code host on the
+    /// same listener, with its data in BRANVIL_DATA_DIR (default
+    /// GUILDBOTICS_HOME/data/code-host, created at the first start)
     Start {
         /// Start services even when automatic startup is disabled
         #[arg(long)]
@@ -334,7 +320,7 @@ fn main() -> ExitCode {
             outcome(block(environment_cli::run(command, workspace)).map(|()| 0))
         }
         #[cfg(feature = "hub")]
-        Command::Branvil { args } => branvil_main(std::iter::once(OsString::new()).chain(args)),
+        Command::Runner(args) => outcome(block(runner(args))),
         Command::Member { arguments } => outcome(block(gb_server::client::member::run(arguments))),
         Command::GitCredential { action } => outcome(
             block(gb_server::client::git_credential_input(
@@ -409,13 +395,17 @@ fn main() -> ExitCode {
         } => outcome(hub_cli::prune(&builds, &keep).map(|()| 0)),
         #[cfg(feature = "hub")]
         Command::Server {
-            command:
-                ServerCommand::HubData {
-                    operation,
-                    data_dir,
-                    to,
-                },
-        } => outcome(block(hub_data::run(operation, data_dir, to)).map(|()| 0)),
+            command: ServerCommand::HubData { command },
+        } => outcome(block(hub_data::run(command)).map(|()| 0)),
+        #[cfg(feature = "hub")]
+        Command::Server {
+            command: ServerCommand::GitHook { name },
+        } => ExitCode::from(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_or(1, |runtime| runtime.block_on(branvil::git_hook(&name))),
+        ),
         #[cfg(feature = "hub")]
         Command::Server {
             command: ServerCommand::HubBuildInfo { checkout, to },
@@ -558,15 +548,13 @@ fn browse(url: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// Branvil's commands, keeping its secrets in the identity store.
+/// The CI runner, against the server of this machine unless told another.
 #[cfg(feature = "hub")]
-fn branvil_main(args: impl IntoIterator<Item = OsString>) -> ExitCode {
-    let vault = Arc::new(gb_server::branvil_vault::IdentityVault::system());
-    let url = match gb_server::port() {
-        Ok(port) => format!("http://127.0.0.1:{port}"),
-        Err(error) => return outcome(Err(error)),
-    };
-    branvil::main_with_client_url(BRANVIL, vault, args, Some(url))
+async fn runner(args: branvil::RunnerArgs) -> anyhow::Result<u8> {
+    let url = format!("http://127.0.0.1:{}", gb_server::port()?);
+    let data_dir = gb_server::endpoint::code_host_data()?;
+    let owner = async { Ok(gb_server::client::local_owner().await?.1) };
+    branvil::run_runner(args, url, data_dir, owner).await
 }
 
 #[cfg(feature = "hub")]
@@ -602,25 +590,19 @@ fn start(services: bool) -> anyhow::Result<u8> {
 #[cfg(feature = "hub")]
 async fn serve(services: bool) -> anyhow::Result<u8> {
     let signals = server_stops(gb_server::client::language().await)?;
-    let branvil_initialized = branvil::initialized()?;
+    let data_dir = gb_server::endpoint::code_host_data()?;
     let mut server = gb_server::Server::start().await?;
     server.start_services(services);
     let stop = wait_for_stop(signals.clone(), Stop::Waiting);
     let cancel = wait_for_stop(signals.clone(), Stop::Cancelling);
 
-    if !branvil_initialized {
-        tracing::info!("Branvil is not set up; `guildbotics branvil init` sets it up");
-        let (_held, served) = server.serve(stop, cancel).await;
-        served?;
-        return Ok(0);
-    }
     let base_url = server.base_url();
-    let session = server.browser_session();
+    let host = server.host();
     let active_agents = server.active_agents();
     let vault = Arc::new(gb_server::branvil_vault::IdentityVault::system());
     let (_held, served) = server
         .serve_embedded(stop, cancel, async move {
-            branvil::prepare_embedded(BRANVIL, vault, &base_url, session, active_agents).await
+            branvil::prepare_embedded(&data_dir, vault, &base_url, host, active_agents).await
         })
         .await;
     served?;

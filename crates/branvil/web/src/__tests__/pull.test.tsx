@@ -499,7 +499,7 @@ describe("pull request review", () => {
     expect(within(refusal).getByRole("link", { name: HEAD.slice(0, 10) })).toHaveAttribute("href", `/acme/demo/-/commits/${HEAD}`);
     const review = fake.calls("POST", `${P}/reviews`)[0];
     expect(review?.body).toEqual({ verdict: "approve", body: "", commit: HEAD });
-    expect(review?.headers["X-Branvil-CSRF"]).toBe("csrf-123");
+    expect(review?.headers["X-GuildBotics-CSRF"]).toBe("csrf-123");
     // The pull request is reloaded and now shows the new head.
     await waitFor(() => expect(fake.calls("GET", P).length).toBeGreaterThanOrEqual(2));
     expect(await screen.findAllByTitle(NEW_HEAD)).not.toHaveLength(0);
@@ -548,7 +548,7 @@ describe("pull request review", () => {
     await waitFor(() => expect(fake.calls("PUT", `${P}/reviewers/mia`)).toHaveLength(1));
     await user.click(screen.getByRole("menuitem", { name: /^owner/ }));
     await waitFor(() => expect(fake.calls("DELETE", `${P}/reviewers/owner`)).toHaveLength(1));
-    expect(fake.calls("DELETE", `${P}/reviewers/owner`)[0]?.headers["X-Branvil-CSRF"]).toBe("csrf-123");
+    expect(fake.calls("DELETE", `${P}/reviewers/owner`)[0]?.headers["X-GuildBotics-CSRF"]).toBe("csrf-123");
   });
 
   it.each(["en", "ja"] as const)("uses a reviewer-specific empty label in the picker in %s", async (language) => {

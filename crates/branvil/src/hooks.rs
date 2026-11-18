@@ -3,7 +3,7 @@
 //! Every managed repository's `core.hooksPath` points at `<data>/hooks`, and
 //! Smart HTTP sets the same value through the Git child's environment, so the
 //! repository's own `hooks/` directory never runs. The hook scripts exec the
-//! running `branvil` binary (`branvil hook pre-receive|post-receive`), which
+//! running executable (`guildbotics server git-hook pre-receive|post-receive`), which
 //! calls back to the service on loopback with a per-process secret passed in
 //! the Git child's environment:
 //!
@@ -30,15 +30,20 @@ pub const SECRET_HEADER: &str = "x-branvil-hook";
 pub fn install(layout: &Layout) -> anyhow::Result<()> {
     std::fs::create_dir_all(layout.hooks())?;
     for hook in ["pre-receive", "post-receive"] {
-        let (exe, words) = crate::invocation::command(&["hook", hook])?;
-        let command = std::iter::once(exe.into_os_string())
-            .chain(words)
-            .map(|word| format!("'{}'", word.to_string_lossy().replace('\'', r"'\''")))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let exe = std::env::current_exe()?.into_os_string();
+        let command = [
+            exe.as_os_str(),
+            "server".as_ref(),
+            "git-hook".as_ref(),
+            hook.as_ref(),
+        ]
+        .iter()
+        .map(|word| format!("'{}'", word.to_string_lossy().replace('\'', r"'\''")))
+        .collect::<Vec<_>>()
+        .join(" ");
         let path = layout.hooks().join(hook);
         let script = format!(
-            "#!/bin/sh\n# Written by Branvil at startup. Repository hooks never run.\nexec {command}\n"
+            "#!/bin/sh\n# Written by the server at startup. Repository hooks never run.\nexec {command}\n"
         );
         std::fs::write(&path, script)?;
         make_executable(&path)?;
@@ -77,7 +82,8 @@ pub struct HookAnswer {
     pub message: String,
 }
 
-/// `branvil hook <name>`: runs inside `git receive-pack`. Returns the exit code.
+/// `guildbotics server git-hook <name>`: runs inside `git receive-pack`.
+/// Returns the exit code.
 pub async fn run_hook(name: &str) -> i32 {
     let env = |k: &str| std::env::var(k).unwrap_or_default();
     let (url, secret, repo, member) = (
