@@ -1040,15 +1040,21 @@ async fn hook_post_receive(
     }
     app.failpoint("post_receive_before_record");
     let repo_id = input.repo.clone();
-    let repo = match app
+    let member_name = input.member.clone();
+    let (repo, member) = match app
         .store
-        .read(move |r| domain::repo_by_id(r, &repo_id))
+        .read(move |r| {
+            Ok((
+                domain::repo_by_id(r, &repo_id)?,
+                domain::member_by_name(r, &member_name)?,
+            ))
+        })
         .await
     {
         Ok(r) => r,
         Err(_) => return hook_answer(false, "Unknown repository."),
     };
-    match crate::refs::record_refs(&app, &repo).await {
+    match crate::refs::record_refs_as(&app, &repo, Some(member.kind)).await {
         Ok(_) => hook_answer(true, ""),
         Err(e) => hook_answer(false, e.message),
     }

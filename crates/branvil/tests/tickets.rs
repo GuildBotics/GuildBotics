@@ -6,6 +6,46 @@ use crate::common;
 use common::*;
 use serde_json::{Value, json};
 
+fn has_change(text: &str, expected: &Value) -> bool {
+    text.lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+        .any(|event| {
+            expected
+                .as_object()
+                .unwrap()
+                .iter()
+                .all(|(key, value)| event.get(key) == Some(value))
+        })
+}
+
+async fn assert_changes(events: &mut reqwest::Response, expected: &[Value], seconds: u64) {
+    let mut seen = String::new();
+    let found = tokio::time::timeout(std::time::Duration::from_secs(seconds), async {
+        while let Ok(Some(chunk)) = events.chunk().await {
+            seen.push_str(&String::from_utf8_lossy(&chunk));
+            if expected.iter().all(|event| has_change(&seen, event)) {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert_eq!(found, Ok(true), "{seen}");
+}
+
+#[test]
+fn event_matching_uses_one_json_payload_and_tolerates_additional_fields() {
+    let expected = json!({"kind":"ticket","path":"acme/demo","id":"3","actor":"agent"});
+    let complete = "data: {\"id\":\"3\",\"actor\":\"agent\",\"extra\":true,\"path\":\"acme/demo\",\"kind\":\"ticket\"}\n\n";
+    assert!(has_change(complete, &expected));
+    assert!(!has_change(
+        "data: {\"kind\":\"ticket\",\"path\":\"acme/demo\"}\n\ndata: {\"id\":\"3\",\"actor\":\"agent\"}\n\n",
+        &expected
+    ));
+    assert!(!has_change(&complete[..complete.len() / 2], &expected));
+}
+
 fn tickets_path() -> String {
     format!("/repos/{}/tickets", encode(REPO))
 }
@@ -246,19 +286,12 @@ async fn deleting_a_ticket_removes_its_sources_and_indexes_but_keeps_numbers() {
         .unwrap();
     assert_eq!(events.status(), 200);
     assert_eq!(s.delete(&path, &w.owner).await.0, 204);
-    let notices = tokio::time::timeout(std::time::Duration::from_secs(3), async {
-        let mut text = String::new();
-        while !text.contains("\"kind\":\"board\"") {
-            text.push_str(std::str::from_utf8(&events.chunk().await.unwrap().unwrap()).unwrap());
-        }
-        text
-    })
-    .await
-    .expect("deletion events");
-    for key in ["1", "2", "3"] {
-        assert!(notices.contains(&format!("\"id\":\"{key}\"")), "{notices}");
-    }
-    assert!(notices.contains(&format!("\"path\":\"{WS}\"")));
+    let mut expected: Vec<_> = ["1", "2", "3"]
+        .into_iter()
+        .map(|id| json!({"kind":"ticket","path":REPO,"id":id,"actor":"owner"}))
+        .collect();
+    expected.push(json!({"kind":"board","path":WS,"actor":"owner"}));
+    assert_changes(&mut events, &expected, 3).await;
     drop(events);
     for suffix in ["", "/comments", "/pulls", "/attachments"] {
         assert_eq!(s.get(&format!("{path}{suffix}"), &w.aiko).await.0, 404);
@@ -1961,19 +1994,12 @@ async fn a_change_of_a_ticket_reaches_the_views_of_all_its_descendants() {
     assert_eq!(events.status(), 200);
     s.patch(&path_of(&top), &w.ken, json!({"interactive": true}))
         .await;
-    let bottom_changed = format!(r#"data: {{"kind":"ticket","path":"{REPO}","id":"3"}}"#);
-    let mut seen = String::new();
-    let found = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while let Ok(Some(chunk)) = events.chunk().await {
-            seen.push_str(&String::from_utf8_lossy(&chunk));
-            if seen.contains(&bottom_changed) {
-                return true;
-            }
-        }
-        false
-    })
+    assert_changes(
+        &mut events,
+        &[json!({"kind":"ticket","path":REPO,"id":"3","actor":"agent"})],
+        10,
+    )
     .await;
-    assert_eq!(found, Ok(true), "{seen}");
 }
 
 #[tokio::test]
@@ -2257,19 +2283,12 @@ async fn a_move_reaches_the_views_of_all_its_descendants() {
         )
         .await;
     assert_eq!(st, 200, "{v}");
-    let bottom_changed = format!(r#"data: {{"kind":"ticket","path":"{REPO}","id":"3"}}"#);
-    let mut seen = String::new();
-    let found = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while let Ok(Some(chunk)) = events.chunk().await {
-            seen.push_str(&String::from_utf8_lossy(&chunk));
-            if seen.contains(&bottom_changed) {
-                return true;
-            }
-        }
-        false
-    })
+    assert_changes(
+        &mut events,
+        &[json!({"kind":"ticket","path":REPO,"id":"3","actor":"agent"})],
+        10,
+    )
     .await;
-    assert_eq!(found, Ok(true), "{seen}");
 }
 
 #[tokio::test]

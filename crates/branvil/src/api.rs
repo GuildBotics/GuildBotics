@@ -47,6 +47,10 @@ impl DataApi {
         }
         value
     }
+    pub fn subscribe(&self) -> impl futures_util::Stream<Item = crate::events::Notice> + use<> {
+        self.app.events.subscribe()
+    }
+
     pub fn hub_status_changed(&self) {
         self.app.events.publish("hub_status_changed", "hub", "");
     }

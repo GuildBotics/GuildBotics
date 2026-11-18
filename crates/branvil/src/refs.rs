@@ -43,16 +43,33 @@ fn snapshot_key(repo_id: &str, refname: &str) -> Vec<u8> {
 
 /// Compares the repository's refs with the recorded snapshot, records the
 /// difference, and applies its effects. Takes the repository lock.
+#[cfg(test)]
 pub async fn record_refs(app: &App, repo: &Repo) -> AppResult<Vec<RefChange>> {
+    record_refs_as(app, repo, None).await
+}
+
+pub async fn record_refs_as(
+    app: &App,
+    repo: &Repo,
+    actor: Option<MemberKind>,
+) -> AppResult<Vec<RefChange>> {
     let r = repo.clone();
     app.locked(&repo.id, move |app| async move {
-        record_refs_locked(&app, &r).await
+        record_refs_locked_as(&app, &r, actor).await
     })
     .await
 }
 
 /// `record_refs` for a caller that already holds the repository lock.
 pub async fn record_refs_locked(app: &App, repo: &Repo) -> AppResult<Vec<RefChange>> {
+    record_refs_locked_as(app, repo, None).await
+}
+
+async fn record_refs_locked_as(
+    app: &App,
+    repo: &Repo,
+    actor: Option<MemberKind>,
+) -> AppResult<Vec<RefChange>> {
     let dir = app.git.repo_dir(&repo.path);
     let actual = app.git.all_refs(&dir).await?;
     let repo_id = repo.id.clone();
@@ -61,7 +78,7 @@ pub async fn record_refs_locked(app: &App, repo: &Repo) -> AppResult<Vec<RefChan
         .write(move |w| apply_snapshot(w, &repo_id, &actual))
         .await?;
     if !changes.is_empty() {
-        app.events.publish("repo", &repo.path, "");
+        app.events.publish_as("repo", &repo.path, "", actor);
         app.ci.on_ref_changes(repo, &changes).await;
         app.upstream.on_ref_changes(repo, &changes);
     }

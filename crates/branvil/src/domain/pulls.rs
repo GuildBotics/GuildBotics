@@ -444,6 +444,7 @@ pub async fn create(
     repo_path: &str,
     input: NewPull,
 ) -> AppResult<PullCreated> {
+    let event_actor = Some(caller.member.kind);
     let repo = domain::repos::visible(app, caller, repo_path).await?;
     domain::check_title(&input.title)?;
     domain::check_text("body", &input.body, domain::MAX_TEXT)?;
@@ -525,7 +526,8 @@ pub async fn create(
         })
         .await?;
     if created {
-        app.events.publish("pull", &repo.path, p.number.to_string());
+        app.events
+            .publish_as("pull", &repo.path, p.number.to_string(), event_actor);
         app.ci.on_pull_opened(app, &repo, &p.head).await;
     }
     Ok(PullCreated {
@@ -1028,6 +1030,7 @@ pub async fn update(
     number: u64,
     patch: PullPatch,
 ) -> AppResult<PullView> {
+    let event_actor = Some(caller.member.kind);
     let (repo, _) = visible(app, caller, repo_path, number).await?;
     if let Some(t) = &patch.title {
         domain::check_title(t)?;
@@ -1087,7 +1090,8 @@ pub async fn update(
     if reselect {
         app.ci.on_pull_opened(app, &repo, &p.head).await;
     }
-    app.events.publish("pull", &repo.path, number.to_string());
+    app.events
+        .publish_as("pull", &repo.path, number.to_string(), event_actor);
     if p.upstream.is_some() {
         app.upstream.wake();
     }
@@ -1103,6 +1107,7 @@ pub async fn set_reviewer(
     name: &str,
     add: bool,
 ) -> AppResult<PullView> {
+    let event_actor = Some(caller.member.kind);
     let (repo, _) = visible(app, caller, repo_path, number).await?;
     let name = name.to_string();
     let r2 = repo.clone();
@@ -1131,7 +1136,8 @@ pub async fn set_reviewer(
             Ok(p)
         })
         .await?;
-    app.events.publish("pull", &repo.path, number.to_string());
+    app.events
+        .publish_as("pull", &repo.path, number.to_string(), event_actor);
     let tips = tips(app, &repo).await?;
     pull_view(app, &repo, &p, &tips).await
 }
@@ -1144,6 +1150,7 @@ pub async fn set_open(
     number: u64,
     open: bool,
 ) -> AppResult<PullView> {
+    let event_actor = Some(caller.member.kind);
     let (repo, _) = visible(app, caller, repo_path, number).await?;
     let r2 = repo.clone();
     let p = app
@@ -1153,7 +1160,8 @@ pub async fn set_open(
                 .await
         })
         .await?;
-    app.events.publish("pull", &repo.path, number.to_string());
+    app.events
+        .publish_as("pull", &repo.path, number.to_string(), event_actor);
     if open && p.state == "open" {
         app.ci.on_pull_opened(app, &repo, &p.head).await;
     }
@@ -1286,6 +1294,7 @@ pub async fn add_comment(
     number: u64,
     input: NewComment,
 ) -> AppResult<CommentView> {
+    let event_actor = Some(caller.member.kind);
     tickets::check_comment(&input)?;
     let (repo, _) = visible(app, caller, repo_path, number).await?;
     let author = caller.name().to_string();
@@ -1300,7 +1309,8 @@ pub async fn add_comment(
             Ok(c)
         })
         .await?;
-    app.events.publish("pull", &repo.path, number.to_string());
+    app.events
+        .publish_as("pull", &repo.path, number.to_string(), event_actor);
     Ok(comment_view(&c, &url))
 }
 
@@ -1368,6 +1378,7 @@ pub async fn review(
     number: u64,
     input: NewReview,
 ) -> AppResult<ReviewSubmitted> {
+    let event_actor = Some(caller.member.kind);
     if !["approve", "request_changes", "comment"].contains(&input.verdict.as_str()) {
         return Err(AppError::invalid(
             "verdict must be approve, request_changes, or comment.",
@@ -1414,7 +1425,8 @@ pub async fn review(
             Ok(x)
         })
         .await?;
-    app.events.publish("pull", &repo.path, number.to_string());
+    app.events
+        .publish_as("pull", &repo.path, number.to_string(), event_actor);
     Ok(ReviewSubmitted {
         url: format!("{url}#{}", x.id),
         id: x.id,
@@ -1465,6 +1477,7 @@ pub async fn inline_comment(
     number: u64,
     input: NewInline,
 ) -> AppResult<ThreadCommentView> {
+    let event_actor = Some(caller.member.kind);
     if input.body.trim().is_empty() {
         return Err(AppError::invalid("body must not be empty."));
     }
@@ -1546,7 +1559,8 @@ pub async fn inline_comment(
             Ok(c)
         })
         .await?;
-    app.events.publish("pull", &repo.path, number.to_string());
+    app.events
+        .publish_as("pull", &repo.path, number.to_string(), event_actor);
     Ok(inline_view(&c, &url))
 }
 
@@ -1630,6 +1644,7 @@ pub async fn reply(
     id: &str,
     input: NewReply,
 ) -> AppResult<ThreadCommentView> {
+    let event_actor = Some(caller.member.kind);
     if input.body.trim().is_empty() {
         return Err(AppError::invalid("body must not be empty."));
     }
@@ -1669,7 +1684,8 @@ pub async fn reply(
             Ok(c)
         })
         .await?;
-    app.events.publish("pull", &repo.path, number.to_string());
+    app.events
+        .publish_as("pull", &repo.path, number.to_string(), event_actor);
     Ok(inline_view(&c, &url))
 }
 
@@ -1687,6 +1703,7 @@ pub async fn resolve(
     id: &str,
     input: Resolution,
 ) -> AppResult<ThreadView> {
+    let event_actor = Some(caller.member.kind);
     let (repo, p) = visible(app, caller, repo_path, number).await?;
     let head_sha = head_of(&p, &tips(app, &repo).await?).unwrap_or_default();
     let url = app.pull_url(&repo.path, number);
@@ -1711,7 +1728,8 @@ pub async fn resolve(
                 .find(|x| x.id == t.id))
         })
         .await?;
-    app.events.publish("pull", &repo.path, number.to_string());
+    app.events
+        .publish_as("pull", &repo.path, number.to_string(), event_actor);
     view.ok_or_else(|| AppError::internal("resolved thread vanished"))
 }
 
@@ -1725,6 +1743,7 @@ pub async fn react(
     input: NewReaction,
     on: bool,
 ) -> AppResult<Option<ReactionAdded>> {
+    let event_actor = Some(caller.member.kind);
     domain::check_reaction(&input.reaction)?;
     let (repo, _) = visible(app, caller, repo_path, number).await?;
     let author = caller.name().to_string();
@@ -1770,7 +1789,8 @@ pub async fn react(
             }))
         })
         .await?;
-    app.events.publish("pull", &repo.path, number.to_string());
+    app.events
+        .publish_as("pull", &repo.path, number.to_string(), event_actor);
     Ok(added)
 }
 
@@ -2362,6 +2382,73 @@ mod tests {
             revision: 1,
         };
         (temp, app, caller, repo, p)
+    }
+
+    #[tokio::test]
+    async fn ticket_and_pull_mutations_publish_the_authenticated_actor() {
+        use futures_util::StreamExt;
+        let (_temp, app, mut caller, repo, pull) = fixture().await;
+        app.store
+            .write(move |w| write_pull(w, None, &pull))
+            .await
+            .unwrap();
+        let stream = app.events.subscribe();
+        tokio::pin!(stream);
+        for kind in [MemberKind::Owner, MemberKind::Agent] {
+            caller.member.kind = kind;
+            add_comment(
+                &app,
+                &caller,
+                &repo.path,
+                1,
+                NewComment {
+                    body: "A comment".into(),
+                    meta: None,
+                },
+            )
+            .await
+            .unwrap();
+            let Some(crate::events::Notice::Change(change)) = stream.next().await else {
+                panic!("missing pull event")
+            };
+            assert_eq!(change.kind, "pull");
+            assert_eq!(change.actor, Some(kind));
+            let ticket = tickets::create_ticket(
+                &app,
+                &caller,
+                &repo.path,
+                serde_json::from_value(serde_json::json!({"title":"Wake attribution"})).unwrap(),
+            )
+            .await
+            .unwrap();
+            let Some(crate::events::Notice::Change(change)) = stream.next().await else {
+                panic!("missing ticket event")
+            };
+            assert_eq!(change.kind, "ticket");
+            assert_eq!(change.actor, Some(kind));
+            let Some(crate::events::Notice::Change(board)) = stream.next().await else {
+                panic!("missing board event")
+            };
+            assert_eq!(board.kind, "board");
+            assert_eq!(board.actor, Some(kind));
+            tickets::add_comment(
+                &app,
+                &caller,
+                &repo.path,
+                &ticket.key,
+                NewComment {
+                    body: "Another comment".into(),
+                    meta: None,
+                },
+            )
+            .await
+            .unwrap();
+            let Some(crate::events::Notice::Change(change)) = stream.next().await else {
+                panic!("missing ticket comment event")
+            };
+            assert_eq!(change.kind, "ticket");
+            assert_eq!(change.actor, Some(kind));
+        }
     }
 
     #[tokio::test]
