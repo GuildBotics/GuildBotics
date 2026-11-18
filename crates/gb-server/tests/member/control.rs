@@ -664,6 +664,8 @@ async fn awaiting_checks_returns_pending_and_ready_prs_and_retains_the_chat_gate
     }
     let result = control.command(&p, "summary").await.unwrap();
     assert_eq!(result["pr_readiness"].as_array().unwrap().len(), 2);
+    assert_eq!(result["pr_readiness"][0]["url"], pending.as_str());
+    assert_eq!(result["pr_readiness"][1]["url"], ready.as_str());
     assert_eq!(result["pr_readiness"][0]["head_sha"], pending_head);
     assert_eq!(result["pr_readiness"][0]["required_checks"], "running");
     assert_eq!(result["pr_readiness"][1]["head_sha"], ready_head);

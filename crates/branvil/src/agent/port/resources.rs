@@ -18,15 +18,8 @@ pub fn valid_repository_path(path: &str) -> bool {
         })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReadSubject {
-    Ticket,
-    PullRequest,
-    Repository,
-}
-
 macro_rules! resources {
-    ($($variant:ident => ($name:literal, $subject:ident, $ticket:literal, $detail:literal)),+ $(,)?) => {
+    ($($variant:ident => ($name:literal, $ticket:literal, $detail:literal)),+ $(,)?) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
         pub enum Resource {
             $(#[serde(rename = $name)] $variant),+
@@ -35,9 +28,6 @@ macro_rules! resources {
             pub const ALL: &'static [Self] = &[$(Self::$variant),+];
             pub fn name(self) -> &'static str {
                 match self { $(Self::$variant => $name),+ }
-            }
-            pub fn subject(self) -> ReadSubject {
-                match self { $(Self::$variant => ReadSubject::$subject),+ }
             }
             pub fn is_ticket_service(self) -> bool {
                 match self { $(Self::$variant => $ticket),+ }
@@ -56,18 +46,18 @@ macro_rules! resources {
 }
 
 resources! {
-    TrackerTickets => ("tracker_tickets", Ticket, true, false),
-    Tickets => ("tickets", Ticket, true, true),
-    TicketComments => ("ticket_comments", Ticket, true, false),
-    TicketAttachments => ("ticket_attachments", Ticket, true, false),
-    TicketPullRequests => ("ticket_pull_requests", Ticket, false, false),
-    PullRequests => ("pull_requests", PullRequest, false, true),
-    PullRequestComments => ("pull_request_comments", PullRequest, false, false),
-    PullRequestReviews => ("pull_request_reviews", PullRequest, false, false),
-    PullRequestFiles => ("pull_request_files", PullRequest, false, false),
-    PullRequestThreads => ("pull_request_threads", PullRequest, false, false),
-    PullRequestReadiness => ("pull_request_readiness", PullRequest, false, true),
-    DependencyAlerts => ("dependency_alerts", Repository, false, false),
+    TrackerTickets => ("tracker_tickets", true, false),
+    Tickets => ("tickets", true, true),
+    TicketComments => ("ticket_comments", true, false),
+    TicketAttachments => ("ticket_attachments", true, false),
+    TicketPullRequests => ("ticket_pull_requests", false, false),
+    PullRequests => ("pull_requests", false, true),
+    PullRequestComments => ("pull_request_comments", false, false),
+    PullRequestReviews => ("pull_request_reviews", false, false),
+    PullRequestFiles => ("pull_request_files", false, false),
+    PullRequestThreads => ("pull_request_threads", false, false),
+    PullRequestReadiness => ("pull_request_readiness", false, true),
+    DependencyAlerts => ("dependency_alerts", false, false),
 }
 
 /// One page of Branvil's views of a resource, with the ticket or pull request

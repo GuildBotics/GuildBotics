@@ -101,8 +101,7 @@ impl Agents {
 }
 
 const MAX_METADATA: usize = 4 << 20;
-const MAX_BUNDLE: usize = 1 << 30;
-pub use crate::member_protocol::{MemberRequest, Phase, Result};
+pub use crate::member_protocol::{MAX_BUNDLE, MemberRequest, Phase, Result};
 pub type Execution<'a> = Pin<Box<dyn Future<Output = Result> + Send + 'a>>;
 /// The application supplies the member command grammar and service assembly.
 /// Transport metadata can never assign a run, guest, lease, or identity.

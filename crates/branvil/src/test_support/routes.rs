@@ -10,7 +10,7 @@ use crate::api::{attachments, members, pulls, tickets};
 use crate::app::Shared;
 use crate::auth::Caller;
 use crate::error::AppError;
-use crate::http::{J, P, Q, R, RepoNum, RepoNumId, created, number, ok};
+use crate::http::{J, P, Q, R, RepoNum, created, number, ok};
 use crate::util;
 
 /// The routes, relative to `/api/v1`.
@@ -26,10 +26,6 @@ pub(crate) fn routes() -> Router<Shared> {
         .route(
             "/repos/{repo}/pulls/{number}/inline-comments",
             post(pull_inline),
-        )
-        .route(
-            "/repos/{repo}/pulls/{number}/threads/{id}/comments",
-            get(thread_comments),
         )
         .route(
             "/repos/{repo}/pulls/{number}/checks/yield",
@@ -123,28 +119,6 @@ async fn pull_inline(
     Ok(created(
         pulls::inline_comment(&app, &c, &repo, number(&n)?, input).await?,
     ))
-}
-
-async fn thread_comments(
-    State(app): State<Shared>,
-    c: Caller,
-    P((repo, n, id)): RepoNumId,
-    q: Q,
-) -> R {
-    let page = q.page(
-        &app,
-        &c,
-        &format!("thread-comments\n{}\n{n}\n{id}", util::fold(&repo)),
-    )?;
-    Ok(ok(pulls::thread_comments(
-        &app,
-        &c,
-        &repo,
-        number(&n)?,
-        &id,
-        page,
-    )
-    .await?))
 }
 
 async fn pull_yield_checks(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNum) -> R {

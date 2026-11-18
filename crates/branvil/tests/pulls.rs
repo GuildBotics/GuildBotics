@@ -332,10 +332,6 @@ async fn reviews_and_inline_comments_on_a_moved_head_write_nothing() {
     let threads = s.ok(&format!("{base}/threads"), &w.ken).await;
     assert_eq!(threads["items"][0]["outdated"], true);
     assert_eq!(threads["items"][0]["comments"].as_array().unwrap().len(), 2);
-    let tc = s
-        .ok(&format!("{base}/threads/{root_id}/comments"), &w.ken)
-        .await;
-    assert_eq!(tc["items"].as_array().unwrap().len(), 2);
 }
 
 #[tokio::test]

@@ -435,8 +435,18 @@ impl RunControl<'_> {
             .map_err(failed)?;
         let mut payload = self.status(&completed)?;
         if matches!(status, Completion::Done | Completion::AwaitingChecks) {
-            payload["pr_readiness"] = serde_json::to_value(readiness)
-                .map_err(|_| MemberError::Capability("capabilities.task_runs.store_failed"))?;
+            // Each readiness names the pull request it is of.
+            payload["pr_readiness"] = readiness
+                .iter()
+                .map(|r| {
+                    let mut value = serde_json::to_value(r).map_err(|_| {
+                        MemberError::Capability("capabilities.task_runs.store_failed")
+                    })?;
+                    value["url"] = r.target.url.clone().into();
+                    Ok(value)
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into();
         }
 
         if matches!(status, Completion::Asking | Completion::Blocked)

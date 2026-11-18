@@ -113,10 +113,7 @@ impl Repository<'_> {
                 .read(resource, subject, parameters, continuation)
                 .await?
         };
-        let mut result = payload(&page)?;
-        if page.target().is_none() {
-            result.as_object_mut().unwrap().remove("target");
-        }
+        let result = payload(&page)?;
         if serde_json::to_vec(&result)
             .map_err(|_| ServiceError::InvalidResult)?
             .len()

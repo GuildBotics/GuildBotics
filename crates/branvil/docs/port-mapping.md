@@ -1,5 +1,9 @@
 # GuildBotics ports → Branvil
 
+This is the record of how the former provider-neutral ports (removed in GuildBotics
+#340) were mapped onto this API. The agent module's methods keep the operation names
+below; their results are now the domain's views, not the neutral types listed here.
+
 Reference: GuildBotics `b7eff7266ed5d4ad12f5219d33bedaa030f5d113` (main after
 GuildBotics#807). Sources read:
 `guildbotics/runtime/{code_hosting_service,ticket_service,resources,port}.py`,

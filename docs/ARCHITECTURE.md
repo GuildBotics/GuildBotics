@@ -231,10 +231,10 @@ trigger, run ID and work identity. Selection happens before dispatch.
   queue/trigger — GuildBotics does not reimplement fine-grained code-host/git
   operations around it, and there is no webhook receiver (local-first design). The
   candidates are the pull requests that ask something of the member
-  (`CodeHostingService.pull_request_candidates()`), then the board's tickets
-  (`TicketService.candidates()`), and each is re-read from the port it came
+  (`CodeAgent::pull_request_candidates`), then the board's tickets
+  (`TicketAgent::candidates`), and each is re-read from the agent it came
   from before it is dispatched; a failed or rate-limited run's status comment goes to
-  that port too.
+  that ticket or pull request too.
   Unanswered mentions on open tickets outside the member's assignment are also
   candidates, even outside the ready/working lanes. Providers resolve mentions;
   `ticket_selection.mention_pending` considers a member's subsequent comment an
