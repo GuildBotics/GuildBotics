@@ -469,10 +469,11 @@ async fn patrol_files_links_and_draft_rules() {
     );
     let s = &w.server;
     // A foreign ticket cannot be closed; a missing ticket of ours is 404.
-    let (st, _) = s
+    let (st, v) = s
         .post(&pulls(&w), &w.aiko, json!({"head": "feature", "title": "x", "tickets": [{"url": "https://example.com/t/1", "closes": true}]}))
         .await;
     assert_eq!(st, 422);
+    assert_eq!(v["error"]["code"], "closes_foreign");
     for key in ["99", "01"] {
         let (st, _) = s
             .post(&pulls(&w), &w.aiko, json!({"head": "feature", "title": "x", "tickets": [{"url": format!("{}/{REPO}/-/tickets/{key}", s.url), "closes": false}]}))
@@ -496,7 +497,7 @@ async fn patrol_files_links_and_draft_rules() {
         .post(&pulls(&w), &w.aiko, json!({"head": "feature", "title": "x", "tickets": [{"url": other["url"], "closes": true}]}))
         .await;
     assert_eq!(st, 422, "{v}");
-    assert_eq!(v["error"]["code"], "unsupported");
+    assert_eq!(v["error"]["code"], "closes_foreign");
     let p = w
         .open_pull("feature", json!([{"url": t["url"], "closes": true}, {"url": "https://example.com/t/1", "closes": false}]))
         .await;

@@ -304,6 +304,15 @@ pub fn error(e: AppError, operation: &str) -> ServiceError {
     if e.code == "unavailable" && e.message == "integrations.branvil.api.stopped" {
         return diagnostic("integrations.branvil.api.stopped", []);
     }
+    if e.code == "closes_foreign" {
+        return match e.closing_link {
+            Some((repository, url)) => diagnostic(
+                "integrations.branvil.api.closes_foreign",
+                [("repository", repository), ("url", url)],
+            ),
+            None => ServiceError::InvalidResult,
+        };
+    }
     let message = e.message.chars().take(500).collect();
     match e.status.as_u16() {
         401 => return diagnostic("integrations.branvil.api.authentication", []),

@@ -10,6 +10,7 @@ pub struct AppError {
     pub status: StatusCode,
     pub code: &'static str,
     pub message: String,
+    pub(crate) closing_link: Option<(String, String)>,
 }
 
 impl AppError {
@@ -18,6 +19,7 @@ impl AppError {
             status,
             code,
             message: message.into(),
+            closing_link: None,
         }
     }
 
@@ -59,6 +61,18 @@ impl AppError {
 
     pub fn unsupported(message: impl Into<String>) -> Self {
         Self::new(StatusCode::UNPROCESSABLE_ENTITY, "unsupported", message)
+    }
+
+    pub(crate) fn closes_foreign(repository: &str, url: &str) -> Self {
+        let mut error = Self::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "closes_foreign",
+            format!(
+                "A merge into {repository} cannot close ticket {url}; use a reference link instead."
+            ),
+        );
+        error.closing_link = Some((repository.into(), url.into()));
+        error
     }
 
     pub fn too_large(message: impl Into<String>) -> Self {

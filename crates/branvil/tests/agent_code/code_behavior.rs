@@ -722,11 +722,35 @@ async fn body_updates_preserve_or_drop_links_before_validation(f: &mut Fixture<'
             )
             .await
             .unwrap_err();
-        assert_eq!(
-            error.translation_key(),
-            "integrations.branvil.api.unsupported"
-        );
-        assert!(error.translation_args()["message"].contains(&foreign));
+        let expected = ServiceError::Diagnostic {
+            class: ServiceErrorClass::Unsupported,
+            key: "integrations.branvil.api.closes_foreign",
+            args: [
+                ("repository".into(), REPOSITORY.into()),
+                ("url".into(), foreign.clone()),
+            ]
+            .into(),
+        };
+        assert_eq!(error, expected);
+        f.git
+            .push(&f.remote, &p.head, "foreign-close", "owner", f.owner_token);
+        let error = f
+            .code
+            .create_pull_request(CreatePullRequest {
+                repository: REPOSITORY.into(),
+                head: "foreign-close".into(),
+                base: "main".into(),
+                title: "Refused".into(),
+                body: String::new(),
+                draft: false,
+                tickets: vec![TicketLink {
+                    url: foreign,
+                    closes: true,
+                }],
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error, expected);
         assert_eq!(
             f.code
                 .read(Resource::PullRequests, &p.url, None, "")

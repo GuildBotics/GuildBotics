@@ -2,8 +2,8 @@
 // board writes that reorder it (unit tested).
 //
 // An agent takes up its ready tickets from the top of the Ready lane (its
-// rank): GuildBotics' Branvil provider
-// (`crates/gb-integrations/src/factory/branvil/patrol.rs`, `ticket_candidates`).
+// rank): the agent module
+// (`crates/branvil/src/agent/patrol.rs`, `ticket_candidates`).
 // The owner sets that order; when a ticket that is not yet started then waits
 // for one another member is working on, the system decides when it starts.
 

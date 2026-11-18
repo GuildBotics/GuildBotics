@@ -390,10 +390,7 @@ fn resolve_links(
         let link = match tickets::resolve_ticket_url(r, base_url, &l.url) {
             None => {
                 if l.closes {
-                    return Err(AppError::unsupported(format!(
-                        "{} is not a ticket of this Branvil; a merge cannot close it.",
-                        l.url
-                    )));
+                    return Err(AppError::closes_foreign(&repo.path, &l.url));
                 }
                 TicketLink {
                     url: l.url.clone(),
@@ -404,10 +401,7 @@ fn resolve_links(
             Some(found) => {
                 let (ticket_repo, ticket) = found?;
                 if l.closes && ticket_repo.id != repo.id {
-                    return Err(AppError::unsupported(format!(
-                        "{} is a ticket of {}, not of {}; a merge cannot close it.",
-                        l.url, ticket_repo.path, repo.path
-                    )));
+                    return Err(AppError::closes_foreign(&repo.path, &l.url));
                 }
                 TicketLink {
                     url: tickets::ticket_url(base_url, &ticket_repo, ticket.number),

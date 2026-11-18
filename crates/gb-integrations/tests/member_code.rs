@@ -26,8 +26,6 @@ pub async fn member_show_contract(service: &dyn CodeHostingService, repository: 
     );
     assert!(!temp.path().join("clones").exists());
 }
-/// Frozen code-host operation population; every assertion runs for both providers.
-
 #[tokio::test]
 async fn member_show_reads_the_embedded_repository() {
     let f = Fixture::new("owner").await;
