@@ -221,31 +221,46 @@ async fn prepare_reuses_clean_cache_refreshes_remote_and_refuses_previous_owner(
     assert!(f.workspace("one").commit(&same, "stale").await.is_err());
     assert!(f.workspace("one").push(&same).await.is_err());
 }
-#[tokio::test]
-async fn unfinished_population_keeps_owner_index_bytes_and_chosen_branch() {
-    for state in [
-        "staged",
-        "untracked",
-        "unstaged",
-        "history",
-        "divergent",
-        "merge",
-        "cherry",
-        "revert",
-        "autostash",
-        "rebase-merge",
-        "rebase-apply",
-        "sequencer",
-        "bisect",
-        "index.lock",
-        "HEAD.lock",
-        "stash",
-        "worktree",
-        "skip-worktree",
-        "assume-unchanged",
-        "detached",
-        "tag",
-    ] {
+/// Each unfinished Git state is an independent case, so each runs as its own test.
+mod unfinished_population_keeps_owner_index_bytes_and_chosen_branch {
+    use super::*;
+
+    macro_rules! cases {
+        ($($name:ident => $state:literal),* $(,)?) => {
+            $(
+                #[tokio::test]
+                async fn $name() {
+                    check($state).await;
+                }
+            )*
+        };
+    }
+
+    cases! {
+        staged => "staged",
+        untracked => "untracked",
+        unstaged => "unstaged",
+        history => "history",
+        divergent => "divergent",
+        merge => "merge",
+        cherry => "cherry",
+        revert => "revert",
+        autostash => "autostash",
+        rebase_merge => "rebase-merge",
+        rebase_apply => "rebase-apply",
+        sequencer => "sequencer",
+        bisect => "bisect",
+        index_lock => "index.lock",
+        head_lock => "HEAD.lock",
+        stash => "stash",
+        worktree => "worktree",
+        skip_worktree => "skip-worktree",
+        assume_unchanged => "assume-unchanged",
+        detached => "detached",
+        tag => "tag",
+    }
+
+    async fn check(state: &str) {
         let f = Fixture::new();
         let first = f.prepare("one", "ticket/1").await;
         let head = git(&first, &["rev-parse", "HEAD"]);
@@ -1417,39 +1432,56 @@ async fn author_feedback_keeps_the_ticket_clone_after_the_agent_chooses_a_branch
     assert_ne!(f.prepare("other", "other").await, path);
 }
 
-#[tokio::test]
-async fn unreadable_targets_stay_reserved_without_blocking_other_work() {
-    for kind in ["ticket", "pull_request"] {
-        for error in [
-            ServiceError::NotFound,
-            ServiceError::Unavailable,
-            ServiceError::OutOfScope,
-            ServiceError::InvalidResult,
-        ] {
-            let mut f = Fixture::new();
-            f.services.error = Some(error.clone());
-            lifecycle_page(&mut f, kind, "gone", "open", false, false);
-            let mut w = f.workspace("gone");
-            w.work = Some((kind, "gone"));
-            let first = w.prepare("owner/repo", "first").await.unwrap();
-            f.services.pages.insert(
-                format!(
-                    "{}|gone|",
-                    if kind == "ticket" {
-                        "tickets"
-                    } else {
-                        "pull_requests"
-                    }
-                ),
-                Err(error),
-            );
-            for other_kind in ["manual", "pull_request_review", "ticket_mention", "chat"] {
-                let mut other = f.workspace("other");
-                other.work = Some((other_kind, "other"));
-                let next = other.prepare("owner/repo", "next").await.unwrap();
-                assert_ne!(first["repo_path"], next["repo_path"]);
-                assert!(Path::new(first["repo_path"].as_str().unwrap()).exists());
-            }
+/// Each target kind and read failure is an independent case, so each runs as its own test.
+mod unreadable_targets_stay_reserved_without_blocking_other_work {
+    use super::*;
+
+    macro_rules! cases {
+        ($($name:ident => ($kind:literal, $error:expr)),* $(,)?) => {
+            $(
+                #[tokio::test]
+                async fn $name() {
+                    check($kind, $error).await;
+                }
+            )*
+        };
+    }
+
+    cases! {
+        ticket_not_found => ("ticket", ServiceError::NotFound),
+        ticket_unavailable => ("ticket", ServiceError::Unavailable),
+        ticket_out_of_scope => ("ticket", ServiceError::OutOfScope),
+        ticket_invalid_result => ("ticket", ServiceError::InvalidResult),
+        pull_request_not_found => ("pull_request", ServiceError::NotFound),
+        pull_request_unavailable => ("pull_request", ServiceError::Unavailable),
+        pull_request_out_of_scope => ("pull_request", ServiceError::OutOfScope),
+        pull_request_invalid_result => ("pull_request", ServiceError::InvalidResult),
+    }
+
+    async fn check(kind: &'static str, error: ServiceError) {
+        let mut f = Fixture::new();
+        f.services.error = Some(error.clone());
+        lifecycle_page(&mut f, kind, "gone", "open", false, false);
+        let mut w = f.workspace("gone");
+        w.work = Some((kind, "gone"));
+        let first = w.prepare("owner/repo", "first").await.unwrap();
+        f.services.pages.insert(
+            format!(
+                "{}|gone|",
+                if kind == "ticket" {
+                    "tickets"
+                } else {
+                    "pull_requests"
+                }
+            ),
+            Err(error),
+        );
+        for other_kind in ["manual", "pull_request_review", "ticket_mention", "chat"] {
+            let mut other = f.workspace("other");
+            other.work = Some((other_kind, "other"));
+            let next = other.prepare("owner/repo", "next").await.unwrap();
+            assert_ne!(first["repo_path"], next["repo_path"]);
+            assert!(Path::new(first["repo_path"].as_str().unwrap()).exists());
         }
     }
 }
