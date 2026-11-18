@@ -203,7 +203,7 @@ impl Scheduler {
                     )
                 };
                 if is_patrol {
-                    state.patrol_retry = (outcome == Outcome::Deferred || !exhausted)
+                    state.patrol_retry = (outcome != Outcome::Succeeded || !exhausted)
                         .then_some(now + Duration::minutes(1));
                 }
                 if woken {
@@ -557,42 +557,6 @@ mod tests {
         cleanup.wait().await;
     }
 
-    #[tokio::test]
-    async fn self_completion_preserves_interval_for_every_outcome_and_batch_state() {
-        for outcome in [Outcome::Succeeded, Outcome::Failed, Outcome::Deferred] {
-            for exhausted in [true, false] {
-                let engine = Fake::new();
-                engine
-                    .patrol
-                    .lock()
-                    .unwrap()
-                    .extend([(outcome, exhausted); 20]);
-                let mut scheduler = Scheduler::default();
-                scheduler.add(
-                    "aiko".into(),
-                    engine.clone(),
-                    vec![],
-                    vec![crate::ticket_selector::COMMAND.into()],
-                );
-                let settings = Settings {
-                    event_queue: false,
-                    ..Default::default()
-                };
-                for seconds in [0, 5, 10, 15, 20, 25, 60] {
-                    scheduler
-                        .tick("aiko", &settings, at(0) + Duration::seconds(seconds))
-                        .await;
-                    scheduler.wakes.except(Some("aiko"));
-                }
-                assert_eq!(
-                    engine.calls.lock().unwrap().len(),
-                    if exhausted { 1 } else { 2 },
-                    "{outcome:?} {exhausted}"
-                );
-            }
-        }
-    }
-
     #[test]
     fn excluding_sender_preserves_external_pending_and_coalesces_other_members() {
         let wakes = Wakes::default();
@@ -646,14 +610,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wakes_cannot_bypass_patrol_retry_or_incomplete_batch_interval() {
-        for result in [
-            (Outcome::Deferred, false),
-            (Outcome::Deferred, true),
-            (Outcome::Succeeded, false),
-        ] {
+    async fn all_wake_sources_preserve_retry_for_every_outcome_and_batch_state() {
+        for source in ["aiko", "kenji", "external"] {
+            for outcome in [Outcome::Succeeded, Outcome::Failed, Outcome::Deferred] {
+                for exhausted in [true, false] {
+                    let engine = Fake::new();
+                    engine
+                        .patrol
+                        .lock()
+                        .unwrap()
+                        .extend([(outcome, exhausted); 20]);
+                    let mut scheduler = Scheduler::default();
+                    scheduler.add(
+                        "aiko".into(),
+                        engine.clone(),
+                        vec![],
+                        vec![crate::ticket_selector::COMMAND.into()],
+                    );
+                    let settings = Settings {
+                        event_queue: false,
+                        ..Default::default()
+                    };
+                    for seconds in [0, 5, 10, 15, 20, 25, 60] {
+                        if source == "external" {
+                            scheduler.wakes.all();
+                        } else {
+                            scheduler.wakes.except(Some(source));
+                        }
+                        scheduler
+                            .tick("aiko", &settings, at(0) + Duration::seconds(seconds))
+                            .await;
+                    }
+                    let expected = if source == "aiko" && exhausted {
+                        1
+                    } else if outcome == Outcome::Succeeded && exhausted {
+                        7
+                    } else {
+                        2
+                    };
+                    assert_eq!(
+                        engine.calls.lock().unwrap().len(),
+                        expected,
+                        "{source} {outcome:?} {exhausted}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_exhaustion_clears_the_previous_failure_retry_deadline() {
+        for outcome in [Outcome::Failed, Outcome::Deferred] {
             let engine = Fake::new();
-            engine.patrol.lock().unwrap().extend([result; 20]);
+            engine.patrol.lock().unwrap().push_back((outcome, true));
             let mut scheduler = Scheduler::default();
             scheduler.add(
                 "aiko".into(),
@@ -665,13 +674,52 @@ mod tests {
                 event_queue: false,
                 ..Default::default()
             };
-            for seconds in [0, 5, 10, 15, 20, 25, 60] {
+            scheduler.tick("aiko", &settings, at(0)).await;
+            for seconds in [60, 65] {
                 scheduler.wakes.all();
                 scheduler
                     .tick("aiko", &settings, at(0) + Duration::seconds(seconds))
                     .await;
             }
-            assert_eq!(engine.calls.lock().unwrap().len(), 2, "{result:?}");
+            assert_eq!(engine.calls.lock().unwrap().len(), 3);
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_members_cannot_keep_each_other_running_without_retry_delay() {
+        let mut scheduler = Scheduler::default();
+        let engine = Fake::new();
+        engine
+            .patrol
+            .lock()
+            .unwrap()
+            .extend([(Outcome::Failed, true); 20]);
+        for person in ["aiko", "kenji"] {
+            scheduler.add(
+                person.into(),
+                engine.clone(),
+                vec![],
+                vec![crate::ticket_selector::COMMAND.into()],
+            );
+        }
+        let settings = Settings {
+            event_queue: false,
+            ..Default::default()
+        };
+        for seconds in [0, 5, 10, 15, 20, 25, 60] {
+            for person in ["aiko", "kenji"] {
+                if scheduler
+                    .tick(person, &settings, at(0) + Duration::seconds(seconds))
+                    .await
+                    == Outcome::Failed
+                {
+                    scheduler.wakes.except(Some(person));
+                }
+            }
+            assert_eq!(
+                engine.calls.lock().unwrap().len(),
+                if seconds < 60 { 2 } else { 4 }
+            );
         }
     }
 
