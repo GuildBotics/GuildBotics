@@ -38,6 +38,7 @@ fn working_conversation_precedes_linked_pr_and_holds_win() {
                     finish_merged: true,
                     repair: false,
                     work_status: None,
+                    work_remaining: false,
                 },
                 Utc::now(),
             );
@@ -133,6 +134,7 @@ fn repair_failures_resume_but_rate_limits_still_hold() {
                         finish_merged: true,
                         repair,
                         work_status: None,
+                        work_remaining: false,
                     },
                     now,
                 );
@@ -158,6 +160,7 @@ fn a_merged_repair_pr_does_not_finish_a_ticket_before_main_verification() {
             finish_merged: true,
             repair: true,
             work_status: None,
+            work_remaining: false,
         },
         Utc::now(),
     );
@@ -171,7 +174,10 @@ fn recorded_ticket_work_controls_merge_completion_and_resume() {
         author_type: "Assistant".into(),
         ..Default::default()
     }];
-    for state in [Completed, WorkRemaining, Asking, Blocked, AwaitingChecks] {
+    for (state, remaining) in [Completed, WorkRemaining, Asking, Blocked, AwaitingChecks]
+        .into_iter()
+        .flat_map(|s| [false, true].map(|r| (s, r)))
+    {
         for pull in [None, Some("open"), Some("merged"), Some("closed")] {
             let d = select_ticket(
                 "in_progress",
@@ -183,10 +189,11 @@ fn recorded_ticket_work_controls_merge_completion_and_resume() {
                     finish_merged: true,
                     repair: false,
                     work_status: Some(state),
+                    work_remaining: remaining,
                 },
                 Utc::now(),
             );
-            assert_eq!(d.finish, state != WorkRemaining && pull == Some("merged"));
+            assert_eq!(d.finish, !remaining && pull == Some("merged"));
             assert_eq!(
                 d.reason,
                 (state == WorkRemaining && matches!(pull, Some("merged" | "closed")))

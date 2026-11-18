@@ -45,6 +45,7 @@ pub struct TicketDecision {
 pub struct TicketPolicy {
     pub finish_merged: bool,
     pub repair: bool,
+    pub work_remaining: bool,
     pub work_status: Option<gb_ports::WorkflowStatusReason>,
 }
 
@@ -61,6 +62,7 @@ pub fn select_ticket(
         repair,
         finish_merged,
         work_status,
+        work_remaining,
     } = policy;
     let mine = since.last().is_some_and(|m| m.author_type == "Assistant");
     if repair
@@ -104,7 +106,7 @@ pub fn select_ticket(
             && !pending
             && linked_pull == Some("merged")
             && finish_merged
-            && work_status != Some(gb_ports::WorkflowStatusReason::WorkRemaining),
+            && !work_remaining,
     }
 }
 

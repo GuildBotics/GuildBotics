@@ -2653,7 +2653,28 @@ pub(crate) mod tests {
                         )
                         .await
                         .unwrap();
-                    assert_eq!(comments.items().len(), if fails_later { 2 } else { 1 });
+                    let completed = phase != "before";
+                    assert_eq!(
+                        comments.items().len(),
+                        1 + usize::from(completed) + usize::from(fails_later)
+                    );
+                    if completed {
+                        let records = RunStore::open(&native.workspace).records().unwrap();
+                        let marker = records[0]
+                            .provider_evidence
+                            .iter()
+                            .find(|e| e["type"] == "ticket_work")
+                            .unwrap();
+                        assert_eq!(
+                            marker["payload"]["status"]["reason"],
+                            if status == "done" {
+                                "completed"
+                            } else {
+                                status
+                            }
+                        );
+                        assert_eq!(comments.items()[0]["body"], "Handled.");
+                    }
                     if failed {
                         assert_ne!(comments.items().last().unwrap()["body"], "Handled.");
                     }

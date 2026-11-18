@@ -1672,7 +1672,7 @@ async fn recorded_remainder_survives_merge_and_plain_comments_until_completed() 
         );
         assert_eq!(
             f.read(&url).await["lane"],
-            if outcome == "work_remaining" {
+            if outcome != "completed" {
                 "in_progress"
             } else {
                 "done"
@@ -1750,6 +1750,67 @@ async fn ticket_outcomes_require_current_assignee_and_assignment_history() {
             expected,
             "{author}/{person}/{identity}/{timestamp}"
         );
+    }
+    f.running.stop().await;
+}
+
+#[tokio::test]
+async fn remaining_scope_survives_run_waits_until_completed() {
+    let f = Fixture::new().await;
+    for wait in ["asking", "blocked", "awaiting_checks"] {
+        let url = f.assigned("in_progress").await;
+        f.linked(Some(&url), false, true).await;
+        for outcome in ["work_remaining", wait, "completed"] {
+            let status: WorkflowStatus = decode(json!({
+                "reason":outcome,"person_id":"agent1","run_id":outcome,
+                "work_kind":"ticket","work_identity":url
+            }))
+            .unwrap();
+            TicketService::comment(&f.service, &url, "Outcome", Some(&status))
+                .await
+                .unwrap();
+            TicketService::comment(&f.service, &url, "Detail", None)
+                .await
+                .unwrap();
+            let tasks = f.service.candidates().await.unwrap();
+            assert_eq!(
+                tasks.iter().any(|t| t.url.as_deref() == Some(&url)),
+                outcome == "work_remaining"
+            );
+            assert_eq!(
+                f.read(&url).await["lane"],
+                if outcome == "completed" {
+                    "done"
+                } else {
+                    "in_progress"
+                }
+            );
+            if outcome == wait {
+                let task = Task {
+                    url: Some(url.clone()),
+                    ..Default::default()
+                };
+                assert!(f.service.refresh(&task).await.unwrap().is_none());
+                f.owner
+                    .tickets_add_comment(
+                        "test/repo",
+                        url.rsplit('/').next().unwrap(),
+                        decode(json!({"body":"Answer"})).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    f.service
+                        .refresh(&task)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .trigger_reason
+                        .as_deref(),
+                    Some("issue_comment")
+                );
+            }
+        }
     }
     f.running.stop().await;
 }
