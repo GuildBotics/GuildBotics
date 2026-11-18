@@ -107,16 +107,18 @@ impl BranvilService {
         p: &Value,
         a: &Value,
     ) -> Result<Option<Task>, ServiceError> {
-        if text(p, "head_sha").is_empty() || self.scope.authorize(text(p, "repository")).is_err() {
+        if text(p, "head_sha").is_empty()
+            || self.write_scope().authorize(text(p, "repository")).is_err()
+        {
             return Ok(None);
         }
-        let me = fold(&self.person_id);
+        let me = fold(self.person_id());
         let task = crate::patrol(
             self,
             &self.snapshot(p, a),
             &me,
             "branvil",
-            &self.person_id,
+            self.person_id(),
             Utc::now(),
         )
         .await;
@@ -177,11 +179,11 @@ impl BranvilService {
     }
     pub(super) async fn pull_can_receive(&self, url: &str) -> Result<bool, ServiceError> {
         let (r, k) = self.item(url, "pulls")?;
-        if self.scope.authorize(&r).is_err() {
+        if self.write_scope().authorize(&r).is_err() {
             return Ok(false);
         }
         let p = self.pull(url).await?;
-        let me = fold(&self.person_id);
+        let me = fold(self.person_id());
         if text(&p, "head_sha").is_empty()
             || fold(text(&p, "author")) == me && self.pull_interactive(&p).await?
         {

@@ -231,15 +231,16 @@ impl Server {
         self.api.shutdown.clone()
     }
 
-    pub fn attach_branvil(&mut self, branvil: branvil::api::DataApi) -> anyhow::Result<()> {
+    /// Resolve current eligible identities before embedded workers can create repairs.
+    pub fn active_agents(&self) -> branvil::agent::ActiveAgents {
         let roster_api = Arc::downgrade(&self.api);
-        branvil.attach_active_agents(Arc::new(move || {
+        Arc::new(move || {
             let api = roster_api
                 .upgrade()
                 .ok_or_else(|| "Host stopped".to_owned())?;
             let selected = api.selected();
             let Some(workspace) = &selected.workspace else {
-                return Ok(vec![]);
+                return Ok(Default::default());
             };
             let team = gb_config::team::Team::load(
                 &workspace.join(".guildbotics/config"),
@@ -250,9 +251,13 @@ impl Server {
                 .members
                 .into_iter()
                 .filter(|m| m.is_active && m.person_type == "agent")
-                .map(|m| m.person_id)
+                .map(|m| (m.person_id, m.name))
                 .collect())
-        }));
+        })
+    }
+
+    pub fn attach_branvil(&mut self, branvil: branvil::api::DataApi) -> anyhow::Result<()> {
+        branvil.attach_active_agents(self.active_agents());
         let weak = Arc::downgrade(&self.api);
         branvil.attach_hub_status(Arc::new(move || {
             let api = weak.upgrade();
@@ -625,6 +630,60 @@ mod tests {
     use std::io::Read;
 
     use super::*;
+
+    #[tokio::test]
+    async fn embedded_roster_is_fresh_and_contains_only_active_agent_identities() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let identity = root.path().join("identity");
+        let config = workspace.join(".guildbotics/config/team");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("project.yml"), "language: ja\n").unwrap();
+        for (id, kind, active) in [
+            ("aiko", "agent", true),
+            ("inactive", "agent", false),
+            ("owner", "human", true),
+            ("absent", "agent", true),
+        ] {
+            let participation = config.join("members").join(id);
+            std::fs::create_dir_all(&participation).unwrap();
+            std::fs::write(
+                participation.join("member.yml"),
+                format!("is_active: {active}\n"),
+            )
+            .unwrap();
+            if id != "absent" {
+                let path = identity.join(".guildbotics/config/team/members").join(id);
+                std::fs::create_dir_all(&path).unwrap();
+                std::fs::write(
+                    path.join("identity.yml"),
+                    format!("person_id: {id}\nname: Display {id}\nperson_type: {kind}\n"),
+                )
+                .unwrap();
+            }
+        }
+        let mut api = Api::new(
+            Selected {
+                workspace: Some(workspace),
+                ..Default::default()
+            },
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            ServerAuth::open(root.path(), 7878).unwrap(),
+            "fixture".into(),
+            root.path().into(),
+        );
+        api.identity_root = identity;
+        let (server, _) = Server::for_test(Arc::new(api)).await;
+        let roster = server.active_agents();
+        assert_eq!(
+            roster().unwrap(),
+            [("aiko".into(), "Display aiko".into())].into()
+        );
+        std::fs::write(config.join("members/aiko/member.yml"), "is_active: false\n").unwrap();
+        assert!(roster().unwrap().is_empty());
+        std::fs::write(config.join("members/aiko/member.yml"), "is_active: []\n").unwrap();
+        assert!(roster().is_err());
+    }
 
     #[tokio::test]
     async fn forced_shutdown_does_not_wait_for_start_gate_to_cancel() {

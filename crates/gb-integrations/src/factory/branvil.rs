@@ -20,11 +20,6 @@ impl std::ops::Deref for BranvilService {
         &self.agent
     }
 }
-impl std::ops::DerefMut for BranvilService {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.agent
-    }
-}
 impl BranvilService {
     pub(super) fn new(
         api: DataApi,

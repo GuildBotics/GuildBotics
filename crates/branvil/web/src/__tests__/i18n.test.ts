@@ -34,6 +34,10 @@ describe("i18n", () => {
   it("describes automatic responders as agent PR authors in both languages", () => {
     expect(dictionaries.ja["settings.responderHelp"]).toContain("AI メンバー（agent）の PR");
     expect(dictionaries.en["settings.responderHelp"]).toContain("agent PR");
+    expect(dictionaries.ja["settings.responderHelp"]).toContain("在籍中");
+    expect(dictionaries.en["settings.responderHelp"]).toContain("active");
+    expect(dictionaries.ja["settings.responderAuto"]).toBe("自動");
+    expect(dictionaries.en["settings.responderAuto"]).toBe("Automatic");
   });
 
   it("names every lane in Japanese", () => {

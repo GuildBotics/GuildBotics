@@ -395,13 +395,14 @@ The owner may PATCH `responder` with an existing agent name (stored with the
 member's canonical spelling), or `null` to return to automatic selection.
 Omission keeps the setting. Owner, runner, and unknown names return 400
 `invalid` without changing the record or revision; non-owners receive 403.
-New repositories use automatic selection. The effective responder is resolved
-at read time from the host's current active agents: the author of the
-repository's most recently merged eligible PR (`merged_at`), otherwise the
-first eligible agent by person_id. An eligible explicit name has `chosen: true`
-and overrides that ordering. Humans and unavailable members are excluded.
-When no agent is available, `member` and `automatic` are empty; repair creation
-remains pending until an agent is available, rather than assigning a human.
+New repositories use automatic selection. Repository responses preserve the configured
+responder, even while that agent is inactive; unrelated settings changes must not clear
+it. The automatic preview uses the stored agent authors of merged PRs, then agent names
+in person_id order. Actual repair creation restricts both authors and responders to the
+host's fresh active roster. If none qualifies, it chooses the first active agent by
+person_id. With no active agent, creation stays pending while the verification API and
+CI screen continue to report `failing`, its commit and failed jobs. A later roster refresh
+retries creation without assigning a human.
 
 
 ## Tickets and the board

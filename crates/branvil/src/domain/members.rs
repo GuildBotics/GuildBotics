@@ -446,3 +446,54 @@ pub async fn current_session(app: &App, id: String) -> AppResult<SessionView> {
         host_navigation: None,
     })
 }
+
+/// Register valid missing roster agents without overwriting existing identities.
+pub(crate) async fn ensure_agents(app: &App, members: Vec<(String, String)>) -> AppResult<()> {
+    let wanted: Vec<_> = members
+        .into_iter()
+        .filter(|(name, _)| check_name(name).is_ok())
+        .collect();
+    let missing = app
+        .store
+        .read(move |r| {
+            let mut missing = Vec::new();
+            for (name, display_name) in wanted {
+                if r.get::<Member>(crate::store::MEMBERS, &Member::key(&name))?
+                    .is_none()
+                {
+                    missing.push((name, display_name));
+                }
+            }
+            Ok(missing)
+        })
+        .await?;
+    if missing.is_empty() {
+        return Ok(());
+    }
+    // The write rereads, so a concurrent creation is kept rather than refused.
+    app.store
+        .write(move |w| {
+            for (name, display_name) in missing {
+                if w.get::<Member>(crate::store::MEMBERS, &Member::key(&name))?
+                    .is_none()
+                {
+                    insert_member(
+                        w,
+                        &NewMember {
+                            name,
+                            display_name: crate::domain::check_text(
+                                "display_name",
+                                &display_name,
+                                256,
+                            )
+                            .is_ok()
+                            .then_some(display_name),
+                            kind: MemberKind::Agent,
+                        },
+                    )?;
+                }
+            }
+            Ok(())
+        })
+        .await
+}

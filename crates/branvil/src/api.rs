@@ -6,7 +6,6 @@ pub use crate::domain::{CommentView, Page};
 pub use crate::domain::{attachments, members, pulls, repos, tickets};
 pub use crate::error::{AppError, AppResult};
 use crate::git::{CommitSummary, FileChange};
-use crate::model::Member;
 pub use crate::model::{MemberKind, Repo, Workspace};
 use crate::store::Rd;
 pub use crate::upstream::host::{AlertState, DependencyAlert};
@@ -117,55 +116,7 @@ impl DataApi {
     /// never keeps the others from being created.
     pub async fn ensure_agents(&self, members: Vec<(String, String)>) -> AppResult<()> {
         let _open = self.guard()?;
-        let wanted: Vec<_> = members
-            .into_iter()
-            .filter(|(name, _)| members::check_name(name).is_ok())
-            .collect();
-        let missing = self
-            .app
-            .store
-            .read(move |r| {
-                let mut missing = Vec::new();
-                for (name, display_name) in wanted {
-                    if r.get::<Member>(crate::store::MEMBERS, &Member::key(&name))?
-                        .is_none()
-                    {
-                        missing.push((name, display_name));
-                    }
-                }
-                Ok(missing)
-            })
-            .await?;
-        if missing.is_empty() {
-            return Ok(());
-        }
-        // The write rereads, so a concurrent creation is kept rather than refused.
-        self.app
-            .store
-            .write(move |w| {
-                for (name, display_name) in missing {
-                    if w.get::<Member>(crate::store::MEMBERS, &Member::key(&name))?
-                        .is_none()
-                    {
-                        members::insert_member(
-                            w,
-                            &members::NewMember {
-                                name,
-                                display_name: crate::domain::check_text(
-                                    "display_name",
-                                    &display_name,
-                                    256,
-                                )
-                                .is_ok()
-                                .then_some(display_name),
-                                kind: MemberKind::Agent,
-                            },
-                        )?;
-                    }
-                }
-                Ok(())
-            })
-            .await
+        members::ensure_agents(&self.app, members).await
     }
     /// Act as the agent `name`, which is created with `display_name` when
     /// missing. Each operation reads the member again, so it acts with the
@@ -956,6 +907,49 @@ mod tests {
     fn input<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> T {
         serde_json::from_value(v).unwrap()
     }
+    #[tokio::test]
+    async fn roster_failure_cannot_break_repository_writes_or_clear_the_responder() {
+        let root = tempfile::tempdir().unwrap();
+        initialize(root.path(), "owner1").unwrap();
+        let running = Running::start(
+            root.path(),
+            std::sync::Arc::new(crate::vault::Memory::default()),
+        )
+        .await
+        .unwrap();
+        running.data.agent("agent1", "Agent One").await.unwrap();
+        running
+            .data
+            .attach_active_agents(std::sync::Arc::new(|| Err("invalid team config".into())));
+        let owner = running.data.owner();
+        owner
+            .repos_create_workspace(input(json!({"name":"test"})))
+            .await
+            .unwrap();
+        let repo = owner
+            .repos_create(input(json!({"path":"test/repo"})))
+            .await
+            .unwrap();
+        let repo = owner
+            .repos_update(
+                "test/repo",
+                input(json!({"revision":repo.revision,"responder":"agent1"})),
+            )
+            .await
+            .unwrap();
+        let repo = owner
+            .repos_update(
+                "test/repo",
+                input(json!({"revision":repo.revision,"ci_network":true})),
+            )
+            .await
+            .unwrap();
+        assert!(repo.responder.chosen);
+        assert_eq!(repo.responder.member, "agent1");
+        assert!(owner.repos_get("test/repo").await.unwrap().responder.chosen);
+        running.stop().await.unwrap();
+    }
+
     #[tokio::test]
     async fn in_process_members_act_with_their_permissions() {
         let temp = tempfile::tempdir().unwrap();

@@ -27,7 +27,9 @@ impl BranvilService {
     ) -> Result<Vec<TicketLink>, ServiceError> {
         let mut result = Vec::with_capacity(links.len());
         for link in links {
-            let own = link.url.starts_with(&format!("{}/", self.api.base_url()));
+            let own = link
+                .url
+                .starts_with(&format!("{}/", self.data().base_url()));
             let item = if own {
                 Some(self.ticket(&link.url).await?)
             } else {
@@ -71,7 +73,7 @@ impl CodeHostingService for BranvilService {
     fn retry_job<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, String> {
         Box::pin(async move {
             let path = url
-                .strip_prefix(self.api.base_url())
+                .strip_prefix(self.data().base_url())
                 .and_then(|p| p.strip_prefix('/'))
                 .ok_or(ServiceError::NotFound)?;
             let (repo, id) = path.split_once("/-/jobs/").ok_or(ServiceError::NotFound)?;
@@ -90,7 +92,7 @@ impl CodeHostingService for BranvilService {
                 .map_err(|e| error(e, "job_retry"))?;
             Ok(format!(
                 "{}/{repo}/-/jobs/{}",
-                self.api.base_url(),
+                self.data().base_url(),
                 attempt.id
             ))
         })
@@ -187,7 +189,7 @@ impl CodeHostingService for BranvilService {
             }
             let m = self.member().await?;
             if resource == Resource::TicketPullRequests {
-                if !subject.starts_with(&format!("{}/", self.api.base_url())) {
+                if !subject.starts_with(&format!("{}/", self.data().base_url())) {
                     return Err(diagnostic(
                         "integrations.branvil.api.foreign_ticket",
                         [("url", subject.to_owned())],
@@ -539,7 +541,7 @@ impl CodeHostingService for BranvilService {
     fn clone_url<'a>(&'a self, repo: &'a str) -> ServiceFuture<'a, String> {
         Box::pin(async move {
             self.repository(repo)?;
-            Ok(format!("{}/git/{repo}.git", self.api.base_url()))
+            Ok(format!("{}/git/{repo}.git", self.data().base_url()))
         })
     }
     fn default_branch<'a>(&'a self, repo: &'a str) -> ServiceFuture<'a, String> {
@@ -569,10 +571,10 @@ impl CodeHostingService for BranvilService {
             if lent.is_none() {
                 self.member().await?;
                 *lent = Some(
-                    self.api
+                    self.data()
                         .owner()
                         .members_issue_token(
-                            self.person_id.clone(),
+                            self.person_id().to_owned(),
                             branvil::api::members::NewToken {
                                 label: super::GIT_TOKEN_LABEL.into(),
                                 replace: false,
@@ -584,7 +586,7 @@ impl CodeHostingService for BranvilService {
             }
             let issued = lent.as_ref().expect("lent above");
             Ok(Some(GitCredential {
-                username: self.person_id.clone(),
+                username: self.person_id().to_owned(),
                 password: issued.token.clone(),
             }))
         })
@@ -593,10 +595,10 @@ impl CodeHostingService for BranvilService {
         self.writable(repo)
     }
     fn commit_url(&self, repo: &str, sha: &str) -> String {
-        Self::commit_url_for(&self.api, repo, sha)
+        Self::commit_url_for(self.data(), repo, sha)
     }
     fn repository_from_remote(&self, url: &str) -> Option<String> {
-        Self::repository_for_remote(&self.api, url)
+        Self::repository_for_remote(self.data(), url)
     }
     fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>> {
         Box::pin(async {
@@ -620,8 +622,11 @@ impl CodeHostingService for BranvilService {
                     .map_err(|e| error(e, "pulls_patrol"))?;
                 for pull in page.items {
                     let pull = value(pull)?;
-                    if fold(text(&pull, "author")) == fold(&self.person_id)
-                        && self.scope.authorize(text(&pull, "repository")).is_ok()
+                    if fold(text(&pull, "author")) == fold(self.person_id())
+                        && self
+                            .write_scope()
+                            .authorize(text(&pull, "repository"))
+                            .is_ok()
                         && !self.pull_interactive(&pull).await?
                     {
                         out.push(text(&pull, "url").into());
@@ -654,9 +659,9 @@ impl CodeHostingService for BranvilService {
         Box::pin(async {
             if let Some(issued) = self.git_token.lock().await.take()
                 && let Err(e) = self
-                    .api
+                    .data()
                     .owner()
-                    .members_revoke_token(self.person_id.clone(), issued.id)
+                    .members_revoke_token(self.person_id().to_owned(), issued.id)
                     .await
                 && e.status.as_u16() != 404
             {

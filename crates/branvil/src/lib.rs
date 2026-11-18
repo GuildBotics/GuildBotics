@@ -383,10 +383,18 @@ pub async fn prepare_embedded(
     vault: Arc<dyn vault::Vault>,
     base_url: &str,
     session: Arc<dyn browser_session::BrowserSession>,
+    active_agents: agent::ActiveAgents,
 ) -> anyhow::Result<Embedded> {
     invocation.install();
     let base_url = config::normalize_base_url(base_url)?;
-    let embedded = cli::prepare(serve_config()?, vault, base_url.clone(), base_url).await?;
+    let embedded = cli::prepare(
+        serve_config()?,
+        vault,
+        base_url.clone(),
+        base_url,
+        active_agents,
+    )
+    .await?;
     let _ = embedded.app.browser_session.set(session);
     Ok(embedded)
 }

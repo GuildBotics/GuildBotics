@@ -489,29 +489,6 @@ pub async fn sweep(app: &App) -> AppResult<()> {
 }
 
 async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
-    let active = super::active_agents(app)?;
-    if let Some(names) = &active {
-        let names = names.clone();
-        app.store
-            .write(move |w| {
-                for name in names {
-                    if w.get::<model::Member>(store::MEMBERS, &model::Member::key(&name))?
-                        .is_none()
-                    {
-                        crate::domain::members::insert_member(
-                            w,
-                            &crate::domain::members::NewMember {
-                                name: name.clone(),
-                                display_name: Some(name),
-                                kind: MemberKind::Agent,
-                            },
-                        )?;
-                    }
-                }
-                Ok(())
-            })
-            .await?;
-    }
     let id = p.repo.clone();
     let repo = app
         .store
@@ -519,6 +496,23 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
         .await?;
     let id = p.repo.clone();
     let old = app.store.read(move |r| open_ticket(r, &id)).await?;
+    // Existing repairs need no new assignee: roster failures cannot suppress updates.
+    let active = if old.is_none() {
+        let roster = super::active_agents(app)?;
+        if let Some(names) = &roster {
+            crate::domain::members::ensure_agents(
+                app,
+                names
+                    .iter()
+                    .map(|(id, name)| (id.clone(), name.clone()))
+                    .collect(),
+            )
+            .await?;
+        }
+        roster.map(|names| names.into_keys().collect::<Vec<_>>())
+    } else {
+        None
+    };
     let mut lines = Vec::new();
     let mut merged = Vec::new();
     if let Some(t) = &old {

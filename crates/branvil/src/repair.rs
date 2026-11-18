@@ -60,7 +60,7 @@ pub fn responder_for(r: &impl Rd, repo: &Repo, active: Option<&[String]>) -> App
                     .any(|n| crate::util::fold(n) == crate::util::fold(&m.name))
             })
     });
-    members.sort_by(|a, b| a.name.cmp(&b.name));
+    members.sort_by_key(|m| crate::util::fold(&m.name));
     let pulls: Vec<Pull> = r.prefix_all(store::PULLS, &store::Key::new().s(&repo.id).bytes())?;
     let latest = pulls
         .iter()
@@ -88,7 +88,9 @@ pub fn responder_for(r: &impl Rd, repo: &Repo, active: Option<&[String]>) -> App
         automatic,
     })
 }
-pub fn active_agents(app: &crate::app::App) -> AppResult<Option<Vec<String>>> {
+pub fn active_agents(
+    app: &crate::app::App,
+) -> AppResult<Option<std::collections::BTreeMap<String, String>>> {
     app.active_agents
         .get()
         .map(|roster| roster().map_err(AppError::unavailable))
@@ -145,5 +147,16 @@ mod tests {
         check(&s, &repo, "new", false, "new").await;
         repo.responder = Some("old".into());
         check(&s, &repo, "old", true, "new").await;
+        member(&s, "Alpha", MemberKind::Agent, "0").await;
+        member(&s, "aaron", MemberKind::Agent, "1").await;
+        repo.responder = None;
+        let chosen = s
+            .read(move |r| responder_for(r, &repo, Some(&["alpha".into(), "aaron".into()])))
+            .await
+            .unwrap();
+        assert_eq!(
+            chosen.member, "aaron",
+            "fallback ordering follows person_id rather than stored display case"
+        );
     }
 }

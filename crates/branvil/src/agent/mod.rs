@@ -22,15 +22,15 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 pub struct TicketAgent {
-    pub api: DataApi,
+    pub(crate) api: DataApi,
     /// The agent acted as: the member's person_id, also its Branvil name.
-    pub person_id: String,
-    pub display_name: String,
+    pub(crate) person_id: String,
+    pub(crate) display_name: String,
     /// Set once the roster's members all exist, so any of them can be named.
     roster_ready: tokio::sync::OnceCell<()>,
     workspace: String,
-    pub scope: WriteScope,
-    pub members: std::collections::BTreeMap<String, String>,
+    pub(crate) scope: WriteScope,
+    pub(crate) members: std::collections::BTreeMap<String, String>,
 }
 impl TicketAgent {
     pub fn new(api: DataApi, workspace: String, person_id: String, display_name: String) -> Self {
@@ -44,6 +44,17 @@ impl TicketAgent {
             members: Default::default(),
         }
     }
+    /// Shared in-process API, without mutable access to the write boundary.
+    pub fn data(&self) -> &DataApi {
+        &self.api
+    }
+    pub fn person_id(&self) -> &str {
+        &self.person_id
+    }
+    pub fn write_scope(&self) -> &WriteScope {
+        &self.scope
+    }
+
     pub fn with_members(mut self, members: &std::collections::BTreeMap<String, String>) -> Self {
         self.members = members
             .iter()
@@ -342,7 +353,9 @@ fn reaction(r: SemanticReaction) -> &'static str {
 mod ticket_parity;
 
 /// The embedding host supplies a fresh roster at each repair sweep.
-pub type ActiveAgents = std::sync::Arc<dyn Fn() -> Result<Vec<String>, String> + Send + Sync>;
+pub type ActiveAgents = std::sync::Arc<
+    dyn Fn() -> Result<std::collections::BTreeMap<String, String>, String> + Send + Sync,
+>;
 impl DataApi {
     pub fn attach_active_agents(&self, roster: ActiveAgents) {
         let _ = self.app.active_agents.set(roster);

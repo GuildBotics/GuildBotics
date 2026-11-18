@@ -33,10 +33,9 @@ pub struct RepoView {
 
 pub async fn repo_view(app: &App, r: &Repo) -> AppResult<RepoView> {
     let repo = r.clone();
-    let active = crate::repair::active_agents(app)?;
     let responder = app
         .store
-        .read(move |rd| crate::repair::responder_for(rd, &repo, active.as_deref()))
+        .read(move |rd| crate::repair::responder(rd, &repo))
         .await?;
     Ok(RepoView {
         path: r.path.clone(),

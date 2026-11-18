@@ -616,10 +616,11 @@ async fn serve(services: bool) -> anyhow::Result<u8> {
     }
     let base_url = server.base_url();
     let session = server.browser_session();
+    let active_agents = server.active_agents();
     let vault = Arc::new(gb_server::branvil_vault::IdentityVault::system());
     let (_held, served) = server
         .serve_embedded(stop, cancel, async move {
-            branvil::prepare_embedded(BRANVIL, vault, &base_url, session).await
+            branvil::prepare_embedded(BRANVIL, vault, &base_url, session, active_agents).await
         })
         .await;
     served?;
