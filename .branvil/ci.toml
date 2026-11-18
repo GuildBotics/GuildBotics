@@ -178,8 +178,9 @@ paths = [
 image = "guildbotics/agent-environment:dev"
 commands = [
   "find crates -exec touch -c {} +",
-  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked -p branvil -p loopback-auth --features branvil/test-support",
+  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked --profile ci -p branvil -p loopback-auth --features branvil/test-support",
 ]
+artifacts = [{ name = "test-results", paths = ["target/nextest/ci/junit.xml"] }]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
 

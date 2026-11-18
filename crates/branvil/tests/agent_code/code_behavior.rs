@@ -43,7 +43,34 @@ struct Pull {
     head: String,
     branch: String,
 }
-impl Fixture<'_> {
+impl<'a> Fixture<'a> {
+    async fn new(context: &'a Context) -> Self {
+        let Context {
+            temp,
+            owner,
+            c,
+            t,
+            owner_token,
+            ..
+        } = context;
+        let root = temp.path();
+        let code = c.as_ref();
+        let tickets = t.as_ref();
+        let git = Git::new(&root.join("code-behavior"));
+        let base = git.commit("", "a.py", "keep\nold\n");
+        let remote = code.clone_url(REPOSITORY).await.unwrap();
+        git.push(&remote, &base, "main", "owner", owner_token.trim());
+        Self {
+            owner,
+            code,
+            tickets,
+            git,
+            remote,
+            base,
+            owner_token: owner_token.trim(),
+            next: 0,
+        }
+    }
     async fn ticket(&self, title: &str, interactive: bool, parent: Option<String>) -> String {
         let mut request = contracts::ticket_request(REPOSITORY, title);
         request.interactive = interactive;
@@ -145,7 +172,10 @@ impl Fixture<'_> {
             .unwrap();
     }
 }
-async fn author_feedback_reactions_and_holds(f: &mut Fixture<'_>) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn author_feedback_reactions_and_holds() {
+    let context = Context::with_repository(REPOSITORY).await;
+    let mut f = Fixture::new(&context).await;
     let p = f.open(true, vec![]).await;
     f.expected(&p, None, false).await;
     f.human(&p, "Please rename").await;
@@ -214,8 +244,12 @@ async fn author_feedback_reactions_and_holds(f: &mut Fixture<'_>) {
         f.owner_token,
     );
     f.expected(&p, None, false).await;
+    context.stop().await;
 }
-async fn requested_and_inline_reviews_follow_heads(f: &mut Fixture<'_>) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn requested_and_inline_reviews_follow_heads() {
+    let context = Context::with_repository(REPOSITORY).await;
+    let mut f = Fixture::new(&context).await;
     for inline in [false, true] {
         let mut p = f.open(false, vec![]).await;
         let before = pull_state(f.owner.pulls_get(REPOSITORY, p.number).await.unwrap());
@@ -303,8 +337,12 @@ async fn requested_and_inline_reviews_follow_heads(f: &mut Fixture<'_>) {
         f.expected(&p, Some("pull_request_review"), true).await;
         f.close(&p).await;
     }
+    context.stop().await;
 }
-async fn threads_answer_reviews_and_later_statements(f: &mut Fixture<'_>) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn threads_answer_reviews_and_later_statements() {
+    let context = Context::with_repository(REPOSITORY).await;
+    let mut f = Fixture::new(&context).await;
     for own in [true, false] {
         let p = f.open(own, vec![]).await;
         let root = f
@@ -367,8 +405,12 @@ async fn threads_answer_reviews_and_later_statements(f: &mut Fixture<'_>) {
         .unwrap();
     f.expected(&p, None, false).await;
     f.close(&p).await;
+    context.stop().await;
 }
-async fn inline_coordinates_and_own_verdicts(f: &mut Fixture<'_>) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn inline_coordinates_and_own_verdicts() {
+    let context = Context::with_repository(REPOSITORY).await;
+    let mut f = Fixture::new(&context).await;
     let p = f.open(true, vec![]).await;
     let files = f
         .code
@@ -481,8 +523,12 @@ async fn inline_coordinates_and_own_verdicts(f: &mut Fixture<'_>) {
         ServiceError::InvalidContinuation
     );
     f.close(&p).await;
+    context.stop().await;
 }
-async fn interactive_authors_reviewers_and_ancestors(f: &mut Fixture<'_>) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn interactive_authors_reviewers_and_ancestors() {
+    let context = Context::with_repository(REPOSITORY).await;
+    let mut f = Fixture::new(&context).await;
     for depth in [0, 2] {
         for role in [
             "pull_request_feedback",
@@ -566,8 +612,12 @@ async fn interactive_authors_reviewers_and_ancestors(f: &mut Fixture<'_>) {
         .await;
         f.close(&p).await;
     }
+    context.stop().await;
 }
-async fn review_limit_is_read_only_and_requests_override_it(f: &mut Fixture<'_>) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_limit_is_read_only_and_requests_override_it() {
+    let context = Context::with_repository(REPOSITORY).await;
+    let mut f = Fixture::new(&context).await;
     let mut p = f.open(false, vec![]).await;
     for _ in 0..3 {
         f.code
@@ -604,8 +654,12 @@ async fn review_limit_is_read_only_and_requests_override_it(f: &mut Fixture<'_>)
         before
     );
     f.close(&p).await;
+    context.stop().await;
 }
-async fn draft_conversion_preserves_other_writers(f: &mut Fixture<'_>) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn draft_conversion_preserves_other_writers() {
+    let context = Context::with_repository(REPOSITORY).await;
+    let mut f = Fixture::new(&context).await;
     for draft in [true, false] {
         let p = f.open(false, vec![]).await;
         let current = f.owner.pulls_get(REPOSITORY, p.number).await.unwrap();
@@ -653,8 +707,12 @@ async fn draft_conversion_preserves_other_writers(f: &mut Fixture<'_>) {
     results.sort();
     assert_eq!(results, [false, true]);
     f.close(&p).await;
+    context.stop().await;
 }
-async fn body_updates_preserve_or_drop_links_before_validation(f: &mut Fixture<'_>) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn body_updates_preserve_or_drop_links_before_validation() {
+    let context = Context::with_repository(REPOSITORY).await;
+    let mut f = Fixture::new(&context).await;
     let ticket = f.ticket("link", false, None).await;
     let p = f
         .open(
@@ -787,8 +845,12 @@ async fn body_updates_preserve_or_drop_links_before_validation(f: &mut Fixture<'
         "Newer"
     );
     f.close(&p).await;
+    context.stop().await;
 }
-async fn outside_scope_pull_requests_are_not_patrolled(f: &mut Fixture<'_>) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn outside_scope_pull_requests_are_not_patrolled() {
+    let context = Context::with_repository(REPOSITORY).await;
+    let f = Fixture::new(&context).await;
     f.owner
         .repos_create_workspace(input(json!({"name":"outside"})))
         .await
@@ -843,39 +905,5 @@ async fn outside_scope_pull_requests_are_not_patrolled(f: &mut Fixture<'_>) {
             .items()
             .is_empty()
     );
-}
-pub(super) async fn contract(
-    root: &Path,
-    owner: &::branvil::api::MemberApi,
-    code: &dyn CodeHostingService,
-    tickets: &dyn TicketService,
-    owner_token: &str,
-) {
-    owner
-        .repos_create(input(json!({"path":REPOSITORY})))
-        .await
-        .unwrap();
-    let git = Git::new(&root.join("code-behavior"));
-    let base = git.commit("", "a.py", "keep\nold\n");
-    let remote = code.clone_url(REPOSITORY).await.unwrap();
-    git.push(&remote, &base, "main", "owner", owner_token);
-    let mut f = Fixture {
-        owner,
-        code,
-        tickets,
-        git,
-        remote,
-        base,
-        owner_token,
-        next: 0,
-    };
-    author_feedback_reactions_and_holds(&mut f).await;
-    requested_and_inline_reviews_follow_heads(&mut f).await;
-    threads_answer_reviews_and_later_statements(&mut f).await;
-    inline_coordinates_and_own_verdicts(&mut f).await;
-    interactive_authors_reviewers_and_ancestors(&mut f).await;
-    review_limit_is_read_only_and_requests_override_it(&mut f).await;
-    draft_conversion_preserves_other_writers(&mut f).await;
-    body_updates_preserve_or_drop_links_before_validation(&mut f).await;
-    outside_scope_pull_requests_are_not_patrolled(&mut f).await;
+    context.stop().await;
 }
