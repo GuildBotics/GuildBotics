@@ -598,6 +598,25 @@ fn pinned(reference: &str) -> bool {
 /// Where a job's log directory is mounted in the VM.
 pub const LOG_MOUNT: &str = "/.branvil-log";
 
+/// A mount source after its Windows drive (`C:\`): msb reads that colon as
+/// part of the path, and any other ':' or ',' as a separator.
+fn after_drive(dir: &str) -> &str {
+    match dir.as_bytes() {
+        [d, b':', b'\\', ..] if d.is_ascii_alphabetic() => &dir[2..],
+        _ => dir,
+    }
+}
+
+/// The spelling of a canonical directory msb accepts as a mount source:
+/// Windows' canonical form is verbatim (`\\?\C:\…`), which msb refuses, and
+/// names the same directory as the plain drive path.
+pub fn mount_source(dir: PathBuf) -> PathBuf {
+    match dir.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(plain) if after_drive(plain).len() < plain.len() => PathBuf::from(plain),
+        _ => dir,
+    }
+}
+
 /// The uid and gid of the fixed non-root user a job's commands run as. The
 /// work and log directories are presented to the VM as this user's.
 pub const JOB_USER_ID: u32 = 1000;
@@ -748,10 +767,10 @@ impl Executor for Microsandbox {
         };
         let work = job.work.to_string_lossy().to_string();
         let log_dir = job.log_dir.to_string_lossy().to_string();
-        if let Some(dir) = [&work, &log_dir]
-            .into_iter()
-            .find(|d| d.contains(':') || d.contains(','))
-        {
+        if let Some(dir) = [&work, &log_dir].into_iter().find(|d| {
+            let body = after_drive(d);
+            body.contains(':') || body.contains(',')
+        }) {
             return Outcome::StartupFailure(format!(
                 "the work directory {dir} contains ':' or ',', which msb mount specifications cannot carry"
             ));
@@ -1037,6 +1056,33 @@ pub(crate) mod tests {
         assert!(set_runtime_binary(dir.path().join("other-msb")).is_err());
     }
     use super::*;
+
+    #[test]
+    fn windows_directories_reach_msb_as_plain_drive_paths() {
+        for (canonical, source) in [
+            (
+                r"\\?\C:\Users\x\.branvil\runner",
+                r"C:\Users\x\.branvil\runner",
+            ),
+            (r"\\?\UNC\srv\share\runner", r"\\?\UNC\srv\share\runner"),
+            ("/var/lib/runner", "/var/lib/runner"),
+        ] {
+            assert_eq!(
+                mount_source(PathBuf::from(canonical)),
+                PathBuf::from(source)
+            );
+        }
+        // Only the drive's colon is part of a path; msb splits at any other.
+        for (dir, body) in [
+            (r"C:\runner\jobs\1\work", r"\runner\jobs\1\work"),
+            (r"C:\a:b\work", r"\a:b\work"),
+            (r"\\?\C:\work", r"\\?\C:\work"),
+            ("C:relative", "C:relative"),
+            ("/srv/C:/work", "/srv/C:/work"),
+        ] {
+            assert_eq!(after_drive(dir), body, "{dir}");
+        }
+    }
 
     #[tokio::test]
     async fn memory_logging_requires_a_positive_sample() {

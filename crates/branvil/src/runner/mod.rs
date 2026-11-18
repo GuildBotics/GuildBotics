@@ -891,6 +891,7 @@ impl Runner {
             // with no link anywhere below the runner's directory.
             let root = match std::fs::create_dir_all(&self.work_dir)
                 .and_then(|_| std::fs::canonicalize(&self.work_dir))
+                .map(executor::mount_source)
             {
                 Ok(r) => r,
                 Err(e) => {
