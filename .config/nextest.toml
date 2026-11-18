@@ -1,5 +1,10 @@
 # cargo-nextest settings for every `cargo nextest run` of the workspace.
 
+# After #352, CI's longest test took 56.843s. Allow roughly twice that
+# duration for runner variation, but fail a stuck test before the job timeout.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 2 }
+
 # A GuildBotics process holds its build's source tree (the root Cargo.toml) with
 # a shared lock while it runs; for the test binary's `guildbotics`, that tree is
 # this checkout. This test takes the tree exclusively, so other tests starting
