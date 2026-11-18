@@ -1,18 +1,5 @@
-use gb_ports::{
-    Check, CompletionBlocker, FailedLog, Feedback, MAX_PAGE_BYTES, Readiness, ReadinessReadiness,
-    ReadinessRollup, Remark, Remarks, ServiceError, WorkTarget,
-};
+use gb_ports::{Check, Feedback, MAX_PAGE_BYTES, Readiness, Remark, Remarks, ServiceError};
 use serde_json::{Value, json};
-
-/// The comparison and the subsequent observation of an open PR's base.
-/// Closed PRs have no freshness observation: completion does not apply.
-pub struct Freshness {
-    pub base_sha: String,
-    pub behind_by: i64,
-    pub current_base_sha: String,
-    pub requires_up_to_date: bool,
-    pub conflicts: Vec<String>,
-}
 
 /// Conclusions whose jobs provide failure logs. A provider's synthetic
 /// `error` affects rollup, but does not identify a job whose log can be read.
@@ -38,28 +25,6 @@ pub fn inspected(checks: &[Check]) -> Vec<&Check> {
         checks.iter().collect()
     } else {
         primary
-    }
-}
-
-pub fn check_rollup(checks: &[Check]) -> ReadinessRollup {
-    if checks.is_empty() {
-        ReadinessRollup::NoChecks
-    } else if checks.iter().any(|c| {
-        c.conclusion
-            .as_deref()
-            .is_some_and(|s| failed_conclusion(s) || s == "error")
-    }) {
-        ReadinessRollup::Failure
-    } else if checks.iter().all(|c| {
-        c.status == "completed"
-            && matches!(
-                c.conclusion.as_deref(),
-                Some("success" | "neutral" | "skipped")
-            )
-    }) {
-        ReadinessRollup::Success
-    } else {
-        ReadinessRollup::Pending
     }
 }
 
@@ -105,110 +70,6 @@ pub fn feedback_of(
         reviews: remarks(reviews),
         comments: remarks(comments),
         thread_comments: remarks(thread_comments),
-    }
-}
-
-/// Checks belong to `head_sha`; callers re-read the PR after collecting them.
-/// No observation of another head or base is accepted as completion evidence.
-#[allow(clippy::too_many_arguments)]
-pub fn readiness_of(
-    target: WorkTarget,
-    head_sha: String,
-    current_head_sha: String,
-    checks: Vec<Check>,
-    checks_expected: bool,
-    freshness: Option<Freshness>,
-    feedback: Feedback,
-    failed_logs: Option<Vec<FailedLog>>,
-) -> Result<Readiness, ServiceError> {
-    let rollup = check_rollup(&checks);
-    let mut result = Readiness {
-        target,
-        base_sha: None,
-        head_sha,
-        behind_by: None,
-        out_of_date: None,
-        current_base_sha: None,
-        current_head_sha,
-        rollup,
-        checks,
-        checks_expected: false,
-        readiness: ReadinessReadiness::NotApplicable,
-        completion_blockers: vec![],
-        feedback,
-        failed_logs,
-    };
-    if let Some(f) = freshness {
-        if f.behind_by < 0 {
-            return Err(ServiceError::InvalidResult);
-        }
-        let b = &mut result.completion_blockers;
-        if f.requires_up_to_date && f.behind_by > 0 {
-            b.push(blocker(
-                "base_out_of_date",
-                format!("The PR head is {} commit(s) behind its base.", f.behind_by),
-                "Merge or rebase the base branch, push, and check again.",
-            ));
-        }
-        if !f.conflicts.is_empty() {
-            b.push(blocker(
-                "base_conflict",
-                format!("The PR head conflicts with its base in: {}.", f.conflicts.join(", ")),
-                "Merge the base branch into the head, resolve the conflicts, push, and check again.",
-            ));
-        }
-        if result.current_head_sha != result.head_sha {
-            b.push(blocker(
-                "head_changed",
-                "The PR head changed while readiness was being checked.",
-                "Check the new head SHA and its CI results again.",
-            ));
-        }
-        if f.current_base_sha != f.base_sha {
-            b.push(blocker(
-                "base_changed",
-                "The PR base changed while readiness was being checked.",
-                "Check freshness against the new base SHA again.",
-            ));
-        }
-        match rollup {
-            ReadinessRollup::Failure => b.push(blocker(
-                "checks_failed",
-                "CI checks are failing.",
-                "Inspect failed logs, fix the failures, and check again.",
-            )),
-            ReadinessRollup::Pending => b.push(blocker(
-                "checks_pending",
-                "CI checks are still pending.",
-                "Wait for every check to finish, then check again.",
-            )),
-            ReadinessRollup::NoChecks if checks_expected => b.push(blocker(
-                "checks_pending",
-                "CI checks have not been registered for the PR head yet.",
-                "Wait for CI to start, then check again.",
-            )),
-            _ => (),
-        }
-        result.readiness = if b.is_empty() {
-            ReadinessReadiness::Ready
-        } else {
-            ReadinessReadiness::Blocked
-        };
-        result.base_sha = Some(f.base_sha);
-        result.behind_by = Some(f.behind_by);
-        result.out_of_date = Some(f.behind_by > 0);
-        result.current_base_sha = Some(f.current_base_sha);
-        result.checks_expected = checks_expected;
-    }
-    fit_log_tails(&mut result)?;
-    Ok(result)
-}
-
-fn blocker(code: &str, message: impl Into<String>, next_action: &str) -> CompletionBlocker {
-    CompletionBlocker {
-        code: code.into(),
-        message: message.into(),
-        next_action: next_action.into(),
     }
 }
 
@@ -258,7 +119,7 @@ fn string_bytes(text: &str) -> usize {
         .sum::<usize>()
 }
 
-fn fit_log_tails(result: &mut Readiness) -> Result<(), ServiceError> {
+pub fn fit_log_tails(result: &mut Readiness) -> Result<(), ServiceError> {
     let Some(logs) = result.failed_logs.as_mut().filter(|l| !l.is_empty()) else {
         return Ok(());
     };

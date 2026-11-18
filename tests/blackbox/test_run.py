@@ -90,9 +90,8 @@ def test_bundled_inspections_run_in_the_environment(stack, repository):
             timeout=180,
         )
     )
-    assert checked["head_sha"] == checked["current_head_sha"] == repository
-    assert checked["readiness"] == "ready"
-    assert checked["completion_blockers"] == []
+    assert checked["head_sha"] == repository
+    assert checked["required_checks"] == "passed"
 
 
 def test_member_git_runs_the_clone_inside_the_command(stack, checkout):

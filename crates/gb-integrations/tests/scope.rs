@@ -1,6 +1,5 @@
 use gb_integrations::*;
 use gb_ports::ServiceError;
-use gb_ports::{Check, ReadinessRollup};
 
 #[test]
 fn refusals_distinguish_scope_from_provider_failure() {
@@ -35,18 +34,6 @@ fn log_failures_and_rollup_failures_are_distinct_populations() {
             failures.contains(&conclusion),
             "{conclusion}"
         );
-        for status in ["queued", "in_progress", "completed"] {
-            let checks = [Check {
-                name: "ci".into(),
-                status: status.into(),
-                conclusion: Some(conclusion.into()),
-                details_url: String::new(),
-                details: None,
-            }];
-            if failures.contains(&conclusion) || conclusion == "error" {
-                assert_eq!(check_rollup(&checks), ReadinessRollup::Failure);
-            }
-        }
     }
 }
 

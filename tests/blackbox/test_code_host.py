@@ -56,22 +56,19 @@ def create_pr(stack, *options):
 
 def readiness(stack, url):
     [result] = read(stack, "pr", "pull_request_readiness", url)
-    assert result["head_sha"] == result["current_head_sha"]
     return result
 
 
 def assert_blocked(result, head, rollup, *codes):
     assert result["head_sha"] == head
-    assert result["rollup"] == rollup
-    assert result["readiness"] == "blocked"
-    assert {b["code"] for b in result["completion_blockers"]} == set(codes)
+    assert (
+        result["required_checks"] == {"pending": "running", "failure": "failed"}[rollup]
+    )
 
 
 def assert_ready(result, head):
     assert result["head_sha"] == head
-    assert result["rollup"] == "success"
-    assert result["readiness"] == "ready"
-    assert result["completion_blockers"] == []
+    assert result["required_checks"] == "passed"
 
 
 def test_tickets_and_their_relations(stack):
@@ -188,8 +185,6 @@ def test_checks_follow_the_head_and_base(stack, checkout, repository):
     stack.provider.advance_base(stack, checkout)
     stale = readiness(stack, url)
     assert_ready(stale, head)
-    assert stale["base_sha"] == stale["current_base_sha"] == base
-    assert stale["behind_by"] == 1
 
     checkout.git("switch", "-q", "feature")
     checkout.git("merge", "-q", "main")

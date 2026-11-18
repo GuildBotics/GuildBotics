@@ -777,6 +777,7 @@ impl CodeAgent {
             .checks
             .iter()
             .map(|c| Check {
+                required: report.required_names.contains(&c.name),
                 name: c.name.clone(),
                 status: c.status.clone(),
                 conclusion: c.conclusion.clone(),
@@ -784,44 +785,15 @@ impl CodeAgent {
                 details: Some(c.details.clone().unwrap_or_default()),
             })
             .collect::<Vec<_>>();
-        let freshness = if text(&current, "state") == "open" {
-            if report.head_sha.is_empty() {
-                return Err(diagnostic(
-                    "integrations.branvil.api.no_head",
-                    [("url", text(&current, "url").to_owned())],
-                ));
-            }
-            if report.base_sha.is_empty()
-                || text(&current, "base_sha").is_empty()
-                || report.conflicts.is_none()
-            {
-                return Err(diagnostic(
-                    "integrations.branvil.api.no_base",
-                    [("url", text(&current, "url").to_owned())],
-                ));
-            }
-            Some(super::pr_readiness::Freshness {
-                base_sha: report.base_sha.clone(),
-                behind_by: report.behind_by.ok_or(ServiceError::InvalidResult)? as i64,
-                current_base_sha: text(&current, "base_sha").into(),
-                requires_up_to_date: false,
-                conflicts: report
-                    .conflicts
-                    .clone()
-                    .ok_or(ServiceError::InvalidResult)?,
-            })
-        } else {
-            None
-        };
-        super::pr_readiness::readiness_of(
-            self.target(&current, WorkKind::PullRequest),
-            report.head_sha,
-            text(&current, "head_sha").into(),
+        let mut result = Readiness {
+            target: self.target(&current, WorkKind::PullRequest),
+            head_sha: report.head_sha,
             checks,
-            report.checks_expected,
-            freshness,
+            required_checks: report.required_checks,
             feedback,
-            failed,
-        )
+            failed_logs: failed,
+        };
+        super::pr_readiness::fit_log_tails(&mut result)?;
+        Ok(result)
     }
 }

@@ -160,7 +160,6 @@ pub async fn code_contract(
         .await
         .unwrap();
     assert_eq!(ready.head_sha, head);
-    assert_eq!(ready.current_head_sha, head);
     assert_eq!(ready.target, pr.target);
     assert!(ready.failed_logs.is_none());
     let read_ready = service
@@ -461,13 +460,13 @@ pub async fn code_missing_base_contract(service: &dyn CodeHostingService, url: &
         service
             .readiness(url, false, MAX_LOG_TAIL_BYTES)
             .await
-            .is_err()
+            .is_ok()
     );
     assert!(
         service
             .read(Resource::PullRequestReadiness, url, None, "")
             .await
-            .is_err()
+            .is_ok()
     );
 }
 /// Run after the fixture merges or closes a PR.

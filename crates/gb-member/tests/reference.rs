@@ -3,7 +3,7 @@ use gb_member::context::{command_summary, help};
 fn command_summary_comes_from_the_catalog() {
     assert_eq!(
         command_summary("git push").unwrap(),
-        "Push the current branch with the member credential and report readiness for matching open PRs."
+        "Push the current branch with the member credential and report required checks for matching open PRs."
     );
 }
 #[test]
@@ -104,24 +104,9 @@ fn reference_includes_standard_work_procedure() {
     assert!(text.contains("--start-line"));
     assert!(text.contains("--start-side"));
     assert!(text.contains("reply_target_id"));
-    assert!(text.contains("After opening or updating a PR"));
     assert!(text.contains("repository/pr_checks failed_logs=true"));
-    assert!(text.contains("check CI again"));
-    assert!(text.contains("unless `readiness` is `ready`"));
-    assert!(text.contains("resolve its `completion_blockers`"));
-    assert!(text.contains("the host requires an up-to-date head"));
-    assert!(text.contains("checked head SHA must still be current"));
-    assert!(text.contains("In any workflow or command run"));
-    assert!(text.contains("do not wait for CI in the turn"));
-    assert!(text.contains("end the run with `member checks await`"));
-    assert!(text.contains("summary says where the outcome is to be reported"));
-    assert!(text.contains("the patrol resumes the run's work once the checks finish"));
-    assert!(
-        text.contains("The resumed run continues that work rather than only reporting the checks")
-    );
-    assert!(text.contains("carries on with whatever of the work is still unfinished"));
-    assert!(text.contains("the resumed run carries on with any of that work still unfinished"));
-    assert!(!text.contains("awaiting_checks"));
+    assert!(text.contains("required_checks=passed"));
+    assert!(text.contains("Branvil’s PR screen (landing)"));
     assert!(text.contains("externally visible trace"));
     assert!(text.contains("entry point"));
     assert!(text.contains("Avoid duplicate posts"));

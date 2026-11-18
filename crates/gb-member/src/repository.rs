@@ -364,61 +364,46 @@ pub async fn answered(
             continue;
         }
         let checks = code.readiness(&url, false, MAX_LOG_TAIL_BYTES).await?;
-        if checks.readiness != ReadinessReadiness::NotApplicable {
-            results.push((pr.clone(), checks));
-        }
+        results.push((pr.clone(), checks));
     }
     Ok(results)
 }
 pub fn ensure_ready(results: &[(Value, Readiness)]) -> Result<()> {
     if results
         .iter()
-        .any(|(_, r)| r.readiness != ReadinessReadiness::Ready)
+        .any(|(_, r)| r.required_checks != RequiredChecks::Passed)
     {
         Err(MemberError::CapabilityArgs {
-            key: "cli.member.readiness_blocked",
-            args: [("blockers".into(), blocker_summary(results))].into(),
+            key: "cli.member.required_checks_incomplete",
+            args: [("blockers".into(), required_summary(results))].into(),
         })
     } else {
         Ok(())
     }
 }
-fn blocker_summary(results: &[(Value, Readiness)]) -> String {
+fn required_summary(results: &[(Value, Readiness)]) -> String {
     results
         .iter()
-        .filter(|(_, r)| r.readiness != ReadinessReadiness::Ready)
-        .map(|(_, r)| {
-            format!(
-                "{}: {}",
-                r.target.url,
-                r.completion_blockers
-                    .iter()
-                    .map(|b| b.message.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        })
+        .filter(|(_, r)| r.required_checks != RequiredChecks::Passed)
+        .map(|(_, r)| format!("{}: {:?}", r.target.url, r.required_checks))
         .collect::<Vec<_>>()
         .join("; ")
 }
 pub fn ensure_awaitable(results: &[(Value, Readiness)]) -> Result<Vec<&Readiness>> {
     let awaited: Vec<_> = results
         .iter()
-        .filter(|(_, r)| r.readiness != ReadinessReadiness::Ready)
+        .filter(|(_, r)| r.required_checks != RequiredChecks::Passed)
         .collect();
     if awaited.is_empty() {
         return Err(MemberError::Capability("cli.member.checks_none"));
     }
-    if awaited.iter().any(|(pr, r)| {
-        pr["draft"] == true
-            || r.completion_blockers.is_empty()
-            || r.completion_blockers
-                .iter()
-                .any(|b| b.code != "checks_pending")
-    }) {
+    if awaited
+        .iter()
+        .any(|(_, r)| r.required_checks == RequiredChecks::Failed)
+    {
         return Err(MemberError::CapabilityArgs {
             key: "cli.member.checks_not_awaitable",
-            args: [("blockers".into(), blocker_summary(results))].into(),
+            args: [("blockers".into(), required_summary(results))].into(),
         });
     }
     Ok(awaited.into_iter().map(|(_, r)| r).collect())
@@ -432,9 +417,9 @@ pub async fn open_pull_request_readiness(
     let mut results = Vec::new();
     for url in code.open_pull_requests(repository, branch).await? {
         let checks = code.readiness(&url, false, MAX_LOG_TAIL_BYTES).await?;
-        if checks.readiness != ReadinessReadiness::NotApplicable {
-            results.push(serde_json::json!({"url":checks.target.url,"readiness":checks.readiness,"completion_blockers":checks.completion_blockers}));
-        }
+        results.push(
+            serde_json::json!({"url":checks.target.url,"required_checks":checks.required_checks}),
+        );
     }
     Ok(results)
 }

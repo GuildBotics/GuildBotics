@@ -965,6 +965,8 @@ head directly replaces the host branch after checking the same conditions.
      "started_at": "2026-10-24T09:50:00.000Z", "finished_at": "2026-10-24T09:53:12.000Z"}
   ],
   "checks_expected": true,
+  "required_checks": "passed",
+  "required_names": ["test"],
   "base_checks": 1
 }
 ```
@@ -1036,6 +1038,7 @@ head directly replaces the host branch after checking the same conditions.
   Branvil cannot read whether it has one, or when the repository has required
   checks: a head without checks is then "not
   registered yet", never "no checks".
+- `required_checks` is the landing head-check result (`passed`, `running`, or `failed`); `required_names` identifies required jobs (all head jobs for repair PRs). Upstream checks do not affect this result.
 - `base_checks` counts the checks of the base tip.
 - A published pull request whose head is the commit Branvil pushed also lists
   the upstream host's check runs of it, named `<provider>/<name>`

@@ -52,6 +52,14 @@ async fn fixture(
         .repos_create(input(json!({"path":repo})))
         .await
         .unwrap();
+    let revision = owner.repos_get(&repo).await.unwrap().revision;
+    owner
+        .repos_update(
+            &repo,
+            input(json!({"revision":revision,"required_checks":jobs})),
+        )
+        .await
+        .unwrap();
     let git = Git::new(&root.join(name));
     let main = git.commit("", "README.md", "base\n");
     let remote = code.clone_url(&repo).await.unwrap();
@@ -146,16 +154,7 @@ pub(super) async fn primary_failure_logs_and_cancelled_fallback(
             .readiness(&pull.target.url, true, MAX_LOG_TAIL_BYTES)
             .await
             .unwrap();
-        assert_eq!(readiness.rollup, ReadinessRollup::Failure);
-        assert_eq!(readiness.readiness, ReadinessReadiness::Blocked);
-        assert_eq!(
-            readiness
-                .completion_blockers
-                .iter()
-                .map(|b| b.code.as_str())
-                .collect::<Vec<_>>(),
-            ["checks_failed"]
-        );
+        assert_eq!(readiness.required_checks, RequiredChecks::Failed);
         let logs = readiness.failed_logs.unwrap();
         assert_eq!(logs.len(), 1);
         let log = &logs[0];
@@ -244,26 +243,15 @@ pub(super) async fn pending_closed_and_advanced_heads(
         .await
         .unwrap();
     assert_eq!(pending.head_sha, head);
-    assert_eq!(pending.current_head_sha, head);
-    assert_eq!(pending.readiness, ReadinessReadiness::Blocked);
-    assert!(pending.checks_expected);
-    assert_eq!(pending.completion_blockers.len(), 1);
-    assert_eq!(pending.completion_blockers[0].code, "checks_pending");
-    // Registration can still be pending immediately after the push.
-    assert!(
-        pending.completion_blockers[0].message.contains("pending")
-            || pending.completion_blockers[0]
-                .message
-                .contains("not been registered")
-    );
+    assert_eq!(pending.required_checks, RequiredChecks::Running);
     let attempt = claim_head(base, runner, &head).await;
     finish_claim(base, runner, &attempt, "success").await;
     assert_eq!(
         code.readiness(&pull.target.url, false, MAX_LOG_TAIL_BYTES)
             .await
             .unwrap()
-            .readiness,
-        ReadinessReadiness::Ready
+            .required_checks,
+        RequiredChecks::Passed
     );
     let advanced = git.commit(&head, "next.txt", "new head\n");
     let credential = code.git_credential().await.unwrap().unwrap();
@@ -279,18 +267,14 @@ pub(super) async fn pending_closed_and_advanced_heads(
         .await
         .unwrap();
     assert_eq!(moved.head_sha, advanced);
-    assert_eq!(moved.current_head_sha, advanced);
-    assert_ne!(moved.readiness, ReadinessReadiness::Ready);
+    assert_ne!(moved.required_checks, RequiredChecks::Passed);
     let number = pull.target.url.rsplit('/').next().unwrap().parse().unwrap();
     owner.pulls_set_open(&repo, number, false).await.unwrap();
     let closed = code
         .readiness(&pull.target.url, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
-    assert_eq!(closed.readiness, ReadinessReadiness::NotApplicable);
-    assert_eq!(closed.base_sha, None);
-    assert!(!closed.checks_expected);
-    assert!(closed.completion_blockers.is_empty());
+    assert_eq!(closed.head_sha, advanced);
     let attempt = claim_head(base, runner, &advanced).await;
     finish_claim(base, runner, &attempt, "success").await;
 }

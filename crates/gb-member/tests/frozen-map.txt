@@ -113,12 +113,12 @@ test_member_repository.py::test_task_completion_of_another_services_ticket_has_n
 test_member_repository.py::test_task_completion_refuses_a_blocked_pull_request -> crates/gb-member/tests/capabilities.rs::completion_revalidates_only_owned_open_prs_and_preserves_read_failures
 test_member_repository.py::test_a_run_awaits_its_pull_requests_pending_checks -> crates/gb-member/tests/capabilities.rs::waits_record_each_success_and_retain_all_work_status_fields
 test_member_repository.py::test_a_run_of_any_work_awaits_its_pull_requests_for_that_work -> crates/gb-member/tests/capabilities.rs::waits_record_each_success_and_retain_all_work_status_fields
-test_member_repository.py::test_a_run_that_names_no_pull_request_has_none_to_await -> crates/gb-member/tests/capabilities.rs::only_pending_checks_of_nondraft_prs_can_be_awaited
-test_member_repository.py::test_a_run_awaits_checks_only_when_nothing_else_blocks -> crates/gb-member/tests/capabilities.rs::only_pending_checks_of_nondraft_prs_can_be_awaited
+test_member_repository.py::test_a_run_that_names_no_pull_request_has_none_to_await -> crates/gb-member/tests/capabilities.rs::run_completion_uses_only_required_checks
+test_member_repository.py::test_a_run_awaits_checks_only_when_nothing_else_blocks -> crates/gb-member/tests/capabilities.rs::run_completion_uses_only_required_checks
 test_member_repository.py::test_a_reviewer_neither_awaits_nor_waits_for_the_checks_it_reviewed -> crates/gb-member/tests/capabilities.rs::completion_revalidates_only_owned_open_prs_and_preserves_read_failures
-test_member_repository.py::test_open_pull_request_readiness_skips_what_is_not_open -> crates/gb-member/tests/capabilities.rs::open_readiness_skips_closed_results
-test_member_repository.py::test_a_remote_git_cannot_read_is_a_failure_not_an_answer -> crates/branvil/tests/agent_code/main.rs::member_show_and_missing_base ; Partial: readiness and PullRequestReadiness fail when the base ref is missing; other unreadable Git failures are not exercised.
-test_member_repository.py::test_a_pull_request_from_a_deleted_fork_is_still_read_and_patrolled -> crates/branvil/tests/agent_code/main.rs::member_show_and_missing_base ; Partial: only missing-base readiness failures are covered; PR readability and patrol after a deleted fork/head are not exercised.
+test_member_repository.py::test_open_pull_request_readiness_skips_what_is_not_open -> crates/gb-member/tests/capabilities.rs::completion_revalidates_only_owned_open_prs_and_preserves_read_failures
+test_member_repository.py::test_a_remote_git_cannot_read_is_a_failure_not_an_answer -> crates/branvil/tests/agent_code/main.rs::member_show_and_missing_base ; Changed in #339: missing base does not prevent inspecting head checks.
+test_member_repository.py::test_a_pull_request_from_a_deleted_fork_is_still_read_and_patrolled -> crates/branvil/tests/agent_code/main.rs::member_show_and_missing_base ; Partial: missing-base check inspection is covered; deleted fork/head is not exercised.
 test_workflow_completion_events.py::test_abandoned_caps_attempt_count_at_max_attempts -> crates/gb-member/tests/records.rs::domain_payloads_preserve_targets_transitions_comments_and_attempt_limits
 test_workflow_completion_events.py::test_abandoned_keeps_attempt_count_within_budget -> crates/gb-member/tests/records.rs::domain_payloads_preserve_targets_transitions_comments_and_attempt_limits
 test_workflow_rate_limits.py::test_workflow_rate_limit_from_exception_extracts_from_cli_agent_error -> #90 に回す：workflow の例外分類と利用者向け再試行案内。

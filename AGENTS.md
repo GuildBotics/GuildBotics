@@ -46,9 +46,9 @@ scripts/dev.sh --data-dir /absolute/path/to/dev-data
 ### メンバー・provider・実行
 
 - `gb-ports` の契約でコードホスト、チケット、チャットを扱う。チケットとPRはURL、コメント・レビュー・ジョブなどは項目のURLと組で意味を持つ不透明なID。任意機能に対応しないときはunsupportedを返す。空の成功は実際に0件の場合だけに使う。
-- チケットとコードホストの操作は `branvil/src/agent/`、チャットのprovider選択は `gb-integrations/src/factory.rs` に置く。書き込みは対象サービスの設定が指す範囲を検査し、member gitはpushの資格情報を渡す前に同じ境界を通す。member gitにはユーザーのcredential helperを継承しない。判定は共通の巡回・readiness・選択処理に置き、providerは読み取った状態を渡す。チャットの契約テストではprovider間で同じ操作を確かめる。チャットの参照providerの `local` は実サービス固有のIDや名前空間をまねない。
+- チケットとコードホストの操作は `branvil/src/agent/`、チャットのprovider選択は `gb-integrations/src/factory.rs` に置く。書き込みは対象サービスの設定が指す範囲を検査し、member gitはpushの資格情報を渡す前に同じ境界を通す。member gitにはユーザーのcredential helperを継承しない。判定は共通の巡回・選択処理に置き、providerは読み取った状態を渡す。チャットの契約テストではprovider間で同じ操作を確かめる。チャットの参照providerの `local` は実サービス固有のIDや名前空間をまねない。
 - チケットの候補選択と実行前後の処理はticket selectorを通す。チャットは発生時刻を時間窓、`position` を順序に使う。返信や外部書き込みの前に依頼元スレッドの新着を確認する。実行が止まったときは作業の出どころに記録する。接続できないサービスで見送った予定は消化せず、連続失敗に数えない。
-- 実行の記録とメンバー単位の排他は共通の実行境界に置く。手動・定期・巡回・イベントで別の完了判定を作らない。PRの完了判定は現在のheadのreadinessを使う。
+- 実行の記録とメンバー単位の排他は共通の実行境界に置く。手動・定期・巡回・イベントで別の完了判定を作らない。run の終了は必須チェックだけで決め、PR のマージ可否は Branvil の landing が決める。
 - メンバーの手順の正本は [参照カタログ](guildbotics/templates/member/reference.md)。workflowの封筒、起動元ごとの情報、手順の本文を分ける。複数のプロンプトが同じ規則を使うときは共通の層に置く。
 
 ### 保存・秘密・記録

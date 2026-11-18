@@ -114,6 +114,7 @@ def sample(typ):
 
 
 models = {c.__name__: c for c in res.RESOURCES.values()}
+models.pop("Readiness", None)  # Head-check reports no longer follow the frozen host.
 models.update({name: ns[name] for name in extra})
 models.update(
     {
@@ -122,8 +123,6 @@ models.update(
             "WorkTarget",
             "TicketRelative",
             "CommentableLine",
-            "Check",
-            "CompletionBlocker",
             "FailedLog",
             "AdvisoryIdentifier",
             "CommentWritten",

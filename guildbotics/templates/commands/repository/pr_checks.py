@@ -1,4 +1,4 @@
-"""Display the host's readiness result without reimplementing its rules."""
+"""Display the head checks and feedback without reimplementing its rules."""
 
 from typing import Any
 
@@ -12,8 +12,8 @@ from guildbotics.utils.i18n_tool import t
 
 COMMAND_METADATA = {
     "description": {
-        "en": "Check pull-request CI and readiness, with optional failed log tails.",
-        "ja": "PR の CI・完了可否と、必要に応じて失敗ログを確認します。",
+        "en": "Inspect pull-request head checks and feedback, with optional failed log tails.",
+        "ja": "PR の head チェック・新着発言と、必要に応じて失敗ログを確認します。",
     },
     "read_only": True,
 }

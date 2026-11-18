@@ -897,7 +897,7 @@
     ],
     "read_only": false,
     "content_required": false,
-    "help": "Push the current branch with the member credential and report readiness for matching open PRs."
+    "help": "Push the current branch with the member credential and report required checks for matching open PRs."
   },
   "git publish": {
     "options": [
@@ -1664,7 +1664,7 @@
     ],
     "read_only": false,
     "content_required": true,
-    "help": "Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. For asking/blocked, use the context roster: name the next member to act by person_id and address them on the item with their service mention spelling. The CLI validates whether their patrol receives any item you commented on. Human members are recorded and notified; omit only for people outside the team. Without a recipient, the CLI says the owner will be notified."
+    "help": "Finish a run other than a chat event's with evidence, checking required head checks before accepting done. For asking/blocked, use the context roster: name the next member to act by person_id and address them on the item with their service mention spelling. The CLI validates whether their patrol receives any item you commented on. Human members are recorded and notified; omit only for people outside the team. Without a recipient, the CLI says the owner will be notified."
   },
   "task status": {
     "options": [

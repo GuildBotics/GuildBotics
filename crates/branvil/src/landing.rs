@@ -395,16 +395,7 @@ pub async fn record_auto_result(
     .await
 }
 
-/// Where the repository's required checks on a head stand.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum HeadChecks {
-    /// Every one succeeded, or was skipped by its paths.
-    Passed,
-    /// None failed, and one is not registered yet or still runs.
-    Running,
-    /// One completed without succeeding.
-    Failed,
-}
+pub(crate) use gb_ports::RequiredChecks as HeadChecks;
 
 pub(crate) async fn pull_head_checks(
     app: &App,

@@ -30,6 +30,7 @@ pub struct PatrolThread {
 #[derive(Clone, Debug, Default)]
 pub struct PatrolPullRequest {
     pub repair: bool,
+    pub unanswered: bool,
     pub id: String,
     pub label: String,
     pub url: String,
@@ -147,8 +148,7 @@ pub fn pull_request_work(
         }
     }
     if pr.author == me {
-        return (thread_unanswered(pr, me, false) || statement_unanswered(pr, me))
-            .then_some("pull_request_feedback");
+        return pr.unanswered.then_some("pull_request_feedback");
     }
     if pr.requested_reviewers.contains(me) {
         return Some("pull_request_review");
@@ -189,7 +189,6 @@ pub async fn patrol(
             s.reason() == WorkflowStatusReason::AwaitingChecks
                 && pr.author == me
                 && pr.open
-                && !pr.is_draft
                 && !pr.head_oid.is_empty()
         });
     let mut work = pull_request_work(pr, me, now);
@@ -204,11 +203,7 @@ pub async fn patrol(
                     return None;
                 }
             };
-            if readiness
-                .completion_blockers
-                .iter()
-                .any(|b| b.code == "checks_pending")
-            {
+            if readiness.required_checks == RequiredChecks::Running {
                 return None;
             }
         }

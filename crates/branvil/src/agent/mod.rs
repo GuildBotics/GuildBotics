@@ -452,5 +452,3 @@ impl CodeAgent {
 mod code_parity;
 #[cfg(all(test, feature = "test-support"))]
 mod code_tests;
-#[cfg(test)]
-mod readiness_parity;
