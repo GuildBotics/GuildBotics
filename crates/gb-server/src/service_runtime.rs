@@ -406,7 +406,7 @@ impl NativeWorker {
                 && !runtime.channels.is_empty()
                 && matches!(
                     runtime.chat_error,
-                    Some(gb_ports::ServiceError::MissingCredential { .. })
+                    Some(gb_base::service::ServiceError::MissingCredential { .. })
                 )
             {
                 missing_credentials.push(member.person_id.clone());
@@ -1272,20 +1272,20 @@ mod tests {
     }
 
     struct RejectedCredentials;
-    impl gb_ports::EventListener for RejectedCredentials {
+    impl gb_integrations::chat::EventListener for RejectedCredentials {
         fn connected(&self) -> bool {
             false
         }
         fn auth_failed(&self) -> bool {
             true
         }
-        fn start(&self) -> gb_ports::ServiceFuture<'_, ()> {
+        fn start(&self) -> gb_base::service::ServiceFuture<'_, ()> {
             Box::pin(async { Ok(()) })
         }
-        fn stop(&self) -> gb_ports::ServiceFuture<'_, ()> {
+        fn stop(&self) -> gb_base::service::ServiceFuture<'_, ()> {
             Box::pin(async { Ok(()) })
         }
-        fn drain_events(&self) -> Vec<gb_ports::ChatEvent> {
+        fn drain_events(&self) -> Vec<gb_integrations::chat::ChatEvent> {
             vec![]
         }
     }

@@ -1,7 +1,7 @@
+use gb_base::service::*;
 use gb_base::shared_writes::SharedWrites;
 use gb_config::secrets::{DeviceKey, Keychain, Scope, SecretStore};
 use gb_integrations::{IntegrationConfig, ServiceIntegrationFactory};
-use gb_ports::*;
 use std::{
     collections::BTreeMap,
     fs,
@@ -35,7 +35,6 @@ fn config(root: &std::path::Path) -> IntegrationConfig {
         person_id: "aiko".into(),
         display_name: "Aiko".into(),
         accounts: BTreeMap::new(),
-        branvil_members: Default::default(),
         chat_provider: "local".into(),
         slack_base_url: String::new(),
     }
@@ -55,25 +54,12 @@ async fn public_factory_constructs_local_chat_and_shares_listener_identity() {
     )
     .unwrap();
     let factory =
-        ServiceIntegrationFactory::new(config(d.path()), &secrets, None, Arc::new(|_| {})).unwrap();
+        ServiceIntegrationFactory::new(config(d.path()), &secrets, Arc::new(|_| {})).unwrap();
     let chat = factory.create_chat_service().unwrap();
     assert_eq!(chat.get_bot_identity().await.unwrap().user_id, "local-aiko");
-    assert_eq!(
-        (
-            factory.create_ticket_service("").err(),
-            factory.create_code_hosting_service("").err()
-        ),
-        (
-            Some(ServiceError::Unsupported),
-            Some(ServiceError::Unsupported)
-        )
-    );
-    assert!(factory.create_ticket_service("acme").is_err());
-    assert!(factory.create_code_hosting_service("acme").is_err());
     let mut another = config(d.path());
     another.person_id = "bob".into();
-    let another =
-        ServiceIntegrationFactory::new(another, &secrets, None, Arc::new(|_| {})).unwrap();
+    let another = ServiceIntegrationFactory::new(another, &secrets, Arc::new(|_| {})).unwrap();
     assert_eq!(
         factory.listener_key().unwrap(),
         another.listener_key().unwrap()
@@ -99,8 +85,7 @@ fn factory_refuses_workspace_secrets_and_unknown_providers() {
     )
     .unwrap();
     assert!(
-        ServiceIntegrationFactory::new(config(d.path()), &workspace, None, Arc::new(|_| {}))
-            .is_err()
+        ServiceIntegrationFactory::new(config(d.path()), &workspace, Arc::new(|_| {})).is_err()
     );
     let identity = SecretStore::new(
         &writes,
@@ -116,7 +101,7 @@ fn factory_refuses_workspace_secrets_and_unknown_providers() {
         .unwrap();
     let mut c = config(d.path());
     c.chat_provider = "unknown".into();
-    let f = ServiceIntegrationFactory::new(c, &identity, None, Arc::new(|_| {})).unwrap();
+    let f = ServiceIntegrationFactory::new(c, &identity, Arc::new(|_| {})).unwrap();
     for (service, error) in [
         ("chat_service", f.create_chat_service().err().unwrap()),
         ("chat_service", f.verify_chat_credentials().unwrap_err()),
@@ -167,15 +152,14 @@ fn member_scoped_secrets_and_collision_withholding() {
         .unwrap();
     let mut c = config(d.path());
     c.chat_provider = "slack".into();
-    let a = ServiceIntegrationFactory::new(c.clone(), &secrets, None, Arc::new(|_| {})).unwrap();
+    let a = ServiceIntegrationFactory::new(c.clone(), &secrets, Arc::new(|_| {})).unwrap();
     let a_key = a.listener_key().unwrap();
     assert!(!a_key.contains("test-value"));
     c.person_id = "bob".into();
-    let b = ServiceIntegrationFactory::new(c.clone(), &secrets, None, Arc::new(|_| {})).unwrap();
+    let b = ServiceIntegrationFactory::new(c.clone(), &secrets, Arc::new(|_| {})).unwrap();
     assert_ne!(a_key, b.listener_key().unwrap());
     c.person_id = "nobody".into();
-    let empty =
-        ServiceIntegrationFactory::new(c.clone(), &secrets, None, Arc::new(|_| {})).unwrap();
+    let empty = ServiceIntegrationFactory::new(c.clone(), &secrets, Arc::new(|_| {})).unwrap();
     assert!(matches!(
         empty.listener_key(),
         Err(ServiceError::MissingCredential { .. })
@@ -193,8 +177,7 @@ fn member_scoped_secrets_and_collision_withholding() {
         .identity_root
         .join(".guildbotics/config/team/members/aiko_bob");
     // A leftover directory is not a configured identity.
-    let stale =
-        ServiceIntegrationFactory::new(c.clone(), &secrets, None, Arc::new(|_| {})).unwrap();
+    let stale = ServiceIntegrationFactory::new(c.clone(), &secrets, Arc::new(|_| {})).unwrap();
     assert!(stale.listener_key().is_ok());
     fs::write(member_dir.join("member.yml"), "{}").unwrap();
     assert!(stale.listener_key().is_ok());
@@ -204,7 +187,7 @@ fn member_scoped_secrets_and_collision_withholding() {
     fs::write(member_dir.join("identity.yml"), "{}").unwrap();
     // Collision checks must use the store's root even if the caller supplies another.
     c.identity_root = d.path().join("unrelated-root");
-    let collision = ServiceIntegrationFactory::new(c, &secrets, None, Arc::new(|_| {})).unwrap();
+    let collision = ServiceIntegrationFactory::new(c, &secrets, Arc::new(|_| {})).unwrap();
     let error = collision.listener_key().unwrap_err();
     // The collision is found before any secret is read: a store whose
     // keychain cannot be touched answers the same.
@@ -221,7 +204,7 @@ fn member_scoped_secrets_and_collision_withholding() {
     colliding.chat_provider = "slack".into();
     colliding.person_id = "aiko-bob".into();
     let refused =
-        ServiceIntegrationFactory::new(colliding, &untouchable, None, Arc::new(|_| {})).unwrap();
+        ServiceIntegrationFactory::new(colliding, &untouchable, Arc::new(|_| {})).unwrap();
     assert!(matches!(
         refused.listener_key(),
         Err(ServiceError::CredentialPrefixConflict { .. })
@@ -255,59 +238,6 @@ fn member_scoped_secrets_and_collision_withholding() {
     assert!(!format!("{error:?}").contains("test-value"));
 }
 
-#[tokio::test]
-async fn branvil_factory_supplies_roster_names_to_task_comments() {
-    let d = tempfile::tempdir().unwrap();
-    let fixture = branvil::test_support::Fixture::new("owner1").await;
-    let running = &fixture.running;
-    let owner = &fixture.owner;
-    owner
-        .repos_create_workspace(serde_json::from_value(serde_json::json!({"name":"acme"})).unwrap())
-        .await
-        .unwrap();
-    owner
-        .repos_create(serde_json::from_value(serde_json::json!({"path":"acme/repo"})).unwrap())
-        .await
-        .unwrap();
-    fixture.member("aiko").await;
-    let ticket = owner.tickets_create_ticket("acme/repo", serde_json::from_value(serde_json::json!({"title":"task","body":"please","lane":"ready","assignee":"aiko"})).unwrap()).await.unwrap();
-    owner
-        .tickets_add_comment(
-            "acme/repo",
-            &ticket.key,
-            serde_json::from_value(serde_json::json!({"body":"please"})).unwrap(),
-        )
-        .await
-        .unwrap();
-    let writes = SharedWrites::new(d.path().join("identity"), Some(d.path().join("workspace")));
-    let key = FakeKeychain::default();
-    let secrets = SecretStore::new(
-        &writes,
-        Scope::Identity,
-        DeviceKey {
-            machine_root: d.path().join("machine"),
-            keychain: &key,
-        },
-    )
-    .unwrap();
-    let mut c = config(d.path());
-    // Deliberately vary case and include account whitespace as in saved identities.
-    c.branvil_members.insert(" OWNER1 ".into(), "Otota".into());
-    let factory =
-        ServiceIntegrationFactory::new(c, &secrets, Some(running.data.clone()), Arc::new(|_| {}))
-            .unwrap();
-    let tasks = factory
-        .create_ticket_service("acme")
-        .unwrap()
-        .candidates()
-        .await
-        .unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].comments[0].author, "Otota");
-    assert_eq!(tasks[0].comments[0].author_type, "User");
-    fixture.stop().await;
-}
-
 #[test]
 fn slack_shared_connections_base_and_required_token_population() {
     let dir = tempfile::tempdir().unwrap();
@@ -326,7 +256,7 @@ fn slack_shared_connections_base_and_required_token_population() {
     c.chat_provider = "slack".into();
     c.person_id = "alice".into();
     let factory =
-        |config| ServiceIntegrationFactory::new(config, &secrets, None, Arc::new(|_| {})).unwrap();
+        |config| ServiceIntegrationFactory::new(config, &secrets, Arc::new(|_| {})).unwrap();
     assert_eq!(
         factory(c.clone()).listener_key().unwrap_err(),
         ServiceError::MissingCredential {
@@ -410,7 +340,7 @@ async fn slack_listener_uses_bound_members_app_token_and_base() {
     let mut c = config(dir.path());
     c.chat_provider = "slack".into();
     c.slack_base_url = base;
-    let factory = ServiceIntegrationFactory::new(c, &secrets, None, Arc::new(|_| {})).unwrap();
+    let factory = ServiceIntegrationFactory::new(c, &secrets, Arc::new(|_| {})).unwrap();
     let listener = factory.create_event_listener(Arc::new(|| {})).unwrap();
     listener.start().await.unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(3), async {

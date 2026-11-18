@@ -4,7 +4,8 @@ use crate::{
     ticket_selector::Selector,
     workflow_runtime::{Refused, Runtime},
 };
-use gb_ports::{ServiceError, Task};
+use branvil::agent::port::Task;
+use gb_base::service::ServiceError;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
@@ -322,33 +323,238 @@ mod repair_tests {
 #[cfg(test)]
 mod cycle_tests {
     use super::*;
+    use serde_json::json;
 
     struct Fixture {
-        _root: tempfile::TempDir,
+        root: tempfile::TempDir,
+        native: crate::member::native::Native,
         runtime: Runtime,
-        tickets: crate::test_ticket::Faults,
+        /// Each ticket by the name a test gives it: its key and URL.
+        tickets: std::sync::Mutex<BTreeMap<String, (String, String)>>,
     }
     impl Fixture {
         fn new() -> Self {
             let root = tempfile::tempdir().unwrap();
+            let native = crate::member::native::tests::fixture(root.path());
             let runtime = crate::test_chat::runtime(root.path());
-            let tickets = crate::test_ticket::Faults::new(runtime.tickets.clone().unwrap());
             Self {
-                _root: root,
+                root,
+                native,
                 runtime,
-                tickets,
+                tickets: Default::default(),
             }
         }
-        fn order(&self, urls: &[&str]) {
-            *self.tickets.candidates.lock().unwrap() = Some(
-                urls.iter()
-                    .map(|url| Task {
-                        url: Some((*url).into()),
-                        assignee: Some("aiko".into()),
-                        ..Default::default()
-                    })
-                    .collect(),
+        fn owner(&self) -> &branvil::api::MemberApi {
+            &self.native.fixture.as_ref().unwrap().owner
+        }
+        fn agent(&self) -> &branvil::agent::TicketAgent {
+            self.runtime.tickets.as_deref().unwrap()
+        }
+        /// Puts the named tickets assigned to aiko in this order on the
+        /// ready lane, creating each one first named; the others leave it.
+        async fn order(&self, names: &[&str]) {
+            let owner = self.owner();
+            for name in names {
+                if self.tickets.lock().unwrap().contains_key(*name) {
+                    continue;
+                }
+                let ticket = owner
+                    .tickets_create_ticket(
+                        "acme/demo",
+                        branvil::test_support::input(json!({"title":name})),
+                    )
+                    .await
+                    .unwrap();
+                owner
+                    .tickets_set_assignee("acme/demo", &ticket.key, Some("aiko".into()))
+                    .await
+                    .unwrap();
+                self.tickets
+                    .lock()
+                    .unwrap()
+                    .insert((*name).into(), (ticket.key, ticket.url));
+            }
+            let tickets = self.tickets.lock().unwrap().clone();
+            for (name, (key, _)) in &tickets {
+                if !names.contains(&name.as_str()) {
+                    owner
+                        .tickets_put_on_board(
+                            "acme/demo",
+                            key,
+                            branvil::test_support::input(json!({"lane":"new"})),
+                        )
+                        .await
+                        .unwrap();
+                }
+            }
+            // Each card placed without a neighbour goes to the lane's end.
+            for name in names {
+                owner
+                    .tickets_put_on_board(
+                        "acme/demo",
+                        &tickets[*name].0,
+                        branvil::test_support::input(json!({"lane":"ready"})),
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        /// A repair ticket of the demo repository, as Branvil opens one once
+        /// the default branch's verification has failed: a runner fails each
+        /// attempt of its check until the automatic retries are used up.
+        async fn repair(&self) -> String {
+            use crate::member::native::tests::git;
+            let fixture = self.native.fixture.as_ref().unwrap();
+            let owner = &fixture.owner;
+            let seed = self.root.path().join("repair-seed");
+            std::fs::create_dir_all(seed.join(".branvil")).unwrap();
+            git(&seed, &["init", "-qb", "main"]);
+            std::fs::write(
+                seed.join(".branvil/ci.toml"),
+                "[[jobs]]\nname = \"test\"\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\n",
+            )
+            .unwrap();
+            git(&seed, &["add", "."]);
+            git(&seed, &["commit", "-qm", "pipeline"]);
+            let head = git(&seed, &["rev-parse", "HEAD"]);
+            let bare = fixture.root.join("repos/acme/demo.git");
+            git(
+                &bare,
+                &[
+                    "fetch",
+                    "-q",
+                    "--update-head-ok",
+                    seed.to_str().unwrap(),
+                    "main:main",
+                ],
             );
+            owner
+                .members_create(branvil::test_support::input(
+                    json!({"name":"runner1","kind":"runner"}),
+                ))
+                .await
+                .unwrap();
+            let token = owner
+                .members_issue_token(
+                    "runner1".into(),
+                    branvil::test_support::input(json!({"label":"fixture"})),
+                )
+                .await
+                .unwrap()
+                .token;
+            // Queued without an event; its claim announces the new main.
+            branvil::test_support::check(
+                &fixture.data,
+                &fixture.root,
+                "acme/demo",
+                "main",
+                &head,
+                None,
+            )
+            .await;
+            let base = format!("{}/api/v1/runner", fixture.data.base_url());
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap();
+            let claim = || async {
+                tokio::time::timeout(std::time::Duration::from_secs(15), async {
+                    loop {
+                        let response = client
+                            .post(format!("{base}/claim"))
+                            .bearer_auth(&token)
+                            .json(&json!({"executor":"microsandbox","executor_state":"ready"}))
+                            .send()
+                            .await
+                            .unwrap();
+                        if response.status() == reqwest::StatusCode::OK {
+                            let claim: serde_json::Value = response.json().await.unwrap();
+                            assert_eq!(claim["sha"], head);
+                            break claim;
+                        }
+                        assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .expect("the main check was never queued")
+            };
+            let verification = || async {
+                serde_json::to_value(owner.repos_verification("acme/demo").await.unwrap()).unwrap()
+                    ["current"]
+                    .clone()
+            };
+            loop {
+                let attempt = claim().await;
+                let before = verification().await["retry"]["number"].as_u64().unwrap();
+                client
+                    .post(format!(
+                        "{base}/attempts/{}/finish",
+                        attempt["attempt_id"].as_str().unwrap()
+                    ))
+                    .bearer_auth(&token)
+                    .json(&json!({"lease":attempt["lease"],"conclusion":"failure","image_digest":format!("sha256:{}","2".repeat(64))}))
+                    .send()
+                    .await
+                    .unwrap()
+                    .error_for_status()
+                    .unwrap();
+                let failed = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+                    loop {
+                        let current = verification().await;
+                        if current["state"] == "failed" {
+                            break true;
+                        }
+                        if current["retry"]["number"].as_u64().unwrap() > before {
+                            break false;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .expect("verification neither failed nor retried");
+                if failed {
+                    break;
+                }
+            }
+            let ticket = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+                loop {
+                    let page = owner
+                        .tickets_cards(
+                            "acme",
+                            branvil::test_support::input(
+                                json!({"repair":true,"state":"open","comments":"none"}),
+                            ),
+                            owner.page("repairs".into(), Some(100), None).unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    if let Some(card) = page.items.into_iter().next() {
+                        break card.ticket;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("the failed verification opened no repair ticket");
+            assert!(ticket.repair);
+            assert_eq!(ticket.lane, "ready");
+            // The first agent by name responds while no merged PR names another.
+            assert_eq!(ticket.assignee.as_ref().unwrap().name, "aiko");
+            self.tickets
+                .lock()
+                .unwrap()
+                .insert("repair".into(), (ticket.key, ticket.url.clone()));
+            ticket.url
+        }
+        fn name(&self, url: &str) -> String {
+            self.tickets
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(_, (_, u))| u == url)
+                .map_or_else(|| url.into(), |(name, _)| name.clone())
         }
         async fn patrol(
             &self,
@@ -362,8 +568,8 @@ mod cycle_tests {
                 person: "aiko",
                 source: "routine",
                 language: "en",
-                ticket: &self.tickets,
-                code: None,
+                ticket: self.agent(),
+                code: self.runtime.code.as_deref(),
                 runner: &self.runtime,
                 quota: None,
             };
@@ -374,7 +580,7 @@ mod cycle_tests {
                     std::future::ready(outcome)
                 })
                 .await;
-            (result, exhausted, selected)
+            (result, exhausted, selected.map(|url| self.name(&url)))
         }
     }
     #[tokio::test]
@@ -388,7 +594,7 @@ mod cycle_tests {
             (vec!["new", "D", "A", "B", "C"], "B", false),
             (vec!["new", "D", "A", "B", "C"], "C", true),
         ] {
-            f.order(&order);
+            f.order(&order).await;
             assert_eq!(
                 f.patrol(&mut cycle, Outcome::Succeeded).await,
                 (Ok(Outcome::Succeeded), exhausted, Some(expected.into()))
@@ -399,7 +605,7 @@ mod cycle_tests {
     #[tokio::test]
     async fn failed_work_is_skipped_until_the_cycle_ends_but_deferred_work_retries() {
         let f = Fixture::new();
-        f.order(&["A", "B"]);
+        f.order(&["A", "B"]).await;
         let mut cycle = Cycle::default();
         for (outcome, selected, exhausted) in [
             (Outcome::Failed, "A", false),
@@ -417,14 +623,13 @@ mod cycle_tests {
     #[tokio::test]
     async fn fresh_repairs_take_precedence_and_failed_repairs_do_not_starve_other_work() {
         let f = Fixture::new();
-        f.order(&["A", "B"]);
+        f.order(&["A", "B"]).await;
         let mut cycle = Cycle::default();
         assert_eq!(
             f.patrol(&mut cycle, Outcome::Succeeded).await.2,
             Some("A".into())
         );
-        f.order(&["A", "B", "repair"]);
-        f.tickets.candidates.lock().unwrap().as_mut().unwrap()[2].repair = true;
+        f.repair().await;
         assert_eq!(
             f.patrol(&mut cycle, Outcome::Failed).await,
             (Ok(Outcome::Deferred), false, Some("repair".into()))
@@ -437,11 +642,37 @@ mod cycle_tests {
     #[tokio::test]
     async fn failed_pr_refresh_does_not_block_the_next_ticket() {
         let f = Fixture::new();
-        f.order(&["PR", "ticket"]);
-        f.tickets.candidates.lock().unwrap().as_mut().unwrap()[0].pull_request_url =
-            Some("PR".into());
+        f.order(&["ticket"]).await;
+        crate::member::native::tests::seed_code(&f.native, f.root.path());
+        let code = f.runtime.code.as_deref().unwrap();
+        let pull = code
+            .create_pull_request(branvil::agent::port::CreatePullRequest {
+                repository: "acme/demo".into(),
+                head: "feature".into(),
+                base: "main".into(),
+                title: "Fix login".into(),
+                body: String::new(),
+                draft: false,
+                tickets: vec![],
+            })
+            .await
+            .unwrap();
+        f.owner()
+            .pulls_add_comment(
+                "acme/demo",
+                1,
+                branvil::test_support::input(json!({"body":"Please fix"})),
+            )
+            .await
+            .unwrap();
+        f.tickets.lock().unwrap().insert(
+            "PR".into(),
+            (String::new(), pull.written.target.url.clone()),
+        );
+        code.faults
+            .fail("refresh_pull_request", ServiceError::Unsupported);
         let mut cycle = Cycle::default();
-        // No code service: refreshing this PR fails at the selector boundary.
+        // The PR is listed first; refreshing it fails at the selector boundary.
         assert_eq!(
             f.patrol(&mut cycle, Outcome::Succeeded).await,
             (Err(ServiceError::Unsupported), false, None)
@@ -454,31 +685,33 @@ mod cycle_tests {
             f.patrol(&mut cycle, Outcome::Succeeded).await,
             (Err(ServiceError::Unsupported), false, None)
         );
+        assert_eq!(
+            code.faults
+                .calls()
+                .into_iter()
+                .filter(|(operation, _)| *operation == "refresh_pull_request")
+                .map(|(_, url)| url)
+                .collect::<Vec<_>>(),
+            vec![pull.written.target.url.clone(); 2]
+        );
     }
     #[tokio::test]
     async fn refresh_failure_is_consumed_but_unavailability_is_deferred() {
         let f = Fixture::new();
-        f.order(&["A", "B"]);
+        f.order(&["A", "B"]).await;
         let mut cycle = Cycle::default();
-        f.tickets
-            .errors
-            .lock()
-            .unwrap()
-            .insert("refresh", ServiceError::Failed);
+        let faults = &f.agent().faults;
+        faults.fail("refresh", ServiceError::Failed);
         assert_eq!(
             f.patrol(&mut cycle, Outcome::Succeeded).await,
             (Err(ServiceError::Failed), false, None)
         );
-        f.tickets.errors.lock().unwrap().clear();
+        faults.clear();
         assert_eq!(
             f.patrol(&mut cycle, Outcome::Succeeded).await.2,
             Some("B".into())
         );
-        f.tickets
-            .errors
-            .lock()
-            .unwrap()
-            .insert("refresh", ServiceError::Unavailable);
+        faults.fail("refresh", ServiceError::Unavailable);
         for _ in 0..2 {
             assert_eq!(
                 f.patrol(&mut cycle, Outcome::Succeeded).await,
@@ -486,8 +719,8 @@ mod cycle_tests {
             );
             assert!(cycle.attempted.is_empty());
         }
-        f.tickets.errors.lock().unwrap().clear();
-        f.order(&[]);
+        faults.clear();
+        f.order(&[]).await;
         assert_eq!(
             f.patrol(&mut cycle, Outcome::Succeeded).await,
             (Ok(Outcome::Succeeded), true, None)
@@ -497,11 +730,7 @@ mod cycle_tests {
     async fn candidate_fetch_failures_end_the_cycle_and_keep_the_error_class() {
         let f = Fixture::new();
         for error in [ServiceError::Failed, ServiceError::Unavailable] {
-            f.tickets
-                .errors
-                .lock()
-                .unwrap()
-                .insert("candidates", error.clone());
+            f.agent().faults.fail("candidates", error.clone());
             let mut cycle = Cycle::default();
             cycle.attempted.insert(Some("previous".into()));
             assert_eq!(

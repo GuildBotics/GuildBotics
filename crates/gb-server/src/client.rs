@@ -594,7 +594,7 @@ async fn answer_git_credential(
     stdout: impl std::io::Write,
     stderr: impl std::io::Write,
     language: &str,
-    lookup: impl AsyncFnOnce(String) -> anyhow::Result<Option<gb_ports::GitCredential>>,
+    lookup: impl AsyncFnOnce(String) -> anyhow::Result<Option<gb_base::service::GitCredential>>,
 ) -> anyhow::Result<()> {
     answer_git_credential_input(
         action,
@@ -613,7 +613,7 @@ async fn answer_git_credential_input(
     mut stdout: impl std::io::Write,
     mut stderr: impl std::io::Write,
     language: &str,
-    lookup: impl AsyncFnOnce(String) -> anyhow::Result<Option<gb_ports::GitCredential>>,
+    lookup: impl AsyncFnOnce(String) -> anyhow::Result<Option<gb_base::service::GitCredential>>,
 ) -> anyhow::Result<()> {
     if action != "get" {
         return Ok(());
@@ -639,7 +639,7 @@ async fn answer_git_credential_input(
             )
         )?,
         Err(error) => {
-            let message = match error.downcast_ref::<gb_ports::ServiceError>() {
+            let message = match error.downcast_ref::<gb_base::service::ServiceError>() {
                 Some(error) => {
                     let args = error.translation_args();
                     let args = args
@@ -1260,14 +1260,14 @@ mod tests {
                 async |asked| {
                     assert_eq!(asked, origin);
                     if fail {
-                        return Err(gb_ports::ServiceError::Diagnostic {
-                            class: gb_ports::ServiceErrorClass::Unavailable,
+                        return Err(gb_base::service::ServiceError::Diagnostic {
+                            class: gb_base::service::ServiceErrorClass::Unavailable,
                             key: "integrations.branvil.api.unreachable",
                             args: [("base_url".into(), origin.into())].into(),
                         }
                         .into());
                     }
-                    Ok(Some(gb_ports::GitCredential {
+                    Ok(Some(gb_base::service::GitCredential {
                         username: "otota".into(),
                         password: "bvt_fixture".into(),
                     }))

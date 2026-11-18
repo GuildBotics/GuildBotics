@@ -29,7 +29,6 @@ CATALOG = json.loads(
     Path("guildbotics/templates/member/catalog.json").read_text(encoding="utf-8")
 )
 VENV = CATALOG["guest_venv"]
-PROVIDERS = CATALOG["provider_names"]
 
 
 def capability_reference_text() -> str:
@@ -692,43 +691,6 @@ def test_chat_prompt_extends_checkout_to_repository_guideline_checks():
     assert "標準作業手順" in japanese
     assert "In each run" in english
     assert "毎回" in japanese
-
-
-def test_agent_facing_layers_do_not_name_a_provider():
-    """The prompts, the capability reference, and the skills say ticket,
-    repository, and chat: which provider serves each kind is the workspace's
-    choice, and provider knowledge lives in ``integrations/<provider>/``."""
-    files = _agent_facing_files()
-    assert FUNCTIONS_DIR / "handle_ticket.en.md" in files
-    assert (
-        Path("guildbotics/templates/commands/workflows/ticket_driven_workflow.py")
-        in files
-    )
-    assert Path("guildbotics/templates/roles/default.en.yml") in files
-    named = [
-        (path.as_posix(), word)
-        for path in files
-        for word in re.findall(r"[a-z]+", path.read_text(encoding="utf-8").lower())
-        if word in set(PROVIDERS) - {"branvil"}
-    ]
-    assert named == []
-
-
-def test_member_cli_help_does_not_name_a_provider():
-    grammar = json.loads(
-        Path("guildbotics/templates/member/grammar.json").read_text(encoding="utf-8")
-    )
-    # "local time" describes timestamps, not the reference service provider.
-    named = [
-        (command, word)
-        for command, entry in grammar.items()
-        for item in (entry, *entry["options"])
-        for word in re.findall(
-            r"[a-z]+", item.get("help", "").lower().replace("local time", "")
-        )
-        if word in set(PROVIDERS) - {"branvil"}
-    ]
-    assert named == []
 
 
 def test_agent_facing_layers_name_only_member_commands_that_exist():

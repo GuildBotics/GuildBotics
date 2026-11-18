@@ -778,7 +778,7 @@ Read repositories and prepare, commit, push, and publish member workspaces.
 
 Usage: guildbotics member git [OPTIONS]
   commit  Commit already-staged changes with the member identity. Stage the files you want with plain git (e.g. ``git add``) first; this command commits only what is staged and applies the member name/email to that single commit without changing the repository's git config.
-  prepare  Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Unfinished checkouts stay assigned to their work and requested branch; idle checkouts of the same repository are reused with their build caches. Call prepare every run and use the returned repo_path and branch: a path from an earlier run may now belong to another work. Unfinished Git state is kept, including an agent-created branch; an empty branch means detached HEAD. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them.
+  prepare  Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url; a --repo given with it must name the ticket's repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Unfinished checkouts stay assigned to their work and requested branch; idle checkouts of the same repository are reused with their build caches. Call prepare every run and use the returned repo_path and branch: a path from an earlier run may now belong to another work. Unfinished Git state is kept, including an agent-created branch; an empty branch means detached HEAD. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them.
   publish  Commit already-staged changes with the member identity, then push. Stage the files you want with plain git (e.g. ``git add``) first; this commits only what is staged with the member name/email and pushes the branch using the member credential.
   push  Push the current branch with the member credential and report required checks for matching open PRs.
   show  Read literal paths on the code host's current default branch, without a checkout. Files return UTF-8 content; directories (including '.') return immediate entry names and kinds. Missing paths return kind missing; binary or oversized objects omit content with status binary or too_large. Results include default_branch and commit; output is bounded by the member result limit. Uses the member credential on the host, both interactively and inside a command, without a lease or approval.
@@ -803,13 +803,13 @@ Usage: guildbotics member git commit [OPTIONS]
 ### guildbotics member git prepare
 
 ```text
-Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Unfinished checkouts stay assigned to their work and requested branch; idle checkouts of the same repository are reused with their build caches. Call prepare every run and use the returned repo_path and branch: a path from an earlier run may now belong to another work. Unfinished Git state is kept, including an agent-created branch; an empty branch means detached HEAD. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them.
+Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url; a --repo given with it must name the ticket's repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Unfinished checkouts stay assigned to their work and requested branch; idle checkouts of the same repository are reused with their build caches. Call prepare every run and use the returned repo_path and branch: a path from an earlier run may now belong to another work. Unfinished Git state is kept, including an agent-created branch; an empty branch means detached HEAD. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them.
 
 Usage: guildbotics member git prepare [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
   --issue-url <VALUE> [default: ]  Ticket URL to prepare a workspace for.
   --pr-url <VALUE> [default: ]  PR URL whose head branch to check out.
-  --repo <VALUE> [default: ]  Repository path (for example, owner/repo; follow the service's path format): with --branch, or with --issue-url for a ticket that belongs to no repository.
+  --repo <VALUE> [default: ]  Repository path (for example, owner/repo; follow the service's path format): with --branch, or with --issue-url, where it must name the ticket's repository.
   --branch <VALUE> [default: ]  Branch to create or check out (with --repo).
   --format <json|markdown> [default: json]  Output format.
   --help  Print help
@@ -1009,11 +1009,11 @@ Read, open, update, comment on, and review pull requests, react to their comment
 Usage: guildbotics member pr [OPTIONS]
   artifact  CI artifact operations.
   comment  Comment on a PR conversation.
-  create  Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes every one of them; a code host that cannot close one of those tickets on a merge refuses --closes-issue.
+  create  Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes every one of them; --closes-issue refuses a ticket kept outside this code host, which a merge cannot close.
   reaction  Reactions to pull request comments and reviews.
-  read  Read one bounded page of a PR's resource: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files, pull_request_threads, review_thread_comments, or pull_request_readiness. Collections accept page_size (1-100); review_thread_comments also requires node from pull_request_threads. Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+  read  Read one bounded page of a PR's resource: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files, pull_request_threads (each with all of its comments), or pull_request_readiness. Collections accept page_size (1-100). Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). Results contain the items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
   reply  Reply to an inline review thread.
-  review  Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. When the head has moved, nothing is written: read the new commits, then submit again on the new head. A code host without request_changes refuses it.
+  review  Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. When the head has moved, nothing is written: read the new commits, then submit again on the new head.
   review-comment  Create a new inline review comment on a diff line of the head the member read; when the head has moved, read the new commits and comment again.
   update  Change a PR's body, title, or ticket links. --issue-url replaces all links with those tickets; --closes-issue closes all of them on merge and --refs-issue only refers (the default). --drop-issue-links removes all links without requiring a body. Without either option, body replacement preserves existing ticket links and ignores new managed link lines in the body.
   --help  Print help
@@ -1060,7 +1060,7 @@ Usage: guildbotics member pr comment [OPTIONS]
 ### guildbotics member pr create
 
 ```text
-Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes every one of them; a code host that cannot close one of those tickets on a merge refuses --closes-issue.
+Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes every one of them; --closes-issue refuses a ticket kept outside this code host, which a merge cannot close.
 
 Usage: guildbotics member pr create [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
@@ -1071,7 +1071,7 @@ Usage: guildbotics member pr create [OPTIONS]
   --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
   --content-stdin  Read the command's entire free-form content from standard input.
   --issue-url <VALUE>  Related ticket URL to link to the PR. May be repeated. (repeatable)
-  --closes-issue/--refs-issue [default: false]  Link every --issue-url ticket so that merging the PR closes it, or only refer to it. Defaults to referring; a code host that cannot close one of the tickets on a merge refuses --closes-issue.
+  --closes-issue/--refs-issue [default: false]  Link every --issue-url ticket so that merging the PR closes it, or only refer to it. Defaults to referring; --closes-issue refuses a ticket kept outside this code host.
   --draft <true|false> [default: false]  Open the pull request as a draft.
   --format <json|markdown> [default: json]  Output format.
   --help  Print help
@@ -1104,11 +1104,11 @@ Usage: guildbotics member pr reaction add [OPTIONS]
 ### guildbotics member pr read
 
 ```text
-Read one bounded page of a PR's resource: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files, pull_request_threads, review_thread_comments, or pull_request_readiness. Collections accept page_size (1-100); review_thread_comments also requires node from pull_request_threads. Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+Read one bounded page of a PR's resource: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files, pull_request_threads (each with all of its comments), or pull_request_readiness. Collections accept page_size (1-100). Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). Results contain the items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
 
 Usage: guildbotics member pr read [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
-  --resource <pull_requests|pull_request_comments|pull_request_reviews|pull_request_files|pull_request_threads|review_thread_comments|pull_request_readiness>  Resource to read; see member help for its conditions. [required]
+  --resource <pull_requests|pull_request_comments|pull_request_reviews|pull_request_files|pull_request_threads|pull_request_readiness>  Resource to read; see member help for its conditions. [required]
   --subject <VALUE>  What the resource is part of: the ticket's or pull request's URL, or the tracker/repository path (tracker_tickets searches a tracker). [required]
   --params <VALUE> [default: ]  Resource conditions as a JSON object.
   --continuation <VALUE> [default: ]  Continuation returned for the same resource and conditions.
@@ -1134,7 +1134,7 @@ Usage: guildbotics member pr reply [OPTIONS]
 ### guildbotics member pr review
 
 ```text
-Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. When the head has moved, nothing is written: read the new commits, then submit again on the new head. A code host without request_changes refuses it.
+Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. When the head has moved, nothing is written: read the new commits, then submit again on the new head.
 
 Usage: guildbotics member pr review [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
@@ -1191,14 +1191,14 @@ Usage: guildbotics member pr update [OPTIONS]
 Read information about the repository as a whole.
 
 Usage: guildbotics member repo-info [OPTIONS]
-  read  Read one bounded page of the repository's dependency_alerts, the repository named by its path. It accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an id condition, it returns that one alert and accepts no other condition or continuation. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+  read  Read one bounded page of the repository's dependency_alerts, the repository named by its path. It accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an id condition, it returns that one alert and accepts no other condition or continuation. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. Results contain the items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
   --help  Print help
 ```
 
 ### guildbotics member repo-info read
 
 ```text
-Read one bounded page of the repository's dependency_alerts, the repository named by its path. It accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an id condition, it returns that one alert and accepts no other condition or continuation. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+Read one bounded page of the repository's dependency_alerts, the repository named by its path. It accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an id condition, it returns that one alert and accepts no other condition or continuation. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. Results contain the items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
 
 Usage: guildbotics member repo-info read [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
@@ -1255,10 +1255,10 @@ Read, create, update, and comment on tickets, react to their comments, and downl
 Usage: guildbotics member ticket [OPTIONS]
   attachment  Attachment operations.
   comment  Comment on a ticket in the member voice.
-  create  Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. Creation settings are covered by the human's approval. The lane defaults to ready with a parent or blockers, new otherwise; interactive work starting now uses --interactive --assignee <person_id> --lane in_progress. Unsupported providers refuse --interactive.
+  create  Open a follow-up ticket a human asked for, in the repository a ticket's read names (`repository`); every ticket is on the board. Creation settings are covered by the human's approval. The lane defaults to ready with a parent or blockers, new otherwise; interactive work starting now uses --interactive --assignee <person_id> --lane in_progress.
   reaction  Reactions to ticket comments.
-  read  Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, author (creator service actor name), lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, lane new|ready|in_progress|done, page_size; lane returns board order; items: URL, key, title, state, lane, assignees, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
-  update  Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. Changing interactive mode requires a human's request or approval for that ticket (--human-approved). Unsupported providers refuse either flag. Reads and updates return the ticket's own interactive setting and interactive_ancestor URL; clearing the setting does not override an interactive ancestor. Report that inherited state to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。 Use --before or --after to apply a human-approved order within the same tracker and lane, in interactive sessions only. In interactive sessions, --assignee replaces all assignees and --lane in_progress moves the ticket; both require --human-approved. Updates return assignees and lane.
+  read  Read one bounded page of a ticket's resource: tickets (the ticket itself: key, repository, author (creator's account name), assignee, lane, interactive, interactive_ancestor, parent, children, blocked_by, blocks, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: the repository path the tickets are kept in; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, lane new|ready|in_progress|done, page_size; lane returns board order; items are tickets as `tickets` returns them). Collections accept page_size (1-100). Results contain the items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+  update  Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. Changing interactive mode requires a human's request or approval for that ticket (--human-approved). Reads and updates return the ticket's own interactive setting and its interactive_ancestor; clearing the setting does not override an interactive ancestor. Report that inherited state to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。 Use --before or --after to apply a human-approved order within the same tracker and lane, in interactive sessions only. In interactive sessions, --assignee assigns the ticket in place of its assignee and --lane in_progress moves the ticket; both require --human-approved. Updates return the ticket.
   --help  Print help
 ```
 
@@ -1303,7 +1303,7 @@ Usage: guildbotics member ticket comment [OPTIONS]
 ### guildbotics member ticket create
 
 ```text
-Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. Creation settings are covered by the human's approval. The lane defaults to ready with a parent or blockers, new otherwise; interactive work starting now uses --interactive --assignee <person_id> --lane in_progress. Unsupported providers refuse --interactive.
+Open a follow-up ticket a human asked for, in the repository a ticket's read names (`repository`); every ticket is on the board. Creation settings are covered by the human's approval. The lane defaults to ready with a parent or blockers, new otherwise; interactive work starting now uses --interactive --assignee <person_id> --lane in_progress.
 
 Usage: guildbotics member ticket create [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
@@ -1312,8 +1312,7 @@ Usage: guildbotics member ticket create [OPTIONS]
   --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
   --content-stdin  Read the command's entire free-form content from standard input.
   --label <VALUE>  Label already defined in the tracker. Repeat for several labels. (repeatable)
-  --add-to-board/--no-add-to-board [default: true]  Put the created ticket on the configured board; a board that keeps every ticket refuses --no-add-to-board.
-  --interactive  Create for interactive work; unsupported providers refuse it.
+  --interactive  Create for interactive work.
   --assignee <VALUE>  Assignee's person_id from the member context roster, including humans.
   --lane <new|ready|in_progress>  Initial lane; defaults to ready with a parent or blockers, new otherwise.
   --parent <VALUE>  Parent ticket URL.
@@ -1350,7 +1349,7 @@ Usage: guildbotics member ticket reaction add [OPTIONS]
 ### guildbotics member ticket read
 
 ```text
-Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, author (creator service actor name), lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, lane new|ready|in_progress|done, page_size; lane returns board order; items: URL, key, title, state, lane, assignees, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
+Read one bounded page of a ticket's resource: tickets (the ticket itself: key, repository, author (creator's account name), assignee, lane, interactive, interactive_ancestor, parent, children, blocked_by, blocks, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: the repository path the tickets are kept in; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, lane new|ready|in_progress|done, page_size; lane returns board order; items are tickets as `tickets` returns them). Collections accept page_size (1-100). Results contain the items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
 
 Usage: guildbotics member ticket read [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
@@ -1365,7 +1364,7 @@ Usage: guildbotics member ticket read [OPTIONS]
 ### guildbotics member ticket update
 
 ```text
-Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. Changing interactive mode requires a human's request or approval for that ticket (--human-approved). Unsupported providers refuse either flag. Reads and updates return the ticket's own interactive setting and interactive_ancestor URL; clearing the setting does not override an interactive ancestor. Report that inherited state to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。 Use --before or --after to apply a human-approved order within the same tracker and lane, in interactive sessions only. In interactive sessions, --assignee replaces all assignees and --lane in_progress moves the ticket; both require --human-approved. Updates return assignees and lane.
+Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. Changing interactive mode requires a human's request or approval for that ticket (--human-approved). Reads and updates return the ticket's own interactive setting and its interactive_ancestor; clearing the setting does not override an interactive ancestor. Report that inherited state to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。 Use --before or --after to apply a human-approved order within the same tracker and lane, in interactive sessions only. In interactive sessions, --assignee assigns the ticket in place of its assignee and --lane in_progress moves the ticket; both require --human-approved. Updates return the ticket.
 
 Usage: guildbotics member ticket update [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
@@ -1373,11 +1372,11 @@ Usage: guildbotics member ticket update [OPTIONS]
   --before <VALUE>  Place this ticket immediately before the given ticket in the same tracker and lane; requires --human-approved and an interactive session.
   --after <VALUE>  Place this ticket immediately after the given ticket in the same tracker and lane; requires --human-approved and an interactive session.
   --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
-  --assignee <VALUE>  Replace all assignees with this roster person_id; interactive sessions only, requires --human-approved.
+  --assignee <VALUE>  Assign the ticket to this roster person_id in place of its assignee; interactive sessions only, requires --human-approved.
   --lane <in_progress>  Move to in_progress; interactive sessions only, requires --human-approved.
   --content-stdin  Read the command's entire free-form content from standard input.
   --title <VALUE>  Replace the ticket title.
-  --interactive/--no-interactive  Set or clear this ticket's interactive mode; requires --human-approved. An interactive ancestor still keeps it interactive. Unsupported providers refuse it.
+  --interactive/--no-interactive  Set or clear this ticket's interactive mode; requires --human-approved. An interactive ancestor still keeps it interactive.
   --add-label <VALUE>  Add a label already defined in the tracker. Repeat for several labels. (repeatable)
   --remove-label <VALUE>  Remove a label from the ticket. Repeat for several labels. (repeatable)
   --state <open|closed>  Close or reopen the ticket; requires --human-approved.

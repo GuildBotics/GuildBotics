@@ -448,7 +448,7 @@ mod tests;
 
 /// Collect every wire page while asserting that its continuation advances.
 pub async fn ticket_items(
-    t: &dyn gb_ports::TicketService,
+    t: &crate::agent::TicketAgent,
     tracker: &str,
     parameters: &Value,
 ) -> Vec<Value> {
@@ -457,7 +457,7 @@ pub async fn ticket_items(
     loop {
         let p = t
             .read(
-                gb_ports::Resource::TrackerTickets,
+                crate::agent::port::Resource::TrackerTickets,
                 tracker,
                 Some(parameters),
                 &cursor,

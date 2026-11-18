@@ -1,4 +1,4 @@
-use gb_ports::ServiceError;
+use gb_base::service::ServiceError;
 use unicode_casefold::UnicodeCaseFold;
 
 /// The namespace configured for member writes, independently of credentials.
@@ -45,4 +45,4 @@ impl ScopedPath<'_> {
     }
 }
 
-pub use gb_ports::valid_repository_path;
+pub use crate::agent::port::valid_repository_path;

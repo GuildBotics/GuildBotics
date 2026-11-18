@@ -442,17 +442,17 @@ mod tests {
     fn member_capability_diagnostics_resolve_in_both_languages() {
         let sources = [
             include_str!("../../gb-member/src/lib.rs"),
-            include_str!("../../gb-member/src/repository.rs"),
-            include_str!("../../gb-member/src/chat.rs"),
+            include_str!("member/repository.rs"),
+            include_str!("member/chat.rs"),
             include_str!("../../gb-member/src/context.rs"),
             include_str!("../../gb-member/src/archive.rs"),
             include_str!("../../gb-member/src/audit.rs"),
             include_str!("../../gb-member/src/memory.rs"),
             include_str!("../../gb-member/src/command.rs"),
-            include_str!("../../gb-member/src/session.rs"),
-            include_str!("../../gb-member/src/git.rs"),
-            include_str!("../../gb-member/src/control.rs"),
-            include_str!("../../gb-member/src/chat_updates.rs"),
+            include_str!("member/session.rs"),
+            include_str!("member/git.rs"),
+            include_str!("member/control.rs"),
+            include_str!("member/chat_updates.rs"),
             include_str!("../../gb-member/src/output.rs"),
         ];
         for source in sources {

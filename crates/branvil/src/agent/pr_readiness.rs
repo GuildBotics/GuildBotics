@@ -1,4 +1,5 @@
-use gb_ports::{Check, Feedback, MAX_PAGE_BYTES, Readiness, Remark, Remarks, ServiceError};
+use crate::agent::port::{Feedback, MAX_PAGE_BYTES, Readiness, Remark, Remarks};
+use gb_base::service::ServiceError;
 use serde_json::{Value, json};
 
 /// Conclusions whose jobs provide failure logs. A provider's synthetic
@@ -8,24 +9,6 @@ pub fn failed_conclusion(conclusion: &str) -> bool {
         conclusion,
         "action_required" | "cancelled" | "failure" | "startup_failure" | "stale" | "timed_out"
     )
-}
-
-/// Prefer primary failures over cancellation fallout when fetching logs.
-pub fn inspected(checks: &[Check]) -> Vec<&Check> {
-    let primary: Vec<_> = checks
-        .iter()
-        .filter(|c| {
-            matches!(
-                c.conclusion.as_deref(),
-                Some("action_required" | "failure" | "startup_failure" | "timed_out")
-            )
-        })
-        .collect();
-    if primary.is_empty() {
-        checks.iter().collect()
-    } else {
-        primary
-    }
 }
 
 pub fn effective_tail_bytes(requested: usize, jobs: usize) -> Result<usize, ServiceError> {

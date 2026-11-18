@@ -138,12 +138,21 @@ async fn snapshot_with_build(api: &Shared, metadata: Option<Value>) -> Value {
         metadata.as_ref().and_then(|v| v["remote"].as_str()),
     ) {
         for version in [&mut current, &mut target].into_iter().flatten() {
-            version["url"] = json!(gb_integrations::factory::commit_url_from_remote(
-                &provider,
-                remote,
-                version["sha"].as_str().unwrap_or_default(),
-                api.branvil.get()
-            ));
+            let sha = version["sha"].as_str().unwrap_or_default().to_owned();
+            version["url"] = json!(
+                api.branvil
+                    .get()
+                    .filter(|_| provider.eq_ignore_ascii_case("branvil"))
+                    .and_then(|data| {
+                        let repository =
+                            branvil::agent::CodeAgent::repository_for_remote(data, remote)?;
+                        Some(branvil::agent::CodeAgent::commit_url_for(
+                            data,
+                            &repository,
+                            &sha,
+                        ))
+                    })
+            );
         }
     }
     let operation = phase.map(|p|json!({"kind":p.kind,"phase":p.phase,"since":p.since,"commit":p.commit,"waiting":{"runs":api.selected().service.execution.generation().snapshot().len(),"ci_jobs":0}}));

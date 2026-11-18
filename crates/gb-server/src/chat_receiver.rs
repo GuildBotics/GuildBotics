@@ -1,9 +1,10 @@
 //! Live reception stays responsive while paginated history catches up.
 
+use crate::member::chat_updates::{Heartbeat, Subject};
 use crate::{chat_state::Store, work_stops::Subscription};
 use chrono::{DateTime, Duration, Utc};
-use gb_member::chat_updates::{Heartbeat, Subject};
-use gb_ports::{ChannelEventsQuery, ChatEvent, ChatService, EventListener, ServiceError};
+use gb_base::service::ServiceError;
+use gb_integrations::chat::{ChannelEventsQuery, ChatEvent, ChatService, EventListener};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
@@ -497,10 +498,10 @@ mod tests {
         fn auth_failed(&self) -> bool {
             false
         }
-        fn start(&self) -> gb_ports::ServiceFuture<'_, ()> {
+        fn start(&self) -> gb_base::service::ServiceFuture<'_, ()> {
             Box::pin(async { Ok(()) })
         }
-        fn stop(&self) -> gb_ports::ServiceFuture<'_, ()> {
+        fn stop(&self) -> gb_base::service::ServiceFuture<'_, ()> {
             Box::pin(async { Ok(()) })
         }
         fn drain_events(&self) -> Vec<ChatEvent> {

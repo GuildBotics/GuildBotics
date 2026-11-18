@@ -133,11 +133,7 @@ impl Drop for Host {
         self.thread.take().unwrap().join().unwrap();
     }
 }
-async fn read(
-    c: &dyn CodeHostingService,
-    parameters: Value,
-    cursor: &str,
-) -> Result<ReadPage, ServiceError> {
+async fn read(c: &CodeAgent, parameters: Value, cursor: &str) -> Result<ReadPage, ServiceError> {
     c.read(Resource::DependencyAlerts, REPO, Some(&parameters), cursor)
         .await
 }
@@ -161,7 +157,7 @@ async fn write(base: &str, token: &str, path: &str, body: Option<Value>) {
 fn expected_alert(number: u64, state: &str, patched: Option<&str>) -> Value {
     json!({"id":number.to_string(),"state":state,"url":format!("https://example.invalid/alerts/{number}"),"package":"fixture","ecosystem":"pip","manifest_path":"requirements.txt","severity":"high","identifiers":[{"type":"GHSA","value":format!("GHSA-{number}")}],"summary":"Fixture advisory","description":"Fixture description","affected_versions":"< 2.0","patched_version":patched,"created_at":"2026-01-01T00:00:00.000Z","updated_at":"2026-01-02T00:00:00.000Z"})
 }
-async fn state_pages(host: &Host, c: &dyn CodeHostingService) {
+async fn state_pages(host: &Host, c: &CodeAgent) {
     host.answers.lock().unwrap().alerts = [(1,"open"),(2,"fixed"),(3,"open"),(4,"auto_dismissed"),(5,"open")].into_iter().map(|(number,state)| json!({"number":number,"state":state,"html_url":format!("https://example.invalid/alerts/{number}"),"dependency":{"package":{"name":"fixture","ecosystem":"pip"},"manifest_path":"requirements.txt"},"security_advisory":{"identifiers":[{"type":"GHSA","value":format!("GHSA-{number}")}],"summary":"Fixture advisory","description":"Fixture description"},"security_vulnerability":{"severity":"high","vulnerable_version_range":"< 2.0","first_patched_version":if number==5 {Value::Null}else{json!({"identifier":"2.0"})}},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z"})).collect();
     let p = json!({"state":"open","page_size":2});
     let first = read(c, p.clone(), "").await.unwrap();
@@ -192,7 +188,7 @@ async fn state_pages(host: &Host, c: &dyn CodeHostingService) {
         .is_err()
     );
 }
-async fn single_id(c: &dyn CodeHostingService) {
+async fn single_id(c: &CodeAgent) {
     let page = read(c, json!({"id":"4"}), "").await.unwrap();
     assert_eq!(page.items().len(), 1);
     assert_eq!(page.items()[0], expected_alert(4, "dismissed", Some("2.0")));
@@ -207,7 +203,7 @@ async fn single_id(c: &dyn CodeHostingService) {
     assert!(missing.is_not_found());
     assert!(!missing.translation_args()["message"].is_empty());
 }
-async fn empty_and_unsupported(host: &Host, c: &dyn CodeHostingService, base: &str, token: &str) {
+async fn empty_and_unsupported(host: &Host, c: &CodeAgent, base: &str, token: &str) {
     host.answers.lock().unwrap().alerts.clear();
     let page = read(c, json!({}), "").await.unwrap();
     assert!(page.items().is_empty());
@@ -221,7 +217,7 @@ async fn empty_and_unsupported(host: &Host, c: &dyn CodeHostingService, base: &s
     assert!(unsupported.is_unsupported());
     assert!(!unsupported.translation_args()["message"].is_empty());
 }
-async fn failures(host: &Host, c: &dyn CodeHostingService) {
+async fn failures(host: &Host, c: &CodeAgent) {
     for status in [401, 403, 404, 429, 500] {
         host.answers.lock().unwrap().failure = Some(status);
         for query in [json!({}), json!({"id":"1"})] {
@@ -264,13 +260,7 @@ async fn failures(host: &Host, c: &dyn CodeHostingService) {
     }
     host.answers.lock().unwrap().failure = None;
 }
-pub(super) async fn contract(
-    host: &Host,
-    c: &dyn CodeHostingService,
-    base: &str,
-    token: &str,
-    head: &str,
-) {
+pub(super) async fn contract(host: &Host, c: &CodeAgent, base: &str, token: &str, head: &str) {
     host.answers.lock().unwrap().head = head.into();
     write(
         base,

@@ -131,7 +131,7 @@ async fn history_real_target_push_chat_and_memory_writers_reach_http_titles_and_
             &f,
             id,
             START,
-            gb_member::events::inspected(
+            crate::member::events::inspected(
                 &json!({"provider":"local","kind":kind,"label":label,"title":title,"url":url}),
                 false,
             ),
@@ -150,7 +150,7 @@ async fn history_real_target_push_chat_and_memory_writers_reach_http_titles_and_
     let writes =
         gb_base::shared_writes::SharedWrites::new(f.root.join("identity"), Some(f.workspace()));
     let events = gb_observability::activity::ActivityEvents::open(&f.workspace());
-    let mut push = gb_member::events::pushed(&json!({"pushed":true,"branch":"feature","commits":[{"id":"abc1234","message":"Local commit","url":"local://code/commits/abc1234"}]}), "local").unwrap();
+    let mut push = crate::member::events::pushed(&json!({"pushed":true,"branch":"feature","commits":[{"id":"abc1234","message":"Local commit","url":"local://code/commits/abc1234"}]}), "local").unwrap();
     push["timestamp"] = START.into();
     push["trace_id"] = "push".into();
     push["person_id"] = "alice".into();
@@ -268,7 +268,7 @@ async fn history_targets_are_start_inclusive_end_exclusive_while_shared_facts_ar
             &f,
             id,
             stamp,
-            gb_member::events::inspected(
+            crate::member::events::inspected(
                 &json!({"kind":"ticket","label":"T-1","title":"Boundary title","url":"local://tickets/T-1"}),
                 false,
             ),

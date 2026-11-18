@@ -4,9 +4,10 @@ use crate::{
     service::Pending as Future,
 };
 use chrono::{DateTime, Duration, Utc};
+use gb_base::service::WorkflowStatus;
+use gb_integrations::chat::{ChatEvent, ChatMessage, ChatService};
 use gb_member::context::PublicMember;
 use gb_observability::runs::RunRecord;
-use gb_ports::{ChatEvent, ChatMessage, ChatService, WorkflowStatus};
 use gb_wire::WorkflowInvocation;
 use serde_json::{Value, json};
 use std::{
@@ -160,8 +161,8 @@ impl Dispatcher {
                         self.runner.selection_failed(&pending, &error).await;
                         let unavailable = error.downcast_ref::<ContextUnavailable>().is_some()
                             || error
-                                .downcast_ref::<gb_ports::ServiceError>()
-                                .is_some_and(gb_ports::ServiceError::is_unavailable);
+                                .downcast_ref::<gb_base::service::ServiceError>()
+                                .is_some_and(gb_base::service::ServiceError::is_unavailable);
                         if !unavailable {
                             pending.attempt_count = pending.attempt_count.saturating_add(1);
                         }
@@ -365,7 +366,8 @@ impl Dispatcher {
                     .filter(|id| !id.trim().is_empty())
                     .map(|id| {
                         (
-                            self.chat.self_user_id(&gb_ports::ActorName(id.clone())),
+                            self.chat
+                                .self_user_id(&gb_base::service::ActorName(id.clone())),
                             p.person_id.clone(),
                         )
                     })
@@ -467,7 +469,7 @@ impl Dispatcher {
             })
             .unwrap_or("");
         let mut ids =
-            gb_member::chat_updates::completed_event_ids(&record.provider_evidence, status);
+            crate::member::chat_updates::completed_event_ids(&record.provider_evidence, status);
         ids.push(pending.event.event_id.clone());
         let channel = &pending.event.message.channel_id;
         let thread = &pending.event.message.thread_id;
@@ -516,7 +518,7 @@ impl Dispatcher {
                     }
                     let user = self
                         .chat
-                        .self_user_id(&gb_ports::ActorName(account.clone()));
+                        .self_user_id(&gb_base::service::ActorName(account.clone()));
                     if mentions.contains(&user)
                         && !handoffs.iter().any(|h| {
                             h["person_id"] == member.person_id && h["message_id"] == message_id
@@ -843,10 +845,10 @@ mod tests {
             );
             history(&dispatcher, "C2", &[pending("C2", "T3")]);
             if stage == "selection" || stage == "selection_failure" {
-                chat.errors
-                    .lock()
-                    .unwrap()
-                    .insert("thread:T1".into(), gb_ports::ServiceError::Unavailable);
+                chat.errors.lock().unwrap().insert(
+                    "thread:T1".into(),
+                    gb_base::service::ServiceError::Unavailable,
+                );
             }
             assert_eq!(dispatcher.process(Utc::now()).await.unwrap(), 0);
             assert_eq!(
@@ -991,10 +993,10 @@ mod tests {
             .receive("local", "aiko", p.event.clone(), "social")
             .unwrap();
         let record: RunRecord = serde_json::from_value(json!({"run_id":"run","work_kind":"chat","execution_mode":"autonomous","member_id":"aiko","device_id":"device","started_at":"2026-11-05T00:00:00Z","finished_at":"2026-11-05T00:01:00Z","result":{"subject_type":"chat","subject_id":"T1","status":"done"},"provider_evidence":[{"type":"chat_reply","payload":{"text":"@yuki hello","message_id":"reply","thread_id":"T1","occurred_at":"2026-11-05T00:01:00Z"}}]})).unwrap();
-        chat.errors
-            .lock()
-            .unwrap()
-            .insert("identity:".into(), gb_ports::ServiceError::Unavailable);
+        chat.errors.lock().unwrap().insert(
+            "identity:".into(),
+            gb_base::service::ServiceError::Unavailable,
+        );
         for _ in 0..3 {
             assert!(dispatcher.settle(&p, &record, true).await.is_err());
         }

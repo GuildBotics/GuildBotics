@@ -814,7 +814,7 @@ dependencies = [
  "ctor",
  "directories",
  "futures-util",
- "gb-ports",
+ "gb-base",
  "libc",
  "loopback-auth",
  "mime_guess",
@@ -2055,6 +2055,7 @@ dependencies = [
  "anyhow",
  "cap-fs-ext",
  "cap-std",
+ "chrono",
  "libc",
  "serde",
  "serde_json",
@@ -2126,26 +2127,19 @@ name = "gb-integrations"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "axum",
- "branvil",
  "chrono",
  "futures-util",
  "gb-base",
  "gb-config",
- "gb-member",
- "gb-ports",
  "regex",
  "reqwest",
  "rustls",
  "serde",
- "serde-saphyr",
  "serde_json",
  "sha2 0.10.9",
- "syn 2.0.119",
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.29.0",
- "tracing",
  "url",
  "uuid",
  "webpki-roots 1.0.11",
@@ -2159,12 +2153,10 @@ dependencies = [
  "chrono",
  "gb-base",
  "gb-observability",
- "gb-ports",
  "gb-workspace",
  "serde",
  "serde-saphyr",
  "serde_json",
- "sha2 0.11.1",
  "tempfile",
  "tokio",
  "unicode-casefold",
@@ -2192,15 +2184,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gb-ports"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "gb-server"
 version = "0.1.0"
 dependencies = [
@@ -2219,7 +2202,6 @@ dependencies = [
  "gb-integrations",
  "gb-member",
  "gb-observability",
- "gb-ports",
  "gb-setup",
  "gb-wire",
  "gb-workspace",
@@ -2236,6 +2218,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "shlex",
+ "syn 2.0.119",
  "tempfile",
  "time",
  "tokio",

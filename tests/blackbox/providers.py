@@ -103,7 +103,7 @@ class BranvilProvider:
             content="Independent base change.",
         )
         self.finish_checks(checkout.git("rev-parse", "HEAD"), branch="base-update")
-        self.merge(created["target"]["url"], checkout, branch="main")
+        self.merge(created["url"], checkout, branch="main")
 
     def merge(self, url, checkout, branch="feature"):
         self.control(

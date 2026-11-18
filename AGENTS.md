@@ -27,7 +27,7 @@ scripts/dev.sh --data-dir /absolute/path/to/dev-data
 | API、画面のデータ、手動実行、巡回・定期実行・チャット | `gb-server/src/api.rs`、`dispatcher.rs`、`execution.rs`、`ticket_selector/`、`native_scheduler.rs` |
 | コマンド、設定の優先順、チーム、brainスロット | `gb-config/src/commands.rs`、`catalog.rs`、`team.rs`、`resolved_guest.rs` |
 | microVM、アクセス契約、認証情報の中継、スナップショット | `gb-environment/src/contract.rs`、`runtime.rs`、`broker.rs`、`gateway.rs`、`recipe.rs` |
-| メンバーの操作、サービスの契約、実装の選択 | `gb-member`、`gb-ports`、`gb-integrations/src/factory.rs` |
+| メンバーの操作、チケット・PR・チャットの操作、チャットの実装の選択 | `gb-server/src/member/`、`gb-member`、`branvil/src/agent/`、`gb-integrations/src/factory.rs` |
 | 設定保存、ワークスペースとidentity、共有書き込み、記録 | `gb-setup`、`gb-config/src/repository.rs`、`gb-workspace`、`gb-base/src/shared_writes.rs`、`gb-observability` |
 | コマンドの実行、プロンプト、AI CLIのアダプター | `guildbotics/guest/entry.py`、`guildbotics/commands/`、`guildbotics/intelligences/` |
 
@@ -45,7 +45,7 @@ scripts/dev.sh --data-dir /absolute/path/to/dev-data
 
 ### メンバー・provider・実行
 
-- `gb-ports` の契約でコードホスト、チケット、チャットを扱う。チケットとPRはURL、コメント・レビュー・ジョブなどは項目のURLと組で意味を持つ不透明なID。任意機能に対応しないときはunsupportedを返す。空の成功は実際に0件の場合だけに使う。
+- チケット・PR・CIはgb-serverからBranvilのagentモジュールを直接呼び、Branvilのviewをそのまま返す。チャットは `gb-integrations` の `ChatService` で扱う。チケットとPRはURL、コメント・レビュー・ジョブなどは項目のURLと組で意味を持つ不透明なID。共有する失敗・状況・時刻の型は `gb-base/src/service.rs` に置く。空の成功は実際に0件の場合だけに使う。`gb-member` にはWindowsのクライアントも使う部分だけを置き、クライアントのビルドにBranvilを含めない。
 - チケットとコードホストの操作は `branvil/src/agent/`、チャットのprovider選択は `gb-integrations/src/factory.rs` に置く。書き込みは対象サービスの設定が指す範囲を検査し、member gitはpushの資格情報を渡す前に同じ境界を通す。member gitにはユーザーのcredential helperを継承しない。判定は共通の巡回・選択処理に置き、providerは読み取った状態を渡す。チャットの契約テストではprovider間で同じ操作を確かめる。チャットの参照providerの `local` は実サービス固有のIDや名前空間をまねない。
 - チケットの候補選択と実行前後の処理はticket selectorを通す。チャットは発生時刻を時間窓、`position` を順序に使う。返信や外部書き込みの前に依頼元スレッドの新着を確認する。実行が止まったときは作業の出どころに記録する。接続できないサービスで見送った予定は消化せず、連続失敗に数えない。
 - 実行の記録とメンバー単位の排他は共通の実行境界に置く。手動・定期・巡回・イベントで別の完了判定を作らない。run の終了は必須チェックだけで決め、PR のマージ可否は Branvil の landing が決める。
@@ -68,7 +68,7 @@ GuildBotics の共有記録を古い版で読めない形へ変えるときは `
 
 ### Branvil
 
-- `branvil` が使う GuildBotics の crate は `gb-ports` だけ。テストが読むファイルとビルドする crate は CI の `rust-test-branvil` の paths に含める。`loopback-auth` は GuildBotics の crate に依存しない。データの入口は同じサービスの公開API（`api::DataApi` と、その `owner()`・`agent()` が返す `MemberApi`）。HTTP APIはその上にある内部のAPIで、画面・ランナー・Gitのhookが使う。ownerの認証は埋め込み先（`host::Host`）が行い、データディレクトリはサーバーの起動時に作る。組み込みproviderは別のstoreを開かない。停止中に直接データを扱うのは `guildbotics server hub-data check|reindex|upgrade|restore`。
+- `branvil` が使う GuildBotics の crate は `gb-base` だけ。テストが読むファイルとビルドする crate は CI の `rust-test-branvil` の paths に含める。`loopback-auth` は GuildBotics の crate に依存しない。データの入口は同じサービスの公開API（`api::DataApi` と、その `owner()`・`agent()` が返す `MemberApi`）。HTTP APIはその上にある内部のAPIで、画面・ランナー・Gitのhookが使う。ownerの認証は埋め込み先（`host::Host`）が行い、データディレクトリはサーバーの起動時に作る。組み込みproviderは別のstoreを開かない。停止中に直接データを扱うのは `guildbotics server hub-data check|reindex|upgrade|restore`。
 - 保存形式を変える場合は互換コードを追加しない規則の例外として、`crates/branvil/src/store.rs` の `SCHEMA_VERSION` を上げ、`upgrade.rs` に直前の1版からの変換を置く。`server hub-data upgrade` と `restore` が使う。古い版を通常の読み取りで扱わない。秘密は起動するプロセスが渡す `vault::Vault` 越しにidentityのstoreへ保存し、平文のファイルへ逃がさない。カーソルの署名鍵はプロセスごとにメモリで作る。実データやtokenの中身を参照しない。
 - 内部のHTTP APIを変えたら [API文書](crates/branvil/docs/api.md) と画面とagentモジュールを合わせ、`cargo nextest run --locked -p branvil --features test-support -E 'test(/^agent/)'` で結合を確認する。上流サービス固有の処理は `upstream::Host` の実装に置く。自然言語の意味判定はGuildBoticsが扱う。
 - loopbackだけで待ち受ける。リモート接続はOSが管理するOpenSSHの転送を使う。HubはmacOS、CIはLinux。サービスのGitは `src/git.rs` を通し、システム・ユーザーのGit設定や `GIT_*` を継承しない。テストでは `tests/common/mod.rs` の `git` / `git_as` を使う。自前で起動する場合は `GIT_CONFIG_NOSYSTEM=1`、空の `GIT_CONFIG_GLOBAL`、`GIT_TERMINAL_PROMPT=0`、`-c credential.helper=` を指定し、トークンは `GIT_ASKPASS` と環境変数で渡す。URLや引数に含めず、テストのメンバー名は架空のものにする。

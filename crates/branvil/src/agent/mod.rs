@@ -2,22 +2,14 @@
 #[path = "tickets.rs"]
 mod operations;
 mod patrol;
+pub mod port;
 pub mod scope;
 mod selection;
+use crate::agent::port::*;
 use crate::api::tickets;
+use crate::api::{AppError, DataApi, MemberApi};
 use scope::WriteScope;
 use selection::*;
-fn lane(s: &str) -> Result<Lane, ServiceError> {
-    match s {
-        "new" => Ok(Lane::New),
-        "ready" => Ok(Lane::Ready),
-        "in_progress" => Ok(Lane::InProgress),
-        "done" => Ok(Lane::Done),
-        _ => Err(ServiceError::InvalidResult),
-    }
-}
-use crate::api::{AppError, DataApi, MemberApi};
-use gb_ports::*;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -31,6 +23,68 @@ pub struct TicketAgent {
     workspace: String,
     pub(crate) scope: WriteScope,
     pub(crate) members: std::collections::BTreeMap<String, String>,
+    /// What a test makes this agent's operations do instead of their work.
+    #[cfg(feature = "test-support")]
+    pub faults: std::sync::Arc<Faults>,
+}
+/// The failures a test sets for single operations of an agent, by the names
+/// of the agent's methods: an operation fails, never reaches the service
+/// (`ServiceError::Unavailable`), or is refused as out of scope
+/// (`ServiceError::OutOfScope`) before it does anything.
+#[cfg(feature = "test-support")]
+#[derive(Default)]
+pub struct Faults {
+    errors: std::sync::Mutex<std::collections::BTreeMap<&'static str, ServiceError>>,
+    blocks: std::sync::Mutex<
+        std::collections::BTreeMap<&'static str, std::sync::Arc<tokio::sync::Notify>>,
+    >,
+    calls: std::sync::Mutex<Vec<(&'static str, String)>>,
+}
+#[cfg(feature = "test-support")]
+impl Faults {
+    pub fn fail(&self, operation: &'static str, error: ServiceError) {
+        self.errors.lock().unwrap().insert(operation, error);
+    }
+    pub fn clear(&self) {
+        self.errors.lock().unwrap().clear();
+    }
+    /// The operation waits forever once it has notified its arrival, so only
+    /// its caller's cancellation ends it.
+    pub fn block(&self, operation: &'static str) -> std::sync::Arc<tokio::sync::Notify> {
+        let arrived = std::sync::Arc::new(tokio::sync::Notify::new());
+        self.blocks
+            .lock()
+            .unwrap()
+            .insert(operation, arrived.clone());
+        arrived
+    }
+    /// The operations called, with the item or repository each was called for.
+    pub fn calls(&self) -> Vec<(&'static str, String)> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+impl TicketAgent {
+    async fn fault(&self, operation: &'static str, subject: &str) -> Result<(), ServiceError> {
+        #[cfg(feature = "test-support")]
+        {
+            let faults = &self.faults;
+            faults
+                .calls
+                .lock()
+                .unwrap()
+                .push((operation, subject.to_owned()));
+            let blocked = faults.blocks.lock().unwrap().get(operation).cloned();
+            if let Some(arrived) = blocked {
+                arrived.notify_one();
+                std::future::pending::<()>().await;
+            }
+            if let Some(error) = faults.errors.lock().unwrap().get(operation) {
+                return Err(error.clone());
+            }
+        }
+        let _ = (operation, subject);
+        Ok(())
+    }
 }
 impl TicketAgent {
     pub fn new(api: DataApi, workspace: String, person_id: String, display_name: String) -> Self {
@@ -42,6 +96,8 @@ impl TicketAgent {
             scope: WriteScope::new(&workspace),
             workspace,
             members: Default::default(),
+            #[cfg(feature = "test-support")]
+            faults: Default::default(),
         }
     }
     /// Shared in-process API, without mutable access to the write boundary.
@@ -99,13 +155,14 @@ impl TicketAgent {
             .ok_or_else(invalid)?;
         let (repo, tail) = path.split_once("/-/").ok_or_else(invalid)?;
         let (found, key) = tail.split_once('/').ok_or_else(invalid)?;
-        if !gb_ports::valid_repository_path(repo) || found != kind || number(key).is_err() {
+        if !crate::agent::port::valid_repository_path(repo) || found != kind || number(key).is_err()
+        {
             return Err(invalid());
         }
         Ok((repo.into(), key.into()))
     }
     pub fn repository(&self, path: &str) -> Result<(), ServiceError> {
-        if gb_ports::valid_repository_path(path) {
+        if crate::agent::port::valid_repository_path(path) {
             Ok(())
         } else {
             Err(diagnostic(
@@ -136,51 +193,13 @@ impl TicketAgent {
             url: t.url.clone(),
             title: t.title.clone(),
             label: format!("#{}", t.key),
+            closed: false,
         }
     }
     fn on_board(&self, t: &tickets::TicketView) -> bool {
         t.repository
             .rsplit_once('/')
             .is_some_and(|(w, _)| w.eq_ignore_ascii_case(&self.workspace))
-    }
-    fn ticket_value(&self, t: &tickets::TicketView) -> Ticket {
-        let relative = |v: &tickets::TicketRef| TicketRelative {
-            kind: WorkKind::Ticket,
-            url: v.url.clone(),
-            title: v.title.clone(),
-            label: format!("#{}", v.key),
-            state: v.state.clone(),
-        };
-        Ticket {
-            repair: t.repair,
-            kind: WorkKind::Ticket,
-            url: t.url.clone(),
-            title: t.title.clone(),
-            label: format!("#{}", t.key),
-            key: t.key.clone(),
-            tracker: t.repository.clone(),
-            repository: Some(t.repository.clone()),
-            body: t.body.clone(),
-            state: t.state.clone(),
-            assignees: t
-                .assignee
-                .iter()
-                .map(|a| ActorName(a.name.clone()))
-                .collect(),
-            author: ActorName(t.author.clone()),
-            labels: t.labels.clone(),
-            lane: self
-                .on_board(t)
-                .then(|| lane(&t.lane))
-                .transpose()
-                .expect("domain lane"),
-            parent: t.parent.as_ref().map(relative),
-            children: t.children.iter().map(relative).collect(),
-            blocked_by: t.blocked_by.iter().map(relative).collect(),
-            blocks: t.blocks.iter().map(relative).collect(),
-            interactive: t.interactive,
-            interactive_ancestor: t.interactive_ancestor.as_ref().map(|t| t.url.clone()),
-        }
     }
     pub fn comment_body(
         &self,
@@ -221,6 +240,7 @@ impl TicketAgent {
         .map_err(|e| error(e, "page"))
     }
     pub async fn ticket_view(&self, url: &str) -> Result<tickets::TicketView, ServiceError> {
+        self.fault("ticket_view", url).await?;
         let (r, k) = self.item(url, "tickets")?;
         self.member()
             .await?
@@ -280,8 +300,7 @@ pub fn diagnostic<const N: usize>(key: &'static str, args: [(&str, String); N]) 
         | "integrations.branvil.api.not_path" => ServiceErrorClass::NotFound,
         "integrations.branvil.api.unsupported"
         | "integrations.branvil.api.foreign_ticket"
-        | "integrations.branvil.api.closes_foreign"
-        | "integrations.branvil.api.every_on_board" => ServiceErrorClass::Unsupported,
+        | "integrations.branvil.api.closes_foreign" => ServiceErrorClass::Unsupported,
         "integrations.branvil.api.stopped" => ServiceErrorClass::Unavailable,
         _ => ServiceErrorClass::Failure,
     };
@@ -431,20 +450,20 @@ impl CodeAgent {
             } else {
                 key.into()
             },
+            closed: false,
         }
     }
-    fn comment_value(&self, v: Value) -> Value {
-        json!({"id":v["id"],"body":v["body"],"author":v["author"],"author_type":self.author_type(text(&v,"author")),"created_at":v["created_at"],"url":v["url"]})
+    pub async fn pull_view(&self, url: &str) -> Result<crate::api::pulls::PullView, ServiceError> {
+        self.fault("pull_view", url).await?;
+        let (r, k) = self.item(url, "pulls")?;
+        self.member()
+            .await?
+            .pulls_get(&r, number(&k)?)
+            .await
+            .map_err(|e| error(e, "pulls_get"))
     }
     async fn pull(&self, url: &str) -> Result<Value, ServiceError> {
-        let (r, k) = self.item(url, "pulls")?;
-        value(
-            self.member()
-                .await?
-                .pulls_get(&r, number(&k)?)
-                .await
-                .map_err(|e| error(e, "pulls_get"))?,
-        )
+        value(self.pull_view(url).await?)
     }
 }
 

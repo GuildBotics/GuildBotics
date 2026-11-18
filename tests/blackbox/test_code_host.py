@@ -16,7 +16,7 @@ def create_ticket(stack, title, *options):
         "--human-approved",
         *options,
         content="作成時の本文。",
-    )["target"]["url"]
+    )["url"]
 
 
 def read(stack, kind, resource, url, **parameters):
@@ -51,7 +51,7 @@ def create_pr(stack, *options):
         "黒箱の変更",
         *options,
         content="メンバーから push した変更。",
-    )["target"]["url"]
+    )["url"]
 
 
 def readiness(stack, url):
@@ -99,7 +99,7 @@ def test_tickets_and_their_relations(stack):
         "更新後の本文。",
         "open",
     )
-    assert item["assignees"] == [stack.provider.member_identity]
+    assert item["assignee"]["name"] == stack.provider.member_identity
     assert item["lane"] == "ready"
     assert item["parent"]["url"] == parent
     assert [(b["url"], b["state"]) for b in item["blocked_by"]] == [(blocker, "open")]

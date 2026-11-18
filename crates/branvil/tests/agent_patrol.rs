@@ -1,8 +1,9 @@
 //! Frozen shared patrol decisions; GitHub GraphQL parsing/query tests belong to its adapter.
+use branvil::agent::CodeAgent;
+use branvil::agent::port::*;
 use branvil::agent::pr_patrol::*;
 use branvil::test_support::{Fixture, input};
 use chrono::{DateTime, Utc};
-use gb_ports::*;
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc};
 const ME: &str = "local-aiko";
@@ -298,7 +299,7 @@ fn reviewer_statements_use_full_history_and_ignore_empty_approvals() {
 }
 
 struct AwaitedFixture {
-    code: Arc<dyn CodeHostingService>,
+    code: Arc<CodeAgent>,
     fixture: Fixture,
     url: String,
     head: String,
@@ -324,7 +325,7 @@ impl AwaitedFixture {
         let actor = fixture.member(ME).await;
         let base = fixture.commit("acme/repo", "main", None, "a.txt", "base");
         let head = fixture.commit("acme/repo", "feature", Some(&base), "a.txt", "feature");
-        let code: Arc<dyn CodeHostingService> = Arc::new(branvil::agent::CodeAgent::new(
+        let code: Arc<CodeAgent> = Arc::new(branvil::agent::CodeAgent::new(
             fixture.data(),
             "acme".into(),
             ME.into(),
@@ -428,12 +429,14 @@ async fn optional_failure_does_not_hold_a_waiting_run() {
         .readiness(&f.url, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
-    assert_eq!(checks.required_checks, RequiredChecks::Passed);
+    assert_eq!(checks.report.required_checks, RequiredChecks::Passed);
     assert!(
         checks
+            .report
             .checks
             .iter()
-            .any(|c| c.conclusion.as_deref() == Some("failure") && !c.required)
+            .any(|c| c.conclusion.as_deref() == Some("failure")
+                && !checks.report.required_names.contains(&c.name))
     );
     let tasks = f.woken().await;
     assert_eq!(tasks.len(), 1);
@@ -570,6 +573,7 @@ async fn missing_base_does_not_hide_another_pr_feedback() {
         })
         .await
         .unwrap()
+        .written
         .target
         .url;
     f.feedback(&other).await;
