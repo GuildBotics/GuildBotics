@@ -607,14 +607,26 @@ fn after_drive(dir: &str) -> &str {
     }
 }
 
-/// The spelling of a canonical directory msb accepts as a mount source:
-/// Windows' canonical form is verbatim (`\\?\C:\…`), which msb refuses, and
-/// names the same directory as the plain drive path.
-pub fn mount_source(dir: PathBuf) -> PathBuf {
-    match dir.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
-        Some(plain) if after_drive(plain).len() < plain.len() => PathBuf::from(plain),
-        _ => dir,
+/// The spelling of the canonical directory `dir` that Git and msb take on
+/// the host. Windows' canonical form is verbatim (`\\?\C:\…`), which both
+/// refuse; its plain drive path is used only when `resolve` (the OS's
+/// canonical form) takes it back to `dir`, as Windows normalizes a plain path
+/// (dropping a component's trailing dots, for one) and it could then name
+/// another directory. Other directories are kept as they are.
+pub fn plain_path(
+    dir: PathBuf,
+    resolve: impl Fn(&Path) -> std::io::Result<PathBuf>,
+) -> std::io::Result<PathBuf> {
+    let Some(plain) = dir.to_str().and_then(|s| s.strip_prefix(r"\\?\")) else {
+        return Ok(dir);
+    };
+    if after_drive(plain).len() < plain.len() && resolve(Path::new(plain)).is_ok_and(|p| p == dir) {
+        return Ok(PathBuf::from(plain));
     }
+    Err(std::io::Error::other(format!(
+        "{} has no drive path naming it",
+        dir.display()
+    )))
 }
 
 /// The uid and gid of the fixed non-root user a job's commands run as. The
@@ -1059,18 +1071,41 @@ pub(crate) mod tests {
 
     #[test]
     fn windows_directories_reach_msb_as_plain_drive_paths() {
-        for (canonical, source) in [
+        // Windows' canonical form of a plain path: it drops a component's
+        // trailing dots and spaces, which the verbatim form keeps.
+        let windows = |p: &Path| -> std::io::Result<PathBuf> {
+            let parts: Vec<&str> = p
+                .to_str()
+                .unwrap()
+                .split('\\')
+                .map(|c| c.trim_end_matches(['.', ' ']))
+                .collect();
+            Ok(PathBuf::from(format!(r"\\?\{}", parts.join(r"\"))))
+        };
+        let missing =
+            |_: &Path| -> std::io::Result<PathBuf> { Err(std::io::ErrorKind::NotFound.into()) };
+        let unused = |p: &Path| -> std::io::Result<PathBuf> {
+            panic!("{} has no verbatim prefix to resolve", p.display())
+        };
+        type Resolve<'a> = &'a dyn Fn(&Path) -> std::io::Result<PathBuf>;
+        let cases: [(&str, Resolve, Option<&str>); 6] = [
             (
                 r"\\?\C:\Users\x\.branvil\runner",
-                r"C:\Users\x\.branvil\runner",
+                &windows,
+                Some(r"C:\Users\x\.branvil\runner"),
             ),
-            (r"\\?\UNC\srv\share\runner", r"\\?\UNC\srv\share\runner"),
-            ("/var/lib/runner", "/var/lib/runner"),
-        ] {
-            assert_eq!(
-                mount_source(PathBuf::from(canonical)),
-                PathBuf::from(source)
-            );
+            (r"\\?\C:\Review\runner.", &windows, None),
+            (r"\\?\C:\Review\runner ", &windows, None),
+            (r"\\?\C:\gone", &missing, None),
+            (r"\\?\UNC\srv\share\runner", &windows, None),
+            ("/var/lib/runner", &unused, Some("/var/lib/runner")),
+        ];
+        for (dir, resolve, expected) in cases {
+            match (plain_path(PathBuf::from(dir), resolve), expected) {
+                (Ok(plain), Some(want)) => assert_eq!(plain, PathBuf::from(want), "{dir}"),
+                (Err(e), None) => assert!(e.to_string().contains("no drive path"), "{dir}: {e}"),
+                (got, want) => panic!("{dir}: {got:?}, expected {want:?}"),
+            }
         }
         // Only the drive's colon is part of a path; msb splits at any other.
         for (dir, body) in [
