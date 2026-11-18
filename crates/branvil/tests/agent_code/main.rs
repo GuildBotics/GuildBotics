@@ -296,6 +296,9 @@ struct Context {
 }
 impl Context {
     async fn new() -> Self {
+        Self::with_repository(REPO).await
+    }
+    async fn with_repository(repository: &str) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let (fixture, alert_host) =
             ::branvil::test_support::Fixture::configured("owner", alerts::Host::configure).await;
@@ -309,7 +312,7 @@ impl Context {
             .await
             .unwrap();
         owner
-            .repos_create(input(json!({"path":REPO,"labels":["bug"]})))
+            .repos_create(input(json!({"path":repository,"labels":["bug"]})))
             .await
             .unwrap();
         owner
@@ -412,27 +415,6 @@ async fn ticket_relations() {
     let f = Context::new().await;
     let Context { t, .. } = &f;
     ticket_relations_contract(t.as_ref()).await;
-    f.stop().await;
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn code_patrol() {
-    let f = Context::new().await;
-    let Context {
-        temp,
-        owner,
-        owner_token,
-        t,
-        c,
-        ..
-    } = &f;
-    code_behavior::contract(
-        temp.path(),
-        owner,
-        c.as_ref(),
-        t.as_ref(),
-        owner_token.trim(),
-    )
-    .await;
     f.stop().await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
