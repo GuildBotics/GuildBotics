@@ -1,7 +1,8 @@
 //! History crosses the host/guest boundary as bundles, never as a repository.
 pub use crate::member_protocol::{MAX_BUNDLE, object};
 use gb_member::{MemberError, Result, WriteGuard};
-use gb_ports::{CodeHostingService, GitCredential};
+use branvil::agent::port::CodeHostingService;
+use gb_base::service::GitCredential;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -625,7 +626,7 @@ impl Origin {
             .parse::<usize>()
             .map_err(|_| failure("bundle"))?;
         let mut result = json!({"path":path,"kind":kind,"size":size});
-        if size > gb_ports::MAX_PAGE_BYTES / 2 {
+        if size > branvil::agent::port::MAX_PAGE_BYTES / 2 {
             result["status"] = "too_large".into();
             return Ok(result);
         }
@@ -664,7 +665,7 @@ impl Origin {
     }
 }
 fn repository_path(repository: &str) -> Result<()> {
-    if gb_ports::valid_repository_path(repository) {
+    if branvil::agent::port::valid_repository_path(repository) {
         Ok(())
     } else {
         Err(MemberError::CapabilityArgs {
@@ -688,7 +689,7 @@ struct Checkout {
     repository: String,
     owner: String,
     #[serde(default)]
-    target: Option<(gb_ports::WorkKind, String)>,
+    target: Option<(branvil::agent::port::WorkKind, String)>,
     branch: String,
     #[serde(default)]
     discarded: bool,
@@ -892,8 +893,8 @@ impl Workspace<'_> {
         }
         Ok((receipt, vec![]))
     }
-    async fn target(&self) -> Option<(gb_ports::WorkKind, String)> {
-        use gb_ports::WorkKind;
+    async fn target(&self) -> Option<(branvil::agent::port::WorkKind, String)> {
+        use branvil::agent::port::WorkKind;
         let (kind, url) = self.work?;
         let kind = match kind {
             "ticket" => WorkKind::Ticket,
@@ -906,10 +907,10 @@ impl Workspace<'_> {
     }
     async fn state(
         &self,
-        kind: gb_ports::WorkKind,
+        kind: branvil::agent::port::WorkKind,
         url: &str,
-    ) -> Result<(gb_ports::WorkKind, bool)> {
-        use gb_ports::WorkKind;
+    ) -> Result<(branvil::agent::port::WorkKind, bool)> {
+        use branvil::agent::port::WorkKind;
         match self.read_state(kind, url).await {
             Ok(state) => Ok(state),
             Err(_) => {
@@ -926,10 +927,10 @@ impl Workspace<'_> {
     }
     async fn read_state(
         &self,
-        kind: gb_ports::WorkKind,
+        kind: branvil::agent::port::WorkKind,
         url: &str,
-    ) -> Result<(gb_ports::WorkKind, bool)> {
-        use gb_ports::{Lane, Resource, WorkKind};
+    ) -> Result<(branvil::agent::port::WorkKind, bool)> {
+        use branvil::agent::port::{Lane, Resource, WorkKind};
         let page = match kind {
             WorkKind::Ticket => {
                 self.services
@@ -946,17 +947,17 @@ impl Workspace<'_> {
         let value = page
             .items()
             .first()
-            .ok_or(gb_ports::ServiceError::InvalidResult)?
+            .ok_or(gb_base::service::ServiceError::InvalidResult)?
             .clone();
         Ok(match kind {
             WorkKind::Ticket => {
-                let t: gb_ports::Ticket = serde_json::from_value(value)
-                    .map_err(|_| gb_ports::ServiceError::InvalidResult)?;
+                let t: branvil::agent::port::Ticket = serde_json::from_value(value)
+                    .map_err(|_| gb_base::service::ServiceError::InvalidResult)?;
                 (t.kind, t.state == "open" && t.lane != Some(Lane::Done))
             }
             WorkKind::PullRequest => {
-                let p: gb_ports::PullRequest = serde_json::from_value(value)
-                    .map_err(|_| gb_ports::ServiceError::InvalidResult)?;
+                let p: branvil::agent::port::PullRequest = serde_json::from_value(value)
+                    .map_err(|_| gb_base::service::ServiceError::InvalidResult)?;
                 (p.kind, p.state == "open" && !p.merged)
             }
         })
@@ -1633,7 +1634,7 @@ async fn show_default(
             .map_err(|_| failure("path"))?
             .len()
             + 128 * paths.len()
-            > gb_ports::MAX_PAGE_BYTES / 4
+            > branvil::agent::port::MAX_PAGE_BYTES / 4
     {
         return Err(MemberError::Capability(
             "capabilities.member_git.show_request_large",
@@ -1696,7 +1697,7 @@ async fn show_default(
             )
             .await?;
         let size = serde_json::to_vec(&item).unwrap().len();
-        if used + size > gb_ports::MAX_PAGE_BYTES * 3 / 4
+        if used + size > branvil::agent::port::MAX_PAGE_BYTES * 3 / 4
             && (item.get("content").is_some() || item.get("entries").is_some())
         {
             item.as_object_mut().unwrap().remove("content");

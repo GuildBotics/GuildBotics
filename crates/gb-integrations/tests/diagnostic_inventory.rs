@@ -360,7 +360,7 @@ fn exclusions_require_a_reason() {
 
 #[test]
 fn every_resource_diagnostic_preserves_its_key_and_safe_arguments_at_runtime() {
-    use gb_ports::{ServiceError, ServiceErrorClass};
+    use gb_base::service::{ServiceError, ServiceErrorClass};
     let cases = [
         (ServiceError::Failed, "service_failed", vec![]),
         (

@@ -8,7 +8,7 @@ use std::{sync::Arc, time::Instant};
 async fn service(
     api: &Shared,
     person: &str,
-) -> anyhow::Result<Arc<dyn gb_ports::CodeHostingService>> {
+) -> anyhow::Result<Arc<dyn branvil::agent::port::CodeHostingService>> {
     let selected = api.selected();
     let workspace = selected
         .workspace

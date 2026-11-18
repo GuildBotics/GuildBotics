@@ -16,7 +16,8 @@ use gb_observability::{
     redaction::Redactor,
     runs::{RunRecord, RunStore},
 };
-use gb_ports::*;
+use branvil::agent::port::*;
+use gb_integrations::chat::*;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -1534,7 +1535,7 @@ pub(crate) mod tests {
         generation: Arc<crate::execution::Generation>,
         arguments: Mutex<Vec<Vec<String>>>,
         failures: Mutex<std::collections::VecDeque<crate::dispatcher::DispatchFailure>>,
-        tickets: Arc<dyn gb_ports::TicketService>,
+        tickets: Arc<dyn branvil::agent::port::TicketService>,
         native: Native,
         calls: Mutex<Vec<gb_wire::WorkflowInvocation>>,
         /// Each command run, by its file and what the file held as it ran.
@@ -1671,7 +1672,7 @@ pub(crate) mod tests {
                     let url = invocation.payload["task"]["url"].as_str().unwrap();
                     let item = self
                         .tickets
-                        .read(gb_ports::Resource::Tickets, url, None, "")
+                        .read(branvil::agent::port::Resource::Tickets, url, None, "")
                         .await
                         .unwrap();
                     assert_eq!(
@@ -1932,14 +1933,14 @@ pub(crate) mod tests {
                     .code
                     .as_ref()
                     .unwrap()
-                    .create_pull_request(gb_ports::CreatePullRequest {
+                    .create_pull_request(branvil::agent::port::CreatePullRequest {
                         repository: "acme/demo".into(),
                         head: "feature".into(),
                         base: "main".into(),
                         title: "Fix login".into(),
                         body: String::new(),
                         draft: false,
-                        tickets: vec![gb_ports::TicketLink {
+                        tickets: vec![branvil::agent::port::TicketLink {
                             url: task.target.url.clone(),
                             closes: false,
                         }],
@@ -2029,7 +2030,7 @@ pub(crate) mod tests {
             assert!(runtime.generation.as_ref().unwrap().snapshot().is_empty());
             let page = ticket
                 .read(
-                    gb_ports::Resource::TicketComments,
+                    branvil::agent::port::Resource::TicketComments,
                     &task.target.url,
                     None,
                     "",
@@ -2049,7 +2050,7 @@ pub(crate) mod tests {
                     .as_ref()
                     .unwrap()
                     .read(
-                        gb_ports::Resource::TicketPullRequests,
+                        branvil::agent::port::Resource::TicketPullRequests,
                         &task.target.url,
                         None,
                         "",
@@ -2261,10 +2262,10 @@ pub(crate) mod tests {
         let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
         for source in ["manual", "scheduled", "routine", "event_queue"] {
             for problem in [
-                gb_ports::ServiceError::Failed,
-                gb_ports::ServiceError::NotFound,
-                gb_ports::ServiceError::Unsupported,
-                gb_ports::ServiceError::Unavailable,
+                gb_base::service::ServiceError::Failed,
+                gb_base::service::ServiceError::NotFound,
+                gb_base::service::ServiceError::Unsupported,
+                gb_base::service::ServiceError::Unavailable,
             ] {
                 let deferred = source != "manual" && problem.is_unavailable();
                 let error_type = if problem.is_unavailable() {
@@ -2346,20 +2347,20 @@ pub(crate) mod tests {
     async fn ready_ticket(
         _native: &Native,
         runtime: &crate::workflow_runtime::Runtime,
-    ) -> gb_ports::TicketCreated {
+    ) -> branvil::agent::port::TicketCreated {
         runtime
             .tickets
             .as_ref()
             .unwrap()
-            .create_ticket(gb_ports::CreateTicket {
+            .create_ticket(branvil::agent::port::CreateTicket {
                 tracker: "acme/demo".into(),
                 title: "Fix login".into(),
                 body: String::new(),
                 labels: vec![],
                 add_to_board: true,
                 interactive: false,
-                assignee: Some(gb_ports::ActorName("aiko".into())),
-                lane: Some(gb_ports::CreateLane::Ready),
+                assignee: Some(gb_base::service::ActorName("aiko".into())),
+                lane: Some(branvil::agent::port::CreateLane::Ready),
                 parent: None,
                 blocked_by: vec![],
             })
@@ -2477,7 +2478,7 @@ pub(crate) mod tests {
                 .errors
                 .lock()
                 .unwrap()
-                .insert(phase, gb_ports::ServiceError::Unavailable);
+                .insert(phase, gb_base::service::ServiceError::Unavailable);
             runtime.tickets = Some(faults.clone());
             let runtime = Arc::new(runtime);
             let dispatch = crate::chat_dispatch::Dispatcher {
@@ -2645,7 +2646,7 @@ pub(crate) mod tests {
                         .as_ref()
                         .unwrap()
                         .read(
-                            gb_ports::Resource::TicketComments,
+                            branvil::agent::port::Resource::TicketComments,
                             &ticket.target.url,
                             None,
                             "",
@@ -2680,7 +2681,7 @@ pub(crate) mod tests {
                 .errors
                 .lock()
                 .unwrap()
-                .insert(phase, gb_ports::ServiceError::Failed);
+                .insert(phase, gb_base::service::ServiceError::Failed);
             runtime.tickets = Some(faults.clone());
             let runtime = Arc::new(runtime);
             let engine = crate::native_scheduler::Engine::new(runtime.clone(), None);
@@ -3205,10 +3206,10 @@ pub(crate) mod tests {
     {
         for operation in ["identity:", "thread:M1"] {
             for error in [
-                gb_ports::ServiceError::Failed,
-                gb_ports::ServiceError::NotFound,
-                gb_ports::ServiceError::Unsupported,
-                gb_ports::ServiceError::Unavailable,
+                gb_base::service::ServiceError::Failed,
+                gb_base::service::ServiceError::NotFound,
+                gb_base::service::ServiceError::Unsupported,
+                gb_base::service::ServiceError::Unavailable,
             ] {
                 let root = tempfile::tempdir().unwrap();
                 let native = fixture(root.path());
@@ -3321,7 +3322,7 @@ pub(crate) mod tests {
                 if !unavailable {
                     assert_eq!(
                         history.events[1].status.as_ref().unwrap().reason(),
-                        gb_ports::WorkflowStatusReason::Failed
+                        gb_base::service::WorkflowStatusReason::Failed
                     );
                 }
                 cleanup.close();

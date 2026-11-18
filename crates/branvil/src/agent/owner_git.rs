@@ -1,6 +1,6 @@
 //! Server-side issuance for the embedded host of the requested origin.
 use crate::api::{DataApi, members};
-use gb_ports::GitCredential;
+use gb_base::service::GitCredential;
 
 pub async fn credential(
     origin: &str,

@@ -1,5 +1,5 @@
 //! Provider-independent operations. Providers own no host configuration types.
-use crate::*;
+use super::*;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -102,12 +102,6 @@ pub fn creation_lane(
 pub struct Download<T> {
     pub metadata: T,
     pub content: Vec<u8>,
-}
-/// Credentials are deliberately excluded from Debug and serialization.
-#[derive(Clone)]
-pub struct GitCredential {
-    pub username: String,
-    pub password: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TicketLink {

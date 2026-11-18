@@ -1,5 +1,6 @@
 use crate::factory::{IntegrationEvent, IntegrationObserver};
-use gb_ports::*;
+use gb_base::service::*;
+use crate::chat::*;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,

@@ -36,7 +36,6 @@ gb-base = { path = "../gb-base" }
 gb-config = { path = "../gb-config" }
 gb-member = { path = "../gb-member" }
 gb-integrations = { path = "../gb-integrations", optional = true }
-gb-ports = { path = "../gb-ports" }
 branvil = { path = "../branvil", optional = true }
 gb-environment = { path = "../gb-environment", default-features = false }
 gb-observability = { path = "../gb-observability" }

@@ -1,5 +1,5 @@
 //! Inject failures at the ticket port while retaining the real embedded Branvil board.
-use gb_ports::*;
+use branvil::agent::port::*;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 pub struct Faults {

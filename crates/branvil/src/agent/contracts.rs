@@ -1,5 +1,5 @@
 //! Shared behavioral contracts, run against real hermetic provider fixtures.
-use gb_ports::*;
+use crate::agent::port::*;
 use serde_json::{Value, json};
 
 pub fn ticket_request(tracker: &str, title: &str) -> CreateTicket {

@@ -12,7 +12,6 @@ publish = false
 autotests = false
 
 [dependencies]
-gb-ports = { path = "../gb-ports" }
 gb-base = { path = "../gb-base" }
 gb-workspace = { path = "../gb-workspace" }
 gb-observability = { path = "../gb-observability" }

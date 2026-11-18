@@ -1,5 +1,6 @@
 use gb_member::WriteGuard;
-use gb_ports::*;
+use branvil::agent::port::*;
+use gb_integrations::chat::*;
 use gb_server::member::chat::{Chat, Reference};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Mutex};

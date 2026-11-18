@@ -1,5 +1,5 @@
 use gb_integrations::*;
-use gb_ports::ServiceError;
+use gb_base::service::ServiceError;
 
 #[test]
 fn refusals_distinguish_scope_from_provider_failure() {

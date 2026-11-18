@@ -60,7 +60,7 @@ pub(crate) async fn issue(
     )
     .await
     .map_err(|error| {
-        if let Some(error) = error.downcast_ref::<gb_ports::ServiceError>() {
+        if let Some(error) = error.downcast_ref::<gb_base::service::ServiceError>() {
             ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "git_credentials", &headers).locale(
                 error.translation_key(),
                 error.translation_args().into_iter().collect(),

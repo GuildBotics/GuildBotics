@@ -6,7 +6,7 @@ use gb_observability::{
     redaction::Redactor,
     runs::{RunRecord, RunStore},
 };
-use gb_ports::ChatEvent;
+use gb_integrations::chat::ChatEvent;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

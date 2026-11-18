@@ -1,7 +1,8 @@
 //! Ticket selection and settlement, shared by patrol and one-off commands.
 use crate::{dispatcher::DispatchFailure, service::Pending, work_stops::WorkStop};
 use gb_observability::{Diagnostics, Trace, runs::RunRecord};
-use gb_ports::{CodeHostingService, MoveLane, ServiceError, Task, TicketService, WorkflowStatus};
+use branvil::agent::port::{CodeHostingService, MoveLane, Task, TicketService};
+use gb_base::service::{ServiceError, WorkflowStatus};
 use gb_wire::{CommandReply, WorkflowInvocation};
 use serde_json::{Value, json};
 

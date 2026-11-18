@@ -5,7 +5,7 @@ mod contracts;
 mod extra;
 mod readiness;
 use branvil::agent::{CodeAgent, TicketAgent};
-use gb_ports::*;
+use branvil::agent::port::*;
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},

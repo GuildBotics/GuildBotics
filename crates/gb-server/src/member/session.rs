@@ -10,7 +10,8 @@ use gb_member::{
     command::{self, Parsed},
     memory::{Edit, Memory, Scope},
 };
-use gb_ports::*;
+use branvil::agent::port::*;
+use gb_integrations::chat::*;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{

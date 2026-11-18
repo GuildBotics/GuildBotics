@@ -6,7 +6,7 @@ pub mod context;
 pub mod memory;
 pub mod output;
 
-use gb_ports::ServiceError;
+use gb_base::service::ServiceError;
 
 /// Capability validation is distinct from the provider's error hierarchy.
 #[derive(Debug)]

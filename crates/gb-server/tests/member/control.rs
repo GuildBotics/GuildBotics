@@ -5,7 +5,7 @@ use gb_observability::{
     redaction::Redactor,
     runs::{RunRecord, RunStore},
 };
-use gb_ports::*;
+use branvil::agent::port::*;
 use gb_server::member::{
     control::{Identity, Recipients, RunControl},
     repository::{Repository, RepositoryServices},
@@ -624,7 +624,7 @@ async fn awaiting_checks_returns_pending_and_ready_prs_and_retains_the_chat_gate
     let mut provider = support::Probe::new(None);
     for (url, blocked) in [("pending", true), ("ready", false)] {
         provider.pages.insert(format!("pull_requests|{url}|"),Ok(ReadPage::of(Resource::PullRequests,[json!({"kind":"pull_request","url":url,"title":"T","label":"!1","repository":"repo","body":"","state":"open","assignees":[],"author":"local-aiko","requested_reviewers":[],"labels":[],"author_type":"Assistant","head":"feature","head_repository":"repo","head_sha":"head","base":"main","merged":false,"draft":false,"changed_files":null})],None,None).unwrap()));
-        let readiness=serde_json::from_value(json!({"target":{"kind":"pull_request","url":url,"title":"T","label":"!1"},"head_sha":"head","checks":[],"required_checks":if blocked{"running"}else{"passed"},"feedback":gb_ports::Feedback::default()})).unwrap();
+        let readiness=serde_json::from_value(json!({"target":{"kind":"pull_request","url":url,"title":"T","label":"!1"},"head_sha":"head","checks":[],"required_checks":if blocked{"running"}else{"passed"},"feedback":branvil::agent::port::Feedback::default()})).unwrap();
         provider.checks.insert(url.into(), readiness);
     }
     let services = Services(provider);

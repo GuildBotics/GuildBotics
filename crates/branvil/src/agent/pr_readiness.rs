@@ -1,4 +1,5 @@
-use gb_ports::{Check, Feedback, MAX_PAGE_BYTES, Readiness, Remark, Remarks, ServiceError};
+use crate::agent::port::{Check, Feedback, MAX_PAGE_BYTES, Readiness, Remark, Remarks};
+use gb_base::service::ServiceError;
 use serde_json::{Value, json};
 
 /// Conclusions whose jobs provide failure logs. A provider's synthetic

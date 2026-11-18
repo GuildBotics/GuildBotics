@@ -1,6 +1,6 @@
 use crate::support;
 use gb_member::{MemberError, WriteGuard};
-use gb_ports::*;
+use branvil::agent::port::*;
 use gb_server::member::repository::*;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -246,7 +246,7 @@ fn evidence_includes_written_pushed_and_resumed_prs_once() {
     );
 }
 fn readiness(states: &[&str]) -> Readiness {
-    serde_json::from_value(json!({"target":{"kind":"pull_request","url":"url","title":"T","label":"!1"},"head_sha":"head", "checks":[], "required_checks":states.first().copied().unwrap_or("passed"), "feedback":gb_ports::Feedback::default()})).unwrap()
+    serde_json::from_value(json!({"target":{"kind":"pull_request","url":"url","title":"T","label":"!1"},"head_sha":"head", "checks":[], "required_checks":states.first().copied().unwrap_or("passed"), "feedback":branvil::agent::port::Feedback::default()})).unwrap()
 }
 #[test]
 fn run_completion_uses_only_required_checks() {

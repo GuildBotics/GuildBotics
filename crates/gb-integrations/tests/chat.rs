@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
-use gb_ports::*;
+use gb_base::service::*;
+use gb_integrations::chat::*;
 use serde_json::json;
 
 fn message(time: &str, id: &str, author: Option<&str>) -> ChatMessage {

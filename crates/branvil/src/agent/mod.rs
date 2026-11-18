@@ -2,6 +2,7 @@
 #[path = "tickets.rs"]
 mod operations;
 mod patrol;
+pub mod port;
 pub mod scope;
 mod selection;
 use crate::api::tickets;
@@ -17,7 +18,7 @@ fn lane(s: &str) -> Result<Lane, ServiceError> {
     }
 }
 use crate::api::{AppError, DataApi, MemberApi};
-use gb_ports::*;
+use crate::agent::port::*;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -99,13 +100,13 @@ impl TicketAgent {
             .ok_or_else(invalid)?;
         let (repo, tail) = path.split_once("/-/").ok_or_else(invalid)?;
         let (found, key) = tail.split_once('/').ok_or_else(invalid)?;
-        if !gb_ports::valid_repository_path(repo) || found != kind || number(key).is_err() {
+        if !crate::agent::port::valid_repository_path(repo) || found != kind || number(key).is_err() {
             return Err(invalid());
         }
         Ok((repo.into(), key.into()))
     }
     pub fn repository(&self, path: &str) -> Result<(), ServiceError> {
-        if gb_ports::valid_repository_path(path) {
+        if crate::agent::port::valid_repository_path(path) {
             Ok(())
         } else {
             Err(diagnostic(

@@ -6,7 +6,8 @@ use crate::{
 use chrono::{DateTime, Duration, Utc};
 use gb_member::context::PublicMember;
 use gb_observability::runs::RunRecord;
-use gb_ports::{ChatEvent, ChatMessage, ChatService, WorkflowStatus};
+use gb_integrations::chat::{ChatEvent, ChatMessage, ChatService};
+use gb_base::service::WorkflowStatus;
 use gb_wire::WorkflowInvocation;
 use serde_json::{Value, json};
 use std::{
@@ -160,8 +161,8 @@ impl Dispatcher {
                         self.runner.selection_failed(&pending, &error).await;
                         let unavailable = error.downcast_ref::<ContextUnavailable>().is_some()
                             || error
-                                .downcast_ref::<gb_ports::ServiceError>()
-                                .is_some_and(gb_ports::ServiceError::is_unavailable);
+                                .downcast_ref::<gb_base::service::ServiceError>()
+                                .is_some_and(gb_base::service::ServiceError::is_unavailable);
                         if !unavailable {
                             pending.attempt_count = pending.attempt_count.saturating_add(1);
                         }
@@ -365,7 +366,7 @@ impl Dispatcher {
                     .filter(|id| !id.trim().is_empty())
                     .map(|id| {
                         (
-                            self.chat.self_user_id(&gb_ports::ActorName(id.clone())),
+                            self.chat.self_user_id(&gb_base::service::ActorName(id.clone())),
                             p.person_id.clone(),
                         )
                     })
@@ -516,7 +517,7 @@ impl Dispatcher {
                     }
                     let user = self
                         .chat
-                        .self_user_id(&gb_ports::ActorName(account.clone()));
+                        .self_user_id(&gb_base::service::ActorName(account.clone()));
                     if mentions.contains(&user)
                         && !handoffs.iter().any(|h| {
                             h["person_id"] == member.person_id && h["message_id"] == message_id
@@ -846,7 +847,7 @@ mod tests {
                 chat.errors
                     .lock()
                     .unwrap()
-                    .insert("thread:T1".into(), gb_ports::ServiceError::Unavailable);
+                    .insert("thread:T1".into(), gb_base::service::ServiceError::Unavailable);
             }
             assert_eq!(dispatcher.process(Utc::now()).await.unwrap(), 0);
             assert_eq!(
@@ -994,7 +995,7 @@ mod tests {
         chat.errors
             .lock()
             .unwrap()
-            .insert("identity:".into(), gb_ports::ServiceError::Unavailable);
+            .insert("identity:".into(), gb_base::service::ServiceError::Unavailable);
         for _ in 0..3 {
             assert!(dispatcher.settle(&p, &record, true).await.is_err());
         }

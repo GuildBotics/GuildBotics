@@ -1,8 +1,9 @@
 //! Ticket selection from observed conversation; no provider writes here.
 use chrono::{DateTime, Utc};
-use gb_ports::{TaskMessage, WorkflowStatus};
+use crate::agent::port::TaskMessage;
+use gb_base::service::WorkflowStatus;
 
-pub use gb_ports::parse_timestamp;
+pub use gb_base::service::parse_timestamp;
 
 pub fn since_assignment<'a>(
     comments: &'a [TaskMessage],
@@ -63,7 +64,7 @@ pub fn select_ticket(
     let mine = since.last().is_some_and(|m| m.author_type == "Assistant");
     if repair
         && mine
-        && latest_status.is_some_and(|s| s.reason() == gb_ports::WorkflowStatusReason::Failed)
+        && latest_status.is_some_and(|s| s.reason() == gb_base::service::WorkflowStatusReason::Failed)
     {
         return TicketDecision {
             reason: Some("working_lane"),

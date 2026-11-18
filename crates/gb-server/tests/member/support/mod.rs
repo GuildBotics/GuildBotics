@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use gb_ports::*;
+use branvil::agent::port::*;
 use serde_json::Value;
 use std::collections::BTreeMap;
 pub struct Probe {

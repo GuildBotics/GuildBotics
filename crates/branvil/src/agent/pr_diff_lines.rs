@@ -1,5 +1,5 @@
 //! Unified diff coordinates shared by code hosts.
-use gb_ports::ServiceError;
+use gb_base::service::ServiceError;
 use serde_json::{Value, json};
 use std::sync::LazyLock;
 static HUNK: LazyLock<regex::Regex> = LazyLock::new(|| {

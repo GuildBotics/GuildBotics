@@ -1,5 +1,5 @@
 use branvil::agent::pr_readiness::*;
-use gb_ports::*;
+use branvil::agent::port::*;
 use serde_json::{Value, json};
 
 fn run(input: &Value) -> Result<Readiness, ServiceError> {

@@ -2,7 +2,7 @@
 use branvil::agent::pr_patrol::*;
 use branvil::test_support::{Fixture, input};
 use chrono::{DateTime, Utc};
-use gb_ports::*;
+use branvil::agent::port::*;
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc};
 const ME: &str = "local-aiko";

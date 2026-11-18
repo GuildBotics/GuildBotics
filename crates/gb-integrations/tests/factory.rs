@@ -1,7 +1,7 @@
 use gb_base::shared_writes::SharedWrites;
 use gb_config::secrets::{DeviceKey, Keychain, Scope, SecretStore};
 use gb_integrations::{IntegrationConfig, ServiceIntegrationFactory};
-use gb_ports::*;
+use gb_base::service::*;
 use std::{
     collections::BTreeMap,
     fs,

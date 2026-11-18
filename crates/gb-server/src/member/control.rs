@@ -37,7 +37,7 @@ pub struct RunControl<'a> {
     pub redactor: &'a Redactor,
     pub observe: &'a (dyn Fn(&str, bool, &Value) -> Result<()> + Send + Sync),
     pub render_notice: &'a (dyn Fn(&str) -> String + Send + Sync),
-    pub render_wait: &'a (dyn Fn(&gb_ports::Readiness) -> String + Send + Sync),
+    pub render_wait: &'a (dyn Fn(&branvil::agent::port::Readiness) -> String + Send + Sync),
 }
 fn failed(error: anyhow::Error) -> MemberError {
     error
@@ -333,7 +333,7 @@ impl RunControl<'_> {
                         .repository
                         .services
                         .code()?
-                        .read(gb_ports::Resource::PullRequests, &url, None, "")
+                        .read(branvil::agent::port::Resource::PullRequests, &url, None, "")
                         .await?;
                     if !page.items().iter().any(|pr| pr["state"] == "open") {
                         continue;
@@ -349,7 +349,7 @@ impl RunControl<'_> {
                             .repository
                             .services
                             .tickets()?
-                            .read(gb_ports::Resource::Tickets, &link.url, None, "")
+                            .read(branvil::agent::port::Resource::Tickets, &link.url, None, "")
                             .await?;
                         if page.items().iter().any(|ticket| ticket["repair"] == true) {
                             linked = true;

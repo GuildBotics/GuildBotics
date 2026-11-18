@@ -4,7 +4,8 @@ use crate::{
     ticket_selector::Selector,
     workflow_runtime::{Refused, Runtime},
 };
-use gb_ports::{ServiceError, Task};
+use gb_base::service::ServiceError;
+use branvil::agent::port::Task;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,

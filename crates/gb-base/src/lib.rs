@@ -5,6 +5,7 @@
 
 pub mod files;
 pub mod home;
+pub mod service;
 pub mod host_path;
 pub mod shared_writes;
 pub mod shell;

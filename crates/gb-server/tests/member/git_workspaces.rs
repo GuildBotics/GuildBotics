@@ -1,6 +1,6 @@
 use crate::support;
 use gb_member::WriteGuard;
-use gb_ports::*;
+use branvil::agent::port::*;
 use gb_server::member::git::{Guest, Output, Pending, Workspace};
 use serde_json::json;
 use std::{
@@ -1194,7 +1194,7 @@ async fn prepare_dispatch_resolves_ticket_and_fork_heads_and_rejects_invalid_anc
 async fn push_reports_readiness_for_open_prs_without_waiting_for_checks() {
     let mut f = Fixture::new();
     f.services.open = vec!["pr".into()];
-    f.services.checks.insert("pr".into(),serde_json::from_value(json!({"target":{"kind":"pull_request","url":"pr","title":"T","label":"!1"},"head_sha":"head","checks":[],"required_checks":"running","feedback":gb_ports::Feedback::default()})).unwrap());
+    f.services.checks.insert("pr".into(),serde_json::from_value(json!({"target":{"kind":"pull_request","url":"pr","title":"T","label":"!1"},"head_sha":"head","checks":[],"required_checks":"running","feedback":branvil::agent::port::Feedback::default()})).unwrap());
     let path = f.prepare("one", "topic").await;
     f.stage(&path, "ours");
     let result = f.workspace("one").publish(&path, "ours").await.unwrap();

@@ -13,7 +13,7 @@
 #
 # The Rust jobs check the whole Cargo workspace, its tests in two jobs:
 # rust-test-branvil tests Branvil and loopback-auth; rust-test tests the rest.
-# Branvil builds gb-ports and loopback-auth; its job covers those dependencies.
+# Branvil builds gb-base and loopback-auth; its job covers those dependencies.
 # Each crate is tested by one of them, and each job's paths include every workspace crate
 # its tested crates build from (tests/test_cargo_workspace.py).
 #
@@ -167,7 +167,7 @@ name = "rust-test-branvil"
 paths = [
   "crates/branvil/**",
   "crates/loopback-auth/**",
-  "crates/gb-ports/**",
+  "crates/gb-base/**",
   "Cargo.toml",
   "Cargo.lock",
   "rust-toolchain*",

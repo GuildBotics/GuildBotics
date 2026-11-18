@@ -1,5 +1,9 @@
 //! Shared provider policy. Providers collect observations; these functions
 //! decide completion without transport, credentials, or writes.
+// The shared chat contract in tests/support names this crate as its tests do.
+#[cfg(test)]
+extern crate self as gb_integrations;
+pub mod chat;
 pub mod factory;
 pub use factory::{
     IntegrationConfig, IntegrationEvent, IntegrationObserver, ServiceIntegrationFactory,

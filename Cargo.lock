@@ -814,7 +814,7 @@ dependencies = [
  "ctor",
  "directories",
  "futures-util",
- "gb-ports",
+ "gb-base",
  "libc",
  "loopback-auth",
  "mime_guess",
@@ -2055,6 +2055,7 @@ dependencies = [
  "anyhow",
  "cap-fs-ext",
  "cap-std",
+ "chrono",
  "libc",
  "serde",
  "serde_json",
@@ -2132,7 +2133,6 @@ dependencies = [
  "futures-util",
  "gb-base",
  "gb-config",
- "gb-ports",
  "regex",
  "reqwest",
  "rustls",
@@ -2158,7 +2158,6 @@ dependencies = [
  "chrono",
  "gb-base",
  "gb-observability",
- "gb-ports",
  "gb-workspace",
  "serde",
  "serde-saphyr",
@@ -2190,15 +2189,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gb-ports"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "gb-server"
 version = "0.1.0"
 dependencies = [
@@ -2217,7 +2207,6 @@ dependencies = [
  "gb-integrations",
  "gb-member",
  "gb-observability",
- "gb-ports",
  "gb-setup",
  "gb-wire",
  "gb-workspace",

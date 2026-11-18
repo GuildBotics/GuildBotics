@@ -15,7 +15,8 @@ use gb_observability::{
     redaction::Redactor,
     runs::{RunRecord, RunState, RunStore},
 };
-use gb_ports::{ChatService, CodeHostingService, Task, TicketService};
+use gb_integrations::chat::ChatService;
+use branvil::agent::port::{CodeHostingService, Task, TicketService};
 use gb_wire::{CommandReply, WorkflowInvocation};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
@@ -39,7 +40,7 @@ pub struct Runtime {
     pub tickets: Option<Arc<dyn TicketService>>,
     pub code: Option<Arc<dyn CodeHostingService>>,
     pub chat: Option<Arc<dyn ChatService>>,
-    pub chat_error: Option<gb_ports::ServiceError>,
+    pub chat_error: Option<gb_base::service::ServiceError>,
     pub chat_provider: String,
     identity_services: Vec<(String, String, Arc<dyn ChatService>)>,
     pub reception: Option<crate::chat_receiver::Connection>,
@@ -301,7 +302,7 @@ impl Runtime {
     }
 
     /// Non-ticket commands use the same admission and settlement boundary.
-    pub async fn selection_failed(&self, error: gb_ports::ServiceError, source: &str) {
+    pub async fn selection_failed(&self, error: gb_base::service::ServiceError, source: &str) {
         let trace = self.traced(Trace::open(&self.diagnostics(), source), Default::default());
         let _ = trace
             .run_command(ticket_selector::COMMAND, &self.person.person_id, async {
@@ -327,7 +328,7 @@ impl Runtime {
                 source,
                 language: &self.language,
                 ticket: self.tickets.as_deref().ok_or(Refused::Dispatch(
-                    DispatchFailure::Service(gb_ports::ServiceError::Unsupported),
+                    DispatchFailure::Service(gb_base::service::ServiceError::Unsupported),
                 ))?,
                 code: self.code.as_deref(),
                 runner: self,
@@ -441,7 +442,7 @@ impl Runtime {
                 source: "manual",
                 language: &self.language,
                 ticket: self.tickets.as_deref().ok_or(Refused::Dispatch(
-                    DispatchFailure::Service(gb_ports::ServiceError::Unsupported),
+                    DispatchFailure::Service(gb_base::service::ServiceError::Unsupported),
                 ))?,
                 code: self.code.as_deref(),
                 runner: self,
@@ -541,7 +542,7 @@ impl Runtime {
                 source: &source,
                 language: &self.language,
                 ticket: self.tickets.as_deref().ok_or(Refused::Dispatch(
-                    DispatchFailure::Service(gb_ports::ServiceError::Unsupported),
+                    DispatchFailure::Service(gb_base::service::ServiceError::Unsupported),
                 ))?,
                 code: self.code.as_deref(),
                 runner: self,
@@ -734,7 +735,7 @@ impl crate::chat_dispatch::Runner for Runtime {
                 trace,
                 crate::chat_dispatch::attributes(&self.chat_provider, pending),
             );
-            let failure = if let Some(error) = error.downcast_ref::<gb_ports::ServiceError>() {
+            let failure = if let Some(error) = error.downcast_ref::<gb_base::service::ServiceError>() {
                 DispatchFailure::Service(error.clone())
             } else if error
                 .downcast_ref::<crate::chat_dispatch::ContextUnavailable>()

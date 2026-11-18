@@ -158,14 +158,13 @@ def _built_from(tested: set[str]) -> set[str]:
 #: identity and record stores, without depending on a provider or the server.
 _ALLOWED = {
     "loopback-auth": set(),
-    "branvil": {"loopback-auth", "gb-ports"},
+    "branvil": {"loopback-auth", "gb-base"},
     "gb-base": set(),
     "gb-workspace": {"gb-base"},
     "gb-observability": {"gb-base"},
     "gb-wire": set(),
-    "gb-ports": set(),
-    "gb-integrations": {"gb-ports", "gb-base", "gb-config", "branvil"},
-    "gb-member": {"gb-ports", "gb-base", "gb-workspace", "gb-observability"},
+    "gb-integrations": {"gb-base", "gb-config", "branvil"},
+    "gb-member": {"gb-base", "gb-workspace", "gb-observability"},
     "gb-config": {"gb-base", "gb-wire"},
     "gb-setup": {"gb-base", "gb-config"},
     "gb-environment": {"gb-base", "gb-config", "gb-wire"},
@@ -180,7 +179,6 @@ _ALLOWED = {
         "loopback-auth",
         "gb-member",
         "gb-integrations",
-        "gb-ports",
         "branvil",
     },
     "guildbotics": {
@@ -192,19 +190,11 @@ _ALLOWED = {
     },
 }
 
-# Provider integration tests exercise the member dispatcher; providers themselves
-# must still depend only on the lower layers.
-_ALLOWED_DEV = {"gb-integrations": {"gb-member"}}
-
-
 def test_each_crate_uses_only_the_crates_below_it() -> None:
     assert set(_crates()) == set(_ALLOWED)
     for name, allowed in _ALLOWED.items():
         for table in ("dependencies", "dev-dependencies", "build-dependencies"):
-            permitted = allowed | (
-                _ALLOWED_DEV.get(name, set()) if table == "dev-dependencies" else set()
-            )
-            assert _uses(name, (table,)) <= permitted, (name, table)
+            assert _uses(name, (table,)) <= allowed, (name, table)
 
 
 def test_only_the_environment_drives_the_microvm_runtime() -> None:

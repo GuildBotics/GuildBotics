@@ -1,5 +1,5 @@
 use branvil::{agent::CodeAgent, test_support::Fixture};
-use gb_ports::*;
+use branvil::agent::port::*;
 use serde_json::json;
 pub async fn member_show_contract(service: &dyn CodeHostingService, repository: &str) {
     let temp = tempfile::tempdir().unwrap();

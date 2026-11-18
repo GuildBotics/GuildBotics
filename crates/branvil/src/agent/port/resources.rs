@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::*;
+use super::*;
 
 pub const MAX_PAGE_BYTES: usize = 10 * 1024 * 1024 / 16;
 pub const MAX_LOG_TAIL_BYTES: usize = MAX_PAGE_BYTES / 10;

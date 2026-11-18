@@ -173,7 +173,7 @@ fn rate_limit_and_review_limit_payloads_preserve_each_field() {
         limited["payload"],
         json!({"category":"rate_limited","retry_after_at":"2026-07-04T11:44:00+09:00","retry_after_text":"11:44 AM","run_id":"run-1","subject_id":"sub-1","source_event_id":"evt-1"})
     );
-    let task = gb_ports::Task {
+    let task = branvil::agent::port::Task {
         pull_request_url: Some("pr".into()),
         title: "Title".into(),
         label: "!1".into(),

@@ -1,5 +1,6 @@
 //! A local provider with faults at the typed port, shared by migration tests.
-use gb_ports::*;
+use branvil::agent::port::*;
+use gb_integrations::chat::*;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,

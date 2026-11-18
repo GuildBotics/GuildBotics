@@ -1,5 +1,6 @@
 use chrono::{DateTime, FixedOffset, Utc};
-use gb_ports::{ChatEvent, ChatMessage, ServiceError, WorkflowStatus};
+use crate::chat::{ChatEvent, ChatMessage};
+use gb_base::service::{ServiceError, WorkflowStatus};
 use regex::Regex;
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::LazyLock};

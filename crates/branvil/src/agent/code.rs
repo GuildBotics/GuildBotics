@@ -10,7 +10,7 @@ impl CodeAgent {
             .trim()
             .strip_prefix(&format!("{}/git/", api.base_url()))?;
         let repo = path.strip_suffix(".git").unwrap_or(path);
-        gb_ports::valid_repository_path(repo).then(|| repo.into())
+        crate::agent::port::valid_repository_path(repo).then(|| repo.into())
     }
 
     fn pull_value(&self, v: Value) -> Value {
@@ -32,7 +32,7 @@ impl CodeHostingService for CodeAgent {
                 .and_then(|p| p.strip_prefix('/'))
                 .ok_or(ServiceError::NotFound)?;
             let (repo, id) = path.split_once("/-/jobs/").ok_or(ServiceError::NotFound)?;
-            if !gb_ports::valid_repository_path(repo)
+            if !crate::agent::port::valid_repository_path(repo)
                 || id.is_empty()
                 || id.contains(['/', '?', '#', '%'])
             {
@@ -325,7 +325,7 @@ impl CodeHostingService for CodeAgent {
         body: &'a str,
         verdict: ReviewVerdict,
         head: &'a str,
-    ) -> ServiceFuture<'a, gb_ports::ReviewSubmitted> {
+    ) -> ServiceFuture<'a, crate::agent::port::ReviewSubmitted> {
         Box::pin(async move {
             let (r, k) = self.item(url, "pulls")?;
             self.writable(&r)?;
@@ -343,7 +343,7 @@ impl CodeHostingService for CodeAgent {
                 )
                 .await
                 .map_err(|e| error(e, "pulls_review"))?;
-            Ok(gb_ports::ReviewSubmitted {
+            Ok(crate::agent::port::ReviewSubmitted {
                 verdict,
                 commit: v.commit,
                 url: Some(v.url),

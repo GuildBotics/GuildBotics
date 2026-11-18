@@ -71,7 +71,7 @@ pub fn rate_limited(
 }
 pub fn review_limit(
     event_type: &str,
-    task: &gb_ports::Task,
+    task: &branvil::agent::port::Task,
     run_id: &str,
     comment_url: &str,
     error_type: &str,
@@ -168,7 +168,7 @@ pub fn record(
 pub async fn refresh(
     workspace: &Path,
     writes: &gb_base::shared_writes::SharedWrites,
-    service: Option<&dyn gb_ports::TicketService>,
+    service: Option<&dyn branvil::agent::port::TicketService>,
     provider: &str,
     start: chrono::DateTime<chrono::Utc>,
     end: chrono::DateTime<chrono::Utc>,

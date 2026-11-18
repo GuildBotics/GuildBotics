@@ -1858,7 +1858,7 @@ pub struct ChecksView {
     /// Sorted conflict paths, or None for closed pulls or missing branches.
     pub conflicts: Option<Vec<String>>,
     pub checks: Vec<Check>,
-    pub required_checks: gb_ports::RequiredChecks,
+    pub required_checks: crate::agent::port::RequiredChecks,
     pub required_names: Vec<String>,
     pub checks_expected: bool,
     pub base_checks: usize,

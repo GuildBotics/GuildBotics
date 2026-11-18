@@ -1,17 +1,78 @@
+use gb_base::service::*;
+use serde_json::json;
+
 #[test]
-fn port_owned_locale_keys_are_provider_neutral() {
-    let source = include_str!("../src/lib.rs");
-    for literal in source.split('"').skip(1).step_by(2) {
-        if literal.starts_with("integrations.") {
-            assert!(literal.starts_with("integrations.resources."), "{literal}");
-        }
+fn rate_limit_reset_requires_an_explicit_zone_and_preserves_unknown_holds() {
+    let now = parse_timestamp("2026-01-02T00:00:00Z").unwrap();
+    for (time, held) in [
+        ("2026-01-02T00:00", true),
+        ("20260101T2359", true),
+        (" 2026-01-01T23:59+00:00 ", true),
+        ("2026-01-01T23:59+00:00", false),
+        ("20260102T0000Z", false),
+        ("2026-W01-5T00:00+00:00", false),
+        ("2026-01-02🦀00:00+00:00", false),
+        ("20260102T0001", true),
+        ("2026-W01-5T00:01+00:00", true),
+        ("invalid", true),
+    ] {
+        let status=WorkflowStatus::from_payload(&json!({"kind":"workflow_error","reason":"rate_limited","person_id":"aiko","retry_after_at":time})).unwrap();
+        assert_eq!(status.holds_selection(now), held, "{time}");
+    }
+}
+
+#[test]
+fn statuses_suppress_work_and_only_failures_and_rate_limits_hold_selection() {
+    let now = "2026-11-04T12:00:00Z".parse().unwrap();
+    for reason in [
+        "failed",
+        "rate_limited",
+        "review_limit",
+        "awaiting_checks",
+        "checks_settled",
+        "asking",
+        "blocked",
+    ] {
+        let status: WorkflowStatus = serde_json::from_value(json!({"reason":reason,"person_id":"member","run_id":"run","work_kind":"ticket","work_identity":"url"})).unwrap();
+        assert_eq!(
+            status.holds_selection(now),
+            ["failed", "rate_limited"].contains(&reason)
+        );
+        assert_eq!(status.payload()["kind"], "workflow_error");
+        assert_eq!(status.payload()["routing"], "suppress");
+        assert!(status.payload().get("subject").is_none());
+        assert_eq!(
+            WorkflowStatus::from_payload(&status.payload()),
+            Some(status)
+        );
+    }
+    for (retry, expected) in [
+        ("", true),
+        ("invalid", true),
+        ("2026-11-04T12:00:00", true),
+        ("2026-11-04T12:00:00Z", false),
+        ("2026-11-04T21:00:01+09:00", true),
+        ("2026-11-03T12:00:00Z", false),
+    ] {
+        let status = WorkflowStatus::from_payload(&json!({"kind":"workflow_error","reason":"rate_limited","person_id":"member","retry_after_at":retry,"unknown":"ignored"})).unwrap();
+        assert_eq!(status.holds_selection(now), expected, "{retry}");
+    }
+    for payload in [
+        json!(null),
+        json!({}),
+        json!({"kind":"work"}),
+        json!({"kind":"workflow_error","reason":"invalid","person_id":"m"}),
+        json!({"kind":"workflow_error","reason":"awaiting_checks","person_id":"m"}),
+        json!({"kind":"workflow_error","reason":"awaiting_checks","person_id":"m","work_kind":"ticket"}),
+    ] {
+        assert!(WorkflowStatus::from_payload(&payload).is_none());
     }
 }
 
 #[test]
 fn diagnostic_carries_the_providers_key_and_safe_arguments_without_interpreting_them() {
-    let error = gb_ports::ServiceError::Diagnostic {
-        class: gb_ports::ServiceErrorClass::Failure,
+    let error = ServiceError::Diagnostic {
+        class: ServiceErrorClass::Failure,
         key: "example.credentials.missing",
         args: [("setting".into(), "MEMBER_KEY".into())].into(),
     };
@@ -26,7 +87,7 @@ fn diagnostic_carries_the_providers_key_and_safe_arguments_without_interpreting_
 
 #[test]
 fn resource_diagnostics_preserve_recovery_arguments_and_categories() {
-    use gb_ports::ServiceError;
+    use ServiceError;
     for (error, key, args, missing) in [
         (ServiceError::ResponseTooLarge, "too_large", vec![], false),
         (
@@ -65,7 +126,7 @@ fn resource_diagnostics_preserve_recovery_arguments_and_categories() {
 
 #[test]
 fn unavailable_category_is_independent_of_provider_guidance() {
-    use gb_ports::{ServiceError, ServiceErrorClass};
+    use {ServiceError, ServiceErrorClass};
     assert!(ServiceError::Unavailable.is_unavailable());
     for class in [
         ServiceErrorClass::Failure,

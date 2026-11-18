@@ -1,6 +1,6 @@
 //! Provider-independent ticket, PR and repository operations.
 use gb_member::{MemberError, Result, WriteGuard};
-use gb_ports::*;
+use branvil::agent::port::*;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;

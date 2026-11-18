@@ -316,7 +316,7 @@ fn task_trace_attributes_distinguish_ticket_and_pull_request_without_changing_th
 }
 
 use gb_config::secrets::{DeviceKey, Keychain, Scope, SecretStore};
-use gb_ports::*;
+use branvil::agent::port::*;
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},

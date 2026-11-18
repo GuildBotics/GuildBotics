@@ -6,7 +6,7 @@ use gb_member::{
     memory::{Memory, Scope},
 };
 use gb_observability::redaction::Redactor;
-use gb_ports::*;
+use branvil::agent::port::*;
 use gb_server::member::{
     repository::{Repository, RepositoryServices},
     session::{Control, Session},

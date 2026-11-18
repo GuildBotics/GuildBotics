@@ -3,7 +3,8 @@ use super::{
     events::{event, text},
 };
 use futures_util::{SinkExt, StreamExt};
-use gb_ports::{ChatEvent, EventListener, ServiceFuture};
+use crate::chat::{ChatEvent, EventListener};
+use gb_base::service::ServiceFuture;
 use serde_json::{Value, json};
 use std::{
     sync::{

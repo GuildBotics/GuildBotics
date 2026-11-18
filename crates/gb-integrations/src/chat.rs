@@ -1,13 +1,12 @@
 //! Chat data and operations, independent of provider, host and member config.
-use std::{collections::BTreeMap, future::Future, pin::Pin};
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{ActorName, SemanticReaction, ServiceError, WorkflowStatus};
+use gb_base::service::{ActorName, SemanticReaction, ServiceError, ServiceFuture, WorkflowStatus};
 
-pub type ServiceFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ServiceError>> + Send + 'a>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatIdentity {

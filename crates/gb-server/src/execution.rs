@@ -126,8 +126,8 @@ pub fn failure_state(source: &str, error: &anyhow::Error) -> RunState {
     if source != "manual"
         && error.chain().any(|cause| {
             cause
-                .downcast_ref::<gb_ports::ServiceError>()
-                .is_some_and(gb_ports::ServiceError::is_unavailable)
+                .downcast_ref::<gb_base::service::ServiceError>()
+                .is_some_and(gb_base::service::ServiceError::is_unavailable)
         })
     {
         RunState::Deferred
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn only_operations_that_never_reached_the_service_are_autonomously_deferred() {
-        use gb_ports::ServiceError;
+        use gb_base::service::ServiceError;
         for source in ["manual", "scheduled", "routine", "event_queue"] {
             for error in [
                 ServiceError::Failed,

@@ -1,6 +1,5 @@
 //! Provider-independent result shapes, matching the frozen Python host.
-use crate::ActorName;
-use crate::SemanticReaction;
+use super::{ActorName, SemanticReaction};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
