@@ -930,7 +930,12 @@ async fn linked_pulls_yield_to_conversations_and_finish_only_after_answer() {
                 })
             );
             assert_eq!(f.read(&url).await["lane"], "in_progress");
-            TicketService::comment(&f.service, &url, "Done", None)
+            let completed: WorkflowStatus = decode(json!({
+                "reason":"completed", "person_id":"agent1", "run_id":"done",
+                "work_kind":"ticket", "work_identity":url
+            }))
+            .unwrap();
+            TicketService::comment(&f.service, &url, "Done", Some(&completed))
                 .await
                 .unwrap();
             assert!(f.service.refresh(&task).await.unwrap().is_none());
@@ -953,6 +958,14 @@ async fn linked_pulls_yield_to_conversations_and_finish_only_after_answer() {
     for closes in [false, true] {
         for merged in [false, true] {
             let url = f.assigned("in_progress").await;
+            let completed: WorkflowStatus = decode(json!({
+                "reason":"completed", "person_id":"agent1", "run_id":"done",
+                "work_kind":"ticket", "work_identity":url
+            }))
+            .unwrap();
+            TicketService::comment(&f.service, &url, "Done", Some(&completed))
+                .await
+                .unwrap();
             f.linked(Some(&url), closes, merged).await;
             assert!(f.service.candidates().await.unwrap().is_empty());
             let read = f.read(&url).await;
@@ -1046,14 +1059,7 @@ async fn assignment_timing_is_shared_by_candidate_and_refresh_reads() {
                 if let Some(task) = tasks.first() {
                     assert_eq!(task.comments.len(), 1);
                 }
-                assert_eq!(
-                    f.read(&url).await["lane"],
-                    if before && linked == Some(true) {
-                        "done"
-                    } else {
-                        "in_progress"
-                    }
-                );
+                assert_eq!(f.read(&url).await["lane"], "in_progress");
                 f.service
                     .update_ticket(
                         &url,
@@ -1615,5 +1621,111 @@ async fn ticket_attachment_contract() {
         },
     )
     .await;
+    f.running.stop().await;
+}
+
+#[tokio::test]
+async fn recorded_remainder_survives_merge_and_plain_comments_until_completed() {
+    let f = Fixture::new().await;
+    let url = f.assigned("in_progress").await;
+    f.linked(Some(&url), false, true).await;
+    for outcome in ["work_remaining", "asking", "blocked", "completed"] {
+        let status: WorkflowStatus = decode(json!({
+            "reason": outcome, "person_id": "agent1", "run_id": outcome,
+            "work_kind": "ticket", "work_identity": url
+        }))
+        .unwrap();
+        TicketService::comment(&f.service, &url, "Outcome", Some(&status))
+            .await
+            .unwrap();
+        TicketService::comment(&f.service, &url, "Additional detail", None)
+            .await
+            .unwrap();
+        let tasks = f.service.candidates().await.unwrap();
+        assert_eq!(
+            tasks.iter().any(|t| t.url.as_deref() == Some(&url)),
+            outcome == "work_remaining"
+        );
+        assert_eq!(
+            f.read(&url).await["lane"],
+            if outcome == "completed" {
+                "done"
+            } else {
+                "in_progress"
+            }
+        );
+        if outcome == "work_remaining" {
+            let resumed = f
+                .service
+                .refresh(
+                    tasks
+                        .iter()
+                        .find(|t| t.url.as_deref() == Some(&url))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(resumed.trigger_reason.as_deref(), Some("working_lane"));
+        }
+    }
+    f.running.stop().await;
+}
+
+#[tokio::test]
+async fn ticket_outcomes_require_current_assignee_and_assignment_history() {
+    let f = Fixture::new().await;
+    for (author, person, identity, timestamp, expected) in [
+        (
+            "agent1",
+            "agent1",
+            "http://unused/test/repo/-/tickets/1",
+            "2026-01-03T00:00:00Z",
+            Some("working_lane"),
+        ),
+        (
+            "other",
+            "agent1",
+            "http://unused/test/repo/-/tickets/1",
+            "2026-01-03T00:00:00Z",
+            None,
+        ),
+        (
+            "agent1",
+            "other",
+            "http://unused/test/repo/-/tickets/1",
+            "2026-01-03T00:00:00Z",
+            None,
+        ),
+        (
+            "agent1",
+            "agent1",
+            "other-ticket",
+            "2026-01-03T00:00:00Z",
+            None,
+        ),
+        (
+            "agent1",
+            "agent1",
+            "http://unused/test/repo/-/tickets/1",
+            "2026-01-01T00:00:00Z",
+            None,
+        ),
+    ] {
+        let mut c = card();
+        let mut outcome = comment(author, "Remainder");
+        outcome["created_at"] = json!(timestamp);
+        outcome["meta"] = json!({
+            "kind":"workflow_error", "reason":"work_remaining", "person_id":person,
+            "work_kind":"ticket", "work_identity":identity
+        });
+        c["comments"] = json!([outcome, comment("agent1", "Plain detail")]);
+        c["pull_requests"] = json!([{"merged":true}]);
+        assert_eq!(
+            reason(&f.service, &c).await.as_deref(),
+            expected,
+            "{author}/{person}/{identity}/{timestamp}"
+        );
+    }
     f.running.stop().await;
 }

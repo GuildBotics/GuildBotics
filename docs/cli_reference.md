@@ -1230,6 +1230,7 @@ Usage: guildbotics member task complete [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
   --waiting-for <VALUE>  Next member to act, by the context roster's person_id (repeatable; asking/blocked only). (repeatable)
   --status <done|asking|blocked>  Run outcome. [required]
+  --work-remains  Ticket work remains after this run (done ticket work only); resume after linked PRs merge.
   --content-file <VALUE>  Read the command's entire free-form content from a UTF-8 file.
   --content-stdin  Read the command's entire free-form content from standard input.
   --format <json|markdown> [default: json]  Output format.

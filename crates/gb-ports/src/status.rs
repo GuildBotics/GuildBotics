@@ -5,6 +5,8 @@ use serde_json::{Value, json};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowStatusReason {
+    Completed,
+    WorkRemaining,
     Failed,
     RateLimited,
     ReviewLimit,

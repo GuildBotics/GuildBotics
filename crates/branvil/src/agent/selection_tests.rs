@@ -37,6 +37,7 @@ fn working_conversation_precedes_linked_pr_and_holds_win() {
                 TicketPolicy {
                     finish_merged: true,
                     repair: false,
+                    work_status: None,
                 },
                 Utc::now(),
             );
@@ -49,10 +50,7 @@ fn working_conversation_precedes_linked_pr_and_holds_win() {
                 },
                 "{conversation}/{pull:?}"
             );
-            assert_eq!(
-                decision.finish,
-                (conversation == "mine" || conversation == "silent") && pull == Some("merged")
-            );
+            assert!(!decision.finish);
         }
     }
 }
@@ -131,6 +129,7 @@ fn repair_failures_resume_but_rate_limits_still_hold() {
                     TicketPolicy {
                         finish_merged: true,
                         repair,
+                        work_status: None,
                     },
                     now,
                 );
@@ -155,8 +154,40 @@ fn a_merged_repair_pr_does_not_finish_a_ticket_before_main_verification() {
         TicketPolicy {
             finish_merged: true,
             repair: true,
+            work_status: None,
         },
         Utc::now(),
     );
     assert!(!d.finish);
+}
+
+#[test]
+fn recorded_ticket_work_controls_merge_completion_and_resume() {
+    use gb_ports::WorkflowStatusReason::*;
+    let mine = [TaskMessage {
+        author_type: "Assistant".into(),
+        ..Default::default()
+    }];
+    for state in [Completed, WorkRemaining, Asking, Blocked, AwaitingChecks] {
+        for pull in [None, Some("open"), Some("merged"), Some("closed")] {
+            let d = select_ticket(
+                "in_progress",
+                &mine,
+                None,
+                false,
+                pull,
+                TicketPolicy {
+                    finish_merged: true,
+                    repair: false,
+                    work_status: Some(state),
+                },
+                Utc::now(),
+            );
+            assert_eq!(d.finish, state == Completed && pull == Some("merged"));
+            assert_eq!(
+                d.reason,
+                (state == WorkRemaining && pull != Some("open")).then_some("working_lane")
+            );
+        }
+    }
 }

@@ -73,7 +73,26 @@ impl TicketService for Probe {
         _body: &'a str,
         _status: Option<&'a WorkflowStatus>,
     ) -> ServiceFuture<'a, CommentWritten> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
+        Box::pin(async move {
+            if let Some(error) = &self.error {
+                return Err(error.clone());
+            }
+            self.notices.lock().unwrap().push(serde_json::json!({
+                "url": _url, "body": _body, "status": _status.map(WorkflowStatus::payload)
+            }));
+            Ok(CommentWritten {
+                id: "ticket-comment".into(),
+                author: "aiko".into(),
+                created_at: None,
+                target: WorkTarget {
+                    kind: WorkKind::Ticket,
+                    url: _url.into(),
+                    label: "T".into(),
+                    title: "Ticket".into(),
+                },
+                url: Some(format!("{_url}#comment")),
+            })
+        })
     }
     fn create_ticket(&self, request: CreateTicket) -> ServiceFuture<'_, TicketCreated> {
         Box::pin(async move {

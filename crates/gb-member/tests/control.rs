@@ -844,3 +844,108 @@ async fn repair_report_only_runs_require_a_current_open_repair_pr() {
         }
     }
 }
+
+#[tokio::test]
+async fn ticket_completion_records_work_outcome_with_run_identity() {
+    for remains in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
+        let redactor = Redactor::default();
+        seed_kind(&writes, &workspace, &redactor, "ticket");
+        let mut provider = support::Probe::new(None);
+        provider
+            .pages
+            .insert("pull_requests|ticket|".into(), Err(ServiceError::NotFound));
+        provider.pages.insert(
+            "ticket_pull_requests|ticket|".into(),
+            Ok(ReadPage::of(Resource::TicketPullRequests, [], None, None).unwrap()),
+        );
+        let services = Services(provider);
+        let roster = BTreeMap::new();
+        let repository = Repository {
+            services: &services,
+            guard: &Current,
+            roster: &roster,
+        };
+        let mut c = control(&workspace, &writes, &repository, &redactor, &Receives, &[]);
+        c.identity.work_kind = "ticket";
+        c.identity.work_identity = "ticket";
+        c.identity.subject_type = "ticket";
+        c.identity.subject_id = "ticket";
+        let mut args = vec![
+            "task",
+            "complete",
+            "--person",
+            "aiko",
+            "--status",
+            "done",
+            "--content-stdin",
+        ];
+        if remains {
+            args.push("--work-remains");
+        }
+        let command = parsed(&args);
+        // An outcome marker cannot replace the run's required write evidence.
+        assert!(c.command(&command, "summary").await.is_err());
+        assert!(services.0.notices.lock().unwrap().is_empty());
+        c.record("ticket comment", false, &json!({"target":{"url":"ticket"}}))
+            .unwrap();
+        let result = c.command(&command, "summary").await.unwrap();
+        assert_eq!(result["status"], "done");
+        let notices = services.0.notices.lock().unwrap();
+        let status = &notices[0]["status"];
+        assert_eq!(
+            status["reason"],
+            if remains {
+                "work_remaining"
+            } else {
+                "completed"
+            }
+        );
+        assert_eq!(status["person_id"], "aiko");
+        assert_eq!(status["work_identity"], "ticket");
+        let record = RunStore::open(&workspace).read("run").unwrap().unwrap();
+        assert!(
+            record
+                .provider_evidence
+                .iter()
+                .any(|e| e["type"] == "ticket_work" && e["payload"]["status"] == *status)
+        );
+    }
+}
+
+#[tokio::test]
+async fn remaining_work_flag_rejects_other_work_and_waiting_outcomes() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
+    let redactor = Redactor::default();
+    seed(&writes, &workspace, &redactor);
+    let services = Services(support::Probe::new(None));
+    let roster = BTreeMap::new();
+    let repository = Repository {
+        services: &services,
+        guard: &Current,
+        roster: &roster,
+    };
+    let c = control(&workspace, &writes, &repository, &redactor, &Receives, &[]);
+    for status in ["done", "asking", "blocked"] {
+        let p = parsed(&[
+            "task",
+            "complete",
+            "--person",
+            "aiko",
+            "--status",
+            status,
+            "--work-remains",
+            "--content-stdin",
+        ]);
+        assert!(matches!(
+            c.command(&p, "summary").await,
+            Err(MemberError::Capability(
+                "capabilities.task_runs.work_remains_status"
+            ))
+        ));
+    }
+}
