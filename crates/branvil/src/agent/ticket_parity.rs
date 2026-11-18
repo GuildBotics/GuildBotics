@@ -1059,7 +1059,14 @@ async fn assignment_timing_is_shared_by_candidate_and_refresh_reads() {
                 if let Some(task) = tasks.first() {
                     assert_eq!(task.comments.len(), 1);
                 }
-                assert_eq!(f.read(&url).await["lane"], "in_progress");
+                assert_eq!(
+                    f.read(&url).await["lane"],
+                    if before && linked == Some(true) {
+                        "done"
+                    } else {
+                        "in_progress"
+                    }
+                );
                 f.service
                     .update_ticket(
                         &url,
@@ -1629,10 +1636,27 @@ async fn recorded_remainder_survives_merge_and_plain_comments_until_completed() 
     let f = Fixture::new().await;
     let url = f.assigned("in_progress").await;
     f.linked(Some(&url), false, true).await;
-    for outcome in ["work_remaining", "asking", "blocked", "completed"] {
+    for outcome in [
+        "work_remaining",
+        "asking",
+        "blocked",
+        "awaiting_checks",
+        "completed",
+    ] {
+        if outcome != "work_remaining" {
+            f.owner
+                .tickets_put_on_board(
+                    "test/repo",
+                    url.rsplit('/').next().unwrap(),
+                    decode(json!({"lane":"in_progress"})).unwrap(),
+                )
+                .await
+                .unwrap();
+        }
         let status: WorkflowStatus = decode(json!({
             "reason": outcome, "person_id": "agent1", "run_id": outcome,
-            "work_kind": "ticket", "work_identity": url
+            "work_kind": "ticket", "work_identity": url,
+            "head": "", "subject": ""
         }))
         .unwrap();
         TicketService::comment(&f.service, &url, "Outcome", Some(&status))
@@ -1648,10 +1672,10 @@ async fn recorded_remainder_survives_merge_and_plain_comments_until_completed() 
         );
         assert_eq!(
             f.read(&url).await["lane"],
-            if outcome == "completed" {
-                "done"
-            } else {
+            if outcome == "work_remaining" {
                 "in_progress"
+            } else {
+                "done"
             }
         );
         if outcome == "work_remaining" {

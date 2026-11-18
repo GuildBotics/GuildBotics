@@ -309,6 +309,22 @@ fn push_url(urls: &mut Vec<String>, value: &Value) {
         urls.push(url.into());
     }
 }
+/// Only the ticket's links authorize waiting for a future PR transition.
+pub async fn has_open_linked_pull(code: &dyn CodeHostingService, ticket: &str) -> Result<bool> {
+    let mut continuation = String::new();
+    let mut open = false;
+    loop {
+        let page = code
+            .read(Resource::TicketPullRequests, ticket, None, &continuation)
+            .await?;
+        open |= page.items().iter().any(|pr| pr["state"] == "open");
+        match page.continuation().filter(|s| !s.is_empty()) {
+            Some(next) => continuation = next.into(),
+            None => return Ok(open),
+        }
+    }
+}
+
 pub async fn work_pull_request_urls(
     code: &dyn CodeHostingService,
     ticket: Option<&str>,

@@ -847,7 +847,13 @@ async fn repair_report_only_runs_require_a_current_open_repair_pr() {
 
 #[tokio::test]
 async fn ticket_completion_records_work_outcome_with_run_identity() {
-    for remains in [false, true] {
+    for (remains, link) in [
+        (false, "none"),
+        (true, "none"),
+        (true, "open"),
+        (true, "merged"),
+        (true, "closed"),
+    ] {
         let temp = tempfile::tempdir().unwrap();
         let workspace = temp.path().join("workspace");
         let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
@@ -859,8 +865,10 @@ async fn ticket_completion_records_work_outcome_with_run_identity() {
             .insert("pull_requests|ticket|".into(), Err(ServiceError::NotFound));
         provider.pages.insert(
             "ticket_pull_requests|ticket|".into(),
-            Ok(ReadPage::of(Resource::TicketPullRequests, [], None, None).unwrap()),
+            Ok(ReadPage::of(Resource::TicketPullRequests,
+                if link == "none" { vec![] } else { vec![json!({"url":"pr","title":"P","label":"!1","state":if link == "open" {"open"} else {"closed"},"merged":link == "merged"})] }, None, None).unwrap()),
         );
+        provider.pages.insert("pull_requests|pr|".into(), Ok(ReadPage::of(Resource::PullRequests,[json!({"kind":"pull_request","url":"pr","title":"T","label":"!1","repository":"repo","body":"","state":"open","assignees":[],"author":"other","requested_reviewers":[],"labels":[],"author_type":"User","head":"feature","head_repository":"repo","head_sha":"head","base":"main","merged":false,"draft":false,"changed_files":null})],None,None).unwrap()));
         let services = Services(provider);
         let roster = BTreeMap::new();
         let repository = Repository {
@@ -891,7 +899,26 @@ async fn ticket_completion_records_work_outcome_with_run_identity() {
         assert!(services.0.notices.lock().unwrap().is_empty());
         c.record("ticket comment", false, &json!({"target":{"url":"ticket"}}))
             .unwrap();
-        let result = c.command(&command, "summary").await.unwrap();
+        let result = c.command(&command, "summary").await;
+        if remains && link != "open" {
+            assert!(matches!(
+                result,
+                Err(MemberError::Capability(
+                    "capabilities.task_runs.work_remains_open_pr"
+                ))
+            ));
+            assert!(services.0.notices.lock().unwrap().is_empty());
+            assert!(
+                RunStore::open(&workspace)
+                    .read("run")
+                    .unwrap()
+                    .unwrap()
+                    .result
+                    .is_none()
+            );
+            continue;
+        }
+        let result = result.unwrap();
         assert_eq!(result["status"], "done");
         let notices = services.0.notices.lock().unwrap();
         let status = &notices[0]["status"];
@@ -947,5 +974,50 @@ async fn remaining_work_flag_rejects_other_work_and_waiting_outcomes() {
                 "capabilities.task_runs.work_remains_status"
             ))
         ));
+    }
+}
+
+#[tokio::test]
+async fn remaining_work_admission_reads_all_link_pages_and_propagates_failures() {
+    for (first_open, second_open, fail) in [
+        (false, true, false),
+        (true, false, false),
+        (false, false, false),
+        (true, false, true),
+    ] {
+        let mut provider = support::Probe::new(None);
+        let item = |open| json!({"url":"pr","title":"P","label":"!1","state":if open {"open"} else {"closed"},"merged":!open});
+        provider.pages.insert(
+            "ticket_pull_requests|ticket|".into(),
+            Ok(ReadPage::of(
+                Resource::TicketPullRequests,
+                [item(first_open)],
+                Some("next".into()),
+                None,
+            )
+            .unwrap()),
+        );
+        provider.pages.insert(
+            "ticket_pull_requests|ticket|next".into(),
+            if fail {
+                Err(ServiceError::Unsupported)
+            } else {
+                Ok(ReadPage::of(
+                    Resource::TicketPullRequests,
+                    [item(second_open)],
+                    None,
+                    None,
+                )
+                .unwrap())
+            },
+        );
+        // Unrelated PRs referenced by evidence must not authorize admission.
+        provider.open.push("unrelated-pr".into());
+        let result = gb_member::repository::has_open_linked_pull(&provider, "ticket").await;
+        if fail {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(result.unwrap(), first_open || second_open);
+        }
     }
 }

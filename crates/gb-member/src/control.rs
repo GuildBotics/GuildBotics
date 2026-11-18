@@ -412,6 +412,17 @@ impl RunControl<'_> {
             snapshot = self.snapshot()?;
         }
         self.check_evidence(&snapshot, status, summary)?;
+        if remains
+            && !repository::has_open_linked_pull(
+                self.repository.services.code()?,
+                self.identity.work_identity,
+            )
+            .await?
+        {
+            return Err(MemberError::Capability(
+                "capabilities.task_runs.work_remains_open_pr",
+            ));
+        }
         if ticket_work {
             self.repository.guard.ensure_current()?;
             let reason = match status {

@@ -87,7 +87,7 @@ pub fn select_ticket(
         Some("issue_mention")
     } else if (repair && since.is_empty())
         || (work_status == Some(gb_ports::WorkflowStatusReason::WorkRemaining)
-            && linked_pull != Some("open"))
+            && matches!(linked_pull, Some("merged" | "closed")))
     {
         Some("working_lane")
     } else if linked_pull.is_some() || !since.is_empty() {
@@ -104,7 +104,7 @@ pub fn select_ticket(
             && !pending
             && linked_pull == Some("merged")
             && finish_merged
-            && work_status == Some(gb_ports::WorkflowStatusReason::Completed),
+            && work_status != Some(gb_ports::WorkflowStatusReason::WorkRemaining),
     }
 }
 

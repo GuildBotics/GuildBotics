@@ -50,7 +50,10 @@ fn working_conversation_precedes_linked_pr_and_holds_win() {
                 },
                 "{conversation}/{pull:?}"
             );
-            assert!(!decision.finish);
+            assert_eq!(
+                decision.finish,
+                (conversation == "mine" || conversation == "silent") && pull == Some("merged")
+            );
         }
     }
 }
@@ -183,10 +186,11 @@ fn recorded_ticket_work_controls_merge_completion_and_resume() {
                 },
                 Utc::now(),
             );
-            assert_eq!(d.finish, state == Completed && pull == Some("merged"));
+            assert_eq!(d.finish, state != WorkRemaining && pull == Some("merged"));
             assert_eq!(
                 d.reason,
-                (state == WorkRemaining && pull != Some("open")).then_some("working_lane")
+                (state == WorkRemaining && matches!(pull, Some("merged" | "closed")))
+                    .then_some("working_lane")
             );
         }
     }
