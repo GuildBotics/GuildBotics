@@ -1873,9 +1873,21 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn native_ticket_patrol_moves_the_branvil_ticket_and_accepts_real_member_comment_and_completion()
      {
-        for (mention, linked) in [(false, false), (true, false), (false, true), (true, true)] {
+        for (mention, linked, language) in [
+            (false, false, "en"),
+            (true, false, "en"),
+            (false, true, "ja"),
+            (true, true, "ja"),
+        ] {
             let root = tempfile::tempdir().unwrap();
             let native = fixture(root.path());
+            let project_path = native
+                .workspace
+                .join(".guildbotics/config/team/project.yml");
+            let mut project: Value =
+                serde_json::from_slice(&std::fs::read(&project_path).unwrap()).unwrap();
+            project["language"] = json!(language);
+            write_json(&project_path, project);
             let cleanup = tokio_util::task::TaskTracker::new();
             let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
             let ticket = runtime.tickets.as_ref().unwrap();
@@ -2013,9 +2025,32 @@ pub(crate) mod tests {
                     .iter()
                     .any(|comment| comment["body"] == "Handled.")
             );
-            assert_eq!(page.items().last().unwrap()["body"], "Handled.");
+            let comments = page.items();
+            assert_eq!(comments.len(), if !mention && linked { 4 } else { 2 });
+            if mention {
+                assert_eq!(comments.last().unwrap()["body"], "Handled.");
+                assert!(
+                    comments
+                        .iter()
+                        .all(|comment| comment["meta"]["reason"] != "completed")
+                );
+            } else {
+                assert_eq!(comments[comments.len() - 2]["body"], "Handled.");
+                let outcome = comments.last().unwrap();
+                assert_eq!(
+                    outcome["body"],
+                    if language == "ja" {
+                        "チケットの作業を完了と記録しました。つながった PR がマージされると、巡回がチケットを完了へ移動します。"
+                    } else {
+                        "Ticket work is recorded as complete. Patrol will move the ticket to done when its linked PR merges."
+                    }
+                );
+                assert_eq!(outcome["meta"]["reason"], "completed");
+                assert_eq!(outcome["meta"]["run_id"], run_id);
+                assert_eq!(outcome["meta"]["person_id"], "aiko");
+                assert_eq!(outcome["meta"]["work_identity"], task.target.url);
+            }
             if linked {
-                assert_eq!(page.items().len(), if mention { 2 } else { 3 });
                 let linked = runtime
                     .code
                     .as_ref()
@@ -2623,7 +2658,39 @@ pub(crate) mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(comments.items().len(), if fails_later { 2 } else { 1 });
+            let completed = phase != "before";
+            assert_eq!(
+                comments.items().len(),
+                1 + usize::from(completed) + usize::from(fails_later)
+            );
+            if completed {
+                let records = RunStore::open(&native.workspace).records().unwrap();
+                let marker = records[0]
+                    .provider_evidence
+                    .iter()
+                    .find(|e| e["type"] == "ticket_work")
+                    .unwrap();
+                assert_eq!(
+                    marker["payload"]["status"]["reason"],
+                    if status == "done" {
+                        "completed"
+                    } else {
+                        status
+                    }
+                );
+                assert_eq!(comments.items()[0]["body"], "Handled.");
+                let outcome = &comments.items()[1];
+                let reason = marker["payload"]["status"]["reason"].as_str().unwrap();
+                assert_eq!(outcome["meta"], marker["payload"]["status"]);
+                assert_eq!(
+                    outcome["body"],
+                    crate::i18n::t(
+                        "en",
+                        &format!("capabilities.task_runs.ticket_{reason}"),
+                        &[]
+                    )
+                );
+            }
             if failed {
                 assert_ne!(comments.items().last().unwrap()["body"], "Handled.");
             }

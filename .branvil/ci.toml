@@ -159,7 +159,7 @@ commands = [
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked --profile ci --workspace --exclude branvil --exclude loopback-auth",
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked -p guildbotics --no-default-features --test main",
 ]
-artifacts = [{ name = "test-results", paths = ["target/nextest/ci/junit.xml"] }]
+artifacts = [{ name = "rust-test-results", paths = ["target/nextest/ci/junit.xml"] }]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
 

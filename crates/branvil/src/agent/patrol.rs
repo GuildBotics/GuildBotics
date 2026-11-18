@@ -161,6 +161,39 @@ impl TicketAgent {
         let latest = selected
             .last()
             .and_then(|(_, c)| c.meta.as_ref().and_then(WorkflowStatus::from_payload));
+        // Ordinary comments and transient errors do not erase the ticket's outcome.
+        let outcomes: Vec<_> = selected
+            .iter()
+            .rev()
+            .filter(|(m, _)| m.author_type == "Assistant")
+            .filter_map(|(_, c)| c.meta.as_ref().and_then(WorkflowStatus::from_payload))
+            .filter(|s| {
+                let payload = s.payload();
+                payload["person_id"] == self.person_id
+                    && payload["work_kind"] == "ticket"
+                    && payload["work_identity"] == t.url.as_str()
+                    && matches!(
+                        s.reason(),
+                        WorkflowStatusReason::Completed
+                            | WorkflowStatusReason::WorkRemaining
+                            | WorkflowStatusReason::Asking
+                            | WorkflowStatusReason::Blocked
+                            | WorkflowStatusReason::AwaitingChecks
+                    )
+            })
+            .map(|s| s.reason())
+            .collect();
+        let work_status = outcomes.first().copied();
+        // Run waits do not decide whether the ticket's scope is complete.
+        let work_remaining = outcomes
+            .iter()
+            .find(|s| {
+                matches!(
+                    s,
+                    WorkflowStatusReason::Completed | WorkflowStatusReason::WorkRemaining
+                )
+            })
+            .is_some_and(|s| *s == WorkflowStatusReason::WorkRemaining);
         let pending = mention_pending(
             mentions(&t.mentions),
             selected
@@ -182,6 +215,8 @@ impl TicketAgent {
             TicketPolicy {
                 finish_merged: finish,
                 repair: task.repair,
+                work_status,
+                work_remaining,
             },
             Utc::now(),
         );

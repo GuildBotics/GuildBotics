@@ -250,6 +250,16 @@ const FILES: &[(&str, &str, &str)] = &[
         include_str!("../../../guildbotics/templates/locales/cli/install.ja.yml"),
     ),
     (
+        "capabilities.task_runs",
+        "en",
+        include_str!("../../../guildbotics/templates/locales/capabilities/task_runs.en.yml"),
+    ),
+    (
+        "capabilities.task_runs",
+        "ja",
+        include_str!("../../../guildbotics/templates/locales/capabilities/task_runs.ja.yml"),
+    ),
+    (
         "capabilities.member_git",
         "en",
         include_str!("../../../guildbotics/templates/locales/capabilities/member_git.en.yml"),
@@ -437,6 +447,62 @@ mod tests {
         assert_eq!(languages[0], languages[1]);
     }
     use super::*;
+
+    #[test]
+    fn ticket_outcome_notices_resolve_from_both_locale_files() {
+        let mut keys = Vec::new();
+        for (language, source) in [
+            (
+                "en",
+                include_str!(
+                    "../../../guildbotics/templates/locales/capabilities/task_runs.en.yml"
+                ),
+            ),
+            (
+                "ja",
+                include_str!(
+                    "../../../guildbotics/templates/locales/capabilities/task_runs.ja.yml"
+                ),
+            ),
+        ] {
+            let value = gb_config::yaml_value(source).unwrap();
+            let messages = value[language].as_object().unwrap();
+            keys.push(
+                messages
+                    .keys()
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<_>>(),
+            );
+            let notices: Vec<_> = messages
+                .iter()
+                .filter(|(key, _)| key.starts_with("ticket_"))
+                .collect();
+            assert_eq!(
+                notices
+                    .iter()
+                    .map(|(key, _)| key.as_str())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                [
+                    "ticket_completed",
+                    "ticket_work_remaining",
+                    "ticket_asking",
+                    "ticket_blocked",
+                    "ticket_awaiting_checks"
+                ]
+                .into_iter()
+                .collect()
+            );
+            for (name, expected) in notices {
+                let key = format!("capabilities.task_runs.{name}");
+                assert_eq!(
+                    t(language, &key, &[]),
+                    expected.as_str().unwrap(),
+                    "{language}: {key}"
+                );
+            }
+        }
+        assert_eq!(keys[0], keys[1]);
+    }
 
     #[test]
     fn member_capability_diagnostics_resolve_in_both_languages() {

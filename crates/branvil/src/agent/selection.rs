@@ -46,6 +46,8 @@ pub struct TicketDecision {
 pub struct TicketPolicy {
     pub finish_merged: bool,
     pub repair: bool,
+    pub work_remaining: bool,
+    pub work_status: Option<gb_base::service::WorkflowStatusReason>,
 }
 
 pub fn select_ticket(
@@ -60,6 +62,8 @@ pub fn select_ticket(
     let TicketPolicy {
         repair,
         finish_merged,
+        work_status,
+        work_remaining,
     } = policy;
     let mine = since.last().is_some_and(|m| m.author_type == "Assistant");
     if repair
@@ -85,7 +89,10 @@ pub fn select_ticket(
         Some("issue_comment")
     } else if pending {
         Some("issue_mention")
-    } else if repair && since.is_empty() {
+    } else if (repair && since.is_empty())
+        || (work_status == Some(gb_base::service::WorkflowStatusReason::WorkRemaining)
+            && matches!(linked_pull, Some("merged" | "closed")))
+    {
         Some("working_lane")
     } else if linked_pull.is_some() || !since.is_empty() {
         None
@@ -100,7 +107,8 @@ pub fn select_ticket(
             && (since.is_empty() || mine)
             && !pending
             && linked_pull == Some("merged")
-            && finish_merged,
+            && finish_merged
+            && !work_remaining,
     }
 }
 
