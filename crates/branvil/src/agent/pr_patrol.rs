@@ -189,6 +189,7 @@ pub async fn patrol(
             s.reason() == WorkflowStatusReason::AwaitingChecks
                 && pr.author == me
                 && pr.open
+                && !pr.is_draft
                 && !pr.head_oid.is_empty()
         });
     let mut work = pull_request_work(pr, me, now);

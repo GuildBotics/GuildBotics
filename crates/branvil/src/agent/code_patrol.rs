@@ -148,7 +148,7 @@ impl CodeAgent {
                     pulls::PatrolQuery {
                         involves: Some("me".into()),
                         state: Some("open".into()),
-                        draft: None,
+                        draft: Some("false".into()),
                     },
                     p,
                 )

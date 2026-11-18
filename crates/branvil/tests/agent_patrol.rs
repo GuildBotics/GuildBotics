@@ -485,27 +485,56 @@ async fn new_head_resumes_work_even_with_pending_checks() {
     f.assert_resumes(&tasks[0], "pull_request_checks");
 }
 #[tokio::test]
-async fn only_closed_or_merged_prs_stop_check_resumption() {
-    for (state, merged, draft) in [
-        ("closed", true, false),
-        ("closed", false, false),
-        ("open", false, true),
-    ] {
+async fn closed_or_merged_prs_stop_check_resumption() {
+    for merged in [true, false] {
         let f = AwaitedFixture::new().await;
         f.conclude("success").await;
         if merged {
             branvil::test_support::merge(&f.fixture.owner, "acme/repo", 1, &f.head, &f.base).await;
-        } else if draft {
-            f.code.convert_pull_request_to_draft(&f.url).await.unwrap();
         } else {
-            assert_eq!(state, "closed");
             f.fixture
                 .owner
                 .pulls_set_open("acme/repo", 1, false)
                 .await
                 .unwrap();
         }
-        assert_eq!(f.woken().await.len(), usize::from(draft));
+        assert!(f.woken().await.is_empty());
+    }
+}
+#[tokio::test]
+async fn draft_pauses_check_resumption_until_ready() {
+    for event in ["success", "failure", "new_head"] {
+        let f = AwaitedFixture::new().await;
+        if event == "new_head" {
+            f.fixture
+                .commit("acme/repo", "feature", Some(&f.head), "a.txt", "new head");
+        } else {
+            f.conclude(event).await;
+        }
+        let before = f.woken().await;
+        assert_eq!(before.len(), 1);
+        f.code.convert_pull_request_to_draft(&f.url).await.unwrap();
+        assert!(f.woken().await.is_empty(), "{event}");
+        assert!(
+            f.code
+                .refresh_pull_request(&before[0])
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let draft = f.fixture.owner.pulls_get("acme/repo", 1).await.unwrap();
+        f.fixture
+            .owner
+            .pulls_update(
+                "acme/repo",
+                1,
+                input(json!({"draft":false,"revision":draft.revision})),
+            )
+            .await
+            .unwrap();
+        let tasks = f.woken().await;
+        assert_eq!(tasks.len(), 1, "{event}");
+        f.assert_resumes(&tasks[0], "pull_request_checks");
     }
 }
 #[tokio::test]
