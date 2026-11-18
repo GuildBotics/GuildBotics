@@ -8,9 +8,10 @@ usage() {
 Usage: scripts/hub-server.sh install | update | restart | status | recover | uninstall | auto-install | auto-uninstall | auto-once
 
 install    Build HEAD, install the CLI and skill, and start the LaunchAgent.
-           Set BRANVIL_DATA_DIR to the absolute path of the initialized data,
-           and GUILDBOTICS_HUB_SIGNING_IDENTITY to the code signing identity.
-update     Build HEAD, back up both services, rehearse the upgrade, and switch builds.
+           Set BRANVIL_DATA_DIR to the absolute path of the code host's data
+           (the first start creates it), and GUILDBOTICS_HUB_SIGNING_IDENTITY
+           to the code signing identity.
+update     Build HEAD, back up the Hub's records, rehearse the upgrade, and switch builds.
 restart    Let in-flight work finish, then start the current build again.
 status     Show the LaunchAgent and its last exit.
 recover    Resume an interrupted update or return to the previous build.
@@ -208,14 +209,6 @@ built_from() {
     tree=$("$1" server hub-probe --source) && printf '%s/%s/guildbotics-bin\n' "$builds" "${tree##*/}"
 }
 team_of() { codesign -dv "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p'; }
-admin_upgrade_and_check() {
-    code=0
-    "$1" branvil admin upgrade --data-dir "$2" || code=$?
-    case "$code" in
-        0|3) "$1" branvil admin check --data-dir "$2" ;;
-        *) return "$code" ;;
-    esac
-}
 
 build_head() {
     stage="checking the signing identity"
@@ -267,28 +260,24 @@ build_head() {
 backup_and_rehearse() {
     stage=backup
     mkdir -p "$backups"
-    backup=$(mktemp -d "$backups/branvil-update-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
-    # Use the installed instance's owner credential and address.
-    unset BRANVIL_TOKEN BRANVIL_URL
-    "$current" branvil backup --data-dir "$BRANVIL_DATA_DIR" --to "$backup"
-    printf 'Backup before update: %s\n' "$backup"
+    if [ -n "${GUILDBOTICS_HUB_MANUAL_BACKUP:-}" ]; then
+        # A backup the owner took by hand, when the running build cannot take
+        # it (docs/hub-server.md).
+        backup=$GUILDBOTICS_HUB_MANUAL_BACKUP
+        [ -f "$backup/manifest.json" ] && [ -f "$backup/code-host/manifest.json" ] ||
+            fail "GUILDBOTICS_HUB_MANUAL_BACKUP must name a complete backup."
+        printf 'Backup taken by hand: %s\n' "$backup"
+    else
+        backup=$(mktemp -d "$backups/hub-update-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
+        # The running build backs up what its server serves.
+        "$current" server hub-data backup --to "$backup"
+        printf 'Backup before update: %s\n' "$backup"
+    fi
 
     # No other backup writer can run under operation. Remove interrupted copies.
     set --
-    for saved in "$backups"/branvil-update-*; do
+    for saved in "$backups"/hub-update-*; do
         if [ "$saved" != "$backup" ] && [ -d "$saved" ] && [ ! -L "$saved" ]; then
-            if [ -f "$saved/manifest.json" ]; then set -- "$@" "$saved"
-            else rm -rf "$saved"; fi
-        fi
-    done
-    while [ "$#" -gt 2 ]; do rm -rf "$1"; shift; done
-
-    guildbotics_backup=$(mktemp -d "$backups/guildbotics-update-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
-    "$candidate" server hub-data backup --to "$guildbotics_backup"
-    printf 'GuildBotics backup before update: %s\n' "$guildbotics_backup"
-    set --
-    for saved in "$backups"/guildbotics-update-*; do
-        if [ "$saved" != "$guildbotics_backup" ] && [ -d "$saved" ] && [ ! -L "$saved" ]; then
             if [ -f "$saved/manifest.json" ]; then set -- "$@" "$saved"
             else rm -rf "$saved"; fi
         fi
@@ -297,11 +286,8 @@ backup_and_rehearse() {
 
     stage=rehearsal
     rehearsal=$lock/rehearsal
-    "$current" branvil restore --from "$backup" --data-dir "$rehearsal"
-    admin_upgrade_and_check "$candidate" "$rehearsal"
-    cp -R "$guildbotics_backup" "$lock/guildbotics-rehearsal"
-    "$candidate" server hub-data upgrade --data-dir "$lock/guildbotics-rehearsal"
-    "$candidate" server hub-data check --data-dir "$lock/guildbotics-rehearsal"
+    "$candidate" server hub-data restore --from "$backup" --data-dir "$rehearsal"
+    "$candidate" server hub-data upgrade --data-dir "$rehearsal"
 }
 
 xml() { printf '%s' "$1" | sed 's/\&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
@@ -333,7 +319,7 @@ write_plist() {
 }
 read_plist() {
     # Build with the invoking shell's tools, but run commands against the same
-    # machine root, Branvil data directory and port as the installed agent.
+    # machine root, code host data directory and port as the installed agent.
     agent_path=$(setting EnvironmentVariables.PATH)
     BRANVIL_DATA_DIR=$(setting EnvironmentVariables.BRANVIL_DATA_DIR)
     GUILDBOTICS_HOME=$(setting EnvironmentVariables.GUILDBOTICS_HOME)
@@ -396,8 +382,7 @@ rollback() {
     point_current "$pending" || return
     # The previous build may refuse the upgraded schema. Leave the data in
     # place and stay stopped for the operator to decide how to restore it.
-    if ! "$current" branvil admin check --data-dir "$BRANVIL_DATA_DIR" ||
-        ! "$current" server hub-data check; then
+    if ! "$current" server hub-data check; then
         launchctl disable "$target" || return
         printf 'The previous build cannot check the live data. Backups: %s. See docs/hub-server.md before restarting.\n' "$backups" >&2
         return 1
@@ -418,7 +403,7 @@ case "$action" in
         : "${GUILDBOTICS_HOME:=$HOME/.guildbotics}"
         case "${BRANVIL_DATA_DIR:-}" in
             /*) ;;
-            *) fail "Set BRANVIL_DATA_DIR to the absolute path of the initialized Branvil data." ;;
+            *) fail "Set BRANVIL_DATA_DIR to the absolute path of the code host's data." ;;
         esac
         case "$GUILDBOTICS_HOME" in /*) ;; *) fail "GUILDBOTICS_HOME must be an absolute path." ;; esac
         identity=${GUILDBOTICS_HUB_SIGNING_IDENTITY:-}
@@ -438,7 +423,7 @@ case "$action" in
         fi
         stage="checking the stopped server"
         assert_stopped "$candidate"
-        "$candidate" branvil admin check --data-dir "$BRANVIL_DATA_DIR"
+        "$candidate" server hub-data check
         unload
         stage="installing the agent"
         point_current "$candidate"
@@ -476,8 +461,7 @@ case "$action" in
         cp "$candidate" "$builds/update-to"
         mv -f "$lock/update-from" "$pending"
         stage="activating the new build"
-        if admin_upgrade_and_check "$candidate" "$BRANVIL_DATA_DIR" &&
-            "$candidate" server hub-data upgrade && "$candidate" server hub-data check &&
+        if "$candidate" server hub-data upgrade &&
             point_current "$candidate" && start_agent; then
             complete_activation
             printf 'Hub updated to %s.\n' "$revision"
@@ -500,9 +484,12 @@ case "$action" in
         else
             unload
             assert_stopped "$current"
+            # Data the owner put back in the previous format fails the
+            # check and returns to the previous build; checked data finishes
+            # its conversion.
             if [ -x "$builds/update-to" ] &&
-                "$builds/update-to" branvil admin check --data-dir "$BRANVIL_DATA_DIR" &&
-                "$builds/update-to" server hub-data upgrade && "$builds/update-to" server hub-data check &&
+                "$builds/update-to" server hub-data check &&
+                "$builds/update-to" server hub-data upgrade &&
                 point_current "$builds/update-to" && start_agent; then
                 complete_activation
             else

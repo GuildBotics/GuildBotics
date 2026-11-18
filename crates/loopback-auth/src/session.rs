@@ -4,6 +4,9 @@ use http::HeaderMap;
 use http::header::COOKIE;
 use subtle::ConstantTimeEq;
 
+/// The header every browser write sends its session's CSRF secret in.
+pub const CSRF_HEADER: &str = "x-guildbotics-csrf";
+
 /// The `Set-Cookie` value of a session: never read by scripts, and never sent
 /// by a request another site starts.
 pub fn session_set_cookie(name: &str, value: &str, max_age_secs: i64) -> String {

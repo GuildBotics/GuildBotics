@@ -6,10 +6,10 @@ in a throwaway microVM. Its results are the checks of `GET
 /api/v1/repos/{repo}/pulls/{n}/checks` and landing conditions (required checks accept service path skips).
 
 ```
-git push ─▶ guildbotics branvil serve ─ register run (pipeline from the commit) ─────────▶ redb queue
+git push ─▶ guildbotics server start ─ register run (pipeline from the commit) ─────────▶ redb queue
                  ▲                                                               │ claim (lease)
                  │  heartbeat · log · artifacts · finish                         ▼
-                 └──────────────────────────────────────────────── guildbotics branvil runner ─ msb run ─▶ microVM
+                 └──────────────────────────────────────────────── guildbotics runner ─ msb run ─▶ microVM
 ```
 
 ## Default-branch verification
@@ -179,7 +179,7 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
 - A pipeline names an image by its tag; which version runs is the image the
   runner's cache holds under that tag. The runner never pulls during a job
   (pull policy `never`): images enter the runner's cache only through
-  `guildbotics branvil runner pull` or Settings → CI (pull a tag from a registry, or load
+  `guildbotics runner pull` or Settings → CI (pull a tag from a registry, or load
   a `docker save` / OCI archive from a file on the Branvil machine). To move
   the jobs to a new version, pull or load the same tag again; nothing in the
   pipelines changes. A job whose tag the cache does not hold concludes
@@ -193,7 +193,7 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   manifest digest does not. An image the cache does not hold, or whose
   digest `msb` does not report as `sha256:<64 hex>`, ends the job
   `startup_failure` with the reason. Pulls and
-  loads (Settings → CI, `guildbotics branvil runner pull`) hold a lock of the image cache
+  loads (Settings → CI, `guildbotics runner pull`) hold a lock of the image cache
   (a file of `MSB_HOME`) exclusively, and a job holds it shared from checking
   its image until its VM has started, so a load that re-points the tag waits
   for the jobs that are starting and never changes the image a checked job
@@ -597,7 +597,7 @@ so a damaged record cannot stop eviction of other entries.
 
 ## The runner
 
-`guildbotics branvil runner` is a separate process (the same binary). It talks to the
+`guildbotics runner` is a separate process (the same binary). It talks to the
 service only over the runner API with the token of a member of kind `runner`;
 it never opens the database or the service's repositories (the source arrives
 as a Git bundle made by the service, which the runner checks out with the
@@ -605,17 +605,17 @@ Git of its machine).
 
 ```sh
 # once, on the Hub machine (the owner's token from the data directory): create the runner member, print its token
-guildbotics branvil runner register runner1 --url http://127.0.0.1:7878
+guildbotics runner register runner1 --url http://127.0.0.1:7878
 
 # once per image the pipelines use, and again to move them to a new version of the tag
-guildbotics branvil runner pull docker.io/library/alpine:3.22
+guildbotics runner pull docker.io/library/alpine:3.22
 
-guildbotics branvil runner doctor                                          # which msb, executor ready?
-BRANVIL_TOKEN=<runner token> guildbotics branvil runner --url http://127.0.0.1:7878
+guildbotics runner doctor                                          # which msb, executor ready?
+BRANVIL_TOKEN=<runner token> guildbotics runner --url http://127.0.0.1:7878
 ```
 
 Or let the service supervise one: `[ci] runner = "auto"` in `branvil.toml`
-makes `guildbotics branvil serve` start `guildbotics branvil runner` as a child (member
+makes the server start `guildbotics runner` as a child (member
 `branvil-runner`, a token minted at every start and passed through the
 environment; the previous automatic token is revoked) and restart it when it
 exits. The child reads the service's configuration file for its
@@ -634,7 +634,7 @@ child refuses to start when it cannot read the configuration file. The image
 cache Settings → CI
 manages is the supervised runner's (`[ci.microsandbox] home`); a runner
 started by hand on another machine keeps its own, filled with
-`guildbotics branvil runner pull`. A runner started by hand is upgraded together with
+`guildbotics runner pull`. A runner started by hand is upgraded together with
 the service: the runner API carries the job definition and the image digest
 in this version's shapes.
 
@@ -716,7 +716,7 @@ build-time download and no SDK dependency.
 `ci.microsandbox.msb_path`, the embedding application's configured runtime
 binary (GuildBotics supplies its deployed runtime), Branvil's copy
 `~/.branvil/msb/bin/msb`
-(created only by `guildbotics branvil runner install-msb --from <msb>`). Nothing is
+(created only by `guildbotics runner install-msb --from <msb>`). Nothing is
 downloaded. Branvil's microsandbox state (`MSB_HOME`: image cache, sandbox
 records) is `~/.branvil/msb-home` (`ci.microsandbox.home`), separate from
 GuildBotics'. `msb` runs with only `PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`,
@@ -747,7 +747,7 @@ used as a guarantee.
 | macOS, Apple Silicon | Hypervisor.framework (built in) | **verified** on macOS 26.6 (M1 Pro) with msb 0.6.17 |
 | Linux | KVM (`/dev/kvm` readable and writable by the runner's user) | CI |
 
-On every OS: `msb doctor` (run by `guildbotics branvil runner doctor`) must pass, and
+On every OS: `msb doctor` (run by `guildbotics runner doctor`) must pass, and
 `git` must be on the runner's `PATH` (it checks the source out; the executor
 reports itself unavailable without it, as without `msb`).
 

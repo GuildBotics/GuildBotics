@@ -1515,7 +1515,7 @@ mod tests {
                 .map(|r| (r.path.to_owned(), *r)),
         );
         routes.push((ROOT_ROUTE.path.to_owned(), ROOT_ROUTE));
-        let branvil = branvil::embedded_route_inventory();
+        let branvil = branvil::route_inventory();
         for (path, _) in &branvil {
             assert!(!path.starts_with("/-/guildbotics"), "Branvil owns {path}");
         }
@@ -1605,7 +1605,7 @@ mod tests {
             );
         }
         // Even an otherwise public GUI fallback must not enter this namespace.
-        for (path, route) in branvil::embedded_route_inventory() {
+        for (path, route) in branvil::route_inventory() {
             let path = format!("/-/guildbotics{}", variable.replace_all(&path, "missing"));
             let response = app
                 .clone()

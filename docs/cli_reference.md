@@ -26,6 +26,12 @@ For workspace setup and examples, see the [README](../README.md).
 - [`guildbotics environment image list`](#guildbotics-environment-image-list)
 - [`guildbotics environment image declare`](#guildbotics-environment-image-declare)
 - [`guildbotics server`](#guildbotics-server)
+- [`guildbotics server hub-data`](#guildbotics-server-hub-data)
+- [`guildbotics server hub-data backup`](#guildbotics-server-hub-data-backup)
+- [`guildbotics server hub-data restore`](#guildbotics-server-hub-data-restore)
+- [`guildbotics server hub-data check`](#guildbotics-server-hub-data-check)
+- [`guildbotics server hub-data upgrade`](#guildbotics-server-hub-data-upgrade)
+- [`guildbotics server hub-data reindex`](#guildbotics-server-hub-data-reindex)
 - [`guildbotics server start`](#guildbotics-server-start)
 - [`guildbotics server stop`](#guildbotics-server-stop)
 - [`guildbotics member`](#guildbotics-member)
@@ -111,31 +117,11 @@ For workspace setup and examples, see the [README](../README.md).
 - [`guildbotics service stop`](#guildbotics-service-stop)
 - [`guildbotics connect`](#guildbotics-connect)
 - [`guildbotics open`](#guildbotics-open)
-- [`guildbotics branvil`](#guildbotics-branvil)
-- [`guildbotics branvil init`](#guildbotics-branvil-init)
-- [`guildbotics branvil serve`](#guildbotics-branvil-serve)
-- [`guildbotics branvil open`](#guildbotics-branvil-open)
-- [`guildbotics branvil member`](#guildbotics-branvil-member)
-- [`guildbotics branvil member list`](#guildbotics-branvil-member-list)
-- [`guildbotics branvil member create`](#guildbotics-branvil-member-create)
-- [`guildbotics branvil member token`](#guildbotics-branvil-member-token)
-- [`guildbotics branvil member account`](#guildbotics-branvil-member-account)
-- [`guildbotics branvil repo`](#guildbotics-branvil-repo)
-- [`guildbotics branvil repo create`](#guildbotics-branvil-repo-create)
-- [`guildbotics branvil repo upstream`](#guildbotics-branvil-repo-upstream)
-- [`guildbotics branvil workspace`](#guildbotics-branvil-workspace)
-- [`guildbotics branvil workspace create`](#guildbotics-branvil-workspace-create)
-- [`guildbotics branvil runner`](#guildbotics-branvil-runner)
-- [`guildbotics branvil runner register`](#guildbotics-branvil-runner-register)
-- [`guildbotics branvil runner pull`](#guildbotics-branvil-runner-pull)
-- [`guildbotics branvil runner doctor`](#guildbotics-branvil-runner-doctor)
-- [`guildbotics branvil runner install-msb`](#guildbotics-branvil-runner-install-msb)
-- [`guildbotics branvil admin`](#guildbotics-branvil-admin)
-- [`guildbotics branvil admin check`](#guildbotics-branvil-admin-check)
-- [`guildbotics branvil admin reindex`](#guildbotics-branvil-admin-reindex)
-- [`guildbotics branvil admin upgrade`](#guildbotics-branvil-admin-upgrade)
-- [`guildbotics branvil backup`](#guildbotics-branvil-backup)
-- [`guildbotics branvil restore`](#guildbotics-branvil-restore)
+- [`guildbotics runner`](#guildbotics-runner)
+- [`guildbotics runner register`](#guildbotics-runner-register)
+- [`guildbotics runner pull`](#guildbotics-runner-pull)
+- [`guildbotics runner doctor`](#guildbotics-runner-doctor)
+- [`guildbotics runner install-msb`](#guildbotics-runner-install-msb)
 
 ## guildbotics
 
@@ -158,7 +144,7 @@ Commands:
   service         Start or stop scheduled commands, ticket patrol, and chat events
   connect         Connect this machine's CLI through the server's consent screen
   open            Open the GuildBotics screens in the browser. The browser enters with a shared single-use link that expires after 60 seconds. The session also opens Branvil
-  branvil         Branvil's commands (code hosting: `guildbotics branvil --help`)
+  runner          Run the CI runner, a separate process that executes jobs in microVMs
   help            Print this message or the help of the given subcommand(s)
 
 Options:
@@ -385,11 +371,110 @@ Run the server
 Usage: guildbotics server <COMMAND>
 
 Commands:
-  start  Run the server in the foreground until SIGINT or SIGTERM (a first SIGINT waits for the commands running, SIGTERM or a second SIGINT cancels them): GuildBotics on GUILDBOTICS_SERVER_PORT (default 7878) with its records under GUILDBOTICS_HOME (default ~/.guildbotics), and Branvil, once `guildbotics branvil init` has set it up, on the same listener (BRANVIL_DATA_DIR chooses its data directory; Branvil's listen setting is used only by `guildbotics branvil serve`)
-  stop   Stop the server and wait for its work to end
-  help   Print this message or the help of the given subcommand(s)
+  hub-data  Back up, restore, check, upgrade, or reindex the Hub's records
+  start     Run the server in the foreground until SIGINT or SIGTERM (a first SIGINT waits for the commands running, SIGTERM or a second SIGINT cancels them): GuildBotics on GUILDBOTICS_SERVER_PORT (default 7878) with its records under GUILDBOTICS_HOME (default ~/.guildbotics), and the code host on the same listener, with its data in BRANVIL_DATA_DIR (default GUILDBOTICS_HOME/data/code-host, created at the first start)
+  stop      Stop the server and wait for its work to end
+  help      Print this message or the help of the given subcommand(s)
 
 Options:
+  -h, --help
+          Print help
+```
+
+## guildbotics server hub-data
+
+```text
+Back up, restore, check, upgrade, or reindex the Hub's records
+
+Usage: guildbotics server hub-data <COMMAND>
+
+Commands:
+  backup   Write a backup of the running server's records into a new or empty directory
+  restore  Restore a backup into a new or empty directory and check it; check and upgrade take the result as --data-dir
+  check    Check the records; a passing check lets the server open an upgraded code host database
+  upgrade  Upgrade the records from the previous version, then check them (stop the server and take a backup first)
+  reindex  Rebuild the code host's indexes from its records
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+```
+
+## guildbotics server hub-data backup
+
+```text
+Write a backup of the running server's records into a new or empty directory
+
+Usage: guildbotics server hub-data backup --to <TO>
+
+Options:
+      --to <TO>
+          Directory to fill, on this machine
+
+  -h, --help
+          Print help
+```
+
+## guildbotics server hub-data restore
+
+```text
+Restore a backup into a new or empty directory and check it; check and upgrade take the result as --data-dir
+
+Usage: guildbotics server hub-data restore --from <FROM> --data-dir <DATA_DIR>
+
+Options:
+      --from <FROM>
+          Backup directory written by `server hub-data backup`
+
+      --data-dir <DATA_DIR>
+          Directory to fill
+
+  -h, --help
+          Print help
+```
+
+## guildbotics server hub-data check
+
+```text
+Check the records; a passing check lets the server open an upgraded code host database
+
+Usage: guildbotics server hub-data check [OPTIONS]
+
+Options:
+      --data-dir <DATA_DIR>
+          A restored backup instead of this machine's records
+
+  -h, --help
+          Print help
+```
+
+## guildbotics server hub-data upgrade
+
+```text
+Upgrade the records from the previous version, then check them (stop the server and take a backup first)
+
+Usage: guildbotics server hub-data upgrade [OPTIONS]
+
+Options:
+      --data-dir <DATA_DIR>
+          A restored backup instead of this machine's records
+
+  -h, --help
+          Print help
+```
+
+## guildbotics server hub-data reindex
+
+```text
+Rebuild the code host's indexes from its records
+
+Usage: guildbotics server hub-data reindex [OPTIONS]
+
+Options:
+      --data-dir <DATA_DIR>
+          A restored backup instead of this machine's records
+
   -h, --help
           Print help
 ```
@@ -397,7 +482,7 @@ Options:
 ## guildbotics server start
 
 ```text
-Run the server in the foreground until SIGINT or SIGTERM (a first SIGINT waits for the commands running, SIGTERM or a second SIGINT cancels them): GuildBotics on GUILDBOTICS_SERVER_PORT (default 7878) with its records under GUILDBOTICS_HOME (default ~/.guildbotics), and Branvil, once `guildbotics branvil init` has set it up, on the same listener (BRANVIL_DATA_DIR chooses its data directory; Branvil's listen setting is used only by `guildbotics branvil serve`)
+Run the server in the foreground until SIGINT or SIGTERM (a first SIGINT waits for the commands running, SIGTERM or a second SIGINT cancels them): GuildBotics on GUILDBOTICS_SERVER_PORT (default 7878) with its records under GUILDBOTICS_HOME (default ~/.guildbotics), and the code host on the same listener, with its data in BRANVIL_DATA_DIR (default GUILDBOTICS_HOME/data/code-host, created at the first start)
 
 Usage: guildbotics server start [OPTIONS]
 
@@ -1754,393 +1839,13 @@ Options:
           Print help
 ```
 
-## guildbotics branvil
+## guildbotics runner
 
 ```text
-Branvil: local code hosting (Git over Smart HTTP, tickets, boards, pull requests, CI) for GuildBotics.
+Run the CI runner, a separate process that executes jobs in microVMs
 
-First run: `branvil init` creates the data directory, the configuration, and the owner, the one person who uses Branvil; the owner's token is kept in <data dir>/secrets/owner.token. Then `branvil serve` starts the service, and `branvil open` opens the GUI without a sign-in screen. The member, workspace, repo, backup, and open commands talk to the running service with the owner's token from that file (or --token / BRANVIL_TOKEN).
-
-Usage: guildbotics branvil <COMMAND>
-
-Commands:
-  init       Create the data directory, the configuration, and the owner (its token goes to <data dir>/secrets/owner.token)
-  serve      Run the service
-  open       Open Branvil with a single-use link (the shared GuildBotics entry on an integrated server)
-  member     Manage agents, runners, and tokens (through the running service)
-  repo       Manage repositories (through the running service)
-  workspace  Manage workspaces (through the running service)
-  runner     Run the CI runner, a separate process that executes jobs in microVMs (docs/ci.md)
-  admin      Offline maintenance of the data directory (the service must be stopped)
-  backup     Write a consistent backup of the running service into a new directory on its machine
-  restore    Restore a backup into a new data directory and check it (the service need not run)
-  help       Print this message or the help of the given subcommand(s)
-
-Options:
-  -h, --help
-          Print help (see a summary with '-h')
-
-  -V, --version
-          Print version
-```
-
-## guildbotics branvil init
-
-```text
-Create the data directory, the configuration, and the owner (its token goes to <data dir>/secrets/owner.token)
-
-Usage: guildbotics branvil init [OPTIONS]
-
-Options:
-      --owner <OWNER>
-          Member name of the owner, the one person who uses Branvil
-
-          [default: owner]
-
-      --display-name <DISPLAY_NAME>
-          Display name of the owner
-
-      --listen <LISTEN>
-          Loopback address written to the configuration
-
-          [default: 127.0.0.1:7878]
-
-      --base-url <BASE_URL>
-          Permanent base URL written to the configuration [default: http://<listen>]
-
-      --config <CONFIG>
-          Configuration file [default: <data dir>/branvil.toml]
-
-      --data-dir <DATA_DIR>
-          Data directory [default: the OS data directory for "branvil"]
-
-          [env: BRANVIL_DATA_DIR]
-
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil serve
-
-```text
-Run the service
-
-Usage: guildbotics branvil serve [OPTIONS]
-
-Options:
-      --listen <LISTEN>
-          Loopback address to listen on (port 0 picks a free port) [default: listen of the configuration, else 127.0.0.1:7878]
-
-      --base-url <BASE_URL>
-          Permanent base URL [default: base_url of the configuration, else http://<bound address>]
-
-      --config <CONFIG>
-          Configuration file [default: <data dir>/branvil.toml]
-
-      --data-dir <DATA_DIR>
-          Data directory [default: the OS data directory for "branvil"]
-
-          [env: BRANVIL_DATA_DIR]
-
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil open
-
-```text
-Open Branvil with a single-use link (the shared GuildBotics entry on an integrated server)
-
-Usage: guildbotics branvil open [OPTIONS]
-
-Options:
-      --print
-          Print the link (valid once, for 60 seconds) instead of opening a browser
-
-      --url <URL>
-          Base URL of the running service [default: base_url of the configuration, else http://127.0.0.1:7878]
-
-          [env: BRANVIL_URL]
-
-      --token <TOKEN>
-          Token [default, except for `branvil runner`, `runner pull`, and `runner doctor`: the owner's token in <data dir>/secrets/owner.token]
-
-          [env: BRANVIL_TOKEN]
-
-      --config <CONFIG>
-          Configuration file [default: <data dir>/branvil.toml]
-
-      --data-dir <DATA_DIR>
-          Data directory [default: the OS data directory for "branvil"]
-
-          [env: BRANVIL_DATA_DIR]
-
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil member
-
-```text
-Manage agents, runners, and tokens (through the running service)
-
-Usage: guildbotics branvil member [OPTIONS] <COMMAND>
-
-Commands:
-  list     List members
-  create   Create an agent or a runner
-  token    Issue a token for a member (printed once)
-  account  Set a member's account on an upstream host: a token, or a GitHub App's identity (owner)
-  help     Print this message or the help of the given subcommand(s)
-
-Options:
-      --url <URL>
-          Base URL of the running service [default: base_url of the configuration, else http://127.0.0.1:7878]
-
-          [env: BRANVIL_URL]
-
-      --token <TOKEN>
-          Token [default, except for `branvil runner`, `runner pull`, and `runner doctor`: the owner's token in <data dir>/secrets/owner.token]
-
-          [env: BRANVIL_TOKEN]
-
-      --config <CONFIG>
-          Configuration file [default: <data dir>/branvil.toml]
-
-      --data-dir <DATA_DIR>
-          Data directory [default: the OS data directory for "branvil"]
-
-          [env: BRANVIL_DATA_DIR]
-
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil member list
-
-```text
-List members
-
-Usage: guildbotics branvil member list
-
-Options:
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil member create
-
-```text
-Create an agent or a runner
-
-Usage: guildbotics branvil member create [OPTIONS] <NAME>
-
-Arguments:
-  <NAME>
-
-
-Options:
-      --display-name <DISPLAY_NAME>
-          Shown name [default: the name]
-
-      --kind <KIND>
-          agent or runner
-
-          [default: agent]
-
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil member token
-
-```text
-Issue a token for a member (printed once)
-
-Usage: guildbotics branvil member token [OPTIONS] <NAME>
-
-Arguments:
-  <NAME>
-
-
-Options:
-      --label <LABEL>
-          [default: cli]
-
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil member account
-
-```text
-Set a member's account on an upstream host: a token, or a GitHub App's identity (owner)
-
-Usage: guildbotics branvil member account [OPTIONS] <NAME>
-
-Arguments:
-  <NAME>
-
-
-Options:
-      --provider <PROVIDER>
-          [default: github]
-
-      --token-env <TOKEN_ENV>
-          Name of an environment variable holding the account's token (never pass it as an argument)
-
-      --app-id <APP_ID>
-          The app's id (with --installation-id and --private-key-file)
-
-      --installation-id <INSTALLATION_ID>
-          The id of the app's installation that reaches the repositories
-
-      --private-key-file <PRIVATE_KEY_FILE>
-          The app's private key (PEM file)
-
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil repo
-
-```text
-Manage repositories (through the running service)
-
-Usage: guildbotics branvil repo [OPTIONS] <COMMAND>
-
-Commands:
-  create    Create an empty managed repository in a workspace
-  upstream  Make a repository follow an upstream repository and publish to it; an empty repository is filled with its default branch (owner)
-  help      Print this message or the help of the given subcommand(s)
-
-Options:
-      --url <URL>
-          Base URL of the running service [default: base_url of the configuration, else http://127.0.0.1:7878]
-
-          [env: BRANVIL_URL]
-
-      --token <TOKEN>
-          Token [default, except for `branvil runner`, `runner pull`, and `runner doctor`: the owner's token in <data dir>/secrets/owner.token]
-
-          [env: BRANVIL_TOKEN]
-
-      --config <CONFIG>
-          Configuration file [default: <data dir>/branvil.toml]
-
-      --data-dir <DATA_DIR>
-          Data directory [default: the OS data directory for "branvil"]
-
-          [env: BRANVIL_DATA_DIR]
-
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil repo create
-
-```text
-Create an empty managed repository in a workspace
-
-Usage: guildbotics branvil repo create [OPTIONS] <PATH>
-
-Arguments:
-  <PATH>
-          Repository path <workspace>/<name>, e.g. acme/demo
-
-Options:
-      --default-branch <DEFAULT_BRANCH>
-          [default: main]
-
-      --label <LABELS>
-          A label its tickets may carry (repeatable)
-
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil repo upstream
-
-```text
-Make a repository follow an upstream repository and publish to it; an empty repository is filled with its default branch (owner)
-
-Usage: guildbotics branvil repo upstream [OPTIONS] --repository <REPOSITORY> <PATH>
-
-Arguments:
-  <PATH>
-          Repository path <workspace>/<name>, e.g. acme/demo
-
-Options:
-      --repository <REPOSITORY>
-          The upstream repository, e.g. acme/demo on GitHub
-
-      --provider <PROVIDER>
-          [default: github]
-
-      --reader <READER>
-          The member whose account reads it [default: kept, or picked for a new upstream]
-
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil workspace
-
-```text
-Manage workspaces (through the running service)
-
-Usage: guildbotics branvil workspace [OPTIONS] <COMMAND>
-
-Commands:
-  create  Create a workspace: its repositories live under it, and it has one board
-  help    Print this message or the help of the given subcommand(s)
-
-Options:
-      --url <URL>
-          Base URL of the running service [default: base_url of the configuration, else http://127.0.0.1:7878]
-
-          [env: BRANVIL_URL]
-
-      --token <TOKEN>
-          Token [default, except for `branvil runner`, `runner pull`, and `runner doctor`: the owner's token in <data dir>/secrets/owner.token]
-
-          [env: BRANVIL_TOKEN]
-
-      --config <CONFIG>
-          Configuration file [default: <data dir>/branvil.toml]
-
-      --data-dir <DATA_DIR>
-          Data directory [default: the OS data directory for "branvil"]
-
-          [env: BRANVIL_DATA_DIR]
-
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil workspace create
-
-```text
-Create a workspace: its repositories live under it, and it has one board
-
-Usage: guildbotics branvil workspace create <NAME>
-
-Arguments:
-  <NAME>
-          Workspace name, e.g. acme
-
-Options:
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil runner
-
-```text
-Run the CI runner, a separate process that executes jobs in microVMs (docs/ci.md)
-
-Usage: guildbotics branvil runner [OPTIONS]
-       guildbotics branvil runner <COMMAND>
+Usage: guildbotics runner [OPTIONS]
+       guildbotics runner <COMMAND>
 
 Commands:
   register     Create a runner member and print its token once (needs the owner's token)
@@ -2154,20 +1859,20 @@ Options:
           Per-job work directories and the dependency cache [default: ci.executor.work_dir of the configuration, else ~/.branvil/runner]
 
       --url <URL>
-          Base URL of the running service [default: base_url of the configuration, else http://127.0.0.1:7878]
+          Base URL of the server [default: the server on this machine]
 
           [env: BRANVIL_URL]
 
       --token <TOKEN>
-          Token [default, except for `branvil runner`, `runner pull`, and `runner doctor`: the owner's token in <data dir>/secrets/owner.token]
+          The runner's token
 
           [env: BRANVIL_TOKEN]
 
       --config <CONFIG>
-          Configuration file [default: <data dir>/branvil.toml]
+          Configuration file whose limits apply to every job, read again before each [default: the one of the data directory]
 
       --data-dir <DATA_DIR>
-          Data directory [default: the OS data directory for "branvil"]
+          Data directory of the configuration [default: the server's]
 
           [env: BRANVIL_DATA_DIR]
 
@@ -2175,12 +1880,12 @@ Options:
           Print help
 ```
 
-## guildbotics branvil runner register
+## guildbotics runner register
 
 ```text
 Create a runner member and print its token once (needs the owner's token)
 
-Usage: guildbotics branvil runner register <NAME>
+Usage: guildbotics runner register <NAME>
 
 Arguments:
   <NAME>
@@ -2191,12 +1896,12 @@ Options:
           Print help
 ```
 
-## guildbotics branvil runner pull
+## guildbotics runner pull
 
 ```text
 Pull an image into the runner's image cache (jobs never pull)
 
-Usage: guildbotics branvil runner pull <IMAGE>
+Usage: guildbotics runner pull <IMAGE>
 
 Arguments:
   <IMAGE>
@@ -2207,143 +1912,28 @@ Options:
           Print help
 ```
 
-## guildbotics branvil runner doctor
+## guildbotics runner doctor
 
 ```text
 Show which msb is used and whether the executor is ready
 
-Usage: guildbotics branvil runner doctor
+Usage: guildbotics runner doctor
 
 Options:
   -h, --help
           Print help
 ```
 
-## guildbotics branvil runner install-msb
+## guildbotics runner install-msb
 
 ```text
 Copy an msb binary (and the libkrunfw next to it) into ~/.branvil/msb
 
-Usage: guildbotics branvil runner install-msb --from <FROM>
+Usage: guildbotics runner install-msb --from <FROM>
 
 Options:
       --from <FROM>
           Path of an msb binary that reports the pinned version
-
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil admin
-
-```text
-Offline maintenance of the data directory (the service must be stopped)
-
-Usage: guildbotics branvil admin [OPTIONS] <COMMAND>
-
-Commands:
-  check    Check the database structure and that every index matches the records; a passing check also clears the mark an upgrade leaves, which `branvil serve` refuses
-  reindex  Rebuild every derived index from the records
-  upgrade  Upgrade the database from the previous schema version, keeping a copy of it as it was (stop the service and take a backup first). Exits 3 when the database was upgraded, now or before, and has not passed `branvil admin check` since; 0 when it already has this version and is checked; 1 when it failed, which leaves it unchanged
-  help     Print this message or the help of the given subcommand(s)
-
-Options:
-      --config <CONFIG>
-          Configuration file [default: <data dir>/branvil.toml]
-
-      --data-dir <DATA_DIR>
-          Data directory [default: the OS data directory for "branvil"]
-
-          [env: BRANVIL_DATA_DIR]
-
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil admin check
-
-```text
-Check the database structure and that every index matches the records; a passing check also clears the mark an upgrade leaves, which `branvil serve` refuses
-
-Usage: guildbotics branvil admin check
-
-Options:
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil admin reindex
-
-```text
-Rebuild every derived index from the records
-
-Usage: guildbotics branvil admin reindex
-
-Options:
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil admin upgrade
-
-```text
-Upgrade the database from the previous schema version, keeping a copy of it as it was (stop the service and take a backup first). Exits 3 when the database was upgraded, now or before, and has not passed `branvil admin check` since; 0 when it already has this version and is checked; 1 when it failed, which leaves it unchanged
-
-Usage: guildbotics branvil admin upgrade
-
-Options:
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil backup
-
-```text
-Write a consistent backup of the running service into a new directory on its machine
-
-Usage: guildbotics branvil backup [OPTIONS] --to <TO>
-
-Options:
-      --to <TO>
-          Directory to create (must not exist or be empty; on the machine the service runs on)
-
-      --url <URL>
-          Base URL of the running service [default: base_url of the configuration, else http://127.0.0.1:7878]
-
-          [env: BRANVIL_URL]
-
-      --token <TOKEN>
-          Token [default, except for `branvil runner`, `runner pull`, and `runner doctor`: the owner's token in <data dir>/secrets/owner.token]
-
-          [env: BRANVIL_TOKEN]
-
-      --config <CONFIG>
-          Configuration file [default: <data dir>/branvil.toml]
-
-      --data-dir <DATA_DIR>
-          Data directory [default: the OS data directory for "branvil"]
-
-          [env: BRANVIL_DATA_DIR]
-
-  -h, --help
-          Print help
-```
-
-## guildbotics branvil restore
-
-```text
-Restore a backup into a new data directory and check it (the service need not run)
-
-Usage: guildbotics branvil restore --from <FROM> --data-dir <DATA_DIR>
-
-Options:
-      --from <FROM>
-          Backup directory written by `branvil backup`
-
-      --data-dir <DATA_DIR>
-          New data directory to fill (must not exist or be empty)
-
-          [env: BRANVIL_DATA_DIR]
 
   -h, --help
           Print help

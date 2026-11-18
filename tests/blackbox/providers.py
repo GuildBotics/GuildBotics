@@ -34,7 +34,7 @@ class BranvilProvider:
         self.api = httpx.Client(
             base_url=str(stack.api.base_url).split("/-/")[0] + "/api/v1/",
             cookies=entered.cookies,
-            headers={"X-Branvil-CSRF": entered.json()["csrf"]},
+            headers={"X-GuildBotics-CSRF": entered.json()["csrf"]},
             trust_env=False,
             timeout=10,
         )

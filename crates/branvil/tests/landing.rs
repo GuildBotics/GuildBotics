@@ -124,7 +124,7 @@ async fn three_ready_pulls_merge_without_a_queue_and_preserve_reviewed_heads() {
     let refs = git_as_ok(
         &w.work,
         "alice",
-        &w.owner,
+        &w.owner_git,
         &[
             "ls-remote",
             "origin",
@@ -310,15 +310,14 @@ async fn upgrade_preserves_landing_conflicts_and_notice_history() {
     .await;
     w.server.stop();
     let db = w.server.data.join("branvil.redb");
-    as_schema_35(&db);
+    as_schema_36(&db);
     let out = branvil_command()
         .args(["admin", "upgrade", "--data-dir"])
         .arg(&w.server.data)
         .output()
         .unwrap();
-    assert_eq!(
-        out.status.code(),
-        Some(3),
+    assert!(
+        out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
@@ -357,13 +356,13 @@ async fn upgrade_preserves_landing_conflicts_and_notice_history() {
             .any(|b| b["code"] == "conflict")
     );
     w.server.stop();
-    as_schema_35(&db);
+    as_schema_36(&db);
     let out = branvil_command()
         .args(["admin", "upgrade", "--data-dir"])
         .arg(&w.server.data)
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(3));
+    assert!(out.status.success());
     let out = branvil_command()
         .args(["admin", "check", "--data-dir"])
         .arg(&w.server.data)

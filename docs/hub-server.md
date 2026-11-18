@@ -1,6 +1,6 @@
 # macOS Hubの起動と更新
 
-Hubのチェックアウトで、オーナーがmacOSのデスクトップにログインしてから実行します。Git、リポジトリの `rust-toolchain.toml` が指定するRust、Node.js 24、npmを `PATH` に入れておきます。Branvilを初めて使う場合は、ビルド済みの `guildbotics branvil init --data-dir <絶対パス>` でデータディレクトリを用意します。既存のHubを切り替える場合は、これまでの方法でGuildBoticsとBranvilを停止し、両方の旧LaunchAgentの登録を解除してから、既存のBranvilデータを指定します。
+Hubのチェックアウトで、オーナーがmacOSのデスクトップにログインしてから実行します。Git、リポジトリの `rust-toolchain.toml` が指定するRust、Node.js 24、npmを `PATH` に入れておきます。コードホスト（リポジトリ、チケット、プルリクエスト、CI）のデータは `BRANVIL_DATA_DIR` の絶対パスに置き、初回の起動時に作られます。既存のHubを切り替える場合は、これまでの方法でGuildBoticsとBranvilを停止し、両方の旧LaunchAgentの登録を解除してから、既存のBranvilデータを指定します。
 
 ## 署名の識別を用意する
 
@@ -27,7 +27,7 @@ Hubのチェックアウトは、開発用のチェックアウトとは別にcl
 `install` と後述の `auto-install` は、開発用のvenvなどを有効にしていないシェル（VS Codeのターミナルではなくターミナル.appなど）で実行します。そのシェルの `PATH` がLaunchAgentに記録されます。
 
 ```sh
-export BRANVIL_DATA_DIR="/absolute/path/to/branvil-data"
+export BRANVIL_DATA_DIR="/absolute/path/to/code-host-data"
 export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
 scripts/hub-server.sh install
 scripts/hub-server.sh status
@@ -62,19 +62,19 @@ scripts/hub-server.sh update
 確認済みでないコミットも手動で入れられます。そのあとの自動更新は、そのコミットより先の確認済みのコミットを待ちます。
 
 1. `update` は更新するコミットから画面と実行ファイルを作り、インストール時に記録した識別で署名します。現在のサーバーは稼働を続けます。
-2. 現行ビルドでBranvilのバックアップを取り、別のディレクトリへ復元します。新ビルドでその写しに `guildbotics branvil admin upgrade` と `guildbotics branvil admin check` を実行します。GuildBotics も退避し、退避の写しに新ビルドの `server hub-data upgrade` と `check` を実行します。
+2. 現行ビルドの `server hub-data backup` で、稼働中のサーバーからGuildBoticsの記録とコードホストのデータを退避します。新ビルドの `server hub-data restore` でその退避を別のディレクトリへ復元し、写しに `server hub-data upgrade`（検査を含む）を実行します。
 3. 検査が通ると、GuildBoticsの実行中の作業と後処理を待ちます。その間もBranvilはCIジョブをランナーへ渡し続けます。作業と後処理が終わってから、新しいCIジョブの配布を止め、実行中のCI（`ci.stop_wait_secs` の上限まで）を待って、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
 4. 新ビルドを起動し、起動を確認できると、新ビルドからCLIとスキルを導入します。
 
 手動更新でも停止時のサービス再開の意図を保存します。自動更新を登録している場合は、その次の回が記録に従ってサービスを再開します。
 
-状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`builds/update-from` は切り替える前に動いていたコピー、`builds/update-to` は更新候補のコピーです。復旧が終わるまで保持します。`update` は、切り替えの前に、現行ビルド・更新候補・配置済みのCLIのビルドを除き、どのプロセスも使っていない `builds/<commit>/` を削除します。GuildBoticsのプロセスは自分のビルドのソースを読むので、終わるまでそのソースを使用中にします（OSのファイルロック）。使用中のビルドは、のちの更新で削除します。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。途中で止まった退避は次の退避時に削除します。バックアップに含まれるデータと含まれない資格情報は[Branvilのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
+状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`builds/update-from` は切り替える前に動いていたコピー、`builds/update-to` は更新候補のコピーです。復旧が終わるまで保持します。`update` は、切り替えの前に、現行ビルド・更新候補・配置済みのCLIのビルドを除き、どのプロセスも使っていない `builds/<commit>/` を削除します。GuildBoticsのプロセスは自分のビルドのソースを読むので、終わるまでそのソースを使用中にします（OSのファイルロック）。使用中のビルドは、のちの更新で削除します。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。途中で止まった退避は次の退避時に削除します。バックアップに含まれるデータと含まれない資格情報は[Hubのデータの退避・復元・検査](#hubのデータの退避復元検査)を参照してください。
 
 ## 失敗した更新から戻す
 
 更新が失敗すると、実行したターミナルに理由が出ます。Hubの `last-failure` には直近の失敗の時刻、段階、リビジョンが残ります。サーバーの起動エラーは `~/Library/Logs/guildbotics.log` にあります。写しでの検査までに失敗した場合は、現行ビルドで稼働を続けます。
 
-新ビルドが起動する前に切り替えが失敗すると、前のビルドへ起動先を戻します。前のビルドで実データを検査できれば、そのまま再起動します。データの形式が変わって前のビルドで検査できない場合は、データをそのまま残し、LaunchAgentを disable して停止します。次のログインでも起動しません。復旧時の bootstrap は enable してから起動します。サーバーが一度でも応答した場合、バックアップ後の書き込みが含まれる可能性があります。更新時の出力に出たDBのコピーとバックアップを確認し、どのデータを戻すかはオーナーが決めます。[Branvilのアップグレードと復元](../crates/branvil/docs/backup-restore.md#upgrading)に従って元の形式へ戻してから、次のコマンドを実行してください。
+新ビルドが起動する前に切り替えが失敗すると、前のビルドへ起動先を戻します。前のビルドで実データを検査できれば、そのまま再起動します。データの形式が変わって前のビルドで検査できない場合は、データをそのまま残し、LaunchAgentを disable して停止します。次のログインでも起動しません。復旧時の bootstrap は enable してから起動します。サーバーが一度でも応答した場合、バックアップ後の書き込みが含まれる可能性があります。更新時の出力に出たDBのコピーとバックアップを確認し、どのデータを戻すかはオーナーが決めます。[コードホストのアップグレードと復元](../crates/branvil/docs/backup-restore.md#upgrading)に従って元の形式へ戻してから、次のコマンドを実行してください。
 
 ```sh
 scripts/hub-server.sh recover
@@ -129,7 +129,7 @@ scripts/hub-server.sh recover
 
 - `guildbotics service status`: `server_running`、サービスの `running`、`state` を返します。サーバー停止中はそれぞれ `false`、`false`、`stopped`。サーバーのロックが指すポートへ接続し、オーナーの証明を検証してから状態を読みます。認証できない場合は停止扱いにせずエラーにします。
 - `guildbotics server hub-verified --repo GuildBotics/GuildBotics --since <full-sha>`: `since_on_main` と `verified` を返します。mainのfirst-parent履歴をカーソルでたどり、指定コミットの直前までの確認済みのSHAを新しい順に返します。指定コミットが最後まで見つからなければ `since_on_main` は `false` です。
-- `--repo` の代わりに `--checkout <path>` を渡すと、そのチェックアウトの origin からリポジトリを取得します。origin は Branvil の clone URL（`{base}/git/{repo}.git`）の形で、設定済み base URL と一致する HTTP(S) URL に限ります。認証情報や query を含まないものに限ります。接続先は設定済み Hub に固定し、プロキシやリダイレクトを使いません。トークンは `BRANVIL_DATA_DIR` の `secrets/owner.token` から直接読み、引数や環境変数では受け取りません。
+- `--repo` の代わりに `--checkout <path>` を渡すと、そのチェックアウトの origin からリポジトリを取得します。origin はコードホストの clone URL（`{base}/git/{repo}.git`）の形で、このマシンのサーバーの URL（`http://127.0.0.1:<GUILDBOTICS_SERVER_PORT>`）と一致する HTTP(S) URL に限ります。認証情報や query を含まないものに限ります。接続先はこのマシンのサーバーに固定し、プロキシやリダイレクトを使いません。トークンはサーバーのオーナーのトークンファイル（`GUILDBOTICS_HOME/data/server/<port>/owner.token`）から直接読み、サーバーがそのダイジェストを持つことを確かめてから送ります。引数や環境変数では受け取りません。
 - `guildbotics server hub-notify`: 標準入力の文を identity の store の webhook へ送り、`sent` を返します。サーバー停止中にも使えます。未設定なら `false`、送信成功なら `true`、送信失敗はエラーです。URL は出力しません。入力する文には秘密を含めないでください。キーチェーンのアクセス権は実行ファイルの署名に従います。
 - `guildbotics server hub-migration`: 実行中のバイナリに埋め込まれた `manual_update_version` と `instructions`（手順書の相対パス、不要なら `null`）を返します。ルートの `hub-update.json` が宣言です。宣言のないソースからのビルドでは番号0となります。このコマンド自体のない旧バイナリも更新ループで番号0として扱います。候補の番号が現在の番号より大きければ手作業が必要です。
 
@@ -272,7 +272,7 @@ Hubの `builds/current install` でスキルを戻します。
 ```sh
 export GUILDBOTICS_HUB_INSTANCE=copy
 export GUILDBOTICS_HOME="/absolute/path/to/copy-home"
-export BRANVIL_DATA_DIR="/absolute/path/to/copy-branvil-data"
+export BRANVIL_DATA_DIR="/absolute/path/to/copy-code-host-data"
 export GUILDBOTICS_SERVER_PORT=7979
 export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
 scripts/hub-server.sh install
@@ -316,17 +316,33 @@ Hub の LaunchAgent と同じ OS ユーザー・`GUILDBOTICS_HOME`、運用ワ�
 ロールバックや別の版への切り替えでその版が稼働していなければ待ちを破棄します。
 通常の upkeep は片付けを開始せず、同じイメージのレシピを削除しないので、その後に次の更新を事前ビルドしても保持されます。
 
-## GuildBotics のデータの退避と検査
+## Hubのデータの退避・復元・検査
 
-更新候補の隠しコマンド `guildbotics server hub-data backup --to <空のディレクトリ>` が、このマシンの `data/workspaces.json` に登録した全ワークスペース（`gb_workspace::selection::registered`）と identity root の `.guildbotics/config`・`state`・`local` を退避します。写しの番号は identity root が 0 で、ワークスペースが続きます。manifest の版は 2 で、ほかの版の退避は扱いません。identity root は `GUILDBOTICS_IDENTITY_ROOT`、未指定なら `GUILDBOTICS_HOME/identity` です。共有書き込みと同じ identity → workspace のロックを取り、通常ファイルをコピーします。リンクと特殊ファイルは拒否し、退避先は所有者だけが開けます。
+`guildbotics server hub-data` が、GuildBotics の記録とコードホストのデータを1つのコマンドで扱います。
 
-再作成可能な `local/clones`、`local/cache`、`local/agent_environment/snapshots`、`local/msb` と実行中だけ使う `local/run` は除外します。マシンの `data/msb` にある runtime は対象の外です。秘密の暗号化ファイルは復号せず退避します。OS キーチェーンの鍵は含まれないため、この退避だけでは別のマシンへ秘密を移せません。
+```sh
+guildbotics server hub-data backup --to <空のディレクトリ>            # サーバーの稼働中
+guildbotics server hub-data restore --from <退避> --data-dir <空のディレクトリ>
+guildbotics server hub-data check [--data-dir <復元先>]               # サーバーの停止中
+guildbotics server hub-data upgrade [--data-dir <復元先>]             # 検査を含む
+guildbotics server hub-data reindex [--data-dir <復元先>]
+```
 
-`backups/guildbotics-update-<時刻>.<乱数>/` の `manifest.json` に元の root と完了を記録し、`0/.guildbotics`、`1/.guildbotics`…にデータを置きます。Branvil とは別に直近3世代を残し、不完全な退避は次の退避時に削除します。更新前の退避には、その後に完了した仕事の書き込みは含まれません。
+`backup` は、稼働中のサーバーにコードホストのデータの退避を `code-host/` へ書かせ、続けて GuildBotics の記録を写します。サーバーへの要求には、このマシンのサーバーのオーナーのトークンを使います。最後に `manifest.json` を書き、その有無で退避の完了を表します。
 
-`server hub-data upgrade --data-dir <退避の写し>` と `check --data-dir <退避の写し>` は番号付きの写しだけを扱い、manifest の元のパスへはアクセスしません。JSON・JSONL・YAML の構文と記録の schema_version を検査します。JSONL は製品の読み取りと同様に壊れた行とオブジェクト以外を読み飛ばし、読めた全記録の版を検査します。検査は退避した元の行を書き換えません。版1〜4は項目追加だけなので変換しません。版4から版5への変換は、identity root から組み込みのコードホストへの接続設定 `config/connections/branvil.yml`、秘密の `BRANVIL_ADMIN_TOKEN` と各メンバーの `BRANVIL_TOKEN`・`BRANVIL_TOKEN_ID`、各メンバーの identity の `account_info.branvil_username` を削除し、変換したときは identity root の `state/schema.json` に `schema_version: 5` を記録します。版4はこれらを identity root だけに置くので、ワークスペースは検査だけを行います。旧ビルドの検査はこの記録で停止します。変換は対象のファイルと秘密をすべて読んでから変更するので、秘密を復号できない場合は何も変更せずに失敗します。秘密の復号にはこのマシンの OS キーチェーンの鍵を使います。繰り返し実行しても、変換済みの root は変わりません。互換性を壊す版では直前の1版からの変換と検査を追加します。それ以前の形式を並行サポートしません。`--data-dir` を省略すると登録済みの本物を対象にします。更新ではサーバー停止後に本物へ `upgrade`、`check` を行い、その成功後だけ起動します。`recover` も候補の変換と検査を再実行します。
+GuildBotics の記録は、このマシンの `data/workspaces.json` に登録した全ワークスペース（`gb_workspace::selection::registered`）と identity root の `.guildbotics/config`・`state`・`local` です。写しの番号は identity root が 0 で、ワークスペースが続きます。manifest の版は 2 で、ほかの版の退避は扱いません。identity root は `GUILDBOTICS_IDENTITY_ROOT`、未指定なら `GUILDBOTICS_HOME/identity` です。共有書き込みと同じ identity → workspace のロックを取り、通常ファイルをコピーします。リンクと特殊ファイルは拒否し、退避先は所有者だけが開けます。
 
-旧ビルドへ戻す場合も両サービスの検査が必要です。GuildBotics の検査に通らない場合はデータを残して停止し、退避の親ディレクトリを表示します。この内部コマンドがまだない旧ビルドへの復旧も、安全のため停止します。オーナーは退避後の書き込みを確認し、停止中に manifest の root と番号付きの写しを照合して、戻す対象を決めてください。自動では実データを退避で上書きしません。
+再作成可能な `local/clones`、`local/cache`、`local/agent_environment/snapshots`、`local/msb` と実行中だけ使う `local/run` は除外します。マシンの `data/msb` にある runtime は対象の外です。秘密の暗号化ファイルは復号せず退避します。OS キーチェーンの鍵は含まれないため、この退避だけでは別のマシンへ秘密を移せません。コードホストの退避に含まれるデータと含まれない資格情報は[コードホストのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
+
+更新は `backups/hub-update-<時刻>.<乱数>/` に退避し、直近3世代を残します。不完全な退避は次の退避時に削除します。更新前の退避には、その後に完了した仕事の書き込みは含まれません。
+
+`restore` は退避の検査値を確かめ、新しいディレクトリへ GuildBotics の記録の写しとコードホストのデータ（`code-host/`）を置いて検査します。直前の版のコードホストのデータは、置くときに変換します。復元先は、そのまま `check` と `upgrade` の `--data-dir` に渡せる退避の形です。本物へ戻す手順は自動化していません。停止中に manifest の root と番号付きの写しを照合し、戻す対象をオーナーが決めてください。
+
+`check`、`upgrade`、`reindex` はサーバーの停止中に使います。コードホストのデータを開いているサーバーがあれば断ります。`--data-dir` を省略すると、このマシンの記録と `BRANVIL_DATA_DIR`（未指定なら `GUILDBOTICS_HOME/data/code-host`）を対象にします。まだデータのないコードホストは対象にしません。`upgrade` で変換したコードホストのデータは、`check` が通るまでサーバーが開きません。
+
+`upgrade --data-dir <復元先>` と `check --data-dir <復元先>` は番号付きの写しと `code-host/` だけを扱い、manifest の元のパスへはアクセスしません。GuildBotics の記録はJSON・JSONL・YAML の構文と記録の schema_version を検査します。JSONL は製品の読み取りと同様に壊れた行とオブジェクト以外を読み飛ばし、読めた全記録の版を検査します。検査は退避した元の行を書き換えません。版1〜4は項目追加だけなので変換しません。版4から版5への変換は、identity root から組み込みのコードホストへの接続設定 `config/connections/branvil.yml`、秘密の `BRANVIL_ADMIN_TOKEN` と各メンバーの `BRANVIL_TOKEN`・`BRANVIL_TOKEN_ID`、各メンバーの identity の `account_info.branvil_username` を削除し、変換したときは identity root の `state/schema.json` に `schema_version: 5` を記録します。版4はこれらを identity root だけに置くので、ワークスペースは検査だけを行います。旧ビルドの検査はこの記録で停止します。変換は対象のファイルと秘密をすべて読んでから変更するので、秘密を復号できない場合は何も変更せずに失敗します。秘密の復号にはこのマシンの OS キーチェーンの鍵を使います。繰り返し実行しても、変換済みの root は変わりません。互換性を壊す版では直前の1版からの変換と検査を追加します。それ以前の形式を並行サポートしません。`--data-dir` を省略すると登録済みの本物を対象にします。更新ではサーバー停止後に本物へ `upgrade`（検査を含む）を行い、その成功後だけ起動します。`recover` も候補の変換と検査を再実行します。
+
+旧ビルドへ戻す場合も検査が必要です。検査に通らない場合はデータを残して停止し、退避の親ディレクトリを表示します。オーナーは退避後の書き込みを確認し、戻す対象を決めてください。自動では実データを退避で上書きしません。
 
 ## CLI の写しと結果の取り直しへの更新（手動更新版 5）
 
@@ -343,6 +359,38 @@ cwd はリポジトリのルートにしてください。下位フォルダだ�
 更新前に、`~/Documents/GuildBotics` に残したいファイルを別の場所へ移し、自作コマンドの固定パスを実行の作業ディレクトリへ書き換えます。GuildBotics はこの既存フォルダを削除しません。更新後は共通許可を与えず、画面で cwd が空欄の手動実行と巡回・チャット・定期実行は、端末状態の `run/files/<run_id>/work` を使います。成果物は実行終了後にコマンド画面・診断画面からダウンロードします（7日間保持、通常ファイルのみ、1ファイル64 MBまで）。アップロードも7日間保持し、要求した実行にだけ読み取り専用で渡します。期限切れは次の利用時に掃除します。
 
 **macOS のシステム設定 → プライバシーとセキュリティ → ファイルとフォルダで、以前 `python3.15` に与えた「書類フォルダ」の許可を外してください。** 同じ uv 管理の Python を使う別のプログラムにも影響する許可です。「書類」の下に明示的な許可先やワークスペースを置く場合だけ、その用途の許可を残します。Hub 以外のクライアントでの手作業はありません。
+
+## コードホストのコマンドを guildbotics にまとめる更新（手動更新版 7）
+
+この版で、コードホストのコマンドは `guildbotics runner`、`guildbotics server hub-data`、`guildbotics server git-hook` になります。コードホストは自前のセッションと owner のトークンファイルを持たず、GuildBotics のオーナーの認証だけを使います。保存形式は 37 になり、変換で `secrets/owner.token`、ブラウザのセッションの表、設定ファイルの `listen`・`base_url`・`limits.session_hours` を削除します。
+
+稼働中の旧ビルドには新しい `server hub-data backup` がないため、`update` が退避を取れません。自動更新は手作業が必要として止まります。旧ビルドで退避を新しい形に取り、それを `update` に渡します。`update` はその退避で新ビルドのリハーサルを行い、成功してから旧ビルドを止めます。Hubのチェックアウトの同じターミナルで続けて実行します。
+
+```sh
+hub="$HOME/Library/Application Support/GuildBotics/Hub"
+plist="$HOME/Library/LaunchAgents/local.guildbotics.plist"
+for key in GUILDBOTICS_HOME BRANVIL_DATA_DIR GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT; do
+    if value=$(plutil -extract "EnvironmentVariables.$key" raw -o - "$plist" 2>/dev/null); then
+        export "$key=$value"
+    else
+        unset "$key"
+    fi
+done
+unset BRANVIL_TOKEN BRANVIL_URL
+scripts/hub-server.sh auto-uninstall
+backup="$hub/backups/hub-update-before-7"
+mkdir "$backup"
+"$hub/builds/current" server hub-data backup --to "$backup"
+"$hub/builds/current" branvil backup --data-dir "$BRANVIL_DATA_DIR" --to "$backup/code-host"
+git fetch origin main
+git merge --ff-only FETCH_HEAD
+GUILDBOTICS_HUB_MANUAL_BACKUP="$backup" scripts/hub-server.sh update
+scripts/hub-server.sh auto-install
+```
+
+新ビルドが起動できずに旧ビルドへ戻った場合、旧ビルドの検査はコードホストの形式を確かめないため、旧ビルドは変換済みのデータを開けずに停止します。ログで原因を確かめてから `recover` で新ビルドを起動し直すか、退避 `$backup` から戻してください。
+
+更新後は `guildbotics open` で画面に入り直してください。開発用のチェックアウトで動かすサーバーも、同じ変換を `guildbotics server hub-data upgrade` で行ってから起動します。更新を確かめたら、以前の形の退避 `backups/branvil-update-*` と `backups/guildbotics-update-*` は削除できます。Hub以外のマシンでの手作業はありません。
 
 ## 別のマシンから member CLI と Git を使う
 

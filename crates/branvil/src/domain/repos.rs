@@ -101,6 +101,7 @@ pub struct NewRepo {
 }
 
 pub async fn create(app: &App, caller: &Caller, input: NewRepo) -> AppResult<RepoView> {
+    let event_actor = Some(caller.member.kind);
     caller.require_owner()?;
     let NewRepo {
         path,
@@ -121,7 +122,7 @@ pub async fn create(app: &App, caller: &Caller, input: NewRepo) -> AppResult<Rep
             create_locked(&app, path, default_branch, labels).await
         })
         .await?;
-    app.events.publish("repo", &repo.path, "");
+    app.events.publish_as("repo", &repo.path, "", event_actor);
     repo_view(app, &repo).await
 }
 
@@ -225,6 +226,7 @@ pub async fn update(
     path: &str,
     patch: RepoPatch,
 ) -> AppResult<RepoView> {
+    let event_actor = Some(caller.member.kind);
     caller.require_owner()?;
     let repo = visible(app, caller, path).await?;
     if let Some(b) = &patch.default_branch
@@ -266,7 +268,8 @@ pub async fn update(
             AppResult::Ok(updated)
         })
         .await?;
-    app.events.publish("repo", &updated.path, "");
+    app.events
+        .publish_as("repo", &updated.path, "", event_actor);
     repo_view(app, &updated).await
 }
 
@@ -409,45 +412,6 @@ pub async fn commit_checks(
     app.ci.estimate(&repo, &sha, &mut checks.checks).await;
     app.ci.order_checks(&mut checks.checks).await?;
     Ok(CommitChecksView { checks, sha })
-}
-
-#[derive(Serialize, Debug)]
-pub struct Compare {
-    pub base: String,
-    pub head: String,
-    pub merge_base: Option<String>,
-    pub ahead_by: u64,
-    pub behind_by: u64,
-}
-
-pub async fn compare_shas(app: &App, repo: &Repo, base: &str, head: &str) -> AppResult<Compare> {
-    let dir = app.git.repo_dir(&repo.path);
-    for sha in [base, head] {
-        if !util::is_sha(sha) || !app.git.commit_exists(&dir, sha).await? {
-            return Err(AppError::not_found(format!(
-                "Commit {sha} was not found in {}.",
-                repo.path
-            )));
-        }
-    }
-    Ok(Compare {
-        base: base.to_string(),
-        head: head.to_string(),
-        merge_base: app.git.merge_base(&dir, base, head).await?,
-        ahead_by: app.git.count_between(&dir, base, head).await?,
-        behind_by: app.git.count_between(&dir, head, base).await?,
-    })
-}
-
-pub async fn compare(
-    app: &App,
-    caller: &Caller,
-    path: &str,
-    base: &str,
-    head: &str,
-) -> AppResult<Compare> {
-    let repo = visible(app, caller, path).await?;
-    compare_shas(app, &repo, base, head).await
 }
 
 // ---------------------------------------------------------------- workspaces

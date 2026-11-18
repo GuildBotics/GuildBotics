@@ -192,13 +192,17 @@ fn reaches(r: &impl Rd, from: &TicketId, to: &TicketId) -> AppResult<bool> {
 
 /// Tells the GUI that the tickets of `views` changed, and so did the views of
 /// the tickets related to them.
-fn publish_tickets<'a>(app: &App, views: impl IntoIterator<Item = &'a TicketView>) {
+fn publish_tickets<'a>(
+    app: &App,
+    actor: Option<model::MemberKind>,
+    views: impl IntoIterator<Item = &'a TicketView>,
+) {
     let mut seen = HashSet::new();
     for v in views {
         let related = v.related().map(|r| (&r.repository, &r.key));
         for (repo, key) in std::iter::once((&v.repository, &v.key)).chain(related) {
             if seen.insert((repo, key)) {
-                app.events.publish("ticket", repo, key.clone());
+                app.events.publish_as("ticket", repo, key.clone(), actor);
             }
         }
     }
@@ -227,7 +231,7 @@ pub async fn publish_closed_by(app: &App, p: &Pull) {
         })
         .await;
     match views {
-        Ok(views) => publish_tickets(app, &views),
+        Ok(views) => publish_tickets(app, None, &views),
         Err(e) => tracing::warn!("reading the tickets a merge closed: {}", e.message),
     }
 }
@@ -382,6 +386,7 @@ pub async fn create_ticket(
     repo_path: &str,
     input: NewTicket,
 ) -> AppResult<TicketView> {
+    let event_actor = Some(caller.member.kind);
     let repo = repos::visible(app, caller, repo_path).await?;
     domain::check_title(&input.title)?;
     domain::check_text("body", &input.body, domain::MAX_TEXT)?;
@@ -482,9 +487,9 @@ pub async fn create_ticket(
             ticket_view(w, &base_url, &repo, &t)
         })
         .await?;
-    publish_tickets(app, [&view]);
+    publish_tickets(app, event_actor, [&view]);
     app.events
-        .publish("board", workspace_of(&view.repository), "");
+        .publish_as("board", workspace_of(&view.repository), "", event_actor);
     Ok(view)
 }
 
@@ -636,6 +641,7 @@ pub async fn delete_ticket(
     repo_path: &str,
     key: &str,
 ) -> AppResult<()> {
+    let event_actor = Some(caller.member.kind);
     caller.require_owner()?;
     let repo = repos::visible(app, caller, repo_path).await?;
     let key = key.to_string();
@@ -691,9 +697,9 @@ pub async fn delete_ticket(
             Ok(view)
         })
         .await?;
-    publish_tickets(app, [&view]);
+    publish_tickets(app, event_actor, [&view]);
     app.events
-        .publish("board", workspace_of(&view.repository), "");
+        .publish_as("board", workspace_of(&view.repository), "", event_actor);
     Ok(())
 }
 
@@ -753,6 +759,7 @@ pub async fn update_ticket(
     key: &str,
     patch: TicketPatch,
 ) -> AppResult<TicketUpdated> {
+    let event_actor = Some(caller.member.kind);
     let repo = repos::visible(app, caller, repo_path).await?;
     if let Some(t) = &patch.title {
         domain::check_title(t)?;
@@ -925,13 +932,14 @@ pub async fn update_ticket(
             ))
         })
         .await?;
-    publish_tickets(app, [&before, &result.ticket]);
+    publish_tickets(app, event_actor, [&before, &result.ticket]);
     if result.ticket.repair && result.state_changed {
         app.events
-            .publish("verification", &result.ticket.repository, "");
+            .publish_as("verification", &result.ticket.repository, "", event_actor);
     }
     for d in &descendants {
-        app.events.publish("ticket", &d.repository, d.key.clone());
+        app.events
+            .publish_as("ticket", &d.repository, d.key.clone(), event_actor);
     }
     Ok(result)
 }
@@ -963,6 +971,7 @@ pub async fn move_ticket(
     key: &str,
     input: TicketMove,
 ) -> AppResult<TicketMoved> {
+    let event_actor = Some(caller.member.kind);
     let repo = repos::visible(app, caller, repo_path).await?;
     let to = repos::visible(app, caller, &input.repository).await?;
     let key = key.to_string();
@@ -1110,15 +1119,20 @@ pub async fn move_ticket(
             ))
         })
         .await?;
-    publish_tickets(app, [&before, &moved.ticket]);
+    publish_tickets(app, event_actor, [&before, &moved.ticket]);
     for d in &descendants {
-        app.events.publish("ticket", &d.repository, d.key.clone());
+        app.events
+            .publish_as("ticket", &d.repository, d.key.clone(), event_actor);
     }
     for (path, number) in pull_paths {
-        app.events.publish("pull", &path, number);
+        app.events.publish_as("pull", &path, number, event_actor);
     }
-    app.events
-        .publish("board", workspace_of(&moved.ticket.repository), "");
+    app.events.publish_as(
+        "board",
+        workspace_of(&moved.ticket.repository),
+        "",
+        event_actor,
+    );
     Ok(moved)
 }
 
@@ -1137,6 +1151,7 @@ pub async fn set_assignee(
     key: &str,
     name: Option<String>,
 ) -> AppResult<TicketView> {
+    let event_actor = Some(caller.member.kind);
     let repo = repos::visible(app, caller, repo_path).await?;
     let key = key.to_string();
     let base_url = app.base_url.clone();
@@ -1165,7 +1180,7 @@ pub async fn set_assignee(
         .await?;
     if changed {
         app.events
-            .publish("ticket", &view.repository, view.key.clone());
+            .publish_as("ticket", &view.repository, view.key.clone(), event_actor);
     }
     Ok(view)
 }
@@ -1351,6 +1366,7 @@ pub async fn put_on_board(
     key: &str,
     p: Placement,
 ) -> AppResult<TicketView> {
+    let event_actor = Some(caller.member.kind);
     let repo = repos::visible(app, caller, repo_path).await?;
     check_lane(&p.lane)?;
     let owner = caller.is_owner();
@@ -1388,9 +1404,9 @@ pub async fn put_on_board(
             ticket_view(w, &base_url, &repo, &t)
         })
         .await?;
-    publish_tickets(app, [&view]);
+    publish_tickets(app, event_actor, [&view]);
     app.events
-        .publish("board", workspace_of(&view.repository), "");
+        .publish_as("board", workspace_of(&view.repository), "", event_actor);
     Ok(view)
 }
 
@@ -1487,6 +1503,7 @@ pub async fn add_comment(
     key: &str,
     input: NewComment,
 ) -> AppResult<CommentView> {
+    let event_actor = Some(caller.member.kind);
     check_comment(&input)?;
     let repo = repos::visible(app, caller, repo_path).await?;
     let key = key.to_string();
@@ -1504,7 +1521,7 @@ pub async fn add_comment(
             Ok((comment_view(&c, &tv.url), tv.repository, tv.key))
         })
         .await?;
-    app.events.publish("ticket", &path, k);
+    app.events.publish_as("ticket", &path, k, event_actor);
     Ok(view)
 }
 
@@ -1518,6 +1535,7 @@ pub async fn change_comment(
     id: &str,
     body: Option<String>,
 ) -> AppResult<Option<CommentView>> {
+    let event_actor = Some(caller.member.kind);
     if let Some(body) = &body {
         check_comment_body(body)?;
     }
@@ -1562,7 +1580,7 @@ pub async fn change_comment(
             Ok((view, repo.path, old.number.to_string()))
         })
         .await?;
-    app.events.publish("ticket", &path, key);
+    app.events.publish_as("ticket", &path, key, event_actor);
     Ok(view)
 }
 
@@ -1594,6 +1612,7 @@ pub async fn react(
     input: NewReaction,
     on: bool,
 ) -> AppResult<Option<ReactionAdded>> {
+    let event_actor = Some(caller.member.kind);
     domain::check_reaction(&input.reaction)?;
     let repo = repos::visible(app, caller, repo_path).await?;
     let key = key.to_string();
@@ -1624,7 +1643,7 @@ pub async fn react(
             ))
         })
         .await?;
-    app.events.publish("ticket", &path, key);
+    app.events.publish_as("ticket", &path, key, event_actor);
     Ok(added)
 }
 

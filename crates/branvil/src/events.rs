@@ -3,6 +3,7 @@
 //! refetches. Every subscription ends when the service starts shutting down,
 //! so the long-lived event streams never hold a graceful shutdown open.
 
+pub use crate::model::MemberKind;
 use futures_util::Stream;
 use serde::Serialize;
 use tokio::sync::{broadcast, watch};
@@ -14,6 +15,7 @@ pub struct Change {
     pub kind: &'static str,
     pub path: String,
     pub id: String,
+    pub actor: Option<MemberKind>,
 }
 
 /// What a subscriber receives.
@@ -43,11 +45,21 @@ impl Events {
     }
 
     pub fn publish(&self, kind: &'static str, path: &str, id: impl Into<String>) {
+        self.publish_as(kind, path, id, None);
+    }
+    pub fn publish_as(
+        &self,
+        kind: &'static str,
+        path: &str,
+        id: impl Into<String>,
+        actor: Option<MemberKind>,
+    ) {
         // No subscribers is not an error.
         let _ = self.tx.send(Change {
             kind,
             path: path.to_string(),
             id: id.into(),
+            actor,
         });
     }
 
@@ -71,5 +83,36 @@ impl Events {
             };
             Some((notice, (rx, closed)))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::StreamExt;
+    #[tokio::test]
+    async fn attribution_reset_and_shutdown_are_preserved() {
+        let events = Events::new();
+        let stream = events.subscribe();
+        tokio::pin!(stream);
+        for actor in [Some(MemberKind::Owner), Some(MemberKind::Agent), None] {
+            events.publish_as("ticket", "org/repo", "1", actor);
+            let Some(Notice::Change(change)) = stream.next().await else {
+                panic!("missing change")
+            };
+            assert_eq!(change.actor, actor);
+            assert_eq!(change.path, "org/repo");
+            assert_eq!(change.id, "1");
+        }
+        for _ in 0..CAPACITY + 1 {
+            events.publish("check", "org/repo", "sha");
+        }
+        assert!(matches!(stream.next().await, Some(Notice::Reset)));
+        for _ in 0..CAPACITY {
+            assert!(matches!(stream.next().await, Some(Notice::Change(_))));
+        }
+        events.close();
+        assert!(stream.next().await.is_none());
+        assert!(Box::pin(events.subscribe()).next().await.is_none());
     }
 }

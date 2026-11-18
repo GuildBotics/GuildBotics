@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
-# Build the screens and the server, set Branvil up once, and open both screens.
+# Build the screens and the server, and open both screens.
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/dev.sh [--data-dir PATH] [--owner NAME] [--no-open]
+Usage: scripts/dev.sh [--data-dir PATH] [--no-open]
 
-Build and run the server of this checkout -- GuildBotics and Branvil in one
-process -- until Ctrl-C, on data of its own, and open both screens once it is
-ready.
+Build and run the server of this checkout -- GuildBotics and its code host in
+one process -- until Ctrl-C, on data of its own, and open both screens once it
+is ready.
   --data-dir PATH  Data directory (default: ~/.gbb/dev): GuildBotics' machine
-                   root in its home/ (GUILDBOTICS_HOME), Branvil's data in its
-                   branvil/ (BRANVIL_DATA_DIR), and the server's log of the
-                   latest start in its server.log.
-  --owner NAME     Branvil's owner name when it is set up (default: owner).
+                   root in its home/ (GUILDBOTICS_HOME), the code host's data
+                   in its branvil/ (BRANVIL_DATA_DIR, created at the first
+                   start), and the server's log of the latest start in its
+                   server.log.
   --no-open        Start the server without opening a browser.
   -h, --help       Show this help.
 
-Both services listen on GUILDBOTICS_SERVER_PORT (default here: 8866). Existing
-Branvil data is reused; its standalone listen/base_url settings are ignored. GUILDBOTICS_WORKSPACE_ROOT
+The server listens on GUILDBOTICS_SERVER_PORT (default here: 8866). Data of an
+older version is converted with `guildbotics server hub-data upgrade` while
+the server is stopped. GUILDBOTICS_WORKSPACE_ROOT
 selects the workspace, which the server then records its runs in. The
 device's runtime, which the Python version placed, is linked under home/data
 for the commands to run in. Restart to pick up code changes.
@@ -27,19 +28,15 @@ EOF
 
 repo="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 data_dir="$HOME/.gbb/dev"
-owner=owner
 open_browser=true
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --data-dir|--owner)
+    --data-dir)
       if [[ $# -lt 2 || -z "$2" || "$2" == --* ]]; then
         echo "Missing value for $1" >&2
         exit 2
       fi
-      case "$1" in
-        --data-dir) data_dir="$2" ;;
-        *) owner="$2" ;;
-      esac
+      data_dir="$2"
       shift 2
       ;;
     --no-open) open_browser=false; shift ;;
@@ -57,10 +54,6 @@ export BRANVIL_DATA_DIR="$data_dir/branvil"
 export GUILDBOTICS_SERVER_PORT="${GUILDBOTICS_SERVER_PORT:-8866}"
 # The identities are the data's own too; the workspace is the one named.
 unset GUILDBOTICS_IDENTITY_ROOT GUILDBOTICS_CONFIG_DIR
-# Branvil says it listens only in the log, at info.
-if [[ -n "${GUILDBOTICS_LOG+set}" ]]; then
-  export GUILDBOTICS_LOG="${GUILDBOTICS_LOG:+$GUILDBOTICS_LOG,}branvil::cli=info"
-fi
 
 # A Ctrl-C before the server starts ends the launcher once the running step
 # returns; afterwards the launcher is the server, which gets it itself.
@@ -90,10 +83,6 @@ if [[ -d "$runtime" && ! -e "$GUILDBOTICS_HOME/data/msb" && ! -L "$GUILDBOTICS_H
   ln -s "$runtime" "$GUILDBOTICS_HOME/data/msb"
 fi
 
-if [[ ! -f "$BRANVIL_DATA_DIR/branvil.redb" ]]; then
-  "$binary" branvil init --data-dir "$BRANVIL_DATA_DIR" --owner "$owner" --listen "127.0.0.1:$GUILDBOTICS_SERVER_PORT"
-fi
-
 mkdir -p "$data_dir"
 # What the server says on stdout -- only that GuildBotics listens -- and its
 # log, where Branvil says it listens, which still reaches the terminal.
@@ -116,17 +105,11 @@ open_screens() {
     fi
     sleep 0.2
   done
-  echo "GuildBotics is running on http://127.0.0.1:$GUILDBOTICS_SERVER_PORT with Branvil. Press Ctrl-C to stop."
+  echo "GuildBotics is running on http://127.0.0.1:$GUILDBOTICS_SERVER_PORT. Press Ctrl-C to stop."
   if ! "$open_browser"; then return 0; fi
-  # A link that no browser takes is printed instead.
+  # A link that no browser takes is printed instead; the session is shared.
   "$binary" open || return 0
-  # Branvil's own credentials and URL for this data directory, not the ones
-  # the calling shell may hold for another instance.
-  unset BRANVIL_TOKEN BRANVIL_URL
-  if ! "$binary" branvil open --data-dir "$BRANVIL_DATA_DIR"; then
-    echo "Could not open Branvil in the browser; the server is still running. Open this single-use link within 60 seconds:" >&2
-    "$binary" branvil open --print --data-dir "$BRANVIL_DATA_DIR" >&2 || true
-  fi
+  "$binary" open --branvil || return 0
 }
 server=$$
 # Not the server's child, which nothing would reap.

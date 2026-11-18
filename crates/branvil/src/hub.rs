@@ -1,4 +1,5 @@
-//! Local Hub maintenance, without accepting credentials from the caller.
+//! Local Hub maintenance on the server of this machine: `base` is its base
+//! URL and `token` its owner's token, which the caller reads from disk.
 
 use std::sync::Arc;
 
@@ -43,39 +44,26 @@ fn validate_repository(repo: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Read exactly the locally configured Hub, bypassing proxies and redirects.
+/// Read exactly the local Hub, bypassing proxies and redirects.
 pub async fn verified(
+    base: &str,
+    token: &str,
     repo: Option<&str>,
     origin: Option<&str>,
     since: &str,
 ) -> anyhow::Result<Value> {
-    let config = crate::serve_config()?;
-    verified_at(&config, repo, origin, since).await
-}
-
-async fn verified_at(
-    config: &crate::config::Config,
-    repo: Option<&str>,
-    origin: Option<&str>,
-    since: &str,
-) -> anyhow::Result<Value> {
-    let base = config
-        .base_url
-        .clone()
-        .unwrap_or_else(|| format!("http://{}", config.listen));
     let repo = match repo {
         Some(repo) => {
             validate_repository(repo)?;
             repo.to_owned()
         }
-        None => repository(origin.context("checkout origin is missing")?, &base)?,
+        None => repository(origin.context("checkout origin is missing")?, base)?,
     };
     anyhow::ensure!(
         since.len() == 40 && since.bytes().all(|b| b.is_ascii_hexdigit()),
         "invalid commit SHA"
     );
     let repo = crate::util::encode_segment(&repo);
-    let token = std::fs::read_to_string(config.layout().owner_token())?;
     let http = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -85,7 +73,7 @@ async fn verified_at(
         // Never render a response body or a request (both can contain secrets).
         let response = http
             .get(format!("{base}/api/v1/repos/{repo}{path}"))
-            .bearer_auth(token.trim())
+            .bearer_auth(token)
             .send()
             .await
             .map_err(|e| e.without_url())?;
@@ -130,14 +118,15 @@ async fn verified_at(
     }
 }
 
-/// Download a named artifact from the locally configured Hub only.
-pub async fn artifact(origin: &str, sha: &str, name: &str) -> anyhow::Result<Vec<u8>> {
-    let config = crate::serve_config()?;
-    let base = config
-        .base_url
-        .clone()
-        .unwrap_or_else(|| format!("http://{}", config.listen));
-    let repo = repository(origin, &base)?;
+/// Download a named artifact from the local Hub only.
+pub async fn artifact(
+    base: &str,
+    token: &str,
+    origin: &str,
+    sha: &str,
+    name: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let repo = repository(origin, base)?;
     anyhow::ensure!(
         sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
         "invalid commit SHA"
@@ -146,7 +135,6 @@ pub async fn artifact(origin: &str, sha: &str, name: &str) -> anyhow::Result<Vec
         name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'),
         "invalid artifact name"
     );
-    let token = std::fs::read_to_string(config.layout().owner_token())?;
     let response = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -156,7 +144,7 @@ pub async fn artifact(origin: &str, sha: &str, name: &str) -> anyhow::Result<Vec
             "{base}/api/v1/repos/{}/commits/{sha}/artifacts/{name}",
             crate::util::encode_segment(&repo)
         ))
-        .bearer_auth(token.trim())
+        .bearer_auth(token)
         .send()
         .await
         .map_err(|e| e.without_url())?;
@@ -172,12 +160,9 @@ pub async fn artifact(origin: &str, sha: &str, name: &str) -> anyhow::Result<Vec
         .to_vec())
 }
 
-/// Read the same scoped webhook as the server, including while it is stopped.
-pub async fn notify(vault: Arc<dyn vault::Vault>, text: &str) -> anyhow::Result<bool> {
-    notify_at(vault, &crate::serve_config()?.data_dir, text).await
-}
-
-async fn notify_at(
+/// Read the same scoped webhook as the server of `data`, including while it is
+/// stopped.
+pub async fn notify(
     vault: Arc<dyn vault::Vault>,
     data: &std::path::Path,
     text: &str,
@@ -204,13 +189,12 @@ mod tests {
             routing::get,
         };
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let root = tempfile::tempdir().unwrap();
-        let mut config = crate::config::Config::load(None, Some(root.path()), None, None).unwrap();
-        std::fs::create_dir_all(root.path().join("secrets")).unwrap();
-        std::fs::write(config.layout().owner_token(), "fixture-owner\n").unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        config.base_url = Some(base.clone());
+        let verified_at = |repo: Option<&'static str>, origin: Option<String>, since: String| {
+            let base = base.clone();
+            async move { verified(&base, "fixture-owner", repo, origin.as_deref(), &since).await }
+        };
         let mode = Arc::new(AtomicUsize::new(0));
         let app = axum::Router::new().route("/api/v1/repos/{repo}/verification/commits", get(
             |State(mode): State<Arc<AtomicUsize>>, headers: HeaderMap,
@@ -234,27 +218,27 @@ mod tests {
             (None, Some(format!("{base}/git/team/repo.git"))),
         ] {
             assert_eq!(
-                verified_at(&config, repo, origin.as_deref(), &"c".repeat(40))
+                verified_at(repo, origin.clone(), "c".repeat(40))
                     .await
                     .unwrap(),
                 json!({"since_on_main":true,"verified":["a".repeat(40)]})
             );
         }
         assert_eq!(
-            verified_at(&config, Some("team/repo"), None, &"f".repeat(40))
+            verified_at(Some("team/repo"), None, "f".repeat(40))
                 .await
                 .unwrap(),
             json!({"since_on_main":false,"verified":["a".repeat(40),"c".repeat(40),"d".repeat(40)]})
         );
         assert_eq!(
-            verified_at(&config, Some("team/repo"), None, &"a".repeat(40))
+            verified_at(Some("team/repo"), None, "a".repeat(40))
                 .await
                 .unwrap(),
             json!({"since_on_main":true,"verified":[]})
         );
         for value in [2, 3] {
             mode.store(value, Ordering::SeqCst);
-            let error = verified_at(&config, Some("team/repo"), None, &"c".repeat(40))
+            let error = verified_at(Some("team/repo"), None, "c".repeat(40))
                 .await
                 .unwrap_err()
                 .to_string();
@@ -263,22 +247,15 @@ mod tests {
         }
         assert!(
             verified_at(
-                &config,
                 None,
-                Some("http://other/git/team/repo.git"),
-                &"c".repeat(40)
+                Some("http://other/git/team/repo.git".into()),
+                "c".repeat(40)
             )
             .await
             .is_err()
         );
         assert!(
-            verified_at(&config, Some("team/repo"), None, "invalid")
-                .await
-                .is_err()
-        );
-        std::fs::remove_file(config.layout().owner_token()).unwrap();
-        assert!(
-            verified_at(&config, Some("team/repo"), None, &"c".repeat(40))
+            verified_at(Some("team/repo"), None, "invalid".into())
                 .await
                 .is_err()
         );
@@ -322,11 +299,7 @@ mod tests {
     async fn notification_without_a_server_uses_the_vault_and_sanitizes_failure() {
         let root = tempfile::tempdir().unwrap();
         let vault: Arc<dyn vault::Vault> = Arc::new(vault::Memory::default());
-        assert!(
-            !notify_at(vault.clone(), root.path(), "notice")
-                .await
-                .unwrap()
-        );
+        assert!(!notify(vault.clone(), root.path(), "notice").await.unwrap());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/secret-hook", listener.local_addr().unwrap());
         vault
@@ -343,14 +316,10 @@ mod tests {
             }),
         );
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        assert!(
-            notify_at(vault.clone(), root.path(), "notice")
-                .await
-                .unwrap()
-        );
+        assert!(notify(vault.clone(), root.path(), "notice").await.unwrap());
         server.abort();
         let _ = server.await;
-        let error = notify_at(vault, root.path(), "notice")
+        let error = notify(vault, root.path(), "notice")
             .await
             .unwrap_err()
             .to_string();

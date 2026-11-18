@@ -54,6 +54,12 @@ fn isolate(w: &mut World) {
 #[tokio::test]
 async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
     let mut w = World::new().await;
+    // A setting of the file before the owner changes any.
+    std::fs::write(
+        w.server.data.join("branvil.toml"),
+        "# kept\n[limits]\ngit_concurrency = 8\n",
+    )
+    .unwrap();
     isolate(&mut w);
     land_pipeline(&w).await;
 
@@ -124,10 +130,10 @@ async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
         assert_eq!(st, StatusCode::BAD_REQUEST, "{bad}: {v}");
     }
 
-    // The init's settings of the file are kept beside the new ones.
+    // The file's own settings are kept beside the new ones.
     let text = config_text(&w);
     assert!(
-        text.contains("listen = ") && text.contains("[limits]"),
+        text.contains("# kept") && text.contains("[limits]"),
         "{text}"
     );
     isolate(&mut w);

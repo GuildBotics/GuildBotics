@@ -148,12 +148,13 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         )
         .await;
     assert_eq!(st, 200, "{v}");
-    // A member token GuildBotics kept, which the upgrade from 35 revokes.
+    // A token of the owner's former token file, which the upgrade from 36
+    // revokes.
     let (st, v) = s
         .post(
-            "/members/aiko/tokens",
+            "/members/alice/tokens",
             &w.owner,
-            json!({"label": "guildbotics"}),
+            json!({"label": "owner-file"}),
         )
         .await;
     assert_eq!(st, StatusCode::CREATED, "{v}");
@@ -179,7 +180,7 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         .await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
 
-    let (cookie, _) = s.session(&w.owner).await;
+    let (cookie, _) = s.session();
     let out = s.cli(&w.owner, &["backup", "--to", backup.to_str().unwrap()]);
     assert!(out.status.success(), "{}", text(&out));
     assert!(
@@ -275,21 +276,22 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     assert!(out.status.success(), "{}", text(&out));
     assert!(!text(&out).contains("upgraded"), "{}", text(&out));
     let serves = format!(
-        "restored into {0}; `branvil serve --data-dir {0}` starts it",
+        "restored into {}; `guildbotics server hub-data check` checks it",
         current.display()
     );
     assert!(text(&out).contains(&serves), "{}", text(&out));
 
-    // A backup of the previous schema version: what version 35 wrote.
+    // A backup of the previous schema version: what version 36 wrote.
     let previous = out_dir.path().join("previous");
     copy_backup(&backup, &previous, &manifest);
     let db = previous.join("branvil.redb");
-    as_schema_35(&db);
-    let bytes = std::fs::read(&db).unwrap();
+    as_schema_36(&db);
     let mut old = manifest.clone();
-    old["schema_version"] = json!(35);
+    old["schema_version"] = json!(36);
+    // Both files the fixture rewrote: the database and the configuration.
     for f in old["files"].as_array_mut().unwrap() {
-        if f["path"] == "branvil.redb" {
+        if f["path"] == "branvil.redb" || f["path"] == "branvil.toml" {
+            let bytes = std::fs::read(previous.join(f["path"].as_str().unwrap())).unwrap();
             f["bytes"] = json!(bytes.len());
             f["sha256"] = json!(
                 sha2::Sha256::digest(&bytes)
@@ -321,19 +323,20 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("from schema version 35 to 36"),
+        text(&out).contains("from schema version 36 to 37"),
         "{}",
         text(&out)
     );
     assert!(
-        text(&out).contains("revoked 1 token(s) kept by GuildBotics"),
+        text(&out).contains("removed the browser sessions and revoked 1 owner file token(s)"),
         "{}",
         text(&out)
     );
     // Upgraded on the way: it has to pass its check before it serves.
     let checks_first = format!(
-        "restored into {0}; `branvil admin check --data-dir {0}` has to pass before `branvil serve --data-dir {0}` starts it",
-        target.path().join("data").display()
+        "restored into {}; `guildbotics server hub-data check` has to pass before the server opens {}",
+        target.path().join("data").display(),
+        target.path().join("data/branvil.redb").display()
     );
     assert!(text(&out).contains(&checks_first), "{}", text(&out));
     // The restore upgraded it: it needs its check before it serves.
@@ -344,29 +347,30 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
             .output()
             .unwrap()
     };
-    let out = admin("upgrade");
-    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
     let out = admin("check");
     assert!(out.status.success(), "{}", text(&out));
     assert!(text(&out).contains("indexes: ok"), "{}", text(&out));
     let out = admin("upgrade");
-    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("already has schema version"),
+        "{}",
+        text(&out)
+    );
 
     // Replace the original by the restored copy on the same base URL (URLs
     // recorded anywhere stay valid), and compare.
     let clones = w.dir.path().join("compare");
     std::fs::create_dir_all(&clones).unwrap();
-    let original_refs = ls_remote(s, &clones, &w.owner);
+    let original_refs = ls_remote(s, &clones, &w.owner_git);
     let listen = s.url.trim_start_matches("http://").to_string();
     w.server.stop();
     let restored = Server::start_on(target.path(), &listen, &[]);
     let r = &restored;
     assert_eq!(r.url, w.server.url);
-    // The backup has no owner token file: the first start mints a new owner
-    // token, and the previous one and every GUI session end.
-    let owner = owner_token(&r.data);
-    assert_ne!(owner, w.owner);
-    assert_eq!(r.get("/me", &w.owner).await.0, StatusCode::UNAUTHORIZED);
+    // The host's owner token and browser session are the owner's as before.
+    let owner = w.owner.clone();
+    assert_eq!(r.ok("/me", &owner).await["name"], "alice");
     let resp = r
         .http
         .get(format!("{}/api/v1/me", r.url))
@@ -374,10 +378,10 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(ls_remote(r, &clones, &owner), original_refs);
-    // The same tokens work (only their hashes were stored), except the one
-    // GuildBotics kept, which the upgrade revoked.
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(ls_remote(r, &clones, &w.owner_git), original_refs);
+    // The same tokens work (only their hashes were stored), except the
+    // owner file's, which the upgrade revoked.
     assert_eq!(r.get("/me", &kept).await.0, StatusCode::UNAUTHORIZED);
     let ticket = r.ok(&one, &w.aiko).await;
     assert_eq!(ticket["title"], "Back me up");

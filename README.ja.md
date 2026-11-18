@@ -67,10 +67,6 @@ cd GuildBotics
 npm ci && npm run build --workspace desktop --workspace crates/branvil/web
 cargo build --locked -p guildbotics
 target/debug/guildbotics install
-# Branvilを使う場合は、サーバーを起動する前に次の2行を実行します。
-# export BRANVIL_DATA_DIR="$HOME/branvil-data"
-# "$HOME/.guildbotics/bin/guildbotics" branvil init --data-dir "$BRANVIL_DATA_DIR"
-
 "$HOME/.guildbotics/bin/guildbotics" server start
 ```
 
@@ -78,7 +74,7 @@ target/debug/guildbotics install
 
 `install` はビルド済みの実行ファイルを `~/.guildbotics/bin/guildbotics` に置き、利用可能なAI CLIのユーザー領域に同梱スキルを配置します。ユーザーが編集したスキルと既存のコマンドは保持します。`~/.local/bin/guildbotics` のリンクを使うには `~/.local/bin` を `PATH` に加えます。
 
-Branvilを初めて使うときは、上のコメント付きの2行を実行します。既存のデータを使う場合は、`BRANVIL_DATA_DIR` にその絶対パスを設定します。別のターミナルでBranvilの画面を開くときも、同じ `BRANVIL_DATA_DIR` を設定して `"$HOME/.guildbotics/bin/guildbotics" open --branvil` を実行します。ログイン時の起動、更新、復旧は [macOS Hubの起動と更新](docs/hub-server.md) を参照してください。
+コードホストのデータは、初回の起動時に `~/.guildbotics/data/code-host` に作られます。別の場所を使う場合や既存のデータを使う場合は、起動の前に `BRANVIL_DATA_DIR` にその絶対パスを設定します。コードホストの画面は `"$HOME/.guildbotics/bin/guildbotics" open --branvil` で開きます。ログイン時の起動、更新、復旧は [macOS Hubの起動と更新](docs/hub-server.md) を参照してください。
 
 ### 初期セットアップ
 
@@ -459,11 +455,9 @@ guildbotics open
 
 ブラウザが、一度だけ使える入口リンク（60 秒で失効します）で開きます。サインインの画面はなく、`~/.guildbotics/data/server/<port>/owner.token` を読める OS のユーザーがオーナーです。セッションは 30 日続きます。期限が切れたら、もう一度 `guildbotics open` を実行してください。
 
-統合サーバーでは、GuildBotics と Branvil の入口とブラウザセッションを共用します。
-`guildbotics open`、`guildbotics open --branvil`、`guildbotics branvil open` は
-`/-/guildbotics/-/enter` の入口リンクを表示し、入った後の画面だけが異なります。
-更新後は新しいリンクで一度入り直してください。単体の `guildbotics branvil serve` は
-従来の Branvil セッションを使います。
+サーバーのすべての画面で、入口とブラウザセッションを共用します。
+`guildbotics open` と `guildbotics open --branvil` は `/-/guildbotics/-/enter` の
+入口リンクを表示し、入った後の画面だけが異なります。
 
 **Windows クライアントの導入**
 

@@ -1,7 +1,7 @@
 //! `guildbotics server start`: GuildBotics' port as the Python server's
 //! launchers and screens expect it, and Branvil in the same process, whose
 //! commands it starts again on this executable (a push runs the hooks as
-//! `guildbotics branvil hook`).
+//! `guildbotics server git-hook`).
 
 #![cfg(unix)]
 
@@ -60,10 +60,13 @@ struct Server {
     stdout: mpsc::Receiver<String>,
     stderr: mpsc::Receiver<String>,
     http: reqwest::Client,
+    /// Whether the code host said it is ready.
+    ready: std::cell::Cell<bool>,
 }
 
 impl Server {
-    /// Starts the server and waits for its notice that it listens.
+    /// Starts the server and waits for its notice that it listens and for
+    /// the code host it prepares at every start.
     fn start(dir: &Path) -> Server {
         Server::start_on(dir, free_port())
     }
@@ -72,7 +75,15 @@ impl Server {
         Server::spawn(server_command(dir, port), dir, port)
     }
 
-    fn spawn(mut command: Command, dir: &Path, port: u16) -> Server {
+    /// Starts `command` and waits for the server and its code host.
+    fn spawn(command: Command, dir: &Path, port: u16) -> Server {
+        let server = Server::spawn_starting(command, dir, port);
+        let _ = server.branvil_url();
+        server
+    }
+
+    /// Starts `command` and waits only for its notice that it listens.
+    fn spawn_starting(mut command: Command, dir: &Path, port: u16) -> Server {
         let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -107,6 +118,7 @@ impl Server {
             stdout,
             stderr,
             http: reqwest::Client::builder().no_proxy().build().unwrap(),
+            ready: std::cell::Cell::new(false),
         }
     }
 
@@ -124,17 +136,17 @@ impl Server {
         format!("http://127.0.0.1:{}{path}", self.port)
     }
 
-    /// The URL Branvil says it listens on.
+    /// The URL the code host serves on, once it says it is ready.
     fn branvil_url(&self) -> String {
-        loop {
+        while !self.ready.get() {
             let line = self
                 .stderr
                 .recv_timeout(Duration::from_secs(30))
-                .expect("Branvil says where it listens");
-            if line.contains("Branvil ready on the shared listener") {
-                return self.url("");
-            }
+                .expect("the code host says it is ready");
+            self.ready
+                .set(line.contains("Branvil ready on the shared listener"));
         }
+        self.url("")
     }
 
     async fn exit_within(&mut self, timeout: Duration) -> std::process::ExitStatus {
@@ -231,9 +243,9 @@ async fn command_and_diagnostics_screens_match_the_python_golden() {
         )
         .unwrap()
     };
-    // Host topology was added after the Python fixture; this server has no Branvil.
+    // Host topology was added after the Python fixture; every server has the code host.
     let mut expected_status = expected["status"].clone();
-    expected_status["branvil_available"] = json!(false);
+    expected_status["branvil_available"] = json!(true);
     let mut urls = vec![
         (
             "/-/guildbotics/api/config/status".to_owned(),
@@ -940,13 +952,32 @@ fn an_empty_branvil_data_dir_is_refused_rather_than_the_current_directory() {
     assert_eq!(std::fs::read_dir(&work).unwrap().count(), 0);
 }
 
-fn guildbotics(data: &Path, args: &[&str]) -> Output {
-    Command::new(BIN)
-        .args(args)
-        .env("BRANVIL_DATA_DIR", data)
-        .stdin(Stdio::null())
-        .output()
+/// Calls the code host's API as the server's owner, with its token.
+async fn code_host(server: &Server, path: &str, body: Value) -> Value {
+    let response = server
+        .http
+        .post(server.url(&format!("/api/v1{path}")))
+        .bearer_auth(server.owner_token())
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let (status, _, value) = self::body(response).await;
+    assert!(status.is_success(), "{path}: {status} {value}");
+    value
+}
+
+/// A token of the code host's member `name`, as Git takes it.
+async fn member_token(server: &Server, name: &str) -> String {
+    code_host(
+        server,
+        &format!("/members/{name}/tokens"),
+        json!({"label": "test"}),
+    )
+    .await["token"]
+        .as_str()
         .unwrap()
+        .to_owned()
 }
 
 /// Git with no configuration but its own, answering the credential prompt
@@ -997,48 +1028,22 @@ fn assert_ok(output: &Output) {
     );
 }
 
-#[test]
-fn branvil_runs_in_the_server_and_its_hooks_run_on_this_executable() {
+#[tokio::test]
+async fn branvil_runs_in_the_server_and_its_hooks_run_on_this_executable() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("branvil");
-    assert_ok(&guildbotics(
-        &data,
-        &[
-            "branvil",
-            "init",
-            "--owner",
-            "owner",
-            "--listen",
-            "127.0.0.1:0",
-        ],
-    ));
-    let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    std::fs::write(
-        data.join("branvil.toml"),
-        format!(
-            "listen = '{}'\nbase_url = 'http://127.0.0.1:1'\n",
-            occupied.local_addr().unwrap()
-        ),
-    )
-    .unwrap();
-    let token = std::fs::read_to_string(data.join("secrets/owner.token")).unwrap();
     let server = Server::start(dir.path());
     let url = server.branvil_url();
     assert_eq!(url, server.url(""));
-
-    for args in [
-        ["branvil", "workspace", "create", "acme"],
-        ["branvil", "repo", "create", "acme/demo"],
-    ] {
-        let mut args = args.to_vec();
-        args.extend(["--url", &url]);
-        assert_ok(&guildbotics(&data, &args));
-    }
+    // The first start made the data directory and its owner.
+    code_host(&server, "/workspaces", json!({"name": "acme"})).await;
+    code_host(&server, "/repos", json!({"path": "acme/demo"})).await;
     let hook = std::fs::read_to_string(data.join("hooks/pre-receive")).unwrap();
     assert!(
-        hook.contains(&format!("exec '{BIN}' 'branvil' 'hook' 'pre-receive'")),
+        hook.contains(&format!("exec '{BIN}' 'server' 'git-hook' 'pre-receive'")),
         "{hook}"
     );
+    let token = member_token(&server, "owner").await;
 
     let home = dir.path().join("git-home");
     let work = dir.path().join("work");
@@ -1054,13 +1059,8 @@ fn branvil_runs_in_the_server_and_its_hooks_run_on_this_executable() {
     }
     // The pre-receive hook refuses a push it cannot run.
     let remote = format!("{url}/git/acme/demo.git");
-    assert_ok(&git(
-        &work,
-        &home,
-        token.trim(),
-        &["push", "-q", &remote, "main"],
-    ));
-    let listed = git(&work, &home, token.trim(), &["ls-remote", &remote, "main"]);
+    assert_ok(&git(&work, &home, &token, &["push", "-q", &remote, "main"]));
+    let listed = git(&work, &home, &token, &["ls-remote", &remote, "main"]);
     assert_ok(&listed);
     let head = git(&work, &home, "", &["rev-parse", "HEAD"]);
     assert!(
@@ -1070,35 +1070,26 @@ fn branvil_runs_in_the_server_and_its_hooks_run_on_this_executable() {
     server.stop();
 }
 
-/// `guildbotics branvil init` with Branvil's data under `dir` and listening on
-/// `listen`.
-fn set_up_branvil(dir: &Path, listen: &str) -> PathBuf {
+/// The code host's data directory under `dir`, made for a configuration the
+/// first start reads.
+fn code_host_data(dir: &Path) -> PathBuf {
     let data = dir.join("branvil");
-    assert_ok(&guildbotics(
-        &data,
-        &["branvil", "init", "--owner", "owner", "--listen", listen],
-    ));
+    std::fs::create_dir_all(&data).unwrap();
     data
 }
 
 #[tokio::test]
 async fn open_commands_share_the_entry_and_browser_session() {
     let dir = tempfile::tempdir().unwrap();
-    let listen = format!("127.0.0.1:{}", free_port());
-    let data = set_up_branvil(dir.path(), &listen);
     let server = Server::start(dir.path());
-    let _ = server.branvil_url();
     for (args, next) in [
         (vec!["open", "--print"], None),
         (vec!["open", "--branvil", "--print"], Some("/")),
-        (vec!["branvil", "open", "--print"], Some("/")),
     ] {
         let opened = Command::new(BIN)
             .args(args)
-            .env("BRANVIL_DATA_DIR", &data)
             .env("GUILDBOTICS_HOME", &server.home)
             .env("GUILDBOTICS_SERVER_PORT", server.port.to_string())
-            .env_remove("BRANVIL_URL")
             .output()
             .unwrap();
         assert_ok(&opened);
@@ -1153,7 +1144,6 @@ async fn open_commands_share_the_entry_and_browser_session() {
 #[test]
 fn ctrl_c_while_starting_reports_drain_then_cancellation_and_stops_branvil() {
     let dir = tempfile::tempdir().unwrap();
-    set_up_branvil(dir.path(), "127.0.0.1:0");
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let registry = dir.path().join("home/data/workspaces.lock");
@@ -1165,7 +1155,7 @@ fn ctrl_c_while_starting_reports_drain_then_cancellation_and_stops_branvil() {
     command
         .env("GUILDBOTICS_WORKSPACE_ROOT", &workspace)
         .env("LANGUAGE", "en");
-    let mut server = Server::spawn(command, dir.path(), port);
+    let mut server = Server::spawn_starting(command, dir.path(), port);
     for key in [
         "runtime.service_lock.stopping_after_work",
         "runtime.service_lock.cancelling",
@@ -1201,8 +1191,7 @@ fn ctrl_c_while_starting_reports_drain_then_cancellation_and_stops_branvil() {
 #[test]
 fn branvil_failing_to_start_stops_the_server() {
     let dir = tempfile::tempdir().unwrap();
-    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let data = set_up_branvil(dir.path(), &taken.local_addr().unwrap().to_string());
+    let data = code_host_data(dir.path());
     std::fs::write(data.join("branvil.toml"), "invalid = true").unwrap();
     let mut child = server_command(dir.path(), free_port())
         .stdout(Stdio::null())
@@ -1221,7 +1210,7 @@ fn a_refused_server_never_starts_branvil() {
     let dir = tempfile::tempdir().unwrap();
     let first = Server::start(dir.path());
     let other = tempfile::tempdir().unwrap();
-    let data = set_up_branvil(other.path(), "127.0.0.1:0");
+    let data = other.path().join("branvil");
     let refused = server_command(dir.path(), free_port())
         .env("BRANVIL_DATA_DIR", &data)
         .output()
@@ -1769,7 +1758,6 @@ fn run_accepts_options_after_the_command_but_requires_a_server() {
 #[test]
 fn server_stop_uses_the_running_port_and_waits_for_both_servers() {
     let dir = tempfile::tempdir().unwrap();
-    set_up_branvil(dir.path(), "127.0.0.1:0");
     let stop = |force: bool| {
         let mut command = Command::new(BIN);
         command
@@ -1855,9 +1843,9 @@ async fn hold_workspace_switch(server: &Server, workspace: &Path) -> gb_base::fi
 async fn graceful_shutdown_keeps_branvil_available_until_guildbotics_drains() {
     for via_api in [true, false] {
         let dir = tempfile::tempdir().unwrap();
-        set_up_branvil(dir.path(), "127.0.0.1:0");
         let mut server = Server::start(dir.path());
-        let branvil = format!("{}/api/v1/health", server.branvil_url());
+        let branvil = format!("{}/api/v1/me", server.branvil_url());
+        let owner = server.owner_token();
         let workspace = dir.path().join("workspace");
         let registry = hold_workspace_switch(&server, &workspace).await;
 
@@ -1884,6 +1872,7 @@ async fn graceful_shutdown_keeps_branvil_available_until_guildbotics_drains() {
             availability = server
                 .http
                 .get(&branvil)
+                .bearer_auth(&owner)
                 .timeout(Duration::from_secs(1))
                 .send()
                 .await
@@ -1912,42 +1901,24 @@ async fn graceful_shutdown_keeps_branvil_available_until_guildbotics_drains() {
 async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interrupted() {
     for mode in ["deadline", "finish", "force-ci", "force-work"] {
         let dir = tempfile::tempdir().unwrap();
-        let data = set_up_branvil(dir.path(), "127.0.0.1:0");
+        let data = code_host_data(dir.path());
         let config = data.join("branvil.toml");
         let configure = |seconds| {
-            std::fs::write(
-                &config,
-                format!("listen = '127.0.0.1:0'\n[ci]\nstop_wait_secs = {seconds}\n"),
-            )
-            .unwrap();
+            std::fs::write(&config, format!("[ci]\nstop_wait_secs = {seconds}\n")).unwrap();
         };
         configure(if mode == "deadline" { 10 } else { 30 });
         let mut server = Server::start(dir.path());
         let url = server.branvil_url();
-        let owner = std::fs::read_to_string(data.join("secrets/owner.token")).unwrap();
-        for args in [
-            &["workspace", "create", "acme"][..],
-            &["repo", "create", "acme/demo"],
-            &["member", "create", "fixture-runner", "--kind", "runner"],
-        ] {
-            let mut command = vec!["branvil"];
-            command.extend(args);
-            command.extend(["--url", &url]);
-            assert_ok(&guildbotics(&data, &command));
-        }
-        let token = guildbotics(
-            &data,
-            &[
-                "branvil",
-                "member",
-                "token",
-                "fixture-runner",
-                "--url",
-                &url,
-            ],
-        );
-        assert_ok(&token);
-        let runner = String::from_utf8(token.stdout).unwrap();
+        code_host(&server, "/workspaces", json!({"name": "acme"})).await;
+        code_host(&server, "/repos", json!({"path": "acme/demo"})).await;
+        code_host(
+            &server,
+            "/members",
+            json!({"name": "fixture-runner", "kind": "runner"}),
+        )
+        .await;
+        let runner = member_token(&server, "fixture-runner").await;
+        let owner = member_token(&server, "owner").await;
         let work = dir.path().join("work");
         let home = dir.path().join("git-home");
         std::fs::create_dir_all(work.join(".branvil")).unwrap();

@@ -293,8 +293,8 @@ impl Server {
         self.api.auth.base_url().to_string()
     }
 
-    /// Share browser authentication without retaining the server or its data API.
-    pub fn browser_session(&self) -> Arc<dyn branvil::browser_session::BrowserSession> {
+    /// Share the owner's authentication without retaining the server or its data API.
+    pub fn host(&self) -> Arc<dyn branvil::host::Host> {
         self.api.auth.clone()
     }
 
@@ -343,7 +343,7 @@ impl Server {
         };
         let startup_api = self.api.clone();
         let mut startup = tokio::spawn(async move {
-            let _preparing = preparing;
+            let preparing = preparing;
             let Some(prepare) = prepare else {
                 return Ok(None);
             };
@@ -367,6 +367,8 @@ impl Server {
             }
             startup_api.select(Selected::open(workspace, &startup_api, Some(data_api)));
             *host_router.write().unwrap() = Some(embedded.router());
+            // Ready means the selection is published and open to operations.
+            drop(preparing);
             ready_tx.send_replace(true);
             tracing::info!("Branvil ready on the shared listener");
             Ok::<_, anyhow::Error>(Some(embedded))
@@ -914,7 +916,7 @@ mod tests {
             .unwrap();
         for path in [
             "/",
-            "/api/v1/health",
+            "/api/v1/session",
             "/git/acme/demo.git/info/refs",
             "/api/v1/runner/claim",
         ] {

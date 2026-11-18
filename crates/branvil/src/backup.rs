@@ -81,7 +81,6 @@ pub struct AccountEntry {
 }
 
 const EXCLUDED: &[&str] = &[
-    "secrets/ (the owner token: the first start makes a new one and every GUI session ends)",
     "members' upstream credentials and the webhook URL (in the service's vault, named after its data directory: set them again after a restore into another directory)",
     "hooks/ and git/ (written again at every start)",
     "Git reflogs and repository-local Git configuration (Branvil re-applies its own at start)",
@@ -104,6 +103,47 @@ pub async fn http_backup(
     c.require_owner()?;
     let manifest = create(&app, Path::new(&input.to)).await?;
     Ok(axum::Json(manifest).into_response())
+}
+
+/// Asks the server at `url` for a backup into `to`, as its owner (`token`).
+/// The directory is on the server's machine; a relative path is made
+/// absolute here first.
+pub async fn request(url: &str, token: &str, to: &Path) -> anyhow::Result<()> {
+    let to = std::path::absolute(to)?;
+    let response = reqwest::Client::new()
+        .post(format!("{url}/api/v1/admin/backup"))
+        .bearer_auth(token)
+        .json(&serde_json::json!({"to": to}))
+        .send()
+        .await
+        .with_context(|| format!("the server is not reachable at {url}"))?;
+    let status = response.status();
+    let v: serde_json::Value = response.json().await.unwrap_or_default();
+    if !status.is_success() {
+        bail!(
+            "{} ({})",
+            v["error"]["message"].as_str().unwrap_or("request failed"),
+            status.as_u16()
+        );
+    }
+    println!("backup written to {}", to.display());
+    println!(
+        "repositories: {}, files: {}",
+        v["repositories"].as_array().map_or(0, Vec::len),
+        v["files"].as_array().map_or(0, Vec::len)
+    );
+    for a in v["account_tokens_excluded"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        println!(
+            "note: the {} credential of {} is not in the backup",
+            a["provider"].as_str().unwrap_or(""),
+            a["member"].as_str().unwrap_or("")
+        );
+    }
+    Ok(())
 }
 
 fn overlaps(a: &Path, b: &Path) -> bool {
@@ -373,7 +413,7 @@ fn inside(root: &Path, rel: &str) -> anyhow::Result<PathBuf> {
 
 // ---------------------------------------------------------------- restore
 
-/// `branvil restore`: verifies the backup, fills a new data directory, and
+/// `guildbotics server hub-data restore`: verifies the backup, fills a new data directory, and
 /// checks the result. Returns the exit code (1 when the check finds problems).
 pub async fn restore(from: &Path, data_dir: &Path) -> anyhow::Result<u8> {
     let text = std::fs::read_to_string(from.join(MANIFEST))
@@ -481,10 +521,7 @@ pub async fn restore(from: &Path, data_dir: &Path) -> anyhow::Result<u8> {
         let next = if store::needs_check(&layout.db())? {
             store::check_step(&layout.db())
         } else {
-            format!(
-                "`branvil serve --data-dir {}` starts it",
-                data_dir.display()
-            )
+            "`guildbotics server hub-data check` checks it".to_string()
         };
         println!("restored into {}; {next}", data_dir.display());
         Ok(0)
@@ -534,7 +571,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 
     fn app(data: &Path) -> crate::app::Shared {
-        let config = Config::load(None, Some(data), None, None).unwrap();
+        let config = Config::load(None, data).unwrap();
         config.layout().create().unwrap();
         let store = Store::open(&config.layout().db(), 1 << 20, 1).unwrap();
         App::new(

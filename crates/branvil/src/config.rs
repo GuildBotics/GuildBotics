@@ -1,21 +1,14 @@
-//! Configuration file, data directory layout, and the fixed base URL.
+//! Configuration file and data directory layout.
 
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
-
-pub const DEFAULT_LISTEN: &str = "127.0.0.1:7878";
 
 /// `branvil.toml`. Every field is optional; a missing file means defaults.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFile {
-    /// Loopback address to listen on.
-    pub listen: Option<String>,
-    /// The permanent base URL every machine uses (`http://127.0.0.1:7878`).
-    pub base_url: Option<String>,
     #[serde(default)]
     pub storage: StorageConfig,
     #[serde(default)]
@@ -106,8 +99,6 @@ pub struct LimitsConfig {
     pub git_push_max_mib: u64,
     /// Largest JSON request body, in KiB.
     pub api_body_max_kib: usize,
-    /// GUI session lifetime, in hours.
-    pub session_hours: i64,
 }
 
 impl Default for LimitsConfig {
@@ -119,7 +110,6 @@ impl Default for LimitsConfig {
             git_command_timeout_secs: 120,
             git_push_max_mib: 1024,
             api_body_max_kib: 1024,
-            session_hours: 720,
         }
     }
 }
@@ -130,9 +120,6 @@ pub struct Config {
     pub data_dir: PathBuf,
     /// The configuration file: the one read, or where it would be.
     pub file: PathBuf,
-    pub listen: SocketAddr,
-    /// Set when configured or given; otherwise derived from the bound address.
-    pub base_url: Option<String>,
     pub storage: StorageConfig,
     pub limits: LimitsConfig,
     pub ci: crate::ci::config::CiConfig,
@@ -182,13 +169,6 @@ impl Layout {
     pub fn attachments(&self) -> PathBuf {
         self.root.join("attachments")
     }
-    pub fn secrets(&self) -> PathBuf {
-        self.root.join("secrets")
-    }
-    /// The owner's token (`0600`), for the CLI on this machine.
-    pub fn owner_token(&self) -> PathBuf {
-        self.secrets().join("owner.token")
-    }
     pub fn repo_dir(&self, path: &str) -> PathBuf {
         let mut dir = self.repos();
         let mut parts: Vec<&str> = path.split('/').collect();
@@ -200,7 +180,7 @@ impl Layout {
         dir
     }
 
-    /// Creates the directories (the root and secrets with owner-only permissions).
+    /// Creates the directories (the root with owner-only permissions).
     pub fn create(&self) -> anyhow::Result<()> {
         for dir in [
             self.root.clone(),
@@ -210,13 +190,11 @@ impl Layout {
             self.ci_logs(),
             self.ci_artifacts(),
             self.attachments(),
-            self.secrets(),
         ] {
             std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         }
         // Only the service's user reads the database, repositories, and logs.
         restrict(&self.root, true)?;
-        restrict(&self.secrets(), true)?;
         if !self.git_config().exists() {
             std::fs::write(self.git_config(), "")?;
         }
@@ -238,29 +216,15 @@ pub fn restrict(_path: &Path, _dir: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The default data directory: the OS convention for application data.
-pub fn default_data_dir() -> anyhow::Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", "branvil")
-        .context("cannot determine the home directory; pass --data-dir")?;
-    Ok(dirs.data_dir().to_path_buf())
-}
-
 /// Validates a base URL: `http(s)://host:port` with nothing after it.
 pub fn normalize_base_url(value: &str) -> anyhow::Result<String> {
     loopback_auth::normalize_base_url(value).map_err(anyhow::Error::msg)
 }
 
 impl Config {
-    pub fn load(
-        config_path: Option<&Path>,
-        data_dir: Option<&Path>,
-        listen: Option<&str>,
-        base_url: Option<&str>,
-    ) -> anyhow::Result<Config> {
-        let data_dir = match data_dir {
-            Some(d) => d.to_path_buf(),
-            None => default_data_dir()?,
-        };
+    /// Reads `config_path`, else `branvil.toml` of `data_dir` when it exists.
+    pub fn load(config_path: Option<&Path>, data_dir: &Path) -> anyhow::Result<Config> {
+        let data_dir = data_dir.to_path_buf();
         let layout = Layout::new(&data_dir);
         let file_path = config_path
             .map(Path::to_path_buf)
@@ -274,28 +238,9 @@ impl Config {
             }
             Err(e) => return Err(e).with_context(|| format!("reading {}", file_path.display())),
         };
-        let listen_text = listen
-            .map(str::to_string)
-            .or(file.listen.clone())
-            .unwrap_or_else(|| DEFAULT_LISTEN.to_string());
-        let listen: SocketAddr = listen_text
-            .parse()
-            .with_context(|| format!("listen address '{listen_text}' is not host:port"))?;
-        if !listen.ip().is_loopback() {
-            bail!(
-                "Branvil listens on loopback only ({listen} is not); other machines reach it through OpenSSH port forwarding"
-            );
-        }
-        let base_url = match base_url.map(str::to_string).or(file.base_url.clone()) {
-            Some(url) => Some(normalize_base_url(&url)?),
-            None if listen.port() != 0 => Some(format!("http://{listen}")),
-            None => None,
-        };
         Ok(Config {
             data_dir,
             file: file_path,
-            listen,
-            base_url,
             storage: file.storage,
             limits: file.limits,
             ci: file.ci,
@@ -313,12 +258,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn non_loopback_listen_is_refused() {
+    fn a_missing_file_means_defaults_and_unknown_keys_are_refused() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(Config::load(None, Some(dir.path()), Some("0.0.0.0:7878"), None).is_err());
-        let c = Config::load(None, Some(dir.path()), Some("127.0.0.1:9000"), None).unwrap();
-        assert_eq!(c.base_url.as_deref(), Some("http://127.0.0.1:9000"));
+        let c = Config::load(None, dir.path()).unwrap();
         assert_eq!(c.storage.cache_size_mib, 32);
+        std::fs::write(
+            dir.path().join("branvil.toml"),
+            "listen = \"127.0.0.1:7878\"\n",
+        )
+        .unwrap();
+        assert!(Config::load(None, dir.path()).is_err());
     }
 
     #[test]

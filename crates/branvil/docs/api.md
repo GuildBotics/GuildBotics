@@ -1,29 +1,31 @@
 # Branvil HTTP API (v1)
 
-This is the contract between the Branvil service and its clients: the browser
-GUI, the `branvil` CLI, and the CI runner. The GuildBotics `branvil` provider
-calls the same operations in-process through `api::DataApi`, without a token:
-`DataApi::owner()` acts as the owner and `DataApi::agent(name, display_name)`
-as the agent `name`, created with that display name when missing. The Python double in
-GuildBotics (`tests/guildbotics/integrations/contracts/providers.py`) and the
-integration tests in this repository both follow it. When the service changes
-an endpoint, this file changes in the same commit.
+This is the internal contract between the service and its clients in this
+repository: the browser GUI, the CI runner (`guildbotics runner`), the Git
+hooks, and the Hub's update commands (`guildbotics server hub-data backup`,
+`hub-verified`, `hub-clients`). GuildBotics' members call the operations
+in process through `api::DataApi`, without a token: `DataApi::owner()` acts as
+the owner and `DataApi::agent(name, display_name)` as the agent `name`,
+created with that display name when missing. When the service changes an
+endpoint, this file changes in the same commit.
 
-## Integrated browser sessions
+Some operations below are **in process only**: no client of the server uses
+them over HTTP, so the server does not serve them, and members reach them
+through `api::MemberApi`. Only the integration tests' server
+(`test_support`) serves them, to drive the service as before. They are
+marked "(in process only)".
 
-When embedded in GuildBotics, the host supplies `browser_session::BrowserSession`
-to `prepare_embedded`. `GET /api/v1/session` includes `host_navigation: {label, url}` supplied by the embedding host
-(`null` on a standalone server), and resolves the host's live owner cookie
-to Branvil's owner member and returns the host CSRF value. Writes still send
-`x-branvil-csrf`. Only the port-specific `guildbotics_session_<port>` cookie is
-accepted; old Branvil cookies are not accepted in this mode. Bearer tokens retain
-Branvil's existing member permissions.
+## Browser sessions and the owner's token
 
-`POST /api/v1/session/links` returns a single-use GuildBotics entry link with
-`next=/`; the fragment is exchanged at `POST /-/guildbotics/api/session`.
-`POST /api/v1/session` is not registered in integrated mode (405).
-`GET /-/enter` redirects to the common `/-/guildbotics/-/enter` guidance.
-The standalone server retains the session endpoints described below.
+GuildBotics authenticates the owner (`host::Host`, given to
+`prepare_embedded`). `GET /api/v1/session` resolves GuildBotics' live owner
+cookie (`guildbotics_session_<port>`) to the owner member and returns
+`{"me", "csrf", "host_navigation": {label, url}}` with GuildBotics' CSRF
+value; every non-GET request made with the cookie sends it as
+`X-GuildBotics-CSRF`. A Bearer token that is not a member's token
+(`bvt_...`) is checked as GuildBotics' owner token (the one in
+`GUILDBOTICS_HOME/data/server/<port>/owner.token`; consent tokens of apps are
+refused). The browser enters through GuildBotics (`guildbotics open`).
 
 ## Conventions
 
@@ -124,38 +126,30 @@ repository, and upstream events, including changes in another repository.
 
 ### Authentication
 
-- Members are the owner (the one person who uses Branvil, created by
-  `guildbotics branvil init`), agents, and CI runners.
-- API clients send `Authorization: Bearer <token>`. A token belongs to one
-  member and is shown once when it is issued (`guildbotics branvil member token`), stored
-  only as a SHA-256 hash. The owner's token is kept in
-  `<data dir>/secrets/owner.token` for the CLI on the Hub machine.
+- Members are the owner (the one person who uses the service, created at the
+  server's first start), agents, and CI runners.
+- API clients send `Authorization: Bearer <token>`: a member's token, shown
+  once when it is issued and stored only as a SHA-256 hash, or GuildBotics'
+  owner token (see above).
 - Git over Smart HTTP uses HTTP Basic: the username is the member's name and
   the password is one of the member's tokens. Both fetch (`git-upload-pack`) and
   push (`git-receive-pack`) require it. A username that is not the token's
   member (compared case-insensitively) is refused with `401` and a
   `WWW-Authenticate: Basic` challenge.
-- Pushes are checked by Branvil's own pre-receive hook: the owner or an agent
+- Pushes are checked by the service's own pre-receive hook: the owner or an agent
   (a runner pushes nothing); only `refs/heads/*` and `refs/tags/*`; a
   protected branch (the default branch always) is never pushed, deleted, or
   force-pushed: it moves only by a merge. The one exception is creating a
   protected branch that does not exist yet (the first import into an empty
   repository) by the owner. An agent creates tags; only the owner moves or
   deletes one.
-- The GUI has no sign-in screen. `guildbotics branvil open` asks for a single-use entry
-  link (`POST /api/v1/session/links`), and the GUI exchanges its code with
-  `POST /api/v1/session` for the owner's `branvil_session_<port>` cookie
-  (HttpOnly, SameSite=Strict; named by the base URL's port, so two services
-  on one machine keep their own sessions). Every non-GET request made with the cookie must carry
-  `X-Branvil-CSRF: <csrf>` from the session response; Bearer requests do not
-  need it. A missing or mismatched header is `403 csrf_mismatch`, before the
-  handler runs. The GUI reads `GET /api/v1/session` to refresh its CSRF value
-  and retries that request once with the same body and idempotency key. If
-  the session cannot be refreshed, it asks the user to reload the page.
-- Every request must have a `Host` of the configured base URL's host and port
-  (or `localhost`/`127.0.0.1`/`[::1]` with that port). Requests that carry an
-  `Origin` must have that same origin. Anything else is `421 misdirected` /
-  `403 forbidden`.
+- A cookie request without the right `X-GuildBotics-CSRF` on a non-GET method
+  is `403 csrf_mismatch`, before the handler runs. The GUI reads
+  `GET /api/v1/session` to refresh its CSRF value and retries that request
+  once with the same body and idempotency key. If the session cannot be
+  refreshed, it asks the user to reload the page.
+- GuildBotics checks `Host` and `Origin` on every request before the service
+  sees it (`421 misdirected` / `403`).
 
 ### Errors
 
@@ -193,12 +187,6 @@ Messages never contain tokens.
 
 ## Service and members
 
-### `GET /api/v1/health` (no authentication)
-
-```json
-{"service": "branvil", "version": "0.1.0", "api": 1}
-```
-
 ### `GET /api/v1/me`
 
 ```json
@@ -213,22 +201,6 @@ are its accounts on upstream hosts (see "Upstream"); an account's `kind` is
 request it opens (see "Pull requests"). `401 unauthorized` for a
 bad token.
 
-### Entry links and sessions (GUI)
-
-- `POST /api/v1/session/links` (owner) → `201 {"url": "{base}/-/enter#<code>", "expires_at": "..."}`.
-  The code is 32 random bytes, works once, and expires after 60 seconds; only
-  its hash is kept, in memory, so a restart invalidates unused codes. It travels
-  in the URL fragment, so it is in no request line, log, or `Referer`.
-  `guildbotics branvil open` calls this and opens the URL (`--print` prints it). The
-  response is never replayed for an `Idempotency-Key`.
-- `POST /api/v1/session` `{"code"}` (no authentication; the `Host` and `Origin`
-  checks apply) → `{"me": {...member}, "csrf": "..."}` and a `Set-Cookie` of a
-  session that lasts `limits.session_hours` (default 720). A used, expired, or
-  unknown code is `401 unauthorized`.
-- `GET /api/v1/session` returns the same body for a valid cookie.
-
-There is no sign-out: `docs/security.md` says how to end every session.
-
 ### Members and tokens (admin API)
 
 The members, tokens, accounts ("Upstream"), and workspaces endpoints are
@@ -239,7 +211,7 @@ as the rest of this file.
 - `GET /api/v1/members` (owner) → items of `{"name","display_name","kind","accounts","reviewers","avatar_url"}`;
   `avatar_url` is where the member's picture is (`null` for none), and it
   changes with the picture.
-- `GET /api/v1/members/{name}` (owner, or the member itself) → member; `403
+- `GET /api/v1/members/{name}` (in process only; owner, or the member itself) → member; `403
   forbidden` for another member's name (known or not) asked by a non-owner,
   `404 not_found` for an unknown name asked by the owner.
 - `POST /api/v1/members` (owner) `{"name","display_name"?,"kind": "agent"|"runner"}` → member.
@@ -329,13 +301,7 @@ a code host it follows and publishes to, or `null` (see "Upstream").
 `{"name": "feature", "sha": "<40 hex>"}`; `404 not_found` when there is no
 branch of exactly that name.
 
-### `GET /api/v1/repos/{repo}/compare?base={sha}&head={sha}`
-
-`{"base": "...", "head": "...", "merge_base": "...", "ahead_by": 2, "behind_by": 0}`
-(`merge_base` is `null` for unrelated histories; `404` when either commit is missing).
-`behind_by` counts commits reachable from `base` and not from `head`.
-
-### Dependency alerts
+### Dependency alerts (in process only)
 
 The dependency vulnerabilities the upstream host reports for the repository
 it follows ("Upstream"; GitHub: Dependabot alerts). Branvil keeps none of them
@@ -501,7 +467,7 @@ blockers, …) is refused with `400 invalid`, as is one to a ticket of another
 workspace.
 
 - `POST /api/v1/repos/{repo}/tickets` `{"title","body","labels","lane"?,"interactive"?,"assignee"?,"parent"?,"blocked_by"?,"upstream_issue"?}` → `201` ticket with the repository's next number, at the end of `lane` of the workspace's board (when `lane` is omitted: `ready` with a parent or blockers, `new` otherwise) in the same transaction. Optional `interactive` (default false), `assignee` (member name, including the owner), `parent` (ticket URL), and `blocked_by` (ticket URLs) are committed with the new ticket and its indexes before any event is published. Relations must name tickets of the same workspace and must not create a wait cycle. `in_progress` is refused while a blocker is open (`409 blocked`), as when moving an existing ticket. Invalid assignment or relations roll back the entire creation, including its number. Labels must be defined by the repository (`400 label_undefined`).
-- `GET /api/v1/repos/{repo}/tickets?state=open|closed|all&lane=...&assignee=...&label=...&q=...` → items in number order
+- `GET /api/v1/repos/{repo}/tickets?state=open|closed|all&lane=...&assignee=...&label=...&q=...` (in process only) → items in number order
   (`state` defaults to `open`; `assignee=me` is the requesting member).
   `q` splits on whitespace and requires every word to occur in the title or
   body, ignoring case (including Unicode). An omitted, empty, or whitespace-only
@@ -640,7 +606,7 @@ a client with a token gets it under the base URL.
 - `GET /api/v1/repos/{repo}/attachments/{id}` → the image with its media type
   as read at the upload. It may be cached for good: an attachment never
   changes. An id of another repository is `404 not_found`.
-- `GET /api/v1/repos/{repo}/tickets/{number}/attachments` → items of the
+- `GET /api/v1/repos/{repo}/tickets/{number}/attachments` (in process only) → items of the
   attachment shape plus `"referenced_by": ["body", "cmt_01JA..."]`: the
   attachments of the workspace's repositories that the ticket's body and
   comments refer to, in the order of their first reference, each with where it
@@ -660,7 +626,7 @@ and comments do not keep an attachment.
 
 ### The board of a workspace
 
-- `GET /api/v1/workspaces/{workspace}/tickets?mentions=me&state=open&comments=all` →
+- `GET /api/v1/workspaces/{workspace}/tickets?mentions=me&state=open&comments=all` (in process only) →
   the card shape below for tickets whose body or any ticket comment mentions
   the requesting member. `mentions=me` is required; other values are refused.
   No lane or assignee filter applies, so unassigned tickets in `new` are also
@@ -684,7 +650,7 @@ and comments do not keep an attachment.
   `comments` empty (the GUI uses it; the default is `all`). `assignee=me` means the requesting member. Cards are ordered by lane (as in
   `lanes`) then rank. Pagination follows the conventions; a client that needs
   every card follows `next_cursor` to the end.
-- `GET /api/v1/workspaces/{workspace}/board/closed?since={ts}&until={ts}` → items of
+- `GET /api/v1/workspaces/{workspace}/board/closed?since={ts}&until={ts}` (in process only) → items of
   `{"kind": "ticket"|"pull_request", "url", "title", "label", "closed_at", "merged"}`:
   the tickets of the workspace's repositories closed in the window, in any
   lane (`label` `#3`), and the pull requests of those repositories
@@ -767,7 +733,7 @@ the pull request was marked ready for review. `upstream` is set once the pull
 request was published (see "Upstream"). `landing` is its current queue entry
 or last departure, or `null` before it first joins (see "Landing").
 
-- `POST /api/v1/repos/{repo}/pulls`
+- `POST /api/v1/repos/{repo}/pulls` (in process only)
   `{"head", "base"?: "", "title", "body", "draft": false, "tickets": [{"url","closes"}]}`
   → `201 {"created": true, "pull": {...}}`, or `200 {"created": false, "pull": {...}}`
   when an open pull request of the same head and base exists (it is unchanged).
@@ -794,7 +760,7 @@ or last departure, or `null` before it first joins (see "Landing").
   passed/no checks, pending, unregistered, failing. Updated time and number
   descend for equal keys. Ranking happens before pagination; cursors bind to
   the chosen sort and filters.
-- `GET /api/v1/pulls?involves=me&state=open&draft=false` → items of
+- `GET /api/v1/pulls?involves=me&state=open&draft=false` (in process only) → items of
   *patrol entry*: the pull request shape plus `"activity"` (below), for every
   open pull request the member authored, is a requested reviewer of, has
   reviewed, or wrote an inline comment or thread reply on. The owner reviews and
@@ -834,7 +800,7 @@ or last departure, or `null` before it first joins (see "Landing").
   true or `tickets` is given (which replaces them). `draft: true` is the only
   draft change an agent may make; `draft: false` (ready for review) is
   the owner's. The response is the pull request.
-- `POST .../pulls/{number}/comments` `{"body","meta"?}` → `201` comment; `GET` → items.
+- `POST .../pulls/{number}/comments` `{"body","meta"?}` → `201` comment; listing them is in process only.
 - `POST .../pulls/{number}/reviews` `{"verdict": "approve"|"request_changes"|"comment", "body", "commit"}`
   → `201 {"id","verdict","commit","submitted_at","url"}`; `409 head_moved` when
   `commit` is not the current head. `body` may be empty. The author's own review can
@@ -843,13 +809,13 @@ or last departure, or `null` before it first joins (see "Landing").
   A closed pull request takes no reviews or inline comments
   (`409 conflict`). A review removes its author from `reviewers` (the request is
   answered). `GET` → items of review.
-- `POST .../pulls/{number}/inline-comments`
+- `POST .../pulls/{number}/inline-comments` (in process only)
   `{"body","commit","path","line","side":"LEFT"|"RIGHT","start_line"?,"start_side"?}` →
   `201` thread comment (it roots a new thread); `409 head_moved` as for reviews;
   `400 invalid` when `path` is not changed by the pull request.
 - `GET .../pulls/{number}/threads` → items of `{"id","resolved","outdated","path","line","side","start_line","start_side","commit","comments":[...]}`.
   A thread's id is its root comment's id.
-- `GET .../pulls/{number}/threads/{id}/comments` → items of thread comment
+- `GET .../pulls/{number}/threads/{id}/comments` (in process only) → items of thread comment
   `{...comment shape, "reply_to_id": null|"<root id>"}`.
 - `POST .../pulls/{number}/threads/{id}/replies` `{"body"}` → `201` thread comment.
   `404` when `id` roots no thread of this pull request.
@@ -1132,8 +1098,8 @@ is not the full sha of a commit of the repository.
 
 ## Runner API (`/api/v1/runner`, runner token)
 
-Used by `guildbotics branvil runner` only. A runner token is a member token of a member of
-kind `runner` (created by `guildbotics branvil runner register`); any other member gets
+Used by `guildbotics runner` only. A runner token is a member token of a member of
+kind `runner` (created by `guildbotics runner register`); any other member gets
 `403 forbidden`. The lease of a claimed attempt is sent in the JSON body
 (`heartbeat`, `finish`) or in the `X-Branvil-Lease` header (`source`, `log`,
 `artifacts`), never in the URL.
@@ -1209,9 +1175,9 @@ nothing.
 ## Events (GUI)
 
 `GET /api/v1/events` is a Server-Sent Events stream. Each event is
-`event: change` with `data: {"kind": "ticket"|"pull"|"board"|"check"|"upstream"|"repo", "path": "...", "id": "..."}`.
+`event: change` with `data: {"kind": "ticket"|"pull"|"board"|"check"|"upstream"|"repo", "path": "...", "id": "...", "actor": "owner"|"agent"|"runner"|null}`.
 `path`/`id` by kind: `ticket` repository / key, `pull` repository / number, `board` workspace / —, `check`
-repository / commit sha, `upstream` repository / — (what following its upstream found changed), `repo` repository / — (its settings, its upstream, or its refs changed, or a member's account on its upstream host was set). Events only say what changed; the GUI refetches it. On reconnect (or after a
+repository / commit sha, `upstream` repository / — (what following its upstream found changed), `repo` repository / — (its settings, its upstream, or its refs changed, or a member's account on its upstream host was set). The actor is the authenticated writer’s member kind, or null for system changes. Events only say what changed; the GUI refetches it. On reconnect (or after a
 `event: reset`, sent when the client fell behind) the GUI refetches what it shows.
 The stream ends when the service shuts down. The service subscribes to the
 same changes itself to land pull requests automatically ("Landing
@@ -1434,7 +1400,7 @@ runner's (`[ci.microsandbox] home`).
 - `POST /api/v1/admin/backup` `{"to": "/absolute/new/dir"}` → the backup's manifest (see
   `docs/backup-restore.md`). The directory is on the service's machine, must not exist or be
   empty (`409 conflict` otherwise), and must be outside the data directory (`400 invalid`).
-  `guildbotics branvil backup --to <dir>` calls it.
+  `guildbotics server hub-data backup --to <dir>` calls it for the code host's part.
 
 ### Diagnostics
 
@@ -1485,7 +1451,7 @@ runner's (`[ci.microsandbox] home`).
 
 ### Yield a PR head's running checks
 
-`POST /api/v1/repos/{repo}/pulls/{number}/checks/yield` takes no body.
+`POST /api/v1/repos/{repo}/pulls/{number}/checks/yield` (in process only) takes no body.
 Only the PR author may call it (member session/Bearer); other members, including
 owners, receive `403 forbidden`. Visibility uses the usual repository and PR
 rules (`404` for missing/invisible items).

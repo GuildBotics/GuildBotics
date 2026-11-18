@@ -402,7 +402,7 @@ What one machine running this fixture carried, from the sections above:
 | Git (service side) | child processes per request, not measured separately | 8 command slots; PR reads 6–12 ms each, 30–60 ms at 32 clients |
 | Data on disk | 110 MiB redb + 20.5 MiB repositories + 7.8 MiB CI files | |
 | GUI (browser) | 22–23 MB JS heap for a 1,695-card board | 0.45–0.62 s to the first painted, idle board of that size |
-| `guildbotics branvil runner` | 20 MiB (debug build, [CI executor](#ci-executor)) | |
+| `guildbotics runner` | 20 MiB (debug build, [CI executor](#ci-executor)) | |
 | One running CI job | ~170 MiB (VM process + `msb run`) for a 512 MiB guest running a shell | 0.24–0.33 s sandbox startup |
 
 So with one CI job running, the executor needs more memory than the service
@@ -427,7 +427,7 @@ itself touches (up to the memory every job gets, `ci.executor.max_memory_mib`).
 ## CI executor
 
 What one job costs on the runner's machine: microsandbox microVMs started by
-`guildbotics branvil runner` through `msb run` (msb 0.6.17).
+`guildbotics runner` through `msb run` (msb 0.6.17).
 
 Conditions:
 
@@ -448,7 +448,7 @@ Results of seven runs on 2026-10-14:
 | Sandbox startup, since the runner reads the job's log file (`docs/ci.md`) | 251, 251, 302 ms | spawn → the script's first line, read every 50 ms (so up to 50 ms late) |
 | Peak RSS of the VM process (`msb sandbox`) | 119.0–120.0 MiB (121 856–122 912 KiB) | guest memory is 512 MiB; RSS is what the host committed |
 | Peak RSS of the attached `msb run` process | 43.6–49.2 MiB (44 688–50 384 KiB) | one per running job |
-| Peak RSS of `guildbotics branvil runner` (debug build) | 20.1–20.3 MiB (20 576–20 752 KiB) | while it serves the jobs |
+| Peak RSS of `guildbotics runner` (debug build) | 20.1–20.3 MiB (20 576–20 752 KiB) | while it serves the jobs |
 | Three jobs end to end (runner process start → all three completed) | 6.0–6.5 s | includes the 5 s timeout of the third job |
 
 So one running job costs about 170 MiB of host memory (VM process plus its

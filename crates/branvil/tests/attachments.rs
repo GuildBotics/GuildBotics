@@ -65,7 +65,6 @@ async fn images_are_kept_by_their_bytes_and_served_as_they_were_read() {
     let resp = fetch(s, &w.ken, a["url"].as_str().unwrap()).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(resp.headers()["content-type"], "image/png");
-    assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
     assert!(
         resp.headers()["cache-control"]
             .to_str()
@@ -139,7 +138,7 @@ async fn only_members_who_read_the_repository_get_its_attachments() {
     let anonymous = s.http.get(format!("{}{url}", s.url)).send().await.unwrap();
     assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
     // The GUI's session reads it as an `<img>` does: a cookie, no CSRF.
-    let (cookie, _) = s.session(&w.owner).await;
+    let (cookie, _) = s.session();
     let resp = s
         .http
         .get(format!("{}{url}", s.url))

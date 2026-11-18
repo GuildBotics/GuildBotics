@@ -56,7 +56,6 @@ export const ja: Record<MessageKey, string> = {
   "nav.language": "表示言語",
   "notFound.title": "ページが見つかりません",
 
-  "enter.expired": "このリンクは期限切れか、すでに使われています。",
   "guide.run": "Hubマシンで次のコマンドを実行して、入口のURLを表示します：",
   "guide.why": "表示されたURLを、この画面と同じブラウザのアドレスバーに貼り付けて開いてください。リンクは60秒間に1回だけ使え、入ったことはそのブラウザでだけ有効です。",
 
@@ -522,7 +521,7 @@ export const ja: Record<MessageKey, string> = {
   "alert.region": "警告",
   "alert.title": "警告",
   "alert.dismiss": "閉じる",
-  "alert.noRunner": "CI のランナーが接続されていません。チェックは実行されず、ジョブは起動失敗で終わります。branvil serve を動かしているマシンで、ランナーの状態を確かめてください。",
+  "alert.noRunner": "CI のランナーが接続されていません。チェックは実行されず、ジョブは起動失敗で終わります。Hub で、ランナーの状態を確かめてください。",
   "alert.streamLost": "サーバーとの接続が切れています。画面は最新でないかもしれません。再接続しています…",
   "alert.executorUnavailable": "CI のランナーがジョブを実行できません: {detail}",
   "alert.stopping": "Branvil は更新か再起動のため、実行中の CI ジョブが終わったら止まります。新しいジョブは待って、起動し直してから始まります。",

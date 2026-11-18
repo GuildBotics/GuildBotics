@@ -761,7 +761,7 @@ impl Ci {
         };
         if last_contact.elapsed() > Duration::from_secs(absent) {
             let details = format!(
-                "No CI runner has contacted Branvil for {absent} s (last contact: {}). Start `branvil runner` (docs/ci.md)",
+                "No CI runner has contacted the server for {absent} s (last contact: {}). Start `guildbotics runner` (docs/ci.md)",
                 last_text.unwrap_or_else(|| "none since Branvil started".into())
             );
             let now = util::now();
@@ -1502,7 +1502,7 @@ mod tests {
     /// A service over `ci`'s store, for tests that register through `App`.
     pub(super) fn app(temp: &tempfile::TempDir, ci: &Ci) -> crate::app::Shared {
         ci.inner.layout.create().unwrap();
-        let config = crate::config::Config::load(None, Some(temp.path()), None, None).unwrap();
+        let config = crate::config::Config::load(None, temp.path()).unwrap();
         App::new(
             config,
             "http://127.0.0.1:7878".into(),

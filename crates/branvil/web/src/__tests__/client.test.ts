@@ -21,12 +21,12 @@ describe("API client", () => {
     await api.members.revokeToken("aiko", "tok_1");
 
     const [getReq, postReq, deleteReq] = fake.requests;
-    expect(getReq?.headers["X-Branvil-CSRF"]).toBeUndefined();
-    expect(postReq?.headers["X-Branvil-CSRF"]).toBe("csrf-xyz");
+    expect(getReq?.headers["X-GuildBotics-CSRF"]).toBeUndefined();
+    expect(postReq?.headers["X-GuildBotics-CSRF"]).toBe("csrf-xyz");
     expect(postReq?.headers["Content-Type"]).toBe("application/json");
     expect(postReq?.headers["Idempotency-Key"]).toMatch(/^[0-9a-f-]{36}$/);
     expect(postReq?.body).toEqual({ body: "hello" });
-    expect(deleteReq?.headers["X-Branvil-CSRF"]).toBe("csrf-xyz");
+    expect(deleteReq?.headers["X-GuildBotics-CSRF"]).toBe("csrf-xyz");
     for (const r of fake.requests) {
       expect(r.credentials).toBe("same-origin");
       expect(r.headers["Authorization"]).toBeUndefined();
@@ -59,9 +59,9 @@ describe("API client", () => {
     await expect(request(method, "/x", { body: { text: "hello" }, query: { page: 2 }, idempotencyKey: "same-key" })).resolves.toEqual({ saved: true });
     expect(fake.requests.map((r) => `${r.method} ${r.path}`)).toEqual([`${method} /api/v1/x`, "GET /api/v1/session", `${method} /api/v1/x`]);
     const [first, refresh, retry] = fake.requests;
-    expect(first?.headers["X-Branvil-CSRF"]).toBe("old");
-    expect(refresh?.headers["X-Branvil-CSRF"]).toBeUndefined();
-    expect(retry).toEqual({ ...first, headers: { ...first?.headers, "X-Branvil-CSRF": "fresh" } });
+    expect(first?.headers["X-GuildBotics-CSRF"]).toBe("old");
+    expect(refresh?.headers["X-GuildBotics-CSRF"]).toBeUndefined();
+    expect(retry).toEqual({ ...first, headers: { ...first?.headers, "X-GuildBotics-CSRF": "fresh" } });
     expect(getCsrfToken()).toBe("fresh");
   });
 

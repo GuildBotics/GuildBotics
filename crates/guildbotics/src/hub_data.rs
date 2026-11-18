@@ -1,30 +1,71 @@
-//! Offline data boundary for Hub updates. Archive paths never select live roots.
+//! `guildbotics server hub-data`: the Hub's records, the code host's included,
+//! backed up by the running server and checked, upgraded, or reindexed with
+//! the server stopped. A backup path never selects live data.
 
 use std::path::PathBuf;
 
-#[derive(Clone, Copy, clap::ValueEnum)]
-pub enum Operation {
-    Backup,
-    Check,
-    Upgrade,
+#[derive(clap::Subcommand)]
+pub enum HubDataCommand {
+    /// Write a backup of the running server's records into a new or empty directory
+    Backup {
+        /// Directory to fill, on this machine
+        #[arg(long)]
+        to: PathBuf,
+    },
+    /// Restore a backup into a new or empty directory and check it; check and upgrade take the result as --data-dir
+    Restore {
+        /// Backup directory written by `server hub-data backup`
+        #[arg(long)]
+        from: PathBuf,
+        /// Directory to fill
+        #[arg(long)]
+        data_dir: PathBuf,
+    },
+    /// Check the records; a passing check lets the server open an upgraded code host database
+    Check {
+        /// A restored backup instead of this machine's records
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
+    /// Upgrade the records from the previous version, then check them (stop the server and take a backup first)
+    Upgrade {
+        /// A restored backup instead of this machine's records
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
+    /// Rebuild the code host's indexes from its records
+    Reindex {
+        /// A restored backup instead of this machine's records
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
 }
 
-pub async fn run(
-    operation: Operation,
-    archive: Option<PathBuf>,
-    to: Option<PathBuf>,
-) -> anyhow::Result<()> {
+pub async fn run(command: HubDataCommand) -> anyhow::Result<()> {
+    use branvil::Maintenance;
     let language = gb_server::client::language().await;
-    let operation = match operation {
-        Operation::Backup => gb_server::hub_data::Operation::Backup,
-        Operation::Check => gb_server::hub_data::Operation::Check,
-        Operation::Upgrade => gb_server::hub_data::Operation::Upgrade,
+    let result = match command {
+        HubDataCommand::Backup { to } => gb_server::hub_data::backup(&to).await,
+        HubDataCommand::Restore { from, data_dir } => {
+            gb_server::hub_data::restore(&from, &data_dir).await
+        }
+        HubDataCommand::Check { data_dir } => {
+            gb_server::hub_data::maintain(Maintenance::Check, data_dir.as_deref())
+        }
+        HubDataCommand::Upgrade { data_dir } => {
+            gb_server::hub_data::maintain(Maintenance::Upgrade, data_dir.as_deref()).and_then(
+                |()| gb_server::hub_data::maintain(Maintenance::Check, data_dir.as_deref()),
+            )
+        }
+        HubDataCommand::Reindex { data_dir } => {
+            gb_server::hub_data::maintain(Maintenance::Reindex, data_dir.as_deref())
+        }
     };
-    gb_server::hub_data::execute(operation, archive.as_deref(), to.as_deref()).map_err(|error| {
+    result.map_err(|error| {
         anyhow::anyhow!(gb_server::i18n::t(
             language,
             "runtime.service_lock.hub_operation_failed",
-            &[("reason", &error.to_string())]
+            &[("reason", &format!("{error:#}"))]
         ))
     })
 }

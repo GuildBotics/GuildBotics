@@ -15,7 +15,7 @@ pub use process::ServiceProcess;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 
-/// Run the embedded CLI on this test executable, including hooks and runners.
+/// Run this test executable as the server, its hooks, and its runners.
 #[ctor::ctor]
 fn process_entry() {
     if let Some(code) = branvil::askpass_main() {
@@ -25,25 +25,114 @@ fn process_entry() {
             1
         });
     }
-    let args: Vec<_> = std::env::args_os().collect();
     if std::env::var_os("BRANVIL_TEST_PROCESS").is_some() {
-        let vault = std::env::var_os("BRANVIL_TEST_VAULT")
-            .map(|p| branvil::vault::Sealed::new(Path::new(&p), &[7; 32]).unwrap());
-        let vault: std::sync::Arc<dyn branvil::vault::Vault> =
-            if std::env::var_os("BRANVIL_TEST_NO_VAULT").is_some() {
-                std::sync::Arc::new(NoVault)
-            } else {
-                match vault {
-                    Some(v) => std::sync::Arc::new(v),
-                    None => std::sync::Arc::new(branvil::vault::Memory::default()),
-                }
-            };
-        let code = branvil::main(branvil::Invocation::standalone(), vault, args);
-        let status = (0u8..=255)
-            .find(|n| code == std::process::ExitCode::from(*n))
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
             .unwrap();
-        std::process::exit(i32::from(status));
+        let code = runtime.block_on(process(args));
+        std::process::exit(code);
     }
+}
+
+/// What the server runs as itself: `serve --listen <addr> --data-dir <dir>`
+/// (this harness's own), `server git-hook <name>`, and `runner ...`.
+async fn process(args: Vec<String>) -> i32 {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_env("BRANVIL_LOG")
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("branvil=info")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+    let words: Vec<&str> = args.iter().map(String::as_str).collect();
+    let result = match words.as_slice() {
+        ["serve", "--listen", listen, "--data-dir", data] => {
+            let vault: std::sync::Arc<dyn branvil::vault::Vault> =
+                if std::env::var_os("BRANVIL_TEST_NO_VAULT").is_some() {
+                    std::sync::Arc::new(NoVault)
+                } else {
+                    match std::env::var_os("BRANVIL_TEST_VAULT") {
+                        Some(dir) => {
+                            std::sync::Arc::new(branvil::test_support::FileVault(dir.into()))
+                        }
+                        None => std::sync::Arc::new(branvil::vault::Memory::default()),
+                    }
+                };
+            let (interrupt, terminate) = stop_signals();
+            branvil::test_support::serve(
+                Path::new(data),
+                listen,
+                vault,
+                interrupt,
+                terminate,
+                true,
+                None,
+            )
+            .await
+        }
+        ["server", "git-hook", name] => Ok(branvil::git_hook(name).await),
+        // The code host's part of `guildbotics server hub-data`.
+        ["admin", what, "--data-dir", data] => {
+            let operation = match *what {
+                "check" => branvil::Maintenance::Check,
+                "reindex" => branvil::Maintenance::Reindex,
+                "upgrade" => branvil::Maintenance::Upgrade,
+                other => panic!("unsupported maintenance: {other}"),
+            };
+            branvil::maintain(operation, Path::new(data)).map(|()| 0)
+        }
+        ["backup", "--to", to] => {
+            let env = |name| std::env::var(name).unwrap_or_default();
+            branvil::request_backup(&env("BRANVIL_URL"), &env("BRANVIL_TOKEN"), Path::new(to))
+                .await
+                .map(|()| 0)
+        }
+        ["restore", "--from", from, "--data-dir", data] => {
+            branvil::restore(Path::new(from), Path::new(data)).await
+        }
+        ["runner", ..] => {
+            use clap::Parser;
+            #[derive(Parser)]
+            struct Runner {
+                #[command(flatten)]
+                args: branvil::RunnerArgs,
+            }
+            let parsed = Runner::try_parse_from(&args).unwrap_or_else(|e| e.exit());
+            let data = std::env::var_os("BRANVIL_DATA_DIR").unwrap_or_default();
+            branvil::run_runner(parsed.args, String::new(), data.into(), async {
+                anyhow::bail!("the test runner has no owner token")
+            })
+            .await
+        }
+        other => panic!("unsupported test process: {other:?}"),
+    };
+    match result {
+        Ok(code) => i32::from(code),
+        Err(e) => {
+            eprintln!("branvil: {e:#}");
+            1
+        }
+    }
+}
+
+/// SIGINT and SIGTERM, taken over before the service starts any work.
+fn stop_signals() -> (
+    impl std::future::Future<Output = ()> + Send + 'static,
+    impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut interrupt = signal(SignalKind::interrupt()).unwrap();
+    let mut terminate = signal(SignalKind::terminate()).unwrap();
+    (
+        async move {
+            interrupt.recv().await;
+        },
+        async move {
+            terminate.recv().await;
+        },
+    )
 }
 
 /// A host that cannot provide a vault must refuse secret operations.
@@ -57,26 +146,6 @@ impl branvil::vault::Vault for NoVault {
     }
     fn delete(&self, _: &str) -> anyhow::Result<()> {
         anyhow::bail!("test host has no vault")
-    }
-}
-
-#[test]
-fn cli_command_names_remain_libtest_filters_without_the_process_marker() {
-    let home = tempfile::tempdir().unwrap();
-    for subcommand in branvil::cli_command().get_subcommands() {
-        let name = subcommand.get_name();
-        let output = Command::new(std::env::current_exe().unwrap())
-            .env_clear()
-            .env("HOME", home.path())
-            .current_dir(home.path())
-            .args([name, "--list"])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "filter {name}: {output:?}");
-        assert!(
-            String::from_utf8_lossy(&output.stdout).contains("benchmarks"),
-            "filter {name}: {output:?}"
-        );
     }
 }
 
@@ -102,20 +171,11 @@ pub struct Server {
     pub http: reqwest::Client,
 }
 
-/// Initialize `dir/data` through the embedded API and return the owner credential.
+/// Initialize `dir/data` with `owner` as its owner and return the owner's
+/// credential, the host's owner token.
 pub fn init(dir: &Path, owner: &str) -> String {
-    branvil::api::initialize(&dir.join("data"), owner)
-        .unwrap()
-        .trim()
-        .into()
-}
-
-/// The owner's token as `<data>/secrets/owner.token` holds it now.
-pub fn owner_token(data: &Path) -> String {
-    std::fs::read_to_string(data.join("secrets").join("owner.token"))
-        .expect("owner.token")
-        .trim()
-        .to_string()
+    branvil::test_support::initialize(&dir.join("data"), owner).unwrap();
+    branvil::test_support::OWNER_TOKEN.into()
 }
 
 impl Server {
@@ -148,7 +208,7 @@ impl Server {
         for (k, v) in env {
             cmd.env(k, v);
         }
-        let mut child = ServiceProcess::spawn(&mut cmd).expect("spawn branvil serve");
+        let mut child = ServiceProcess::spawn(&mut cmd).expect("spawn the test server");
         let stdout = child.take_stdout();
         let (sender, lines) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -184,10 +244,13 @@ impl Server {
     fn in_vault(
         &self,
         name: impl FnOnce(&branvil::vault::Secrets) -> String,
-    ) -> (branvil::vault::Sealed, String) {
-        use branvil::vault::{Memory, Sealed, Secrets};
+    ) -> (branvil::test_support::FileVault, String) {
+        use branvil::vault::{Memory, Secrets};
         let names = Secrets::new(std::sync::Arc::new(Memory::default()), &self.data);
-        (Sealed::new(&self.vault, &[7; 32]).unwrap(), name(&names))
+        (
+            branvil::test_support::FileVault(self.vault.clone()),
+            name(&names),
+        )
     }
 
     /// What the service keeps in its vault under the name `name` gives.
@@ -204,40 +267,25 @@ impl Server {
         vault.delete(&name).unwrap();
     }
 
-    /// The files under `<data>/secrets/`: the owner's token, and no secret
-    /// of another system.
-    pub fn secret_files(&self) -> Vec<String> {
-        fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
-            for entry in std::fs::read_dir(dir).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    walk(&path, root, out);
-                } else {
-                    out.push(path.strip_prefix(root).unwrap().display().to_string());
-                }
-            }
-        }
-        let mut files = Vec::new();
-        let root = self.data.join("secrets");
-        walk(&root, &root, &mut files);
-        files.sort();
-        files
-    }
-
     /// The vault's file of the name `name` gives.
     pub fn vault_file(&self, name: impl FnOnce(&branvil::vault::Secrets) -> String) -> PathBuf {
         self.vault.join(self.in_vault(name).1)
     }
 
-    /// Whether a file of the vault holds `value` in plain text.
-    pub fn vault_shows(&self, value: &str) -> bool {
-        std::fs::read_dir(&self.vault)
-            .into_iter()
-            .flatten()
-            .any(|e| {
-                let bytes = std::fs::read(e.unwrap().path()).unwrap_or_default();
-                String::from_utf8_lossy(&bytes).contains(value)
+    /// Whether a file of the data directory holds `value` in plain text.
+    pub fn data_shows(&self, value: &str) -> bool {
+        fn shows(dir: &Path, value: &str) -> bool {
+            std::fs::read_dir(dir).into_iter().flatten().any(|e| {
+                let path = e.unwrap().path();
+                if path.is_dir() {
+                    shows(&path, value)
+                } else {
+                    String::from_utf8_lossy(&std::fs::read(&path).unwrap_or_default())
+                        .contains(value)
+                }
             })
+        }
+        shows(&self.data, value)
     }
 
     /// Stops the service as Ctrl-C does (no wait for CI jobs; the repository
@@ -369,6 +417,20 @@ impl Server {
         v
     }
 
+    /// A new token of the member `name` (the owner's for Git, which takes
+    /// only members' own tokens), issued by the host's owner.
+    pub async fn git_token(&self, name: &str) -> String {
+        let (st, v) = self
+            .post(
+                &format!("/members/{name}/tokens"),
+                branvil::test_support::OWNER_TOKEN,
+                json!({"label": "git"}),
+            )
+            .await;
+        assert_eq!(st, StatusCode::CREATED, "{v}");
+        v["token"].as_str().unwrap().to_string()
+    }
+
     /// Creates a member of `kind` (`agent` or `runner`) and returns a token
     /// of it.
     pub async fn member(&self, owner: &str, name: &str, kind: &str) -> String {
@@ -387,40 +449,13 @@ impl Server {
         v["token"].as_str().unwrap().to_string()
     }
 
-    /// A new single-use entry link of the owner (`POST /session/links`);
-    /// returns its code, the URL fragment.
-    pub async fn entry_code(&self, owner: &str) -> String {
-        let (st, v) = self.post("/session/links", owner, json!({})).await;
-        assert_eq!(st, StatusCode::CREATED, "{v}");
-        let url = v["url"].as_str().unwrap();
-        url.strip_prefix(&format!("{}/-/enter#", self.url))
-            .unwrap_or_else(|| panic!("unexpected link {url}"))
-            .to_string()
-    }
-
-    /// Exchanges an entry code for a session (`POST /session`).
-    pub async fn enter(&self, code: &str) -> reqwest::Response {
-        self.http
-            .post(format!("{}/api/v1/session", self.url))
-            .json(&json!({"code": code}))
-            .send()
-            .await
-            .unwrap()
-    }
-
-    /// A new GUI session of the owner: the cookie pair and the CSRF value.
-    pub async fn session(&self, owner: &str) -> (String, String) {
-        let resp = self.enter(&self.entry_code(owner).await).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        let cookie = resp.headers()["set-cookie"]
-            .to_str()
-            .unwrap()
-            .split(';')
-            .next()
-            .unwrap()
-            .to_string();
-        let body: Value = resp.json().await.unwrap();
-        (cookie, body["csrf"].as_str().unwrap().to_string())
+    /// The host's browser session of the owner: the cookie pair and the CSRF
+    /// value.
+    pub fn session(&self) -> (String, String) {
+        (
+            branvil::test_support::SESSION_COOKIE.into(),
+            branvil::test_support::SESSION_CSRF.into(),
+        )
     }
 
     /// The clone URL (credentials come from `git_as`'s askpass, never the URL).
@@ -428,13 +463,17 @@ impl Server {
         format!("{}/git/{repo}.git", self.url)
     }
 
-    /// Runs `branvil` with the given arguments against this server.
+    /// Runs this harness's `backup` or `admin <what>` against this server's
+    /// data, as `guildbotics server hub-data` does for the code host.
     pub fn cli(&self, token: &str, args: &[&str]) -> Output {
-        branvil_command()
-            .args(args)
+        let mut command = branvil_command();
+        command.args(args);
+        if args.first() == Some(&"admin") {
+            command.arg("--data-dir").arg(&self.data);
+        }
+        command
             .env("BRANVIL_URL", &self.url)
             .env("BRANVIL_TOKEN", token)
-            .env("BRANVIL_DATA_DIR", &self.data)
             .output()
             .unwrap()
     }
@@ -536,6 +575,8 @@ pub struct World {
     pub dir: tempfile::TempDir,
     pub server: Server,
     pub owner: String,
+    /// A token of the owner, for Git.
+    pub owner_git: String,
     pub ken: String,
     pub aiko: String,
     pub work: PathBuf,
@@ -575,6 +616,11 @@ impl World {
             .0,
             StatusCode::OK
         );
+        let (st, v) = s
+            .post("/members/alice/tokens", &owner, json!({"label": "git"}))
+            .await;
+        assert_eq!(st, StatusCode::CREATED, "{v}");
+        let owner_git = v["token"].as_str().unwrap().to_string();
         let mut tokens = Vec::new();
         for name in ["ken", "aiko"] {
             tokens.push(s.member(&owner, name, "agent").await);
@@ -586,10 +632,16 @@ impl World {
         git_ok(&work, &["add", "README.md"]);
         git_ok(&work, &["commit", "-qm", "initial"]);
         git_ok(&work, &["remote", "add", "origin", &server.remote(REPO)]);
-        git_as_ok(&work, "alice", &owner, &["push", "-q", "origin", "main"]);
+        git_as_ok(
+            &work,
+            "alice",
+            &owner_git,
+            &["push", "-q", "origin", "main"],
+        );
         let mut t = tokens.into_iter();
         World {
             owner,
+            owner_git,
             ken: t.next().unwrap(),
             aiko: t.next().unwrap(),
             server,
@@ -655,17 +707,9 @@ impl World {
             .post("/admin/backup", &self.owner, json!({"to": backup}))
             .await;
         assert_eq!(st, StatusCode::OK, "{v}");
-        let out = branvil_command()
-            .args(["restore", "--from"])
-            .arg(&backup)
-            .arg("--data-dir")
-            .arg(into.join("data"))
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
+        assert_eq!(
+            branvil::restore(&backup, &into.join("data")).await.unwrap(),
+            0
         );
         Server::start(into)
     }
@@ -760,14 +804,22 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
 }
 
 /// Recreates the immediately preceding schema in a stopped database.
-/// Version 35 stored the same records; its tokens may include those
-/// GuildBotics kept, which the upgrade revokes.
-pub fn as_schema_35(db: &Path) {
+/// Version 36 stored the same records and browser sessions, which the
+/// upgrade removes, and its configuration had the keys of a standalone
+/// service, which this build refuses until the upgrade removes them.
+pub fn as_schema_36(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
-            *v = json!(35);
+            *v = json!(36);
         }
     });
+    let config = db.with_file_name("branvil.toml");
+    let kept = std::fs::read_to_string(&config).unwrap_or_default();
+    std::fs::write(
+        &config,
+        format!("listen = \"127.0.0.1:7878\"\nbase_url = \"http://127.0.0.1:7878\"\n{kept}"),
+    )
+    .unwrap();
 }
 
 /// Every table of a database, by name, as raw keys and values.

@@ -1,9 +1,8 @@
 //! Security properties claimed in `docs/security.md` that other tests do not
-//! already cover: token revocation (API and Git), Host checks on every route,
-//! entry links (owner only, single use, gone after a restart), Origin and CSRF
-//! on cookie writes, ending every session through the owner's token file,
-//! what each member kind may do, owner-only endpoints, replacing a label's
-//! tokens and the reserved labels, hook callbacks, and the absence of CORS.
+//! already cover: token revocation (API and Git), the host's owner session
+//! and token, CSRF on cookie writes, what each member kind may do, owner-only
+//! endpoints, replacing a label's tokens and the reserved label, and hook
+//! callbacks.
 
 use crate::common;
 
@@ -116,211 +115,13 @@ async fn token_use_is_recorded() {
     assert!(last_used.is_string(), "last_used_at was never recorded");
 }
 
+/// The host authenticates the owner: its browser session (with its CSRF
+/// value on writes) and its owner token. Branvil keeps no session of its own.
 #[tokio::test]
-async fn hosts_and_origins_are_checked_on_every_kind_of_route() {
+async fn the_hosts_session_and_owner_token_identify_the_owner() {
     let w = World::new().await;
     let s = &w.server;
-    let http = reqwest::Client::new();
-    let port = s.url.rsplit(':').next().unwrap();
-    // A rebinding name with the right port, the right name with another
-    // port, on the API, Git, and GUI routes.
-    for host in [
-        format!("attacker.example:{port}"),
-        "127.0.0.1:1".to_string(),
-    ] {
-        for path in [
-            "/api/v1/health".to_string(),
-            format!("/git/{REPO}.git/info/refs?service=git-upload-pack"),
-            "/".to_string(),
-        ] {
-            let resp = http
-                .get(format!("{}{path}", s.url))
-                .header("host", &host)
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(
-                resp.status(),
-                StatusCode::MISDIRECTED_REQUEST,
-                "{host} {path}"
-            );
-        }
-    }
-    // localhost with the right port is the same service.
-    let resp = http
-        .get(format!("{}/api/v1/health", s.url))
-        .header("host", format!("localhost:{port}"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    // A same-origin request gets no CORS headers; a cross-origin one is refused.
-    let resp = http
-        .get(format!("{}/api/v1/me", s.url))
-        .bearer_auth(&w.ken)
-        .header("origin", &s.url)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp.headers().get("access-control-allow-origin").is_none());
-    for origin in [
-        "null",
-        "http://127.0.0.1:1",
-        "http://localhost.attacker.example",
-    ] {
-        let resp = http
-            .post(format!("{}/api/v1/workspaces", s.url))
-            .bearer_auth(&w.owner)
-            .header("origin", origin)
-            .json(&json!({"name": "evil"}))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{origin}");
-    }
-    let workspaces = s.ok("/workspaces", &w.owner).await;
-    assert!(!workspaces.to_string().contains("evil"));
-    // API responses carry the security headers too.
-    let resp = http
-        .get(format!("{}/api/v1/health", s.url))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.headers()["x-frame-options"], "DENY");
-    assert_eq!(resp.headers()["referrer-policy"], "no-referrer");
-}
-
-#[tokio::test]
-async fn entry_links_are_the_owners_work_once_and_end_with_the_process() {
-    let mut w = World::new().await;
-    let s = &w.server;
-    // Agents get no link.
-    for agent in [&w.aiko, &w.ken] {
-        let (st, _) = s.post("/session/links", agent, json!({})).await;
-        assert_eq!(st, StatusCode::FORBIDDEN);
-    }
-    let code = s.entry_code(&w.owner).await;
-    // A cross-origin or misdirected exchange is refused before the code is used.
-    let resp = s
-        .http
-        .post(format!("{}/api/v1/session", s.url))
-        .header("origin", "http://attacker.example")
-        .json(&json!({"code": code}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    let resp = s
-        .http
-        .post(format!("{}/api/v1/session", s.url))
-        .header("host", "attacker.example")
-        .json(&json!({"code": code}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::MISDIRECTED_REQUEST);
-    // The code works once.
-    let resp = s.enter(&code).await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = resp.json().await.unwrap();
-    assert_eq!(body.get("host_navigation"), Some(&Value::Null));
-    assert_eq!(
-        (&body["me"]["name"], &body["me"]["kind"]),
-        (&json!("alice"), &json!("owner"))
-    );
-    for code in [code.as_str(), "guess"] {
-        let resp = s.enter(code).await;
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{code}");
-    }
-    // The code is written nowhere: not in the service log (debug level here)
-    // nor in the database.
-    let log = std::fs::read_to_string(w.dir.path().join("serve.log")).unwrap();
-    assert!(!log.contains(&code), "code in the service log");
-    let db = std::fs::read(s.data.join("branvil.redb")).unwrap();
-    assert!(!db.windows(code.len()).any(|win| win == code.as_bytes()));
-    // An Idempotency-Key does not make the service keep a link.
-    let link = || {
-        s.http
-            .post(format!("{}/api/v1/session/links", s.url))
-            .bearer_auth(&w.owner)
-            .header("Idempotency-Key", "link-1")
-            .send()
-    };
-    let a: Value = link().await.unwrap().json().await.unwrap();
-    let b: Value = link().await.unwrap().json().await.unwrap();
-    assert_ne!(a["url"], b["url"]);
-    // Codes live in memory only: a restart invalidates the unused ones.
-    let code = w.server.entry_code(&w.owner).await;
-    w.restart(&[]);
-    assert_eq!(
-        w.server.enter(&code).await.status(),
-        StatusCode::UNAUTHORIZED
-    );
-}
-
-#[tokio::test]
-async fn cookie_writes_need_the_sessions_own_csrf() {
-    let w = World::new().await;
-    let s = &w.server;
-    let (cookie, csrf) = s.session(&w.owner).await;
-    let (_, other_csrf) = s.session(&w.owner).await;
-    let url = format!("{}/api/v1/repos/{}/tickets", s.url, encode(REPO));
-    for sent in ["", "wrong", other_csrf.as_str()] {
-        let mut req = s
-            .http
-            .post(&url)
-            .header("cookie", &cookie)
-            .json(&json!({"title": "x"}));
-        if !sent.is_empty() {
-            req = req.header("x-branvil-csrf", sent);
-        }
-        let response = req.send().await.unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        assert_eq!(
-            response.json::<Value>().await.unwrap()["error"]["code"],
-            "csrf_mismatch"
-        );
-    }
-    // The right CSRF value from another origin is still refused.
-    let resp = s
-        .http
-        .post(&url)
-        .header("cookie", &cookie)
-        .header("x-branvil-csrf", &csrf)
-        .header("origin", "http://attacker.example")
-        .json(&json!({"title": "x"}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    let tickets = s
-        .ok(&format!("/repos/{}/tickets", encode(REPO)), &w.ken)
-        .await;
-    assert!(tickets["items"].as_array().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn an_old_tab_can_refresh_csrf_after_another_entry_replaces_the_cookie() {
-    let w = World::new().await;
-    let s = &w.server;
-    let (_, old_csrf) = s.session(&w.owner).await;
-    let (cookie, _) = s.session(&w.owner).await;
-    let url = format!("{}/api/v1/repos/{}/tickets", s.url, encode(REPO));
-    let refused = s
-        .http
-        .post(&url)
-        .header("cookie", &cookie)
-        .header("x-branvil-csrf", old_csrf)
-        .json(&json!({"title": "from the old tab"}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
-    assert_eq!(
-        refused.json::<Value>().await.unwrap()["error"]["code"],
-        "csrf_mismatch"
-    );
+    let (cookie, csrf) = s.session();
     let session: Value = s
         .http
         .get(format!("{}/api/v1/session", s.url))
@@ -331,59 +132,59 @@ async fn an_old_tab_can_refresh_csrf_after_another_entry_replaces_the_cookie() {
         .json()
         .await
         .unwrap();
-    let saved = s
+    assert_eq!(
+        (
+            &session["me"]["name"],
+            &session["me"]["kind"],
+            &session["csrf"]
+        ),
+        (&json!("alice"), &json!("owner"), &json!(csrf))
+    );
+    assert_eq!(session["host_navigation"]["url"], "/-/guildbotics/");
+    assert_eq!(
+        s.get("/session", "unknown").await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    // There is no entry of Branvil's own.
+    for path in ["/session", "/session/links"] {
+        let (st, _) = s.post(path, &w.owner, json!({"code": "x"})).await;
+        assert!(
+            matches!(st, StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED),
+            "{path}: {st}"
+        );
+    }
+    // Only the owner's token is the host's; an agent's token stays its own.
+    assert_eq!(s.ok("/me", &w.owner).await["name"], "alice");
+    assert_eq!(s.ok("/me", &w.aiko).await["name"], "aiko");
+    let url = format!("{}/api/v1/repos/{}/tickets", s.url, encode(REPO));
+    for sent in ["", "wrong"] {
+        let mut req = s
+            .http
+            .post(&url)
+            .header("cookie", &cookie)
+            .json(&json!({"title": "x"}));
+        if !sent.is_empty() {
+            req = req.header("x-guildbotics-csrf", sent);
+        }
+        let response = req.send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["error"]["code"],
+            "csrf_mismatch"
+        );
+    }
+    let created = s
         .http
         .post(&url)
         .header("cookie", &cookie)
-        .header("x-branvil-csrf", session["csrf"].as_str().unwrap())
-        .json(&json!({"title": "from the old tab"}))
+        .header("x-guildbotics-csrf", &csrf)
+        .json(&json!({"title": "from the browser"}))
         .send()
         .await
         .unwrap();
-    assert_eq!(saved.status(), StatusCode::CREATED);
-    let tickets = s
-        .ok(&format!("/repos/{}/tickets", encode(REPO)), &w.ken)
-        .await;
-    assert_eq!(tickets["items"].as_array().unwrap().len(), 1);
-}
-
-/// Without a sign-out, the owner's token file is the way to end every GUI
-/// session: `serve` replaces a missing file with a new token and drops the
-/// sessions and the previous file token.
-#[tokio::test]
-async fn a_new_owner_token_ends_every_session() {
-    let mut w = World::new().await;
-    let (cookie, _) = w.server.session(&w.owner).await;
-    // As a browser sends it to the port the restarted service now has: the
-    // cookie is named by the port.
-    let me = |s: &Server, cookie: &str| {
-        let (_, value) = cookie.split_once('=').unwrap();
-        let port = s.url.rsplit_once(':').unwrap().1;
-        s.http
-            .get(format!("{}/api/v1/me", s.url))
-            .header("cookie", format!("branvil_session_{port}={value}"))
-            .send()
-    };
-    // A restart keeps a valid file, its token, and the sessions.
-    w.restart(&[]);
-    assert_eq!(owner_token(&w.server.data), w.owner);
-    assert_eq!(
-        me(&w.server, &cookie).await.unwrap().status(),
-        StatusCode::OK
-    );
-    std::fs::remove_file(w.server.data.join("secrets/owner.token")).unwrap();
-    w.restart(&[]);
-    let s = &w.server;
-    assert_eq!(
-        me(s, &cookie).await.unwrap().status(),
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(s.get("/me", &w.owner).await.0, StatusCode::UNAUTHORIZED);
-    let fresh = owner_token(&s.data);
-    assert_ne!(fresh, w.owner);
-    assert_eq!(s.ok("/me", &fresh).await["kind"], "owner");
-    // Agents' tokens are untouched.
-    assert_eq!(s.get("/me", &w.aiko).await.0, StatusCode::OK);
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let ticket: Value = created.json().await.unwrap();
+    assert_eq!(ticket["author"], "alice");
 }
 
 #[tokio::test]
@@ -466,7 +267,7 @@ async fn member_kinds_decide_what_a_member_may_do() {
         assert_eq!(st, StatusCode::BAD_REQUEST, "{kind}: {v}");
     }
     // The owner's GUI session lists members; an agent's token does not.
-    let (cookie, _) = s.session(&w.owner).await;
+    let (cookie, _) = s.session();
     let resp = s
         .http
         .get(format!("{}/api/v1/members", s.url))
@@ -482,18 +283,14 @@ async fn member_kinds_decide_what_a_member_may_do() {
 async fn the_data_directory_is_owner_only() {
     use std::os::unix::fs::PermissionsExt;
     let w = World::new().await;
-    for dir in [w.server.data.clone(), w.server.data.join("secrets")] {
-        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700, "{}", dir.display());
-    }
-    // The cursor key is made per process: a start writes the owner's token alone.
-    assert_eq!(w.server.secret_files(), ["owner.token"]);
-    let mode = std::fs::metadata(w.server.data.join("secrets/owner.token"))
+    let mode = std::fs::metadata(&w.server.data)
         .unwrap()
         .permissions()
         .mode()
         & 0o777;
-    assert_eq!(mode, 0o600);
+    assert_eq!(mode, 0o700);
+    // The cursor key is made per process, and the owner has no token file.
+    assert!(!w.server.data.join("secrets").exists());
 }
 
 #[tokio::test]
@@ -505,7 +302,7 @@ async fn hook_callbacks_need_the_per_process_secret() {
             "pre-receive",
             json!({"repo": "x", "member": "aiko", "updates": []}),
         ),
-        ("post-receive", json!({"repo": "x"})),
+        ("post-receive", json!({"repo": "x", "member": "aiko"})),
     ] {
         for secret in [None, Some("guess")] {
             let mut req = s.http.post(format!("{}/-/hooks/{hook}", s.url)).json(&body);
@@ -665,8 +462,8 @@ async fn replacing_a_label_leaves_one_token_of_it_and_reserved_labels_are_refuse
     );
     // Other labels are untouched.
     assert_eq!(s.get("/me", &w.ken).await.0, StatusCode::OK);
-    // The labels Branvil issues itself, by anyone, with or without replace.
-    for label in ["owner-file", "auto"] {
+    // The label Branvil issues itself, by anyone, with or without replace.
+    for label in ["auto"] {
         for (token, name) in [(&w.owner, "alice"), (&w.owner, "ken"), (&w.ken, "ken")] {
             for replace in [false, true] {
                 let (st, v) = s
@@ -682,7 +479,7 @@ async fn replacing_a_label_leaves_one_token_of_it_and_reserved_labels_are_refuse
         }
     }
     assert_eq!(s.get("/me", &w.owner).await.0, StatusCode::OK);
-    assert_eq!(labels(s, &w.owner, "alice").await, ["owner-file"]);
+    assert_eq!(labels(s, &w.owner, "alice").await, ["git"]);
 }
 
 /// The classified catalogs are the only way in: a router built with
@@ -711,13 +508,14 @@ fn routers_register_routes_only_through_the_classified_catalogs() {
     }
 }
 
-/// All registered methods, not a hand-picked sample of the API.
+/// All registered methods, not a hand-picked sample of the API. The host
+/// checks Host and Origin (gb-server's classification tests).
 #[tokio::test]
-async fn classified_routes_enforce_host_origin_and_credentials() {
+async fn classified_routes_enforce_credentials() {
     use loopback_auth::RouteAuth;
     let w = World::new().await;
     let s = &w.server;
-    let (cookie, _) = s.session(&w.owner).await;
+    let (cookie, _) = s.session();
     let mut seen = std::collections::BTreeSet::new();
     for (method, path) in [
         (
@@ -769,13 +567,7 @@ async fn classified_routes_enforce_host_origin_and_credentials() {
                     .json(&json!({"repo":"missing", "member":"missing", "updates":[]}))
             };
             if route.auth == RouteAuth::HookSecret {
-                // A hook uses its secret even when Host/Origin are not local.
-                let response = request()
-                    .header("host", "evil.invalid")
-                    .header("origin", "http://evil.invalid")
-                    .send()
-                    .await
-                    .unwrap();
+                let response = request().send().await.unwrap();
                 assert_eq!(response.status(), StatusCode::FORBIDDEN, "{route:?}");
                 if method != reqwest::Method::HEAD {
                     assert_eq!(
@@ -784,13 +576,6 @@ async fn classified_routes_enforce_host_origin_and_credentials() {
                     );
                 }
                 continue;
-            }
-            for (name, value, expected) in [
-                ("host", "evil.invalid", StatusCode::MISDIRECTED_REQUEST),
-                ("origin", "http://evil.invalid", StatusCode::FORBIDDEN),
-            ] {
-                let response = request().header(name, value).send().await.unwrap();
-                assert_eq!(response.status(), expected, "{method} {path}: {route:?}");
             }
             if matches!(
                 route.auth,

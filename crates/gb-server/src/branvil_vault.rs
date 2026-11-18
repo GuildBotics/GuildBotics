@@ -110,17 +110,19 @@ mod tests {
     async fn the_integrated_branvil_keeps_its_webhook_sealed_in_the_identity_store() {
         let root = tempfile::tempdir().unwrap();
         let data = root.path().join("branvil");
-        let owner = branvil::api::initialize(&data, "owner1").unwrap();
+        branvil::test_support::initialize(&data, "owner1").unwrap();
         let keys = Arc::new(Keys::default());
-        let running =
-            branvil::api::Running::start(&data, Arc::new(vault(root.path(), keys.clone())))
-                .await
-                .unwrap();
+        let running = branvil::test_support::Running::start(
+            &data,
+            Arc::new(vault(root.path(), keys.clone())),
+        )
+        .await
+        .unwrap();
         let url = "https://hooks.example.test/services/T0/hook-71c3";
         let webhook = format!("{}/api/v1/admin/webhook", running.data.base_url());
         let response = reqwest::Client::new()
             .put(&webhook)
-            .bearer_auth(owner.trim())
+            .bearer_auth(branvil::test_support::OWNER_TOKEN)
             .json(&serde_json::json!({ "url": url }))
             .send()
             .await
@@ -139,7 +141,7 @@ mod tests {
             .expect("the webhook's name in the index");
         assert_eq!(store.with(|s| s.get(name)).unwrap().as_deref(), Some(url));
         // Neither the identity store nor Branvil's data holds it in plain text,
-        // and Branvil's secrets/ holds the owner's token alone.
+        // and Branvil keeps no secrets directory.
         for (path, bytes) in files(root.path()) {
             assert!(
                 !String::from_utf8_lossy(&bytes).contains("hook-71c3"),
@@ -147,12 +149,7 @@ mod tests {
                 path.display()
             );
         }
-        // Branvil's secrets/ holds one file, the owner's token.
-        let kept: Vec<_> = files(&data.join("secrets"))
-            .into_iter()
-            .map(|(_, bytes)| bytes)
-            .collect();
-        assert_eq!(kept, [owner.into_bytes()]);
+        assert!(!data.join("secrets").exists());
     }
 
     #[test]

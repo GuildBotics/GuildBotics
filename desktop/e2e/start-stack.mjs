@@ -435,7 +435,7 @@ async function main() {
     const headers = {
       "Content-Type": "application/json",
       Cookie: entered.headers.get("set-cookie").split(";")[0],
-      "X-Branvil-CSRF": csrf,
+      "X-GuildBotics-CSRF": csrf,
     };
     const deadline = Date.now() + 60_000;
     while (true) {

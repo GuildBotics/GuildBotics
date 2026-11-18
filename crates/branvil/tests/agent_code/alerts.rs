@@ -111,12 +111,13 @@ impl Host {
                 write!(stream,"HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{link}Connection: close\r\n\r\n{body}",body.len()).unwrap();
             }
         });
-        let path = data.join("branvil.toml");
-        let config = std::fs::read_to_string(&path)
-            .unwrap()
-            .replace("https://api.github.com", &format!("http://{address}"))
-            .replace("https://github.com", &format!("http://{address}"));
-        std::fs::write(path, config).unwrap();
+        // The service reads GitHub at this stand-in.
+        let url = format!("http://{address}");
+        let mut config = std::fs::read_to_string(data.join("branvil.toml")).unwrap_or_default();
+        config.push_str(&format!(
+            "\n[upstream.github]\napi_url = \"{url}\"\nweb_url = \"{url}\"\ngit_url = \"{url}\"\n"
+        ));
+        std::fs::write(data.join("branvil.toml"), config).unwrap();
         Self {
             address,
             answers,

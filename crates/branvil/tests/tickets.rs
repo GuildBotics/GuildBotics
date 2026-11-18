@@ -6,6 +6,46 @@ use crate::common;
 use common::*;
 use serde_json::{Value, json};
 
+fn has_change(text: &str, expected: &Value) -> bool {
+    text.lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+        .any(|event| {
+            expected
+                .as_object()
+                .unwrap()
+                .iter()
+                .all(|(key, value)| event.get(key) == Some(value))
+        })
+}
+
+async fn assert_changes(events: &mut reqwest::Response, expected: &[Value], seconds: u64) {
+    let mut seen = String::new();
+    let found = tokio::time::timeout(std::time::Duration::from_secs(seconds), async {
+        while let Ok(Some(chunk)) = events.chunk().await {
+            seen.push_str(&String::from_utf8_lossy(&chunk));
+            if expected.iter().all(|event| has_change(&seen, event)) {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert_eq!(found, Ok(true), "{seen}");
+}
+
+#[test]
+fn event_matching_uses_one_json_payload_and_tolerates_additional_fields() {
+    let expected = json!({"kind":"ticket","path":"acme/demo","id":"3","actor":"agent"});
+    let complete = "data: {\"id\":\"3\",\"actor\":\"agent\",\"extra\":true,\"path\":\"acme/demo\",\"kind\":\"ticket\"}\n\n";
+    assert!(has_change(complete, &expected));
+    assert!(!has_change(
+        "data: {\"kind\":\"ticket\",\"path\":\"acme/demo\"}\n\ndata: {\"id\":\"3\",\"actor\":\"agent\"}\n\n",
+        &expected
+    ));
+    assert!(!has_change(&complete[..complete.len() / 2], &expected));
+}
+
 fn tickets_path() -> String {
     format!("/repos/{}/tickets", encode(REPO))
 }
@@ -246,19 +286,12 @@ async fn deleting_a_ticket_removes_its_sources_and_indexes_but_keeps_numbers() {
         .unwrap();
     assert_eq!(events.status(), 200);
     assert_eq!(s.delete(&path, &w.owner).await.0, 204);
-    let notices = tokio::time::timeout(std::time::Duration::from_secs(3), async {
-        let mut text = String::new();
-        while !text.contains("\"kind\":\"board\"") {
-            text.push_str(std::str::from_utf8(&events.chunk().await.unwrap().unwrap()).unwrap());
-        }
-        text
-    })
-    .await
-    .expect("deletion events");
-    for key in ["1", "2", "3"] {
-        assert!(notices.contains(&format!("\"id\":\"{key}\"")), "{notices}");
-    }
-    assert!(notices.contains(&format!("\"path\":\"{WS}\"")));
+    let mut expected: Vec<_> = ["1", "2", "3"]
+        .into_iter()
+        .map(|id| json!({"kind":"ticket","path":REPO,"id":id,"actor":"owner"}))
+        .collect();
+    expected.push(json!({"kind":"board","path":WS,"actor":"owner"}));
+    assert_changes(&mut events, &expected, 3).await;
     drop(events);
     for suffix in ["", "/comments", "/pulls", "/attachments"] {
         assert_eq!(s.get(&format!("{path}{suffix}"), &w.aiko).await.0, 404);
@@ -1054,7 +1087,12 @@ async fn the_board_lists_the_closed_items_of_its_workspace() {
         .await;
     s.post("/repos", &w.owner, json!({"path": "beta/x"})).await;
     let remote = s.remote("beta/x");
-    git_as_ok(&w.work, "alice", &w.owner, &["push", "-q", &remote, "main"]);
+    git_as_ok(
+        &w.work,
+        "alice",
+        &w.owner_git,
+        &["push", "-q", &remote, "main"],
+    );
     git_as_ok(
         &w.work,
         "aiko",
@@ -1468,79 +1506,6 @@ async fn idempotency_keys_replay_and_conflict() {
         .ok(&format!("{}?state=all", tickets_path()), &w.aiko)
         .await;
     assert_eq!(all["items"].as_array().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn sessions_need_csrf_and_hosts_are_checked() {
-    let w = World::new().await;
-    let s = &w.server;
-    let http = reqwest::Client::new();
-    let resp = s.enter(&s.entry_code(&w.owner).await).await;
-    assert_eq!(resp.status(), 200);
-    let cookie = resp.headers()["set-cookie"].to_str().unwrap().to_string();
-    assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
-    // Named by the port, so another service on the machine keeps its own.
-    let port = s.url.rsplit_once(':').unwrap().1;
-    assert!(
-        cookie.starts_with(&format!("branvil_session_{port}=")),
-        "{cookie}"
-    );
-    let cookie = cookie.split(';').next().unwrap().to_string();
-    let body: Value = resp.json().await.unwrap();
-    let csrf = body["csrf"].as_str().unwrap();
-    // GET with the cookie works; a write without the CSRF header does not.
-    let me = http
-        .get(format!("{}/api/v1/me", s.url))
-        .header("cookie", &cookie)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(me.status(), 200);
-    let url = format!("{}/api/v1{}", s.url, tickets_path());
-    let no_csrf = http
-        .post(&url)
-        .header("cookie", &cookie)
-        .json(&json!({"title": "x"}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(no_csrf.status(), 403);
-    let with_csrf = http
-        .post(&url)
-        .header("cookie", &cookie)
-        .header("x-branvil-csrf", csrf)
-        .json(&json!({"title": "x"}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(with_csrf.status(), 201);
-    // DNS rebinding: another Host is misdirected; another Origin is refused.
-    let wrong_host = http
-        .get(format!("{}/api/v1/health", s.url))
-        .header("host", "evil.example")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(wrong_host.status(), 421);
-    let wrong_origin = http
-        .get(format!("{}/api/v1/me", s.url))
-        .bearer_auth(&w.ken)
-        .header("origin", "http://evil.example")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(wrong_origin.status(), 403);
-    // Responses carry the security headers; the SPA serves web URLs.
-    let page = http
-        .get(format!("{}/{REPO}/-/tickets/1", s.url))
-        .send()
-        .await
-        .unwrap();
-    // Scripts only from the GUI's own files; inline styles are allowed for its components.
-    let csp = page.headers()["content-security-policy"].to_str().unwrap();
-    assert!(csp.contains("script-src 'self';"), "{csp}");
-    assert!(csp.contains("style-src 'self' 'unsafe-inline';"), "{csp}");
-    assert_eq!(page.headers()["x-content-type-options"], "nosniff");
 }
 
 /// The URL path of ticket `t` (a ticket of `REPO`).
@@ -1961,19 +1926,12 @@ async fn a_change_of_a_ticket_reaches_the_views_of_all_its_descendants() {
     assert_eq!(events.status(), 200);
     s.patch(&path_of(&top), &w.ken, json!({"interactive": true}))
         .await;
-    let bottom_changed = format!(r#"data: {{"kind":"ticket","path":"{REPO}","id":"3"}}"#);
-    let mut seen = String::new();
-    let found = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while let Ok(Some(chunk)) = events.chunk().await {
-            seen.push_str(&String::from_utf8_lossy(&chunk));
-            if seen.contains(&bottom_changed) {
-                return true;
-            }
-        }
-        false
-    })
+    assert_changes(
+        &mut events,
+        &[json!({"kind":"ticket","path":REPO,"id":"3","actor":"agent"})],
+        10,
+    )
     .await;
-    assert_eq!(found, Ok(true), "{seen}");
 }
 
 #[tokio::test]
@@ -2257,19 +2215,12 @@ async fn a_move_reaches_the_views_of_all_its_descendants() {
         )
         .await;
     assert_eq!(st, 200, "{v}");
-    let bottom_changed = format!(r#"data: {{"kind":"ticket","path":"{REPO}","id":"3"}}"#);
-    let mut seen = String::new();
-    let found = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while let Ok(Some(chunk)) = events.chunk().await {
-            seen.push_str(&String::from_utf8_lossy(&chunk));
-            if seen.contains(&bottom_changed) {
-                return true;
-            }
-        }
-        false
-    })
+    assert_changes(
+        &mut events,
+        &[json!({"kind":"ticket","path":REPO,"id":"3","actor":"agent"})],
+        10,
+    )
     .await;
-    assert_eq!(found, Ok(true), "{seen}");
 }
 
 #[tokio::test]
