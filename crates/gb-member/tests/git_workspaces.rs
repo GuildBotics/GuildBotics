@@ -780,18 +780,25 @@ async fn changing_the_anchor_keeps_unpublished_branches_and_repository_slots_sep
     }
 }
 #[cfg(unix)]
-#[tokio::test]
-async fn clone_programs_and_redirections_execute_only_in_the_guest_without_credentials() {
+/// Each planted program or redirection is an independent case, so each runs as its own test.
+mod clone_programs_and_redirections_execute_only_in_the_guest_without_credentials {
+    use super::*;
     use std::os::unix::fs::PermissionsExt;
-    for plant in [
-        "hook",
-        "filter",
-        "fsmonitor",
-        "remote",
-        "gitfile",
-        "worktree",
-        "symlink",
-    ] {
+
+    macro_rules! cases {
+        ($($plant:ident),* $(,)?) => {
+            $(
+                #[tokio::test]
+                async fn $plant() {
+                    check(stringify!($plant)).await;
+                }
+            )*
+        };
+    }
+
+    cases!(hook, filter, fsmonitor, remote, gitfile, worktree, symlink);
+
+    async fn check(plant: &str) {
         let f = Fixture::new();
         let path = f.prepare("one", "topic").await;
         let trap = f.temp.path().join("trap");
@@ -1316,14 +1323,29 @@ fn lifecycle_page(f: &mut Fixture, kind: &str, url: &str, state: &str, done: boo
         Ok(ReadPage::of(resource, [value], None, None).unwrap()),
     );
 }
-#[tokio::test]
-async fn active_work_keeps_clean_clones_and_terminal_work_releases_them() {
-    for (kind, state, done, merged) in [
-        ("ticket", "closed", false, false),
-        ("ticket", "open", true, false),
-        ("pull_request", "closed", false, true),
-        ("pull_request", "closed", false, false),
-    ] {
+/// Each way of finishing the work is an independent case, so each runs as its own test.
+mod active_work_keeps_clean_clones_and_terminal_work_releases_them {
+    use super::*;
+
+    macro_rules! cases {
+        ($($name:ident => ($kind:literal, $state:literal, $done:literal, $merged:literal)),* $(,)?) => {
+            $(
+                #[tokio::test]
+                async fn $name() {
+                    check($kind, $state, $done, $merged).await;
+                }
+            )*
+        };
+    }
+
+    cases! {
+        closed_ticket => ("ticket", "closed", false, false),
+        done_ticket => ("ticket", "open", true, false),
+        merged_pull_request => ("pull_request", "closed", false, true),
+        closed_pull_request => ("pull_request", "closed", false, false),
+    }
+
+    async fn check(kind: &'static str, state: &str, done: bool, merged: bool) {
         let mut f = Fixture::new();
         lifecycle_page(&mut f, kind, "one", "open", false, false);
         lifecycle_page(&mut f, kind, "two", "open", false, false);
@@ -1359,15 +1381,24 @@ async fn active_work_keeps_clean_clones_and_terminal_work_releases_them() {
     }
 }
 
-#[tokio::test]
-async fn excluded_work_retains_git_based_reuse() {
-    for kind in [
-        "pull_request_review",
-        "ticket_mention",
-        "chat",
-        "manual",
-        "routine",
-    ] {
+/// Each kind of excluded work is an independent case, so each runs as its own test.
+mod excluded_work_retains_git_based_reuse {
+    use super::*;
+
+    macro_rules! cases {
+        ($($kind:ident),* $(,)?) => {
+            $(
+                #[tokio::test]
+                async fn $kind() {
+                    check(stringify!($kind)).await;
+                }
+            )*
+        };
+    }
+
+    cases!(pull_request_review, ticket_mention, chat, manual, routine);
+
+    async fn check(kind: &'static str) {
         let f = Fixture::new();
         let mut w = f.workspace("one");
         w.work = Some((kind, "one"));
