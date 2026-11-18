@@ -15,7 +15,6 @@
     "--add-blocked-by",
     "--add-keyword",
     "--add-label",
-    "--add-to-board",
     "--after",
     "--assignee",
     "--base",
@@ -55,7 +54,6 @@
     "--message-url",
     "--meta-only",
     "--name",
-    "--no-add-to-board",
     "--no-interactive",
     "--params",
     "--parent",
@@ -100,12 +98,6 @@
     "--work-remains",
     "--workspace",
     "--workspace-mode"
-  ],
-  "provider_names": [
-    "branvil",
-    "github",
-    "local",
-    "slack"
   ],
   "guest_venv": "/opt/guildbotics/venv"
 }

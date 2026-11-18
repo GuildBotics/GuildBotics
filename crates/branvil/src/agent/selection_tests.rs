@@ -169,7 +169,7 @@ fn a_merged_repair_pr_does_not_finish_a_ticket_before_main_verification() {
 
 #[test]
 fn recorded_ticket_work_controls_merge_completion_and_resume() {
-    use gb_ports::WorkflowStatusReason::*;
+    use gb_base::service::WorkflowStatusReason::*;
     let mine = [TaskMessage {
         author_type: "Assistant".into(),
         ..Default::default()

@@ -1,7 +1,9 @@
 //! A stopped ticket's notice, separate from the execution that stopped.
+use branvil::agent::port::Task;
+use gb_base::service::WorkflowStatus;
+use gb_integrations::chat::ChatService;
 use gb_member::context::PublicMember;
 use gb_observability::runs::{Completion, RunRecord, RunState};
-use gb_ports::{ChatService, Task, WorkflowStatus};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
@@ -327,7 +329,6 @@ mod tests {
             person_id: "aiko".into(),
             display_name: "Aiko".into(),
             accounts: Default::default(),
-            branvil_members: Default::default(),
 
             chat_provider: "local".into(),
 
@@ -336,7 +337,6 @@ mod tests {
         let factory = gb_integrations::ServiceIntegrationFactory::new(
             config,
             &secrets,
-            None,
             std::sync::Arc::new(|_| {}),
         )
         .unwrap();
@@ -369,7 +369,7 @@ mod tests {
         let events = chat
             .list_channel_events(
                 "notify",
-                gb_ports::ChannelEventsQuery {
+                gb_integrations::chat::ChannelEventsQuery {
                     since: None,
                     until: None,
                     cursor: None,
@@ -385,7 +385,7 @@ mod tests {
         assert!(notice.message.text.contains("local://comment/1"));
         assert_eq!(
             notice.status.as_ref().unwrap().reason(),
-            gb_ports::WorkflowStatusReason::Blocked
+            gb_base::service::WorkflowStatusReason::Blocked
         );
         assert_eq!(observed.lock().unwrap().len(), 1);
         assert_eq!(observed.lock().unwrap()[0]["delivered"], true);
@@ -536,7 +536,7 @@ mod tests {
         chat.errors
             .lock()
             .unwrap()
-            .insert("post:bad".into(), gb_ports::ServiceError::Failed);
+            .insert("post:bad".into(), gb_base::service::ServiceError::Failed);
         let stop = WorkStop::of(
             &Task {
                 url: Some("ticket".into()),

@@ -32,4 +32,5 @@ mod agent_code;
 #[cfg(feature = "test-support")]
 mod agent_patrol;
 mod agent_readiness;
+mod agent_scope;
 mod agent_selection_pr;

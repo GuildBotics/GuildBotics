@@ -1,5 +1,5 @@
 //! Unified diff coordinates shared by code hosts.
-use gb_ports::ServiceError;
+use gb_base::service::ServiceError;
 use serde_json::{Value, json};
 use std::sync::LazyLock;
 static HUNK: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -43,52 +43,36 @@ pub fn commentable_lines(patch: &str) -> Result<Vec<Value>, ServiceError> {
     }
     Ok(lines)
 }
-pub fn file_change(
-    path: &str,
-    status: &str,
-    patch: Option<String>,
-    additions: i64,
-    deletions: i64,
-) -> Result<Value, ServiceError> {
-    if additions < 0 || deletions < 0 {
-        return Err(ServiceError::InvalidResult);
-    }
-    let changes = additions
-        .checked_add(deletions)
-        .ok_or(ServiceError::InvalidResult)?;
-    let coordinates = commentable_lines(patch.as_deref().unwrap_or(""))?;
-    let added = coordinates
-        .iter()
-        .filter(|v| v["side"] == "RIGHT" && v.get("left_line").is_none())
-        .count() as i64;
-    let deleted = coordinates.iter().filter(|v| v["side"] == "LEFT").count() as i64;
-    Ok(
-        json!({"path":path,"status":status,"additions":additions,"deletions":deletions,"changes":changes,"patch":patch,"patch_available":patch.is_some(),"patch_complete":patch.is_some()&&added==additions&&deleted==deletions,"commentable_lines":coordinates}),
-    )
+/// Branvil's change of one file, with the lines an inline comment can name.
+pub fn with_commentable_lines(file: crate::git::FileChange) -> Result<Value, ServiceError> {
+    let lines = commentable_lines(file.patch.as_deref().unwrap_or(""))?;
+    let mut value = serde_json::to_value(file).map_err(|_| ServiceError::InvalidResult)?;
+    value["commentable_lines"] = lines.into();
+    Ok(value)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn invalid_counts_are_errors() {
-        assert!(file_change("a", "modified", None, -1, 0).is_err());
-        assert!(file_change("a", "modified", None, i64::MAX, 1).is_err());
-    }
-    #[test]
     fn context_and_multiple_hunks_preserve_both_sides() {
         let patch = "header\n@@ -1,2 +1,2 @@\n old\n-removed\n+added\n\\ No newline at end of file\n@@ -8 +10 @@\n+next";
-        let v = file_change("a", "modified", Some(patch.into()), 2, 1).unwrap();
+        let v = with_commentable_lines(crate::git::FileChange {
+            path: "a".into(),
+            previous_path: None,
+            status: "modified",
+            additions: 2,
+            deletions: 1,
+            patch: Some(patch.into()),
+            patch_complete: true,
+            binary: false,
+        })
+        .unwrap();
         assert_eq!(v["commentable_lines"].as_array().unwrap().len(), 4);
         assert_eq!(v["commentable_lines"][0]["left_line"], 1);
         assert_eq!(v["commentable_lines"][3]["line"], 10);
-        assert_eq!(v["patch_complete"], true);
         assert_eq!(
-            file_change("a", "modified", Some(patch.into()), 3, 1).unwrap()["patch_complete"],
-            false
-        );
-        assert_eq!(
-            file_change("a", "modified", None, 0, 0).unwrap()["patch_available"],
-            false
+            (v["path"].as_str(), v["patch_complete"].as_bool()),
+            (Some("a"), Some(true))
         );
     }
 }

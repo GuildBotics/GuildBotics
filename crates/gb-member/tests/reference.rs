@@ -23,12 +23,15 @@ fn ticket_update_help_preserves_order_and_assignment_conditions() {
     for text in [summary, reference] {
         for sentence in [
             "Use --before or --after to apply a human-approved order within the same tracker and lane, in interactive sessions only.",
-            "In interactive sessions, --assignee replaces all assignees and --lane in_progress moves the ticket; both require --human-approved.",
-            "Updates return assignees and lane.",
+            "In interactive sessions, --assignee assigns the ticket in place of its assignee and --lane in_progress moves the ticket; both require --human-approved.",
+            "Updates return the ticket.",
         ] {
             assert!(text.contains(sentence), "{sentence}");
         }
     }
+    // The returned ticket carries the assignee and lane the update set.
+    let read = grammar["ticket read"]["help"].as_str().unwrap();
+    assert!(read.contains("author (creator's account name), assignee, lane, interactive"));
 }
 #[test]
 fn reference_covers_every_member_domain() {
@@ -39,7 +42,7 @@ fn reference_covers_every_member_domain() {
     assert!(text.contains("[--issue-url <url> ... [--closes-issue|--refs-issue]]"));
     assert!(text.contains("--issue-url, which may be repeated, links each ticket"));
     assert!(text.contains(
-        "a code host that cannot close one of those tickets on a merge refuses --closes-issue"
+        "--closes-issue refuses a ticket kept outside this code host, which a merge cannot close"
     ));
     assert!(text.contains("guildbotics member pr update"));
     assert!(text.contains("guildbotics member pr review-comment"));
@@ -185,7 +188,7 @@ fn reference_states_which_code_host_writes_stay_human_decisions() {
         "it never authorizes changing an existing ticket",
         "PR state, draft, and base are read-only because humans decide them",
         "In interactive sessions",
-        "replacing all assignees",
+        "replacing its assignee",
         "Workflow and delegated runs must not change assignment or lane",
         "--assignee <person_id>",
         "--lane in_progress",
@@ -216,7 +219,9 @@ fn reference_standardizes_free_form_input_with_utf8_files() {
 #[test]
 fn reference_documents_complete_content_command_usage() {
     let text = help();
-    assert!(text.contains("[--add-to-board|--no-add-to-board]"));
+    assert!(text.contains(
+        "--tracker <tracker> --title <title> --content-file <file> [--label <name> ...] [--interactive] [--assignee <person_id>]"
+    ));
     assert!(text.contains("(--channel-id <id> | --channel-name <name>) --thread-id <id>"));
     assert!(text.contains("[--scope personal|team] --title <title> --content-file <file>"));
     assert!(text.contains("[--keyword <word> ...] [--add-keyword <word> ...]"));
@@ -291,7 +296,7 @@ fn interactive_takeover_documents_blockers_and_partial_failure_in_both_languages
     let text = include_str!("../../../skills/guildbotics/SKILL.md");
     for term in [
         "If any `blocked_by` ticket is open, keep the lane, omit `--lane`",
-        "read the ticket\nagain and report its actual state",
+        "If the update fails, read the ticket again and\nreport its actual state",
         "`blocked_by` に開いたチケットがあれば",
         "一部が書き込まれている可能性があるため",
     ] {
@@ -307,7 +312,8 @@ fn reference_requires_approved_interactive_order_and_readback() {
         "read tracker_tickets with lane",
         "work still waits until the blocker closes",
         "人が承認した着手の順",
-        "assignees",
+        "items are tickets as `tickets` returns them",
+        "author (creator's account name), assignee, lane",
     ] {
         assert!(text.contains(phrase), "{phrase}");
     }

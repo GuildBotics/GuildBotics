@@ -1,5 +1,6 @@
 //! Shared local chat behavior.
-use gb_ports::*;
+use gb_base::service::*;
+use gb_integrations::chat::*;
 
 pub async fn chat_contract(service: &dyn ChatService, channel: &str) {
     let identity = service.get_bot_identity().await.unwrap();

@@ -14,7 +14,10 @@ def test_ticket_create_read_and_comment(stack):
         "--human-approved",
         content="外から作成した本文。",
     )
-    url = created["target"]["url"]
+    url = created["url"]
+    # The output is the code host's view of the ticket; the trace's work target
+    # stays out of it.
+    assert "target" not in created and created["title"] == "黒箱のチケット"
     read = stack.member("ticket", "read", "--resource", "tickets", "--subject", url)
     assert read["items"][0]["title"] == "黒箱のチケット"
     assert read["items"][0]["body"] == "外から作成した本文。"
@@ -50,7 +53,7 @@ def test_pr_create_and_read(stack, repository):
         "--resource",
         "pull_requests",
         "--subject",
-        created["target"]["url"],
+        created["url"],
     )
     [pr] = read["items"]
     assert pr["title"] == "黒箱の PR"

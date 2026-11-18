@@ -110,7 +110,6 @@ en:
     unknown: "unknown"
   prepare_repo_pr: "--repo cannot be combined with --pr-url."
   prepare_branch_anchor: "--branch cannot be combined with --issue-url or --pr-url."
-  ticket_no_repository: "%{url} belongs to no repository: name one with --repo."
   ticket_repository_mismatch: "%{url} belongs to %{repository}, not %{requested}."
   ticket_order: "Changing the ticket order"
   ticket_order_conflict: "Use only one of --before and --after."

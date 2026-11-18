@@ -38,9 +38,10 @@ guildbotics server start                 Rust host, one process on the Hub
 `gb-config` resolves workspace settings, team and member data, command names and
 declarations, and brain slots. `gb-server` uses those results to start a command
 and write its records through `gb-observability`. Member operations live in
-`gb-member` and use the `gb-ports` contracts. `gb-integrations` selects the
-provider, including the embedded Branvil API. Branvil has no dependency on a
-GuildBotics crate. `gb-setup` validates setup changes, `gb-workspace` owns
+`gb-server/src/member/`, which calls the embedded Branvil's agent module for
+tickets and pull requests; `gb-member` keeps the parts the client also uses.
+`gb-integrations` selects the chat provider. Branvil uses no GuildBotics crate
+but `gb-base`. `gb-setup` validates setup changes, `gb-workspace` owns
 workspace selection and identity, and `gb-base` owns the shared file and path
 operations used across crates.
 
@@ -160,85 +161,52 @@ Member-facing agent instructions are layered so each contract has exactly one so
 The layer model and its guard tests are described in `AGENTS.md`
 (「メンバー・provider・実行」).
 
-### External service ports
+### External services
 
-A member works with external services through four ports, chosen per kind by
-`project.services` (`gb-integrations/src/factory.rs`). A port is the contract of operations
-and data a caller understands without knowing the service; a provider maps it onto a
-service's API.
+Tickets, pull requests, and CI are the embedded Branvil's. `gb-server` calls its agent
+module (`branvil/src/agent/`, `TicketAgent` and `CodeAgent`) as the member, through
+`gb-server/src/member.rs`'s `Agents`, which acts within the workspace
+`project.services` names for each. Chat is the one service with providers:
+`ChatService` and `EventListener` (`gb-integrations/src/chat.rs`), chosen in
+`gb-integrations/src/factory.rs` (Slack, or the reference provider `local`).
 
-| port | responsibility | called by |
+| service | responsibility | called by |
 | --- | --- | --- |
-| `CodeHostingService` | repositories (git remote, default branch, push credential and scope, commit URL), pull requests (reads and writes, conversation comments, reviews, inline comments, replies, reactions), CI (readiness, failed logs, artifacts), repository information, the pull request patrol, the pull requests that refer to a ticket | `member pr / repo-info / git`, task completion, the patrol |
-| `TicketService` | tickets (reads and writes, a created one put in the board's new lane, comments, reactions, the files their bodies and comments refer to) and the board (candidates, re-reading, lanes, closed work) | `member ticket`, the ticket selector, the activity import |
+| `CodeAgent` | repositories (git remote, default branch, push credential and scope, commit URL), pull requests (reads and writes, conversation comments, reviews, inline comments, replies, reactions), CI (readiness, failed logs, artifacts), repository information, the pull request patrol, the pull requests that refer to a ticket | `member pr / repo-info / git`, task completion, the patrol |
+| `TicketAgent` | tickets (reads and writes, comments, reactions, the files their bodies and comments refer to) and the board (candidates, re-reading, lanes, closed work) | `member ticket`, the ticket selector, the activity import |
 | `ChatService` | the chat: identity, history, posts and replies, reactions | `member chat`, the chat workflow |
 | `EventListener` | receiving the chat, one connection at a time | the chat receiving runner |
 
-```mermaid
-flowchart LR
-    CodeCLI["member pr / repo-info / git<br/>task completion"] --> Code["CodeHostingService"]
-    TicketCLI["member ticket"] --> Tickets["TicketService"]
-    Patrol["ticket and PR patrol"] --> Code
-    Patrol --> Tickets
-    ChatCLI["member chat"] --> Chat["ChatService"]
-    Receive["chat receiving"] --> Listener["EventListener"]
-    Receive --> Chat
+What these share lives in `gb-base/src/service.rs`:
 
-    Code --> Branvil["branvil"]
-    Tickets --> Branvil
-    Chat --> Slack["slack"]
-    Listener --> Slack
-    Code --> Local["local"]
-    Tickets --> Local
-    Chat --> Local
-    Listener --> Local
-```
-
-Shared contracts live in `gb-ports`:
-
-- **People.** Ticket assignees, PR authors and requested reviewers, and comment,
-  review and thread authors use `ActorName`: a service account name, not a
-  GuildBotics person id. Each provider's descriptor exposes a credential-free
-  `member_identity(person)` with its public names (including API aliases) and
-  mention spelling. The patrol and author classification use that same identity.
-  `member context` publishes the team roster so agents can resolve these names
-  and address a teammate without guessing an id from an account name. The local
-  reference provider deliberately gives members names different from their ids.
+- **People.** Authors, assignees, and reviewers are Branvil account names, which are the
+  members' person ids; chat uses the chat's account names (`ActorName`). `member context`
+  publishes the team roster so agents can resolve these names and address a teammate.
 - **References.** Tickets and pull requests are named by their URLs; a read is
   `read(resource, subject)`, the subject being the item's URL or, for repository
-  information, the repository's path, which the provider checks and spells (Branvil
-  `workspace/repo`). Comments, reviews, threads, CI jobs, artifacts, and attachments are opaque string
-  ids that mean something only together with their item's URL. A work target is
-  `{kind: ticket | pull_request, url, title, label}`, `label` being the short reference
-  the service shows it by (Branvil `#12`); shared code never builds one from a number. A
-  ticket has a `key` (its branch is `ticket/<key>`), a `tracker` (where it is kept), the
-  `repository` it belongs to, if any, and its `lane` on the board.
-- **Failures.** `ServiceError` (a message fit for the user, never what the service
-  answered or a credential), `ServiceNotFound` (not there, or not this service's), and
-  `ServiceUnsupported` (the service cannot do it at all). Optional features — reactions
-  by meaning, `request_changes`, a ticket created off the board, artifacts, a ticket's
-  attachments, failed logs,
-  `dependency_alerts`, the pull requests of another service's ticket, a link that closes
-  a ticket on a merge — raise `ServiceUnsupported` when called; an empty result means
-  read and found nothing.
-- **Reactions** are four meanings (`ack`, `agree`, `celebrate`, `support`) on every
-  port; a provider never substitutes another reaction for one it lacks.
+  information, the repository's path (`workspace/repo`). Comments, reviews, threads,
+  CI jobs, artifacts, and attachments are opaque string ids that mean something only
+  together with their item's URL. Reads and writes return Branvil's own views. A write
+  also names its work target, `{kind: ticket | pull_request, url, title, label}`, which
+  the trace and the run evidence record and the member's output leaves out.
+- **Failures.** `ServiceError` carries a locale key and safe arguments, never what the
+  service answered or a credential; its class tells not found, unsupported, and
+  unavailable apart. An empty result means read and found nothing.
+- **Reactions** are four meanings (`ack`, `agree`, `celebrate`, `support`).
 - **Reviews** take a verdict (`approve`, `request_changes`, `comment`) and, like inline
   comments, the head the member read: on a moved head nothing is written.
 - **A workflow status** (`WorkflowStatus`) is what a run that did not finish leaves where
-  its work came from; each provider carries it in its own form (a hidden comment marker,
-  message metadata) and gives it back on reading. It also marks the notice a member posts
+  its work came from: a comment's `meta`, or chat message metadata, given back on
+  reading. It also marks the notice a member posts
   in its explicitly selected chat channels (`chat.notify_work_stops`) when its ticket or PR work stops to wait for a person, which the
   ticket selector posts (`gb-server/src/work_stops.rs`), so no member answers it.
-- **Write scope.** Each service's configuration names a scope (a workspace in Branvil); a
-  write goes only to a repository or tracker directly in it (`check_path`), a push only
-  to the code host's.
+- **Write scope.** Each service's configuration names a workspace; a write goes only to
+  a repository directly in it (`check_path`), a push only to the code host's.
 - **Selection rules are GuildBotics' own.** The shared patrol code decides which pull
   request asks something of a member (`branvil/src/agent/pr_patrol.rs`), whether a
   head may be reported complete (`branvil/src/agent/pr_readiness.rs`), and whether an assigned
   ticket is a member's work now (`branvil/src/agent/selection.rs`) by applying these
-  shared rules to observations of the embedded service. Chat retains the reference
-  provider `local`; tickets and pull requests use the agent module.
+  shared rules to observations of the embedded service.
 
 `branvil` (`branvil/src/agent/`) is a code host and tickets of a
 [Branvil](branvil_integration.en.md) service that every machine reaches at the same
@@ -263,10 +231,10 @@ trigger, run ID and work identity. Selection happens before dispatch.
   queue/trigger — GuildBotics does not reimplement fine-grained code-host/git
   operations around it, and there is no webhook receiver (local-first design). The
   candidates are the pull requests that ask something of the member
-  (`CodeHostingService.pull_request_candidates()`), then the board's tickets
-  (`TicketService.candidates()`), and each is re-read from the port it came
+  (`CodeAgent::pull_request_candidates`), then the board's tickets
+  (`TicketAgent::candidates`), and each is re-read from the agent it came
   from before it is dispatched; a failed or rate-limited run's status comment goes to
-  that port too.
+  that ticket or pull request too.
   Unanswered mentions on open tickets outside the member's assignment are also
   candidates, even outside the ready/working lanes. Providers resolve mentions;
   `ticket_selection.mention_pending` considers a member's subsequent comment an
@@ -1130,7 +1098,7 @@ Two Person distinctions matter architecturally:
   adapter.
 - **New command type**: subclass `CommandBase` with `extensions` / `inline_key`; the
   registry picks it up (`commands/registry.py`).
-- **New integration**: implement the relevant `gb-ports` traits and register
+- **New chat provider**: implement `ChatService` and `EventListener` and register
   the provider in `gb-integrations/src/factory.rs`. Keep payload conversion,
   credentials and the provider's write checks in that implementation. Add setup
   support in `gb-server/src/setup_providers/` when the provider is configurable

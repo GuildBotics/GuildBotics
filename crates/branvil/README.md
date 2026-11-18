@@ -15,7 +15,7 @@ its owner, authenticated by GuildBotics. Its CI jobs run in a separate
 `guildbotics server git-hook`, and `guildbotics server hub-data` backs up,
 restores, checks, upgrades, and reindexes its data with the rest of the Hub's
 records. GuildBotics uses its data API (`api::DataApi`) in process through
-`crates/gb-integrations`. How to run and update the Hub is in the
+its agent module, from `crates/gb-server`. How to run and update the Hub is in the
 [macOS Hub guide](../../docs/hub-server.md); see
 [Architecture](docs/architecture.md) for the service boundaries.
 

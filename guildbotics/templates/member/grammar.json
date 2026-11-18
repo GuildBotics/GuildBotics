@@ -803,7 +803,7 @@
       {
         "spelling": "--repo",
         "default": "",
-        "help": "Repository path (for example, owner/repo; follow the service's path format): with --branch, or with --issue-url for a ticket that belongs to no repository."
+        "help": "Repository path (for example, owner/repo; follow the service's path format): with --branch, or with --issue-url, where it must name the ticket's repository."
       },
       {
         "spelling": "--branch",
@@ -821,7 +821,7 @@
     ],
     "read_only": false,
     "content_required": false,
-    "help": "Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Unfinished checkouts stay assigned to their work and requested branch; idle checkouts of the same repository are reused with their build caches. Call prepare every run and use the returned repo_path and branch: a path from an earlier run may now belong to another work. Unfinished Git state is kept, including an agent-created branch; an empty branch means detached HEAD. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them."
+    "help": "Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url; a --repo given with it must name the ticket's repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Unfinished checkouts stay assigned to their work and requested branch; idle checkouts of the same repository are reused with their build caches. Call prepare every run and use the returned repo_path and branch: a path from an earlier run may now belong to another work. Unfinished Git state is kept, including an agent-created branch; an empty branch means detached HEAD. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them."
   },
   "git commit": {
     "options": [
@@ -1003,15 +1003,9 @@
         "help": "Label already defined in the tracker. Repeat for several labels."
       },
       {
-        "spelling": "--add-to-board/--no-add-to-board",
-        "default": true,
-        "flag": true,
-        "help": "Put the created ticket on the configured board; a board that keeps every ticket refuses --no-add-to-board."
-      },
-      {
         "spelling": "--interactive",
         "flag": true,
-        "help": "Create for interactive work; unsupported providers refuse it."
+        "help": "Create for interactive work."
       },
       {
         "spelling": "--assignee",
@@ -1051,7 +1045,7 @@
     ],
     "read_only": false,
     "content_required": true,
-    "help": "Open a follow-up ticket a human asked for, in the tracker a ticket's read names (`tracker`); a board that keeps every ticket refuses `--no-add-to-board`. Creation settings are covered by the human's approval. The lane defaults to ready with a parent or blockers, new otherwise; interactive work starting now uses --interactive --assignee <person_id> --lane in_progress. Unsupported providers refuse --interactive."
+    "help": "Open a follow-up ticket a human asked for, in the repository a ticket's read names (`repository`); every ticket is on the board. Creation settings are covered by the human's approval. The lane defaults to ready with a parent or blockers, new otherwise; interactive work starting now uses --interactive --assignee <person_id> --lane in_progress."
   },
   "ticket update": {
     "options": [
@@ -1079,7 +1073,7 @@
       {
         "spelling": "--assignee",
         "default": null,
-        "help": "Replace all assignees with this roster person_id; interactive sessions only, requires --human-approved."
+        "help": "Assign the ticket to this roster person_id in place of its assignee; interactive sessions only, requires --human-approved."
       },
       {
         "spelling": "--lane",
@@ -1101,7 +1095,7 @@
         "spelling": "--interactive/--no-interactive",
         "default": null,
         "flag": true,
-        "help": "Set or clear this ticket's interactive mode; requires --human-approved. An interactive ancestor still keeps it interactive. Unsupported providers refuse it."
+        "help": "Set or clear this ticket's interactive mode; requires --human-approved. An interactive ancestor still keeps it interactive."
       },
       {
         "spelling": "--add-label",
@@ -1160,7 +1154,7 @@
     ],
     "read_only": false,
     "content_required": false,
-    "help": "Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. Changing interactive mode requires a human's request or approval for that ticket (--human-approved). Unsupported providers refuse either flag. Reads and updates return the ticket's own interactive setting and interactive_ancestor URL; clearing the setting does not override an interactive ancestor. Report that inherited state to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。 Use --before or --after to apply a human-approved order within the same tracker and lane, in interactive sessions only. In interactive sessions, --assignee replaces all assignees and --lane in_progress moves the ticket; both require --human-approved. Updates return assignees and lane."
+    "help": "Change a ticket's body, title, labels, state, interactive mode, parent, or the tickets it is blocked by; empty content removes the body, and an empty `--parent` the parent. Changing interactive mode requires a human's request or approval for that ticket (--human-approved). Reads and updates return the ticket's own interactive setting and its interactive_ancestor; clearing the setting does not override an interactive ancestor. Report that inherited state to the requester. 対話指定の切り替えは、そのチケットについて人が依頼・承認した場合だけ --human-approved を付けて行う。継承元がある間は対話のままなので、その結果を伝える。 Use --before or --after to apply a human-approved order within the same tracker and lane, in interactive sessions only. In interactive sessions, --assignee assigns the ticket in place of its assignee and --lane in_progress moves the ticket; both require --human-approved. Updates return the ticket."
   },
   "pr create": {
     "options": [
@@ -1205,7 +1199,7 @@
         "spelling": "--closes-issue/--refs-issue",
         "default": false,
         "flag": true,
-        "help": "Link every --issue-url ticket so that merging the PR closes it, or only refer to it. Defaults to referring; a code host that cannot close one of the tickets on a merge refuses --closes-issue."
+        "help": "Link every --issue-url ticket so that merging the PR closes it, or only refer to it. Defaults to referring; --closes-issue refuses a ticket kept outside this code host."
       },
       {
         "spelling": "--draft",
@@ -1227,7 +1221,7 @@
     ],
     "read_only": false,
     "content_required": true,
-    "help": "Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes every one of them; a code host that cannot close one of those tickets on a merge refuses --closes-issue."
+    "help": "Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes every one of them; --closes-issue refuses a ticket kept outside this code host, which a merge cannot close."
   },
   "pr update": {
     "options": [
@@ -1359,7 +1353,7 @@
     ],
     "read_only": false,
     "content_required": true,
-    "help": "Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. When the head has moved, nothing is written: read the new commits, then submit again on the new head. A code host without request_changes refuses it."
+    "help": "Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. When the head has moved, nothing is written: read the new commits, then submit again on the new head."
   },
   "pr review-comment": {
     "options": [
@@ -1761,7 +1755,7 @@
         ]
       }
     ],
-    "help": "Read one bounded page of a ticket's resource: tickets (the ticket itself: key, tracker, repository, author (creator service actor name), lane, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: tracker path; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, lane new|ready|in_progress|done, page_size; lane returns board order; items: URL, key, title, state, lane, assignees, labels, updated_at). Collections accept page_size (1-100). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted."
+    "help": "Read one bounded page of a ticket's resource: tickets (the ticket itself: key, repository, author (creator's account name), assignee, lane, interactive, interactive_ancestor, parent, children, blocked_by, blocks, ...), ticket_comments, ticket_attachments (the files its body and comments refer to: id, name, media_type, size, and referenced_by, `body` or a comment id), or ticket_pull_requests (the code host's pull requests that refer to it), or tracker_tickets (subject: the repository path the tickets are kept in; conditions: text with all whitespace-separated terms in title/body, state open|closed|all, label, lane new|ready|in_progress|done, page_size; lane returns board order; items are tickets as `tickets` returns them). Collections accept page_size (1-100). Results contain the items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted."
   },
   "pr read": {
     "read_only": true,
@@ -1780,7 +1774,6 @@
           "pull_request_reviews",
           "pull_request_files",
           "pull_request_threads",
-          "review_thread_comments",
           "pull_request_readiness"
         ],
         "help": "Resource to read; see member help for its conditions."
@@ -1809,7 +1802,7 @@
         ]
       }
     ],
-    "help": "Read one bounded page of a PR's resource: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files, pull_request_threads, review_thread_comments, or pull_request_readiness. Collections accept page_size (1-100); review_thread_comments also requires node from pull_request_threads. Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted."
+    "help": "Read one bounded page of a PR's resource: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files, pull_request_threads (each with all of its comments), or pull_request_readiness. Collections accept page_size (1-100). Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). Results contain the items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted."
   },
   "repo-info read": {
     "read_only": true,
@@ -1851,7 +1844,7 @@
         ]
       }
     ],
-    "help": "Read one bounded page of the repository's dependency_alerts, the repository named by its path. It accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an id condition, it returns that one alert and accepts no other condition or continuation. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. Results contain normalized items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted."
+    "help": "Read one bounded page of the repository's dependency_alerts, the repository named by its path. It accepts state (open by default, resolved, dismissed) and page_size (1-100, default 30). With an id condition, it returns that one alert and accepts no other condition or continuation. For formatted or JSON alerts, run repository/security_alerts in a ready command environment. Results contain the items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted."
   },
   "checks retry": {
     "help": "Retry a CI job by its page URL.",

@@ -148,24 +148,76 @@ def _built_from(tested: set[str]) -> set[str]:
     return built
 
 
+def _build(name: str, default: bool) -> set[str]:
+    """The workspace crates that building a crate needs, with its default
+    features or none: its normal dependencies, and the optional ones the
+    enabled features name, with the features enabled across the graph."""
+    crates = _crates()
+    names = {directory.resolve(): crate for crate, directory in crates.items()}
+    features: dict[str, set[str]] = {name: {"default"} if default else set()}
+    built: set[str] = set()
+    pending = [name]
+    while pending:
+        crate = pending.pop()
+        built.add(crate)
+        manifest = _load(f"{crates[crate].relative_to(ROOT).as_posix()}/Cargo.toml")
+        declared = manifest.get("features", {})
+        enabled, named, implied = set(features[crate]), set(), {}
+        expanding = list(enabled)
+        while expanding:
+            for item in declared.get(expanding.pop(), []):
+                dependency, _, feature = item.removeprefix("dep:").partition("/")
+                if feature:
+                    implied.setdefault(dependency.rstrip("?"), set()).add(feature)
+                    if not dependency.endswith("?"):
+                        named.add(dependency)
+                elif item in declared and item not in enabled:
+                    enabled.add(item)
+                    expanding.append(item)
+                else:
+                    named.add(dependency)
+        for scope in [manifest, *manifest.get("target", {}).values()]:
+            for dependency, spec in scope.get("dependencies", {}).items():
+                if not isinstance(spec, dict) or "path" not in spec:
+                    continue
+                if spec.get("optional") and dependency not in named:
+                    continue
+                used = names[(crates[crate] / spec["path"]).resolve()]
+                wanted = set(spec.get("features", [])) | implied.get(dependency, set())
+                if spec.get("default-features", True):
+                    wanted.add("default")
+                if used not in built or not wanted <= features.get(used, set()):
+                    features[used] = features.get(used, set()) | wanted
+                    pending.append(used)
+    return built
+
+
+def test_the_client_build_has_no_branvil() -> None:
+    """The Windows client (`-p guildbotics --no-default-features`) runs the
+    member CLI against the Hub: the Hub's code host is no part of its build."""
+    client = _build("guildbotics", default=False)
+    assert {"gb-server", "gb-member", "gb-base"} <= client
+    assert "branvil" not in client
+    assert "branvil" in _build("guildbotics", default=True)
+
+
 #: Every crate of the workspace, by the workspace crates it may use. The shared
 #: crates and Branvil depend only on lower layers.
 #: GuildBotics' crates follow the layers of the Python version's zones (#81):
 #: each uses only crates below it, and siblings of one layer (workspace and
 #: observability) never each other. The wire, generated from the schemas,
-#: and the service ports both stand on no other workspace crate; integrations
-#: belong above the ports. Member capabilities use ports and the workspace's
-#: identity and record stores, without depending on a provider or the server.
+#: stands on no other workspace crate. Integrations are chat and its providers.
+#: Member capabilities use the workspace's identity and record stores, without
+#: depending on a code host or the server, which the client also builds.
 _ALLOWED = {
     "loopback-auth": set(),
-    "branvil": {"loopback-auth", "gb-ports"},
+    "branvil": {"loopback-auth", "gb-base"},
     "gb-base": set(),
     "gb-workspace": {"gb-base"},
     "gb-observability": {"gb-base"},
     "gb-wire": set(),
-    "gb-ports": set(),
-    "gb-integrations": {"gb-ports", "gb-base", "gb-config", "branvil"},
-    "gb-member": {"gb-ports", "gb-base", "gb-workspace", "gb-observability"},
+    "gb-integrations": {"gb-base", "gb-config"},
+    "gb-member": {"gb-base", "gb-workspace", "gb-observability"},
     "gb-config": {"gb-base", "gb-wire"},
     "gb-setup": {"gb-base", "gb-config"},
     "gb-environment": {"gb-base", "gb-config", "gb-wire"},
@@ -180,7 +232,6 @@ _ALLOWED = {
         "loopback-auth",
         "gb-member",
         "gb-integrations",
-        "gb-ports",
         "branvil",
     },
     "guildbotics": {
@@ -192,19 +243,12 @@ _ALLOWED = {
     },
 }
 
-# Provider integration tests exercise the member dispatcher; providers themselves
-# must still depend only on the lower layers.
-_ALLOWED_DEV = {"gb-integrations": {"gb-member"}}
-
 
 def test_each_crate_uses_only_the_crates_below_it() -> None:
     assert set(_crates()) == set(_ALLOWED)
     for name, allowed in _ALLOWED.items():
         for table in ("dependencies", "dev-dependencies", "build-dependencies"):
-            permitted = allowed | (
-                _ALLOWED_DEV.get(name, set()) if table == "dev-dependencies" else set()
-            )
-            assert _uses(name, (table,)) <= permitted, (name, table)
+            assert _uses(name, (table,)) <= allowed, (name, table)
 
 
 def test_only_the_environment_drives_the_microvm_runtime() -> None:

@@ -129,7 +129,7 @@ async fn frozen_remote_and_pull_address_population() {
     ] {
         // Validation answers before the API is reached.
         assert_eq!(
-            CodeHostingService::comment(&service, &url, "Hi", None)
+            CodeAgent::comment(&service, &url, "Hi", None)
                 .await
                 .unwrap_err(),
             diagnostic(

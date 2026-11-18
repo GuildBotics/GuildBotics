@@ -1,9 +1,9 @@
 //! The machine's owner token for Git. The member client never sees it.
 use std::{path::Path, time::Duration};
 
+use gb_base::service::GitCredential;
 use gb_base::{files, home};
 use gb_config::secrets;
-use gb_ports::GitCredential;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 
@@ -98,8 +98,8 @@ async fn acquire(
 }
 
 fn diagnostic(key: &'static str) -> anyhow::Error {
-    gb_ports::ServiceError::Diagnostic {
-        class: gb_ports::ServiceErrorClass::Failure,
+    gb_base::service::ServiceError::Diagnostic {
+        class: gb_base::service::ServiceErrorClass::Failure,
         key,
         args: Default::default(),
     }
@@ -126,8 +126,8 @@ impl Api<'_> {
     fn transport_error(&self, error: reqwest::Error) -> anyhow::Error {
         let args = [("base_url", self.url.to_owned())];
         if error.is_timeout() {
-            gb_ports::ServiceError::Diagnostic {
-                class: gb_ports::ServiceErrorClass::Failure,
+            gb_base::service::ServiceError::Diagnostic {
+                class: gb_base::service::ServiceErrorClass::Failure,
                 key: "integrations.branvil.api.timeout",
                 args: args.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
             }
@@ -135,8 +135,8 @@ impl Api<'_> {
         } else if error.is_decode() {
             invalid()
         } else {
-            gb_ports::ServiceError::Diagnostic {
-                class: gb_ports::ServiceErrorClass::Failure,
+            gb_base::service::ServiceError::Diagnostic {
+                class: gb_base::service::ServiceErrorClass::Failure,
                 key: "integrations.branvil.api.unreachable",
                 args: args.into_iter().map(|(k, v)| (k.to_owned(), v)).collect(),
             }

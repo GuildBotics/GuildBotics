@@ -1,8 +1,7 @@
 use super::*;
 
-use chrono::{DateTime, Utc};
-impl TicketService for TicketAgent {
-    fn read<'a>(
+impl TicketAgent {
+    pub fn read<'a>(
         &'a self,
         resource: Resource,
         subject: &'a str,
@@ -10,6 +9,7 @@ impl TicketService for TicketAgent {
         continuation: &'a str,
     ) -> ServiceFuture<'a, ReadPage> {
         Box::pin(async move {
+            self.fault("read", subject).await?;
             let c = read_conditions(resource, parameters, continuation)?;
             if !resource.is_ticket_service() {
                 return Err(ServiceError::InvalidResource);
@@ -42,17 +42,7 @@ impl TicketService for TicketAgent {
                     let size = c["page_size"].as_u64().unwrap_or(30) as usize;
                     let next = (start.saturating_add(size) < entries.len())
                         .then(|| start.saturating_add(size).to_string());
-                    return ReadPage::of(
-                        resource,
-                        entries
-                            .iter()
-                            .skip(start)
-                            .take(size)
-                            .map(|v| value(self.ticket_summary(v)))
-                            .collect::<Result<Vec<_>, _>>()?,
-                        next,
-                        None,
-                    );
+                    return ReadPage::of(entries.into_iter().skip(start).take(size), next, None);
                 }
                 let p = m
                     .tickets_list_tickets(
@@ -62,20 +52,7 @@ impl TicketService for TicketAgent {
                     )
                     .await
                     .map_err(|e| error(e, "tickets_list_tickets"))?;
-                let items = p
-                    .items
-                    .into_iter()
-                    .map(|t| self.ticket_summary(&t))
-                    .collect::<Vec<_>>();
-                return ReadPage::of(
-                    resource,
-                    items
-                        .into_iter()
-                        .map(value)
-                        .collect::<Result<Vec<_>, _>>()?,
-                    p.next_cursor,
-                    None,
-                );
+                return ReadPage::of(p.items, p.next_cursor, None);
             }
             let (r, k) = self.item(subject, "tickets")?;
             if resource == Resource::Tickets {
@@ -84,12 +61,7 @@ impl TicketService for TicketAgent {
                     .await
                     .map_err(|e| error(e, "tickets_get_ticket"))?;
                 let target = self.target_ticket(&v);
-                return ReadPage::of(
-                    resource,
-                    [value(self.ticket_value(&v))?],
-                    None,
-                    Some(target),
-                );
+                return ReadPage::of([v], None, Some(target));
             }
             let page = self.page(&m, resource, subject, &c, continuation)?;
             match resource {
@@ -98,43 +70,27 @@ impl TicketService for TicketAgent {
                         .tickets_list_comments(&r, &k, page)
                         .await
                         .map_err(|e| error(e, "tickets_list_comments"))?;
-                    ReadPage::of(
-                        resource,
-                        p.items
-                            .into_iter()
-                            .map(|v| {
-                                value(Comment {
-                                    id: v.id,
-                                    body: v.body,
-                                    author_type: self.author_type(&v.author).into(),
-                                    author: ActorName(v.author),
-                                    created_at: Some(v.created_at),
-                                    url: Some(v.url),
-                                })
-                            })
-                            .collect::<Result<Vec<_>, _>>()?,
-                        p.next_cursor,
-                        None,
-                    )
+                    ReadPage::of(p.items, p.next_cursor, None)
                 }
                 Resource::TicketAttachments => {
                     let p = m
                         .attachments_of_ticket(&r, &k, page)
                         .await
                         .map_err(|e| error(e, "attachments_of_ticket"))?;
-                    ReadPage::of(resource,p.items.into_iter().map(|a|json!({"id":a.attachment.id,"name":a.attachment.name,"media_type":a.attachment.media_type,"size":a.attachment.size,"referenced_by":a.referenced_by})),p.next_cursor,None)
+                    ReadPage::of(p.items, p.next_cursor, None)
                 }
                 _ => Err(ServiceError::InvalidResource),
             }
         })
     }
-    fn attachment<'a>(
+    pub fn attachment<'a>(
         &'a self,
         url: &'a str,
         id: &'a str,
         limit: usize,
     ) -> ServiceFuture<'a, Download<Attachment>> {
         Box::pin(async move {
+            self.fault("attachment", url).await?;
             let (r, k) = self.item(url, "tickets")?;
             let m = self.member().await?;
             let _open = self.api.guard().map_err(|e| error(e, "attachments"))?;
@@ -184,13 +140,14 @@ impl TicketService for TicketAgent {
             })
         })
     }
-    fn comment<'a>(
+    pub fn comment<'a>(
         &'a self,
         url: &'a str,
         body: &'a str,
         status: Option<&'a WorkflowStatus>,
-    ) -> ServiceFuture<'a, CommentWritten> {
+    ) -> ServiceFuture<'a, Written<crate::domain::CommentView>> {
         Box::pin(async move {
+            self.fault("comment", url).await?;
             let (r, k) = self.item(url, "tickets")?;
             self.writable(&r)?;
             let m = self.member().await?;
@@ -209,21 +166,18 @@ impl TicketService for TicketAgent {
                 )
                 .await
                 .map_err(|e| error(e, "tickets_add_comment"))?;
-            let v = c;
-            Ok(CommentWritten {
-                id: v.id,
-                url: Some(v.url),
-                author: v.author,
-                created_at: Some(v.created_at),
+            Ok(Written {
+                view: c,
                 target: self.target_ticket(&t),
             })
         })
     }
-    fn create_ticket(&self, r: CreateTicket) -> ServiceFuture<'_, TicketCreated> {
+    pub fn create_ticket(
+        &self,
+        r: CreateTicket,
+    ) -> ServiceFuture<'_, Written<tickets::TicketView>> {
         Box::pin(async move {
-            if !r.add_to_board {
-                return Err(diagnostic("integrations.branvil.api.every_on_board", []));
-            }
+            self.fault("create_ticket", &r.tracker).await?;
             self.repository(&r.tracker)?;
             self.writable(&r.tracker)?;
             self.related(r.parent.iter().chain(&r.blocked_by).cloned())?;
@@ -247,18 +201,19 @@ impl TicketService for TicketAgent {
                 )
                 .await
                 .map_err(|e| error(e, "tickets_create_ticket"))?;
-            Ok(TicketCreated {
-                labels: t.labels.clone(),
+            Ok(Written {
                 target: self.target_ticket(&t),
+                view: t,
             })
         })
     }
-    fn update_ticket<'a>(
+    pub fn update_ticket<'a>(
         &'a self,
         url: &'a str,
         r: UpdateTicket,
-    ) -> ServiceFuture<'a, TicketUpdated> {
+    ) -> ServiceFuture<'a, Written<tickets::TicketView>> {
         Box::pin(async move {
+            self.fault("update_ticket", url).await?;
             let (repo, key) = self.item(url, "tickets")?;
             self.writable(&repo)?;
             self.related(
@@ -334,7 +289,7 @@ impl TicketService for TicketAgent {
                 self.ticket_assign(url, &actor.0).await?;
             }
             if let Some(lane) = r.lane.filter(|_| r.placement.is_none()) {
-                self.ticket_move(
+                self.move_ticket(
                     &Task {
                         url: Some(url.into()),
                         ..Default::default()
@@ -344,27 +299,19 @@ impl TicketService for TicketAgent {
                 .await?;
             }
             let v = self.ticket_view(url).await?;
-            let t = self.ticket_value(&v);
-            Ok(TicketUpdated {
-                assignees: t.assignees,
-                lane: t.lane,
-                body: v.body.clone(),
-                state: v.state.clone(),
-                state_changed: changed,
-                labels: v.labels.clone(),
-                target: self.target_ticket(&v),
-                interactive: v.interactive,
-                interactive_ancestor: t.interactive_ancestor,
-            })
+            let mut target = self.target_ticket(&v);
+            target.closed = changed && v.state == "closed";
+            Ok(Written { view: v, target })
         })
     }
-    fn add_reaction<'a>(
+    pub fn add_reaction<'a>(
         &'a self,
         url: &'a str,
         id: &'a str,
         r: SemanticReaction,
     ) -> ServiceFuture<'a, ReactionAdded> {
         Box::pin(async move {
+            self.fault("add_reaction", url).await?;
             let (repo, key) = self.item(url, "tickets")?;
             self.writable(&repo)?;
             self.member()
@@ -386,28 +333,6 @@ impl TicketService for TicketAgent {
             })
         })
     }
-    fn candidates(&self) -> ServiceFuture<'_, Vec<Task>> {
-        Box::pin(self.ticket_candidates())
-    }
-    fn refresh<'a>(&'a self, t: &'a Task) -> ServiceFuture<'a, Option<Task>> {
-        Box::pin(self.ticket_refresh(t))
-    }
-    fn can_receive_work<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, bool> {
-        Box::pin(self.ticket_can_receive(url))
-    }
-    fn move_ticket<'a>(&'a self, t: &'a Task, l: MoveLane) -> ServiceFuture<'a, bool> {
-        Box::pin(self.ticket_move(t, l))
-    }
-    fn closed_since(
-        &self,
-        s: DateTime<Utc>,
-        e: DateTime<Utc>,
-    ) -> ServiceFuture<'_, Vec<ClosedItem>> {
-        Box::pin(self.ticket_closed(s, e))
-    }
-    fn aclose(&self) -> ServiceFuture<'_, ()> {
-        Box::pin(async { Ok(()) })
-    }
 }
 
 impl TicketAgent {
@@ -420,21 +345,6 @@ impl TicketAgent {
             .await
             .map_err(|e| error(e, "tickets_set_assignee"))?;
         Ok(())
-    }
-    fn ticket_summary(&self, v: &tickets::TicketView) -> TicketSummary {
-        let t = self.ticket_value(v);
-        TicketSummary {
-            kind: t.kind,
-            url: t.url,
-            title: t.title,
-            label: t.label,
-            key: t.key,
-            state: t.state,
-            lane: t.lane,
-            labels: t.labels,
-            updated_at: v.updated_at.clone(),
-            assignees: t.assignees,
-        }
     }
 }
 

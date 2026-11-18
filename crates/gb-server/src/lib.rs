@@ -85,9 +85,6 @@ mod test_chat;
 #[cfg(test)]
 #[cfg(feature = "server")]
 mod test_logs;
-#[cfg(test)]
-#[cfg(feature = "server")]
-mod test_ticket;
 #[cfg(feature = "server")]
 pub mod ticket_selector;
 #[cfg(feature = "server")]

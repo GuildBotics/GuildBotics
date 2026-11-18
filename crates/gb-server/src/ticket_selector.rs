@@ -1,7 +1,9 @@
 //! Ticket selection and settlement, shared by patrol and one-off commands.
 use crate::{dispatcher::DispatchFailure, service::Pending, work_stops::WorkStop};
+use branvil::agent::port::{MoveLane, Task};
+use branvil::agent::{CodeAgent, TicketAgent};
+use gb_base::service::{ServiceError, WorkflowStatus};
 use gb_observability::{Diagnostics, Trace, runs::RunRecord};
-use gb_ports::{CodeHostingService, MoveLane, ServiceError, Task, TicketService, WorkflowStatus};
 use gb_wire::{CommandReply, WorkflowInvocation};
 use serde_json::{Value, json};
 
@@ -103,7 +105,7 @@ impl PullRequestQuota {
     pub fn snapshot(&self) -> Option<PullRequestLoad> {
         self.last.lock().unwrap().clone()
     }
-    async fn observe(&self, code: &dyn CodeHostingService) -> bool {
+    async fn observe(&self, code: &CodeAgent) -> bool {
         let count = match code.authored_open_pull_requests().await {
             Ok(pulls) => pulls.len(),
             Err(error) => {
@@ -131,8 +133,8 @@ pub struct Selector<'a> {
     pub roster: &'a [gb_member::context::PublicMember],
     pub source: &'a str,
     pub language: &'a str,
-    pub ticket: &'a dyn TicketService,
-    pub code: Option<&'a dyn CodeHostingService>,
+    pub ticket: &'a TicketAgent,
+    pub code: Option<&'a CodeAgent>,
     pub runner: &'a dyn Runner,
     pub quota: Option<&'a PullRequestQuota>,
 }
@@ -194,7 +196,7 @@ impl Selector<'_> {
                 .pull_request_url
                 .as_deref()
                 .ok_or(ServiceError::InvalidResult)?;
-            if let Some(ticket) = gb_member::repository::author_ticket(code, self.ticket, url)
+            if let Some(ticket) = crate::member::repository::author_ticket(code, self.ticket, url)
                 .await
                 .unwrap_or(None)
             {
@@ -358,7 +360,7 @@ impl Selector<'_> {
         } else {
             self.ticket.comment(url, body, Some(status)).await?
         };
-        Ok(written.url.unwrap_or_default())
+        Ok(written.view.url)
     }
 
     async fn settle_failure(
@@ -521,7 +523,7 @@ impl Selector<'_> {
             )
             .await;
         let comment_failed = comment.is_err();
-        let comment_url = comment.ok().and_then(|c| c.url).unwrap_or_default();
+        let comment_url = comment.map(|c| c.view.url).unwrap_or_default();
         if reason == "review_limit" {
             settlement.drafted(
                 &comment_url,
@@ -641,7 +643,7 @@ pub fn max_attempts(raw: &str) -> usize {
 mod tests;
 
 fn rate_limit_attributes(at: &str, hint: &str) -> serde_json::Map<String, Value> {
-    gb_member::events::rate_limited("", "", "", at, hint)["attributes"]
+    crate::member::events::rate_limited("", "", "", at, hint)["attributes"]
         .as_object()
         .unwrap()
         .clone()
