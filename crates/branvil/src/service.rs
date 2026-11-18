@@ -165,13 +165,15 @@ pub(crate) async fn recover(
 /// directory without a database has nothing yet: the server's first start
 /// creates it.
 pub fn maintain(operation: Maintenance, data_dir: &Path) -> anyhow::Result<()> {
-    let config = Config::load(None, data_dir)?;
-    let layout = config.layout();
+    let layout = crate::config::Layout::new(data_dir);
     if !layout.db().exists() {
         println!("{} has no data yet", data_dir.display());
         return Ok(());
     }
-    let open = || Store::open(&layout.db(), config.storage.cache_size_mib << 20, 1);
+    // Without the configuration: the previous version's may not read as
+    // this build's until the upgrade converts it.
+    let cache = crate::config::StorageConfig::default().cache_size_mib << 20;
+    let open = || Store::open(&layout.db(), cache, 1);
     match operation {
         Maintenance::Upgrade => {
             let done = crate::upgrade::upgrade(&layout)?;

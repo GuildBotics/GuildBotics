@@ -286,11 +286,12 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     copy_backup(&backup, &previous, &manifest);
     let db = previous.join("branvil.redb");
     as_schema_36(&db);
-    let bytes = std::fs::read(&db).unwrap();
     let mut old = manifest.clone();
     old["schema_version"] = json!(36);
+    // Both files the fixture rewrote: the database and the configuration.
     for f in old["files"].as_array_mut().unwrap() {
-        if f["path"] == "branvil.redb" {
+        if f["path"] == "branvil.redb" || f["path"] == "branvil.toml" {
+            let bytes = std::fs::read(previous.join(f["path"].as_str().unwrap())).unwrap();
             f["bytes"] = json!(bytes.len());
             f["sha256"] = json!(
                 sha2::Sha256::digest(&bytes)
