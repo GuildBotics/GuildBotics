@@ -14,7 +14,7 @@ covers it is named in brackets.
 
 ```
 other machine                                 Hub machine (Branvil's OS user)
-browser / GuildBotics / git ─ 127.0.0.1:7878 ─ ssh -L ═══ sshd ─ 127.0.0.1:7878 ─ guildbotics branvil serve
+browser / GuildBotics / git ─ 127.0.0.1:7878 ─ ssh -L ═══ sshd ─ 127.0.0.1:7878 ─ guildbotics server start
                               (OS service)                                        ├─ <data>/ (0700)
                                                                                   └─ git children
 ```
@@ -22,7 +22,7 @@ browser / GuildBotics / git ─ 127.0.0.1:7878 ─ ssh -L ═══ sshd ─ 127
 | Who | Can | Branvil's defence |
 | --- | --- | --- |
 | A web page in the user's browser | Send requests to `127.0.0.1:7878` (CSRF), or to an attacker name that resolves to 127.0.0.1 (DNS rebinding) | Host check, Origin check, `SameSite=Strict` cookie, CSRF header, no CORS |
-| Another process or OS user on the Hub or a forwarding client | Connect to the loopback port | Every request authenticates (token or session); there is no anonymous access except `GET /api/v1/health` and exchanging a single-use entry code for a session |
+| Another process or OS user on the Hub or a forwarding client | Connect to the loopback port | Every request authenticates (a member's token, GuildBotics' owner token, or GuildBotics' browser session); there is no anonymous access |
 | A member (an AI agent) | Use its token within what its kind may do | Fixed rights per member kind (owner-only settings, merges, and administration), protected branches, server-side hooks, path and name validation, entry ids bound to their item |
 | Repository content | Contain hooks, Markdown, odd ref names | Repository hooks never run; Markdown is sanitized by the GUI; only `refs/heads/*` and `refs/tags/*` can be pushed |
 | An external Git host | Diverge, refuse, or be unreachable | Branvil never force-pushes, never deletes there, never overwrites local refs from it |
@@ -34,50 +34,30 @@ itself speaks plain HTTP on loopback only).
 
 ## Network exposure
 
-- `guildbotics branvil serve` refuses a non-loopback listen address (`src/config.rs`,
-  `Config::load`) [unit `non_loopback_listen_is_refused`].
-- Other machines reach it through OpenSSH port forwarding managed by an OS
-  service, outside Branvil. The setup in `README.md`, "Several machines", uses
-  `ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o BatchMode=yes
-  -L 127.0.0.1:7878:127.0.0.1:7878 -- <hub>`. Both ends use loopback and the
-  base URL's port. Keys, host keys, and host names belong to the user's OpenSSH
-  configuration; Branvil neither stores them nor supervises the connection.
-- Every response carries `Content-Security-Policy` (`default-src 'self';
-  script-src 'self'`, no inline scripts, `frame-ancestors 'none'`; inline
-  styles are allowed because the GUI's components set their look through
-  `style` attributes — Markdown never carries a `style` attribute, see below),
-  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and
-  `Referrer-Policy: no-referrer`: the guard adds each one a response does not
-  set itself, and no route sets its own. No CORS header is ever sent
-  [`tests/security.rs` `hosts_and_origins_are_checked_on_every_kind_of_route`,
-  `tests/tickets.rs` `sessions_need_csrf_and_hosts_are_checked`].
+- The GuildBotics server listens on loopback only and serves this service on
+  its listener; other machines reach it through OpenSSH port forwarding
+  managed by an OS service.
+- GuildBotics checks `Host` and `Origin` on every request before this
+  service sees it (`gb-server`'s guard; its route classification tests cover
+  every route of this service, `route_inventory()`): another host is
+  `421 misdirected`, another origin `403`. The hook callbacks are the exception:
+  their per-process secret authenticates them.
 
-## Host and Origin (DNS rebinding, CSRF)
+## The owner's authentication
 
-`http::guard` runs before every route except the hook callbacks:
-
-- `Host` must be the base URL's host and port, or `localhost`, `127.0.0.1`,
-  `[::1]` with that port; anything else is `421 misdirected`. This holds for
-  the API, Git Smart HTTP, and GUI pages [`tests/security.rs`, unit
-  `hosts_are_the_base_url_or_loopback_with_its_port` of `loopback-auth`].
-- A request with an `Origin` must have exactly `scheme://Host`; `null` and
-  other origins are `403` [`tests/security.rs`].
-
-## Integrated browser authentication
-
-The integrated server delegates browser session validation to GuildBotics via
-`browser_session::BrowserSession`; Branvil does not depend on a GuildBotics crate.
-The authority is `server/<port>/auth.json`, with the port-specific
-`guildbotics_session_<port>` cookie and its fixed 30-day expiry. Branvil still
-reads `x-branvil-csrf` on writes and returns that same CSRF value from its session
-endpoint. A valid host session maps only to Branvil's owner. Bearer credentials
-continue to identify their original Branvil members, and invalid Bearer values
-never fall back to a browser session. Old Branvil cookies and code exchange at
-`POST /api/v1/session` are refused in integrated mode. GuildBotics' consent
-screen uses the shared session. Host/Origin checks still apply to all routes.
-
-The remainder of the session lifecycle description below applies to standalone
-`guildbotics branvil serve`.
+GuildBotics authenticates the owner and this service does not depend on a
+GuildBotics crate: the host implements `host::Host`. A Bearer value that is
+not a member token (`bvt_...`) is the owner when the host says it is its
+owner token (the token in `GUILDBOTICS_HOME/data/server/<port>/owner.token`;
+consent tokens of other apps are refused). A browser request is the owner's
+when it carries GuildBotics' live session cookie
+(`guildbotics_session_<port>`, 30 days); every non-GET request made with it
+must send that session's CSRF value in `X-GuildBotics-CSRF` (a missing or
+wrong one is `403 csrf_mismatch`). A host session maps only to the owner;
+members' Bearer tokens keep identifying their members and never fall back to
+a browser session. This service keeps no sessions and no owner token of its
+own [unit `auth::tests::the_host_identifies_the_owner_and_member_tokens_their_members`,
+`tests/security.rs` `the_hosts_session_and_owner_token_identify_the_owner`].
 
 ## Members, tokens, sessions
 
@@ -88,30 +68,10 @@ The remainder of the session lifecycle description below applies to standalone
   [`tests/security.rs` `a_revoked_token_no_longer_opens_the_api_or_git`].
   Token issuance ignores `Idempotency-Key`, so the token text is never kept in
   the idempotency table [same test, which scans the database file].
-- The owner's token is an ordinary token whose text is kept in
-  `<data>/secrets/owner.token` (`0600` in `0700`); `guildbotics branvil init` writes it and
-  the CLI on the Hub machine reads it. At every start `guildbotics branvil serve` checks
-  that the file's token still authenticates the owner; when the file is
-  missing or does not (a restored backup has no `secrets/`), it revokes the
-  previous file token, deletes every GUI session, and writes a new token
-  [`tests/security.rs` `a_new_owner_token_ends_every_session`,
-  `tests/backup.rs`].
-- The GUI has no sign-in screen. `guildbotics branvil open` (the owner's token) asks for an
-  entry link `{base}/-/enter#<code>`: 32 random bytes, single use, 60 seconds,
-  kept in memory as a SHA-256 only, so a restart invalidates unused codes. The
-  code is in the URL fragment, which the browser sends in no request line,
-  log, or `Referer`; the GUI removes it from the address bar and history and
-  exchanges it once with `POST /api/v1/session`. That exchange is the only
-  unauthenticated write, and the Host and Origin checks apply to it like to
-  every other request. Agents and runners get no link; link responses are
-  never kept for `Idempotency-Key` [`tests/security.rs`
-  `entry_links_are_the_owners_work_once_and_end_with_the_process`, unit
-  `entry_codes_work_once_and_expire`].
 - A member's tokens of one label can be replaced in one write
-  (`"replace": true`), so a retried issue leaves exactly one. The labels
-  Branvil issues itself (`owner-file` and `auto`) are
-  refused by the tokens endpoint, so no client mints or rotates the owner's
-  file token or the automatic runner's through it
+  (`"replace": true`), so a retried issue leaves exactly one. The label
+  the service issues itself (`auto`) is refused by the tokens endpoint, so no
+  client mints or rotates the automatic runner's token through it
   [`tests/security.rs`
   `replacing_a_label_leaves_one_token_of_it_and_reserved_labels_are_refused`].
 - The embedding host (the GuildBotics server) shares Branvil's process and
@@ -122,15 +82,6 @@ The remainder of the session lifecycle description below applies to standalone
   current kind. For an agent's Git transfers the host issues a token of that
   agent for the run (label `guildbotics-git`) and revokes it when the run
   releases the service.
-- A session is a 32-byte random id in a `branvil_session_<port>` cookie, named
-  by the base URL's port (a browser sends a cookie to every port of a host) (`HttpOnly`,
-  `SameSite=Strict`, `Path=/`, `Max-Age` of `limits.session_hours`, default
-  720), stored only as its SHA-256, and a 32-byte CSRF secret. Every non-GET
-  request made with the cookie must carry that session's CSRF value in
-  `X-Branvil-CSRF` (constant-time compare); another session's value, a wrong
-  one, or none is `403` [`tests/security.rs`
-  `cookie_writes_need_the_sessions_own_csrf`]. Bearer requests need no CSRF
-  header: a browser never adds them on its own.
 - What a member may do follows from its kind alone (`src/auth.rs`), the same
   in every workspace; there are no per-workspace grants (Branvil has one
   person). The owner may do everything. An agent reads every workspace and
@@ -246,10 +197,7 @@ Other consumers of the API (GuildBotics) must treat bodies as untrusted text.
 | --- | --- | --- |
 | Data directory | `<data>/` | `0700` (Unix), set at every start [`tests/security.rs` `the_data_directory_is_owner_only`] |
 | Member tokens | redb `tokens` | SHA-256 only |
-| Session ids | redb `sessions` | SHA-256 only (the CSRF value is stored as is: it is compared, not a credential by itself) |
-| Entry-link codes | memory | SHA-256 only, 60 seconds, single use |
 | Local-app codes | memory | SHA-256 only, 60 seconds, single use, bound to the app's name, `redirect_uri`, and PKCE challenge |
-| The owner's token | `<data>/secrets/owner.token` | `0600` in `0700` [`tests/security.rs` `the_data_directory_is_owner_only`]; replaced at start when missing or invalid |
 | Cursor signing key | memory | per process: a restart ends the list cursors handed out before |
 | Hook secret | memory, and the environment of Git children | per process |
 | Members' upstream credentials (a token, or a GitHub App's id, installation id, and private key) | the service's vault (see [Upstream tokens](#upstream-tokens)) | sealed; never in the data directory [`tests/upstream.rs` `accounts_are_checked_with_the_host_and_their_tokens_never_returned`] |
@@ -275,16 +223,13 @@ user profile's ACL.
 - **Where.** A credential (a token, or a GitHub App's private key with its ids),
   like the webhook's URL, is kept in the vault that the process running the
   service provides (`src/vault.rs`), never in the data directory. Run by
-  GuildBotics (`guildbotics server start`, `guildbotics branvil`), that is
+  GuildBotics (`guildbotics server start` and its commands), that is
   GuildBotics' identity store: AES-256-GCM in
   `<identity>/.guildbotics/local/secrets.enc.json`, with the machine's key in
   the OS keychain, under `branvil_account_<provider>_<hash>` and
   `branvil_webhook_<hash>` (the hash of the data directory's path, and of the
   member; a GuildBotics member's secret is named in capitals, so these are
-  never one). The `branvil` executable keeps them in the directory
-  `BRANVIL_VAULT` names, one file per name sealed with the key in
-  `BRANVIL_VAULT_KEY` and bound to that name, and keeps none without
-  them. When the vault cannot keep or open a value (no key, a locked keychain,
+  never one). When the vault cannot keep or open a value (no key, a locked keychain,
   another key, a damaged file), reading, setting, and removing it are refused
   and every use reports why, the way a missing credential is reported; the
   value stays as it was, and nothing falls back to a plain file
@@ -342,7 +287,7 @@ user profile's ACL.
 - Only the title, the body, and lines for linked issues of the host are
   posted; conversation, reviews, threads, and Branvil URLs stay in Branvil.
   Tickets, pull requests, and boards are **not** backed up by the upstream; use
-  `guildbotics branvil backup`.
+  `guildbotics server hub-data backup`.
 - An unreachable host or a refused token is recorded and retried at the next
   poll; it never holds up pushes, pull requests, reviews, or CI in Branvil.
 - Publishing starts the host's own CI for the pull request (for example GitHub
@@ -362,18 +307,13 @@ service log for the tokens].
 ## What is not protected
 
 - **The same OS user and root** can read everything: the database (all
-  tickets, reviews, token hashes), repositories, `secrets/`, backups, the
+  tickets, reviews, token hashes), repositories, backups, the
   environment of running Git children, and the vault, as far as the OS
   keychain gives them its key.
-- **There is no sign-out.** A session lasts `limits.session_hours` (default
-  720). To end every GUI session, or to recover from a leaked owner token or
-  session cookie, stop the service, delete `<data>/secrets/owner.token`, and
-  start it again: it writes a new owner token, revokes the old one, and ends
-  every session. Revoking a token takes effect at the next request.
-- **`guildbotics branvil open` hands the URL to the OS through argv** (`open`, `xdg-open`,
-  or `rundll32`), so on a Hub shared with other OS users the code can be read
-  with `ps` during its 60 seconds. There, use `guildbotics branvil open --print` and paste
-  the link into the browser.
+- **Sessions and the owner's token are GuildBotics'.** Ending a browser
+  session or replacing the owner's token is done in GuildBotics (its owner
+  token file under `GUILDBOTICS_HOME/data/server/<port>/`). Revoking a member
+  token takes effect at the next request.
 - **No rate limit** on failed authentication. Tokens carry 256 bits of
   randomness, so guessing is not practical, but failed attempts are not
   counted or logged.

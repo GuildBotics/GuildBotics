@@ -7,8 +7,9 @@ workspace's board. GuildBotics uses it through the `branvil` provider as the cod
 GitHub. The chat stays whatever the
 project chooses (Slack, for example).
 
-This guide covers what GuildBotics needs of Branvil. How to install and run Branvil, and
-the exact `guildbotics branvil` commands, are in the [Branvil README](../crates/branvil/README.md).
+This guide covers what GuildBotics needs of Branvil. The server runs it; its runner and
+data maintenance are `guildbotics runner` and `guildbotics server hub-data` (see the
+[CLI reference](cli_reference.md)).
 
 Ticket mention selection uses the `mentions` lists Branvil returns on bodies
 and comments. Branvil resolves names against its members when a body is saved.
@@ -65,9 +66,10 @@ An unavailable scheduled occurrence stays due and is retried on a later schedule
 
 Follow the [GuildBotics installation steps](../README.md#installation) on the Hub:
 
-1. Set `BRANVIL_DATA_DIR` and initialize Branvil with `guildbotics branvil init` before starting the server.
-   This creates the owner, the human member who uses Branvil's GUI and merges pull
-   requests. Set up SSH forwarding on the other machines as described below.
+1. Start the server. Its first start creates the code host's data (in `BRANVIL_DATA_DIR`,
+   by default `~/.guildbotics/data/code-host`) and the owner, the human member who uses
+   the screens and merges pull requests. Set up SSH forwarding on the other machines as
+   described below.
 2. Create the repositories the members work in (`acme/demo`, with the labels its tickets
    may carry) in Branvil's GUI. A workspace (`acme`) holds repositories and has one board;
    a repository holds its tickets; a merge closes only tickets of the pull request's
@@ -159,11 +161,9 @@ contain no application names or default ports.
 Several GuildBotics workspaces can use one Branvil. The members are the same in every
 workspace, and each GuildBotics workspace chooses the code host's workspace its members work in.
 
-The integrated server uses one browser entry and session for GuildBotics and Branvil.
-`guildbotics open`, `guildbotics open --branvil`, and `guildbotics branvil open`
-issue links to `/-/guildbotics/-/enter`; only the landing screen differs.
-After updating, enter once again with a new link. Standalone `guildbotics branvil serve`
-retains its own Branvil sessions.
+The server uses one browser entry and session for all of its screens.
+`guildbotics open` and `guildbotics open --branvil` issue links to
+`/-/guildbotics/-/enter`; only the landing screen differs.
 
 ## Set up the code host and the tickets
 
@@ -205,7 +205,7 @@ An AI member needs nothing done on the code host after it is added.
   and before any member's operation. Others can assign it work before it has ever acted. An existing agent
   whose name equals the member's ID is used as it is. When the member of that name is not
   an agent, the operation is refused.
-- The human member is the owner (the person `guildbotics branvil init` created).
+- The human member is the owner (created at the server's first start).
 - For a run in which a member pushes or fetches with git, the server issues that member a
   token (labelled `guildbotics-git`) and hands it to git with the member's ID. It is revoked
   when the run ends and releases the service. The token is kept in no store.

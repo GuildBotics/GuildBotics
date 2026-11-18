@@ -7,8 +7,9 @@ provider を通じて、GitHub の代わりにコードホスト（`services.cod
 チケット（`services.ticket_service`）として使います。チャットはプロジェクトが選んだもの
 （Slack など）のままです。
 
-このガイドは、GuildBotics が Branvil に求めるものを説明します。Branvil のインストールと起動、
-`guildbotics branvil` の使い方は [BranvilのREADME](../crates/branvil/README.md) を参照してください。
+このガイドは、GuildBotics が Branvil に求めるものを説明します。サーバーがこれを動かします。
+ランナーとデータの保守は `guildbotics runner` と `guildbotics server hub-data` です
+（[CLI リファレンス](cli_reference.md)を参照してください）。
 
 チケットのメンション判定には、Branvil が本文とコメントに返す `mentions` を使います。
 名前は Branvil のメンバーとして本文の保存時に解決されます。
@@ -60,8 +61,8 @@ GuildBotics のサーバーは、このサービスを同じプロセスの中�
 
 Hubで[GuildBoticsのインストール手順](../README.ja.md#インストール)に従って、次を行います。
 
-1. サーバーの起動前に `BRANVIL_DATA_DIR` を設定し、`guildbotics branvil init` を実行します。
-   このコマンドは、Branvilの画面を使ってマージを行う人のアカウントを作ります。
+1. サーバーを起動します。初回の起動で、コードホストのデータ（`BRANVIL_DATA_DIR`、
+   既定は `~/.guildbotics/data/code-host`）と、画面を使ってマージを行う人のアカウントを作ります。
    ほかのマシンでは下記のSSH転送を設定します。
 2. メンバーが作業するリポジトリ（`acme/demo`。チケットに付けられるラベルも設定する）を
    Branvil の GUI で作る。ワークスペース（`acme`）はリポジトリをまとめ、ボードを 1 つ持ちます。
@@ -154,11 +155,9 @@ macOS は `ThrottleInterval` により起動が 15 秒に 1 回を超えない�
 複数の GuildBotics のワークスペースで 1 つの Branvil を使えます。メンバーはすべてのワークスペースで
 共通です。メンバーが作業するコードホストのワークスペースは、GuildBotics のワークスペースごとに選びます。
 
-統合サーバーでは、GuildBotics と Branvil の入口とブラウザセッションを共用します。
-`guildbotics open`、`guildbotics open --branvil`、`guildbotics branvil open` は
-`/-/guildbotics/-/enter` の入口リンクを表示し、入った後の画面だけが異なります。
-更新後は新しいリンクで一度入り直してください。単体の `guildbotics branvil serve` は
-従来の Branvil セッションを使います。
+サーバーのすべての画面で、入口とブラウザセッションを共用します。
+`guildbotics open` と `guildbotics open --branvil` は `/-/guildbotics/-/enter` の
+入口リンクを表示し、入った後の画面だけが異なります。
 
 ## コードホストとチケットを設定する
 
@@ -198,7 +197,7 @@ AI メンバーを追加したあとに、コードホスト側で行う作業�
   サーバーの起動、ワークスペースの切り替え、メンバーの保存のときと、どのメンバーの操作よりも前です。
   そのため、まだ一度も動いていないメンバーにも、ほかのメンバーやオーナーがチケットを割り当てられます。名前がメンバーの ID と同じエージェントがすでにあれば、
   それを使います。同じ名前のメンバーがエージェントでなければ、操作を拒否します。
-- 人間のメンバーはオーナー（`guildbotics branvil init` で作った人）です。
+- 人間のメンバーはオーナー（サーバーの初回の起動で作られた人）です。
 - メンバーが git で push・fetch する実行では、サーバーがそのメンバーのトークン（ラベル
   `guildbotics-git`）を発行し、メンバーの ID とともに git に渡します。実行が終わってサービスを
   手放すときに取り消します。トークンはどのストアにも保存しません。

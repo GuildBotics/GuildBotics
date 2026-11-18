@@ -1,7 +1,7 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
-// The dev server proxies the API to a running `branvil serve`. The service
+// The dev server proxies the API to a running `guildbotics server start`. The service
 // checks Host and Origin, so the proxy presents itself as the service origin.
 const apiTarget = process.env.BRANVIL_DEV_API ?? "http://127.0.0.1:7878";
 

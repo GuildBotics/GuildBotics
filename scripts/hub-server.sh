@@ -484,7 +484,11 @@ case "$action" in
         else
             unload
             assert_stopped "$current"
+            # Data the owner put back in the previous format fails the
+            # check and returns to the previous build; checked data finishes
+            # its conversion.
             if [ -x "$builds/update-to" ] &&
+                "$builds/update-to" server hub-data check &&
                 "$builds/update-to" server hub-data upgrade &&
                 point_current "$builds/update-to" && start_agent; then
                 complete_activation

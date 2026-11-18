@@ -151,6 +151,8 @@ case "$name" in
                                 [ ! -f "$FAKE_ROOT/gb-new-schema" ] || exit 1
                                 [ "$3" != check ] || [ ! -f "$FAKE_ROOT/new-schema" ] || exit 1
                             else
+                                # The new build reads only converted data.
+                                if [ "$3" = check ] && [ -f "$FAKE_ROOT/change-schema" ] && [ ! -f "$FAKE_ROOT/new-schema" ]; then exit 1; fi
                                 if [ "$3" = upgrade ] && [ -f "$FAKE_ROOT/change-gb-schema" ]; then touch "$FAKE_ROOT/gb-new-schema"; fi
                                 [ ! -f "$FAKE_ROOT/fail-gb-live" ] || exit 1
                             fi

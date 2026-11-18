@@ -41,7 +41,7 @@ test("time to a rendered board", async ({ browser }) => {
   await enter(seed);
   const { csrf } = await (await seed.request.get("/api/v1/session")).json();
   const response = await seed.request.post("/api/v1/repos/acme%2Fdemo/tickets", {
-    headers: { "X-Branvil-CSRF": csrf },
+    headers: { "X-GuildBotics-CSRF": csrf },
     data: { title: "Board timing fixture", lane: "ready" },
   });
   if (!response.ok()) throw new Error(`timing fixture: ${response.status()}`);

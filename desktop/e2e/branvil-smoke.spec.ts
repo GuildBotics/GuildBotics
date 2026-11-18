@@ -107,7 +107,7 @@ test("shows a change made elsewhere without a reload (event stream)", async ({ p
   const repo = repos.items.find((r) => r.path.startsWith(`${env.workspace}/`))?.path as string;
   const title = `Made elsewhere ${Date.now()}`;
   const created = await api.post(`/api/v1/repos/${encodeURIComponent(repo)}/tickets`, {
-    headers: { "X-Branvil-CSRF": csrf },
+    headers: { "X-GuildBotics-CSRF": csrf },
     data: { title, body: "", labels: [], lane: "ready" },
   });
   expect(created.status()).toBe(201);

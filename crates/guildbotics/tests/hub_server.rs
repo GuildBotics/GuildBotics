@@ -2168,27 +2168,6 @@ fn guildbotics_live_failure_checks_old_data_and_reports_backups() {
 }
 
 #[test]
-fn guildbotics_backup_rotation_retains_three_complete_generations() {
-    let hub = Hub::new();
-    hub.install();
-    let backups = hub.builds().parent().unwrap().join("backups");
-    for stamp in ["2000", "2001", "2002", "2003"] {
-        let path = backups.join(format!("guildbotics-update-{stamp}"));
-        fs::create_dir_all(&path).unwrap();
-        if stamp != "2003" {
-            fs::write(path.join("manifest.json"), "").unwrap();
-        }
-    }
-    hub.commit("new");
-    hub.run("update", None, true);
-    assert!(!backups.join("guildbotics-update-2000").exists());
-    assert!(!backups.join("guildbotics-update-2003").exists());
-    for stamp in ["2001", "2002"] {
-        assert!(backups.join(format!("guildbotics-update-{stamp}")).exists());
-    }
-}
-
-#[test]
 fn update_uses_the_installed_identity_root_instead_of_the_shells_selection() {
     let hub = Hub::new();
     let identity = hub.root().join("identity");

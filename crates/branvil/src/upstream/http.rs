@@ -4,14 +4,12 @@ use axum::Router;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 
-use super::host::AlertState;
 use super::ops;
 use crate::app::Shared;
 use crate::auth::Caller;
 use crate::domain::pulls::MergeInput;
 use crate::error::{AppError, AppResult};
-use crate::http::{J, P, Q};
-use crate::util;
+use crate::http::{J, P};
 
 type R = AppResult<Response>;
 
@@ -81,30 +79,10 @@ async fn publish(
     Ok(ok(ops::publish(&app, &c, &repo, number(&n)?, input).await?))
 }
 
-async fn alerts(State(app): State<Shared>, c: Caller, P(repo): P<String>, q: Q) -> R {
-    let state = match q.0.get("state").map(String::as_str) {
-        None | Some("open") => AlertState::Open,
-        Some("resolved") => AlertState::Resolved,
-        Some("dismissed") => AlertState::Dismissed,
-        Some(_) => return Err(AppError::invalid("state is open, resolved, or dismissed.")),
-    };
-    let collection = format!("upstream/dependency-alerts\n{}", util::fold(&repo));
-    let page = q.page(&app, &c, &collection)?;
-    Ok(ok(
-        ops::dependency_alerts(&app, &c, &repo, state, page).await?
-    ))
-}
-
-async fn alert(State(app): State<Shared>, c: Caller, P((repo, id)): P<(String, String)>) -> R {
-    Ok(ok(ops::dependency_alert(&app, &c, &repo, &id).await?))
-}
-
 // Paths relative to `/api/v1`.
 loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
     ("/repos/{repo}/upstream", (put, upstream_put, OwnerSession), (delete, upstream_delete, OwnerSession)),
     ("/repos/{repo}/upstream/refresh", (post, refresh, MemberSession)),
-    ("/repos/{repo}/upstream/dependency-alerts", (get, alerts, MemberSession)),
-    ("/repos/{repo}/upstream/dependency-alerts/{id}", (get, alert, MemberSession)),
     ("/repos/{repo}/pulls/{number}/publish", (get, preview, MemberSession), (post, publish, OwnerSession)),
     ("/members/{name}/accounts/{provider}", (put, account_put, OwnerSession), (delete, account_delete, OwnerSession)),
 );

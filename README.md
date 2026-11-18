@@ -68,10 +68,6 @@ cd GuildBotics
 npm ci && npm run build --workspace desktop --workspace crates/branvil/web
 cargo build --locked -p guildbotics
 target/debug/guildbotics install
-# To include Branvil, run these two lines before starting the server.
-# export BRANVIL_DATA_DIR="$HOME/branvil-data"
-# "$HOME/.guildbotics/bin/guildbotics" branvil init --data-dir "$BRANVIL_DATA_DIR"
-
 "$HOME/.guildbotics/bin/guildbotics" server start
 ```
 
@@ -79,7 +75,7 @@ In another terminal, run `"$HOME/.guildbotics/bin/guildbotics" open` to open the
 
 `install` places the executable in `~/.guildbotics/bin/guildbotics` and copies the bundled skill into the user directories of the AI CLI tools it finds. It preserves edited skills and user-owned commands. Add `~/.local/bin` to `PATH` to use the link there.
 
-For a first-time Branvil setup, run the two optional lines above. If you already have Branvil data, set `BRANVIL_DATA_DIR` to its absolute path before starting. In the terminal where you open Branvil, set the same `BRANVIL_DATA_DIR` and run `"$HOME/.guildbotics/bin/guildbotics" open --branvil`. For login startup, updates, and recovery, see the [macOS Hub guide](docs/hub-server.md).
+The first start creates the code host's data in `~/.guildbotics/data/code-host`. To keep it elsewhere or use existing data, set `BRANVIL_DATA_DIR` to its absolute path before starting. Open the code host's screens with `"$HOME/.guildbotics/bin/guildbotics" open --branvil`. For login startup, updates, and recovery, see the [macOS Hub guide](docs/hub-server.md).
 
 ### Initial Setup
 
@@ -460,11 +456,9 @@ guildbotics open
 
 The browser opens with a single-use entry link that expires after 60 seconds. There is no sign-in screen: the OS user who can read `~/.guildbotics/data/server/<port>/owner.token` is the owner. A session lasts 30 days; when it has expired, run `guildbotics open` again.
 
-The integrated server uses one browser entry and session for GuildBotics and Branvil.
-`guildbotics open`, `guildbotics open --branvil`, and `guildbotics branvil open`
-issue links to `/-/guildbotics/-/enter`; only the landing screen differs.
-After updating, enter once again with a new link. Standalone `guildbotics branvil serve`
-retains its own Branvil sessions.
+The server uses one browser entry and session for all of its screens.
+`guildbotics open` and `guildbotics open --branvil` issue links to
+`/-/guildbotics/-/enter`; only the landing screen differs.
 
 **Install the Windows client**
 

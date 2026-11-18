@@ -97,7 +97,8 @@ pub(crate) async fn open_service(config: &Config) -> anyhow::Result<Store> {
     crate::git::hold(&layout).await?;
     // A new data directory gets its owner, the host's owner.
     store.write_sync(|w| {
-        if crate::auth::owner(w).is_err() {
+        let members = w.prefix_all::<crate::model::Member>(store::MEMBERS, &[])?;
+        if !members.iter().any(|m| m.kind == MemberKind::Owner) {
             members::insert_member(
                 w,
                 &NewMember {

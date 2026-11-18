@@ -104,11 +104,7 @@ elif tool in ("cargo", "other-cargo"):
         sys.exit(int(env.get("DEV_TEST_BUILD_EXIT", "0")))
 elif tool == "guildbotics":
     record()
-    if args[:2] == ["branvil", "init"]:
-        data = Path(option("--data-dir"))
-        data.mkdir(parents=True, exist_ok=True)
-        (data / "branvil.redb").touch()
-    elif args[:2] == ["server", "start"]:
+    if args[:2] == ["server", "start"]:
         if "DEV_TEST_SERVER_FAILS" in env:
             sys.exit(int(env["DEV_TEST_SERVER_FAILS"]))
 
@@ -144,10 +140,7 @@ elif tool == "guildbotics":
         sys.exit(int(env.get("DEV_TEST_SERVER_EXIT", "0")))
     elif args == ["open"]:
         sys.exit(int(env.get("DEV_TEST_OPEN_EXIT", "0")))
-    elif args[:2] == ["branvil", "open"]:
-        if "--print" in args:
-            print("http://example.invalid/-/enter#test-only-link")
-            sys.exit(int(env.get("DEV_TEST_PRINT_EXIT", "0")))
+    elif args == ["open", "--branvil"]:
         time.sleep(float(env.get("DEV_TEST_OPEN_SLEEP", "0")))
         sys.exit(int(env.get("DEV_TEST_BROWSER_EXIT", "0")))
 """
@@ -444,10 +437,10 @@ def test_the_server_reads_neither_identities_nor_a_workspace_named_elsewhere(
     first, second, third = (e["env"] for e in launcher.calls("server", "start"))
     assert first["GUILDBOTICS_IDENTITY_ROOT"] is None
     assert first["GUILDBOTICS_CONFIG_DIR"] is None
-    # Whatever the log shows, it says when Branvil listens.
+    # The log is the caller's choice.
     assert first["GUILDBOTICS_LOG"] is None
-    assert second["GUILDBOTICS_LOG"] == "warn,branvil::cli=info"
-    assert third["GUILDBOTICS_LOG"] == "branvil::cli=info"
+    assert second["GUILDBOTICS_LOG"] == "warn"
+    assert third["GUILDBOTICS_LOG"] == ""
 
 
 @pytest.mark.parametrize("device_has_one", [True, False])
@@ -489,27 +482,7 @@ def test_a_relative_workspace_is_the_callers(launcher: Launcher) -> None:
     assert absolute["GUILDBOTICS_WORKSPACE_ROOT"] == "/elsewhere/ws"
 
 
-def test_branvil_is_set_up_once(launcher: Launcher) -> None:
-    launcher.finish(launcher.start("--no-open", "--data-dir", str(launcher.data)))
-    launcher.finish(
-        launcher.start("--no-open", "--data-dir", str(launcher.data), "--owner", "x")
-    )
-
-    assert [e["args"] for e in launcher.calls("branvil", "init")] == [
-        [
-            "branvil",
-            "init",
-            "--data-dir",
-            str(launcher.data / "branvil"),
-            "--owner",
-            "owner",
-            "--listen",
-            "127.0.0.1:8866",
-        ]
-    ]
-
-
-def test_both_screens_open_with_this_data_directorys_credentials(
+def test_both_screens_open_with_this_data_directory(
     launcher: Launcher,
 ) -> None:
     # What the latest start said is not what this one says.
@@ -519,47 +492,23 @@ def test_both_screens_open_with_this_data_directorys_credentials(
     )
     (launcher.data / "server.log").write_text("listening on http://old\n", "utf-8")
     run = launcher.start("--data-dir", str(launcher.data), DEV_TEST_BRANVIL_DELAY="1")
-    wait_until(lambda: len(launcher.calls("branvil", "open")) == 1, run[0])
+    wait_until(lambda: len(launcher.calls("open")) == 2, run[0])
     launcher.finish(run)
 
-    [guildbotics] = launcher.calls("open")
-    assert guildbotics["env"]["GUILDBOTICS_HOME"] == str(launcher.data / "home")
-    [branvil] = launcher.calls("branvil", "open")
-    assert branvil["args"] == [
-        "branvil",
-        "open",
-        "--data-dir",
-        str(launcher.data / "branvil"),
-    ]
-    assert branvil["env"]["BRANVIL_TOKEN"] is None
-    assert branvil["env"]["BRANVIL_URL"] is None
-    # Branvil starts listening after GuildBotics does: its screen waits for it.
+    guildbotics, branvil = launcher.calls("open")
+    assert [guildbotics["args"], branvil["args"]] == [["open"], ["open", "--branvil"]]
+    for call in (guildbotics, branvil):
+        assert call["env"]["GUILDBOTICS_HOME"] == str(launcher.data / "home")
+    # The code host is ready after GuildBotics listens: its screen waits for it.
     assert branvil["branvil_listened"]
 
 
-def test_a_browser_failure_prints_a_branvil_link_and_keeps_serving(
+def test_a_browser_failure_keeps_the_server_until_stopped(
     launcher: Launcher,
 ) -> None:
     run = launcher.start(DEV_TEST_BROWSER_EXIT="7")
-    wait_until(lambda: len(launcher.calls("branvil", "open")) == 2, run[0])
-    launcher.finish(run)
-
-    first, fallback = launcher.calls("branvil", "open")
-    assert "--print" not in first["args"]
-    assert "--print" in fallback["args"]
-    for call in (first, fallback):
-        assert call["env"]["BRANVIL_TOKEN"] is None
-        assert call["env"]["BRANVIL_URL"] is None
-    output = run[1].read_text(encoding="utf-8")
-    assert "http://example.invalid/-/enter#test-only-link" in output
-    assert "60 seconds" in output
-
-
-def test_a_failed_print_fallback_keeps_the_server_until_stopped(
-    launcher: Launcher,
-) -> None:
-    run = launcher.start(DEV_TEST_BROWSER_EXIT="7", DEV_TEST_PRINT_EXIT="8")
-    wait_until(lambda: len(launcher.calls("branvil", "open")) == 2, run[0])
+    wait_until(lambda: launcher.calls("open", "--branvil") != [], run[0])
+    time.sleep(0.3)
     assert run[0].poll() is None
     launcher.finish(run)
 
@@ -571,7 +520,7 @@ def test_termination_after_a_browser_failure_stops_the_server(
     launcher: Launcher,
 ) -> None:
     proc, _, _ = launcher.start(DEV_TEST_BROWSER_EXIT="7", DEV_TEST_SERVER_EXIT="5")
-    wait_until(lambda: len(launcher.calls("branvil", "open")) == 2, proc)
+    wait_until(lambda: launcher.calls("open", "--branvil") != [], proc)
     proc.terminate()
 
     assert proc.wait(timeout=5) == 5
@@ -586,14 +535,13 @@ def test_a_server_that_no_longer_answers_opens_no_branvil_screen(
     time.sleep(0.5)
     launcher.finish(run)
 
-    assert launcher.calls("branvil", "open") == []
+    assert launcher.calls("open", "--branvil") == []
 
 
 def test_no_open_skips_both_screens(launcher: Launcher) -> None:
     launcher.finish(launcher.start("--no-open"))
 
     assert launcher.calls("open") == []
-    assert launcher.calls("branvil", "open") == []
 
 
 def test_a_ctrl_c_reaches_the_server_once_and_ends_with_it(
@@ -652,7 +600,7 @@ def test_a_ctrl_c_during_startup_reaches_the_server_once_too(
     if while_ == "waiting for branvil":
         wait_until(lambda: launcher.calls("server", "start") != [], proc)
     else:
-        wait_until(lambda: launcher.calls("branvil", "open") != [], proc)
+        wait_until(lambda: launcher.calls("open", "--branvil") != [], proc)
     time.sleep(0.3)
     os.killpg(proc.pid, signal.SIGINT)
 

@@ -90,7 +90,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Q {
 }
 
 impl Q {
-    fn get(&self, k: &str) -> Option<String> {
+    pub(crate) fn get(&self, k: &str) -> Option<String> {
         self.0.get(k).cloned()
     }
 
@@ -129,28 +129,24 @@ impl Q {
     }
 }
 
-fn number(text: &str) -> AppResult<u64> {
+pub(crate) fn number(text: &str) -> AppResult<u64> {
     text.parse()
         .ok()
         .filter(|n| *n >= 1)
         .ok_or_else(|| AppError::not_found(format!("No pull request numbered {text}.")))
 }
 
-fn ok<T: serde::Serialize>(value: T) -> Response {
+pub(crate) fn ok<T: serde::Serialize>(value: T) -> Response {
     axum::Json(value).into_response()
 }
 
-fn created<T: serde::Serialize>(value: T) -> Response {
+pub(crate) fn created<T: serde::Serialize>(value: T) -> Response {
     (StatusCode::CREATED, axum::Json(value)).into_response()
 }
 
-type R = AppResult<Response>;
+pub(crate) type R = AppResult<Response>;
 
 // ---------------------------------------------------------------- service and members
-
-async fn health() -> Response {
-    ok(json!({"service": "branvil", "version": env!("CARGO_PKG_VERSION"), "api": 1}))
-}
 
 async fn me(c: Caller) -> R {
     Ok(ok(members::member_view(&c.member)))
@@ -164,10 +160,6 @@ async fn session_get(State(app): State<Shared>, headers: HeaderMap) -> R {
         csrf,
         host_navigation: host.navigation(),
     }))
-}
-
-async fn member_get(State(app): State<Shared>, c: Caller, P(name): P<String>) -> R {
-    Ok(ok(members::get(&app, &c, name).await?))
 }
 
 async fn avatar_get(State(app): State<Shared>, _c: Caller, P(name): P<String>) -> R {
@@ -345,16 +337,6 @@ async fn commit_checks(
     Ok(ok(repos::commit_checks(&app, &c, &repo, &sha).await?))
 }
 
-async fn compare(State(app): State<Shared>, c: Caller, P(repo): P<String>, q: Q) -> R {
-    let base = q
-        .get("base")
-        .ok_or_else(|| AppError::invalid("base is required."))?;
-    let head = q
-        .get("head")
-        .ok_or_else(|| AppError::invalid("head is required."))?;
-    Ok(ok(repos::compare(&app, &c, &repo, &base, &head).await?))
-}
-
 // ---------------------------------------------------------------- tickets, the board
 
 async fn tickets_create(
@@ -365,20 +347,6 @@ async fn tickets_create(
 ) -> R {
     Ok(created(
         tickets::create_ticket(&app, &c, &repo, input).await?,
-    ))
-}
-
-async fn tickets_list(State(app): State<Shared>, c: Caller, P(repo): P<String>, q: Q) -> R {
-    let page = q.page(&app, &c, &format!("tickets\n{}", util::fold(&repo)))?;
-    let query = tickets::TicketQuery {
-        q: q.get("q"),
-        state: q.get("state"),
-        lane: q.get("lane"),
-        assignee: q.get("assignee"),
-        label: q.get("label"),
-    };
-    Ok(ok(
-        tickets::list_tickets(&app, &c, &repo, query, page).await?
     ))
 }
 
@@ -416,22 +384,6 @@ async fn attachment_get(
         bytes,
     )
         .into_response())
-}
-
-async fn ticket_attachments(
-    State(app): State<Shared>,
-    c: Caller,
-    P((repo, key)): P<(String, String)>,
-    q: Q,
-) -> R {
-    let page = q.page(
-        &app,
-        &c,
-        &format!("ticket-attachments\n{}\n{key}", util::fold(&repo)),
-    )?;
-    Ok(ok(
-        attachments::of_ticket(&app, &c, &repo, &key, page).await?
-    ))
 }
 
 async fn ticket_get(
@@ -605,40 +557,7 @@ async fn board_cards(State(app): State<Shared>, c: Caller, P(ws): P<String>, q: 
     Ok(ok(tickets::cards(&app, &c, &ws, query, page).await?))
 }
 
-async fn mentioned_tickets(State(app): State<Shared>, c: Caller, P(ws): P<String>, q: Q) -> R {
-    let page = q.page(&app, &c, &format!("mentioned-tickets\n{}", util::fold(&ws)))?;
-    let query = tickets::MentionQuery {
-        mentions: q.get("mentions"),
-        state: q.get("state"),
-        comments: q.get("comments"),
-    };
-    Ok(ok(tickets::mentioned(&app, &c, &ws, query, page).await?))
-}
-
-async fn board_closed(State(app): State<Shared>, c: Caller, P(ws): P<String>, q: Q) -> R {
-    let page = q.page(&app, &c, &format!("closed\n{}", util::fold(&ws)))?;
-    let query = tickets::ClosedQuery {
-        since: q.get("since"),
-        until: q.get("until"),
-    };
-    Ok(ok(tickets::closed(&app, &c, &ws, query, page).await?))
-}
-
 // ---------------------------------------------------------------- pull requests
-
-async fn pulls_create(
-    State(app): State<Shared>,
-    c: Caller,
-    P(repo): P<String>,
-    J(input): J<pulls::NewPull>,
-) -> R {
-    let result = pulls::create(&app, &c, &repo, input).await?;
-    Ok(if result.created {
-        created(result)
-    } else {
-        ok(result)
-    })
-}
 
 async fn pulls_list(State(app): State<Shared>, c: Caller, P(repo): P<String>, q: Q) -> R {
     let page = q.page(
@@ -651,17 +570,7 @@ async fn pulls_list(State(app): State<Shared>, c: Caller, P(repo): P<String>, q:
     Ok(ok(pulls::list(&app, &c, &repo, query, page).await?))
 }
 
-async fn patrol(State(app): State<Shared>, c: Caller, q: Q) -> R {
-    let page = q.page(&app, &c, "patrol")?;
-    let query = pulls::PatrolQuery {
-        involves: q.get("involves"),
-        state: q.get("state"),
-        draft: q.get("draft"),
-    };
-    Ok(ok(pulls::patrol(&app, &c, query, page).await?))
-}
-
-type RepoNum = P<(String, String)>;
+pub(crate) type RepoNum = P<(String, String)>;
 
 async fn pull_get(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNum) -> R {
     Ok(ok(pulls::get(&app, &c, &repo, number(&n)?).await?))
@@ -680,17 +589,6 @@ async fn pull_activity(State(app): State<Shared>, c: Caller, P((repo, n)): RepoN
     Ok(ok(pulls::activity(&app, &c, &repo, number(&n)?).await?))
 }
 
-async fn pull_comments(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNum, q: Q) -> R {
-    let page = q.page(
-        &app,
-        &c,
-        &format!("pull-comments\n{}\n{n}", util::fold(&repo)),
-    )?;
-    Ok(ok(
-        pulls::list_comments(&app, &c, &repo, number(&n)?, page).await?
-    ))
-}
-
 async fn pull_comment(
     State(app): State<Shared>,
     c: Caller,
@@ -699,13 +597,6 @@ async fn pull_comment(
 ) -> R {
     Ok(created(
         pulls::add_comment(&app, &c, &repo, number(&n)?, input).await?,
-    ))
-}
-
-async fn pull_reviews(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNum, q: Q) -> R {
-    let page = q.page(&app, &c, &format!("reviews\n{}\n{n}", util::fold(&repo)))?;
-    Ok(ok(
-        pulls::list_reviews(&app, &c, &repo, number(&n)?, page).await?
     ))
 }
 
@@ -720,17 +611,6 @@ async fn pull_review(
     ))
 }
 
-async fn pull_inline(
-    State(app): State<Shared>,
-    c: Caller,
-    P((repo, n)): RepoNum,
-    J(input): J<pulls::NewInline>,
-) -> R {
-    Ok(created(
-        pulls::inline_comment(&app, &c, &repo, number(&n)?, input).await?,
-    ))
-}
-
 async fn pull_threads(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNum, q: Q) -> R {
     let page = q.page(&app, &c, &format!("threads\n{}\n{n}", util::fold(&repo)))?;
     Ok(ok(
@@ -738,29 +618,7 @@ async fn pull_threads(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNu
     ))
 }
 
-type RepoNumId = P<(String, String, String)>;
-
-async fn thread_comments(
-    State(app): State<Shared>,
-    c: Caller,
-    P((repo, n, id)): RepoNumId,
-    q: Q,
-) -> R {
-    let page = q.page(
-        &app,
-        &c,
-        &format!("thread-comments\n{}\n{n}\n{id}", util::fold(&repo)),
-    )?;
-    Ok(ok(pulls::thread_comments(
-        &app,
-        &c,
-        &repo,
-        number(&n)?,
-        &id,
-        page,
-    )
-    .await?))
-}
+pub(crate) type RepoNumId = P<(String, String, String)>;
 
 async fn thread_reply(
     State(app): State<Shared>,
@@ -849,16 +707,6 @@ async fn verification_commits(State(app): State<Shared>, c: Caller, P(repo): P<S
 async fn pull_commits(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNum, q: Q) -> R {
     let page = q.page(&app, &c, &format!("commits\n{}\n{n}", util::fold(&repo)))?;
     Ok(ok(pulls::commits(&app, &c, &repo, number(&n)?, page).await?))
-}
-
-async fn pull_yield_checks(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNum) -> R {
-    Ok(ok(crate::ci::api::yield_pull_checks(
-        &app,
-        &c,
-        &repo,
-        number(&n)?,
-    )
-    .await?))
 }
 
 async fn pull_checks(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNum) -> R {
@@ -1209,11 +1057,10 @@ async fn idempotency(State(app): State<Shared>, req: Request, next: Next) -> Res
 }
 
 loopback_auth::classified_routes!(pub fn api_routes() -> Router<Shared>, API_ROUTES,
-    ("/health", (get, health, Public)),
     ("/me", (get, me, MemberSession)),
     ("/session", (get, session_get, Session)),
     ("/members", (get, members_list, OwnerSession), (post, members_create, OwnerSession)),
-    ("/members/{name}", (get, member_get, MemberSession), (patch, member_patch, OwnerSession)),
+    ("/members/{name}", (patch, member_patch, OwnerSession)),
     ("/members/{name}/avatar", (get, avatar_get, MemberSession), (put, avatar_put, MemberSession), (delete, avatar_delete, MemberSession)),
     ("/members/{name}/tokens", (get, tokens_list, MemberSession), (post, tokens_create, MemberSession)),
     ("/members/{name}/reviewers/{reviewer}", (put, member_reviewer_put, OwnerSession), (delete, member_reviewer_delete, OwnerSession)),
@@ -1221,25 +1068,20 @@ loopback_auth::classified_routes!(pub fn api_routes() -> Router<Shared>, API_ROU
     ("/workspaces", (get, workspaces_list, MemberSession), (post, workspaces_create, OwnerSession)),
     ("/workspaces/{workspace}", (get, workspace_get, MemberSession)),
     ("/workspaces/{workspace}/board/cards", (get, board_cards, MemberSession)),
-    ("/workspaces/{workspace}/tickets", (get, mentioned_tickets, MemberSession)),
-    ("/workspaces/{workspace}/board/closed", (get, board_closed, MemberSession)),
     ("/repos", (get, repos_list, MemberSession), (post, repos_create, OwnerSession)),
     ("/repos/{repo}", (get, repo_get, MemberSession), (patch, repo_patch, OwnerSession)),
     ("/repos/{repo}/markdown", (post, markdown_render, MemberSession)),
     ("/repos/{repo}/verification", (get, verification, MemberSession)),
     ("/repos/{repo}/verification/commits", (get, verification_commits, MemberSession)),
     ("/repos/{repo}/branches/{branch}", (get, branch_get, MemberSession)),
-    ("/repos/{repo}/compare", (get, compare, MemberSession)),
     ("/repos/{repo}/commits/{sha}", (get, commit_get, MemberSession)),
     ("/repos/{repo}/commits/{sha}/checks", (get, commit_checks, MemberSession)),
-    ("/repos/{repo}/pulls", (get, pulls_list, MemberSession), (post, pulls_create, MemberSession)),
+    ("/repos/{repo}/pulls", (get, pulls_list, MemberSession)),
     ("/repos/{repo}/pulls/{number}", (get, pull_get, MemberSession), (patch, pull_patch, MemberSession)),
     ("/repos/{repo}/pulls/{number}/activity", (get, pull_activity, MemberSession)),
-    ("/repos/{repo}/pulls/{number}/comments", (get, pull_comments, MemberSession), (post, pull_comment, MemberSession)),
-    ("/repos/{repo}/pulls/{number}/reviews", (get, pull_reviews, MemberSession), (post, pull_review, MemberSession)),
-    ("/repos/{repo}/pulls/{number}/inline-comments", (post, pull_inline, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/comments", (post, pull_comment, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/reviews", (post, pull_review, MemberSession)),
     ("/repos/{repo}/pulls/{number}/threads", (get, pull_threads, MemberSession)),
-    ("/repos/{repo}/pulls/{number}/threads/{id}/comments", (get, thread_comments, MemberSession)),
     ("/repos/{repo}/pulls/{number}/threads/{id}/replies", (post, thread_reply, MemberSession)),
     ("/repos/{repo}/pulls/{number}/threads/{id}/resolved", (put, thread_resolved, MemberSession)),
     ("/repos/{repo}/pulls/{number}/reactions", (post, pull_react, MemberSession), (delete, pull_unreact, MemberSession)),
@@ -1247,17 +1089,14 @@ loopback_auth::classified_routes!(pub fn api_routes() -> Router<Shared>, API_ROU
     ("/repos/{repo}/pulls/{number}/files", (get, pull_files, MemberSession)),
     ("/repos/{repo}/pulls/{number}/commits", (get, pull_commits, MemberSession)),
     ("/repos/{repo}/pulls/{number}/checks", (get, pull_checks, MemberSession)),
-    ("/repos/{repo}/pulls/{number}/checks/yield", (post, pull_yield_checks, MemberSession)),
     ("/repos/{repo}/pulls/{number}/merge", (post, pull_merge, OwnerSession)),
     ("/repos/{repo}/pulls/{number}/close", (post, pull_close, MemberSession)),
     ("/repos/{repo}/pulls/{number}/reopen", (post, pull_reopen, MemberSession)),
-    ("/pulls", (get, patrol, MemberSession)),
-    ("/repos/{repo}/tickets", (get, tickets_list, MemberSession), (post, tickets_create, MemberSession)),
+    ("/repos/{repo}/tickets", (post, tickets_create, MemberSession)),
     ("/repos/{repo}/tickets/{number}", (get, ticket_get, MemberSession), (patch, ticket_patch, MemberSession), (delete, ticket_delete, OwnerSession)),
     ("/repos/{repo}/attachments", (post, attachments_create, MemberSession)),
     ("/repos/{repo}/attachments/{id}", (get, attachment_get, MemberSession)),
     ("/repos/{repo}/tickets/{number}/pulls", (get, ticket_pulls, MemberSession)),
-    ("/repos/{repo}/tickets/{number}/attachments", (get, ticket_attachments, MemberSession)),
     ("/repos/{repo}/tickets/{number}/comments", (get, ticket_comments, MemberSession), (post, ticket_comment, MemberSession)),
     ("/repos/{repo}/tickets/{number}/comments/{id}", (patch, ticket_comment_patch, MemberSession), (delete, ticket_comment_delete, MemberSession)),
     ("/repos/{repo}/tickets/{number}/reactions", (post, ticket_react, MemberSession), (delete, ticket_unreact, MemberSession)),
@@ -1310,8 +1149,14 @@ pub fn route_inventory() -> Vec<(String, loopback_auth::Route)> {
 }
 
 pub fn router(app: Shared) -> Router {
+    router_with(app, Router::new())
+}
+
+/// The router with `extra` API routes beside the service's own.
+pub(crate) fn router_with(app: Shared, extra: Router<Shared>) -> Router {
     let body_limit = app.config.limits.api_body_max_kib << 10;
     let api = api_routes()
+        .merge(extra)
         .merge(crate::ci::api::routes())
         .merge(crate::ci::admin::routes())
         .merge(crate::upstream::http::routes())

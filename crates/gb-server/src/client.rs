@@ -673,12 +673,12 @@ pub async fn local_owner() -> anyhow::Result<(String, String)> {
     let port = crate::endpoint::port()?;
     let data = gb_base::home::data()?;
     let language = language().await;
-    let owner = OwnerClient::connect(&data, port, language)
+    let client = OwnerClient::connect(&data, port, language)
         .await?
         .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.server.unreachable", &[])))?;
     Ok((
         format!("http://127.0.0.1:{port}"),
-        owner.token.trim().to_owned(),
+        client.token.trim().to_owned(),
     ))
 }
 

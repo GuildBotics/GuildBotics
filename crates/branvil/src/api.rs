@@ -709,16 +709,6 @@ impl MemberApi {
         let caller = self.caller().await?;
         repos::commit_checks(&self.api.app, &caller, path, sha).await
     }
-    pub async fn repos_compare(
-        &self,
-        path: &str,
-        base: &str,
-        head: &str,
-    ) -> AppResult<repos::Compare> {
-        let _open = self.api.guard()?;
-        let caller = self.caller().await?;
-        repos::compare(&self.api.app, &caller, path, base, head).await
-    }
     pub async fn repos_get_workspace(&self, name: &str) -> AppResult<repos::WorkspaceView> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;
