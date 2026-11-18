@@ -1,6 +1,24 @@
 //! The interactive member client and server wire contract.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// The largest bundle either side of the member transport accepts.
+pub const MAX_BUNDLE: usize = 1 << 30;
+
+/// A full Git object name, as both sides of a bundle exchange spell it.
+pub fn object(value: &str) -> gb_member::Result<&str> {
+    if matches!(value.len(), 40 | 64)
+        && value
+            .bytes()
+            .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
+    {
+        Ok(value)
+    } else {
+        Err(gb_member::MemberError::Capability(
+            "capabilities.member_git.invalid_bundle",
+        ))
+    }
+}
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {

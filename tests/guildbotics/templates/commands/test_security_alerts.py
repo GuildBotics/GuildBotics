@@ -23,6 +23,26 @@ from guildbotics.utils.fileio import get_template_path
 from guildbotics.utils.i18n_tool import get_language, set_language, t
 
 
+def _alert(**fields):
+    """An alert as the code host shows it: every field, null when unreported."""
+    unreported = dict.fromkeys(
+        (
+            "url",
+            "package",
+            "ecosystem",
+            "manifest_path",
+            "severity",
+            "summary",
+            "description",
+            "affected_versions",
+            "patched_version",
+            "created_at",
+            "updated_at",
+        )
+    )
+    return {"id": "opaque", "state": "open", **unreported, "identifiers": [], **fields}
+
+
 @pytest.fixture
 def command(monkeypatch):
     module = _load_python_module(
@@ -118,7 +138,7 @@ async def test_empty_missing_fields_and_no_patch_are_localized(command, language
     try:
         empty = await module.main(context, "org/subgroup/repo")
         assert t("commands.repository.security_alerts.empty", state="open") in empty
-        page.update(items=[{"id": "opaque", "state": "open"}])
+        page.update(items=[_alert()])
         result = json.loads(
             await module.main(context, "org/subgroup/repo", alert="42", output="json")
         )
@@ -216,16 +236,18 @@ async def test_descriptions_only_in_detail_and_cannot_take_over_metadata(command
     module, context, page, _ = command
     description = "### Impact\nAn attacker can do X.\n\n### Patches\nUpgrade to 2.\n\n### Workarounds\nNone."
     page["items"] = [
-        {
-            "id": "opaque",
-            "state": "open",
-            "package": "demo",
-            "severity": "high",
-            "summary": "A summary",
-            "description": description,
-            "affected_versions": "< 2",
-            "patched_version": "2",
-        }
+        _alert(
+            **{
+                "id": "opaque",
+                "state": "open",
+                "package": "demo",
+                "severity": "high",
+                "summary": "A summary",
+                "description": description,
+                "affected_versions": "< 2",
+                "patched_version": "2",
+            }
+        )
     ]
     listing = await module.main(context, "org/repo")
     assert "## opaque · demo · high" in listing
@@ -262,11 +284,13 @@ async def test_descriptions_only_in_detail_and_cannot_take_over_metadata(command
 async def test_scalar_metadata_never_creates_markdown_structure(command, field):
     module, context, page, _ = command
     page["items"] = [
-        {
-            "id": "opaque",
-            "state": "open",
-            field: "value\n\n# Injected heading\n<h1>HTML heading</h1>",
-        }
+        _alert(
+            **{
+                "id": "opaque",
+                "state": "open",
+                field: "value\n\n# Injected heading\n<h1>HTML heading</h1>",
+            }
+        )
     ]
     text = await module.main(context, "org/repo")
     tokens = MarkdownIt().parse(text)
@@ -284,11 +308,13 @@ async def test_heading_inputs_and_identifiers_stay_on_one_line(command, detail):
     value = "org/demo.repo\n\n# heading\n> quote\n- item"
     normalized = "org/demo.repo # heading > quote - item"
     page["items"] = [
-        {
-            "id": "opaque",
-            "state": "open",
-            "identifiers": [{"type": value, "value": value}],
-        }
+        _alert(
+            **{
+                "id": "opaque",
+                "state": "open",
+                "identifiers": [{"type": value, "value": value}],
+            }
+        )
     ]
     text = await module.main(context, value, alert=value if detail else "")
     assert normalized in text.splitlines()[0]
@@ -322,15 +348,17 @@ async def test_python_command_preserves_readable_scalar_values(
         "updated_at": "2026-09-30T13:00:00Z",
     }
     page["items"] = [
-        {
-            "id": "41",
-            "state": "open",
-            **values,
-            "identifiers": [
-                {"type": "GHSA", "value": "GHSA-abcd-1234-efgh"},
-                {"type": "CVE", "value": "CVE-2024-1234"},
-            ],
-        }
+        _alert(
+            **{
+                "id": "41",
+                "state": "open",
+                **values,
+                "identifiers": [
+                    {"type": "GHSA", "value": "GHSA-abcd-1234-efgh"},
+                    {"type": "CVE", "value": "CVE-2024-1234"},
+                ],
+            }
+        )
     ]
     context.pipe = ""
     monkeypatch.setattr(python_command, "_load_python_module", lambda _: module)

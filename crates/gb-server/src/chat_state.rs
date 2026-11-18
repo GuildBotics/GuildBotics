@@ -1,6 +1,6 @@
 //! Shared chat input and acknowledgements; all mutations hold one workspace lock.
 use gb_base::{files, shared_writes::SharedWrites};
-use gb_ports::{ChatEvent, ChatMessage};
+use gb_integrations::chat::{ChatEvent, ChatMessage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{

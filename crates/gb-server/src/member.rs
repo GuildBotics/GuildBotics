@@ -1,6 +1,14 @@
 //! Interactive member transport. A worker owns the invocation until it has
 //! settled, even when the HTTP caller disconnects or its response times out.
+pub mod chat;
+pub mod chat_updates;
+pub mod control;
+pub mod events;
+pub mod git;
+mod identity;
 pub mod native;
+pub mod repository;
+pub mod session;
 use crate::api::{ApiError, Shared};
 use axum::{
     body::Body,
@@ -20,9 +28,80 @@ use std::{
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// A member's agents on the embedded Branvil, each acting within the
+/// workspace the project names for its service.
+pub struct Agents {
+    data: Option<branvil::api::DataApi>,
+    tickets: String,
+    code: String,
+    person_id: String,
+    display_name: String,
+    members: std::collections::BTreeMap<String, String>,
+}
+impl Agents {
+    pub fn new(
+        data: Option<&branvil::api::DataApi>,
+        project: &serde_json::Value,
+        person: &gb_member::context::PublicMember,
+        roster: &[gb_member::context::PublicMember],
+    ) -> Self {
+        Self {
+            data: data.cloned(),
+            tickets: native::service_workspace(project, "ticket_service").into(),
+            code: native::service_workspace(project, "code_hosting_service").into(),
+            person_id: person.person_id.clone(),
+            display_name: person.name.clone(),
+            members: roster
+                .iter()
+                .filter_map(|v| {
+                    v.accounts
+                        .get("branvil")
+                        .map(|a| (a.clone(), v.name.clone()))
+                })
+                .collect(),
+        }
+    }
+    fn data(
+        &self,
+        workspace: &str,
+    ) -> std::result::Result<branvil::api::DataApi, gb_base::service::ServiceError> {
+        if workspace.is_empty() {
+            return Err(gb_base::service::ServiceError::Unsupported);
+        }
+        self.data
+            .clone()
+            .ok_or(gb_base::service::ServiceError::Unavailable)
+    }
+    pub fn tickets(
+        &self,
+    ) -> std::result::Result<Arc<branvil::agent::TicketAgent>, gb_base::service::ServiceError> {
+        Ok(Arc::new(
+            branvil::agent::TicketAgent::new(
+                self.data(&self.tickets)?,
+                self.tickets.clone(),
+                self.person_id.clone(),
+                self.display_name.clone(),
+            )
+            .with_members(&self.members),
+        ))
+    }
+    pub fn code(
+        &self,
+    ) -> std::result::Result<Arc<branvil::agent::CodeAgent>, gb_base::service::ServiceError> {
+        Ok(Arc::new(
+            branvil::agent::CodeAgent::new(
+                self.data(&self.code)?,
+                self.code.clone(),
+                self.person_id.clone(),
+                self.display_name.clone(),
+            )
+            .with_members(&self.members),
+        ))
+    }
+}
+
 const MAX_METADATA: usize = 4 << 20;
-const MAX_BUNDLE: usize = 1 << 30;
-pub use crate::member_protocol::{MemberRequest, Phase, Result};
+pub use crate::member_protocol::{MAX_BUNDLE, MemberRequest, Phase, Result};
 pub type Execution<'a> = Pin<Box<dyn Future<Output = Result> + Send + 'a>>;
 /// The application supplies the member command grammar and service assembly.
 /// Transport metadata can never assign a run, guest, lease, or identity.

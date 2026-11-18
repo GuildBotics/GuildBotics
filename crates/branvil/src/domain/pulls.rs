@@ -1607,29 +1607,6 @@ fn thread_of(r: &impl Rd, p: &Pull, id: &str) -> AppResult<Thread> {
     .ok_or_else(not_found)
 }
 
-pub async fn thread_comments(
-    app: &App,
-    caller: &Caller,
-    repo_path: &str,
-    number: u64,
-    id: &str,
-    page: PageReq,
-) -> AppResult<Page<ThreadCommentView>> {
-    let (repo, p) = visible(app, caller, repo_path, number).await?;
-    let url = app.pull_url(&repo.path, number);
-    let id = id.to_string();
-    app.store
-        .read(move |r| {
-            let t = thread_of(r, &p, &id)?;
-            let prefix = Key::new().s(&p.repo).u(p.number).u(t.root_seq).bytes();
-            let (items, next_cursor) = page.scan(r, store::INLINE, &prefix, |_, v| {
-                Ok(Some(inline_view(&store::decode(v)?, &url)))
-            })?;
-            Ok(Page { items, next_cursor })
-        })
-        .await
-}
-
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct NewReply {
@@ -1849,7 +1826,7 @@ pub async fn commits(
     Ok(Page { items, next_cursor })
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct ChecksView {
     pub head_sha: String,
     pub base_sha: String,
@@ -1858,7 +1835,7 @@ pub struct ChecksView {
     /// Sorted conflict paths, or None for closed pulls or missing branches.
     pub conflicts: Option<Vec<String>>,
     pub checks: Vec<Check>,
-    pub required_checks: gb_ports::RequiredChecks,
+    pub required_checks: crate::agent::port::RequiredChecks,
     pub required_names: Vec<String>,
     pub checks_expected: bool,
     pub base_checks: usize,

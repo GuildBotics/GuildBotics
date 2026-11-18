@@ -815,8 +815,6 @@ or last departure, or `null` before it first joins (see "Landing").
   `400 invalid` when `path` is not changed by the pull request.
 - `GET .../pulls/{number}/threads` → items of `{"id","resolved","outdated","path","line","side","start_line","start_side","commit","comments":[...]}`.
   A thread's id is its root comment's id.
-- `GET .../pulls/{number}/threads/{id}/comments` (in process only) → items of thread comment
-  `{...comment shape, "reply_to_id": null|"<root id>"}`.
 - `POST .../pulls/{number}/threads/{id}/replies` `{"body"}` → `201` thread comment.
   `404` when `id` roots no thread of this pull request.
 - `PUT .../pulls/{number}/threads/{id}/resolved` `{"resolved": true|false}`.

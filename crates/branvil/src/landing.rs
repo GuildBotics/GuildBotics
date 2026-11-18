@@ -399,7 +399,7 @@ pub async fn record_auto_result(
     .await
 }
 
-pub(crate) use gb_ports::RequiredChecks as HeadChecks;
+pub(crate) use crate::agent::port::RequiredChecks as HeadChecks;
 
 pub(crate) async fn pull_head_checks(
     app: &App,

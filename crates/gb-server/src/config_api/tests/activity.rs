@@ -329,12 +329,11 @@ async fn history_refresh_imports_closed_board_work_once_without_an_agent_session
         .unwrap();
     let tickets = runtime.tickets.unwrap();
     let ticket = tickets
-        .create_ticket(gb_ports::CreateTicket {
+        .create_ticket(branvil::agent::port::CreateTicket {
             tracker: "acme/demo".into(),
             title: "Closed work".into(),
             body: String::new(),
             labels: vec![],
-            add_to_board: true,
             interactive: false,
             assignee: None,
             lane: None,
@@ -346,7 +345,7 @@ async fn history_refresh_imports_closed_board_work_once_without_an_agent_session
     tickets
         .update_ticket(
             &ticket.target.url,
-            gb_ports::UpdateTicket {
+            branvil::agent::port::UpdateTicket {
                 state: Some("closed".into()),
                 ..Default::default()
             },

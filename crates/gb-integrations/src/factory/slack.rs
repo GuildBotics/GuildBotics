@@ -4,8 +4,9 @@ mod listener;
 #[cfg(test)]
 mod tests;
 
+use crate::chat::*;
 use events::*;
-use gb_ports::*;
+use gb_base::service::*;
 pub(super) use listener::SlackListener;
 use regex::{Captures, Regex};
 use serde_json::Value;

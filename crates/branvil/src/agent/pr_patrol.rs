@@ -1,6 +1,6 @@
 //! Pure PR patrol snapshots. Read operations never draft or announce a PR.
+use crate::agent::port::*;
 use chrono::{DateTime, Utc};
-use gb_ports::*;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Default)]
@@ -172,7 +172,7 @@ pub fn pull_request_work(
     )
 }
 pub async fn patrol(
-    code: &dyn CodeHostingService,
+    code: &super::CodeAgent,
     pr: &PatrolPullRequest,
     me: &str,
     provider: &str,
@@ -204,7 +204,7 @@ pub async fn patrol(
                     return None;
                 }
             };
-            if readiness.required_checks == RequiredChecks::Running {
+            if readiness.report.required_checks == RequiredChecks::Running {
                 return None;
             }
         }
@@ -230,7 +230,7 @@ pub async fn patrol(
         assignee: Some(person_id.into()),
         pull_request_url: Some(pr.url.clone()),
         trigger_reason: work.map(str::to_owned),
-        created_at: gb_ports::parse_timestamp(&pr.created_at),
+        created_at: gb_base::service::parse_timestamp(&pr.created_at),
         resumes,
         ..Default::default()
     })

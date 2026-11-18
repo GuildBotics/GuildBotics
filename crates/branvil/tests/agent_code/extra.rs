@@ -1,6 +1,6 @@
 //! Frozen reused-CI and behind-head landing cases from test_smoke.py.
 use super::*;
-async fn open(c: &dyn CodeHostingService, repo: &str, branch: &str) -> PullRequestCreated {
+async fn open(c: &CodeAgent, repo: &str, branch: &str) -> PullRequestCreated {
     c.create_pull_request(CreatePullRequest {
         repository: repo.into(),
         head: branch.into(),
@@ -17,7 +17,7 @@ async fn open(c: &dyn CodeHostingService, repo: &str, branch: &str) -> PullReque
 pub(super) async fn reused_and_gates(
     root: &Path,
     owner: &::branvil::api::MemberApi,
-    c: &dyn CodeHostingService,
+    c: &CodeAgent,
     base: &str,
     owner_token: &str,
     runner: &str,
@@ -53,6 +53,7 @@ pub(super) async fn reused_and_gates(
         );
         let feature = open(c, &repo, "feature").await;
         let number: u64 = feature
+            .written
             .target
             .url
             .rsplit('/')
@@ -88,9 +89,10 @@ pub(super) async fn reused_and_gates(
             assert_eq!(attempt["reuse"]["sha"], head);
             api_call(base,&format!("/runner/attempts/{}/finish",attempt["attempt_id"].as_str().unwrap()),runner,json!({"lease":attempt["lease"],"conclusion":"success","image_digest":format!("sha256:{}","2".repeat(64)),"reused_from":attempt["reuse"]["attempt_id"]})).await;
             assert_eq!(
-                c.readiness(&pr.target.url, false, MAX_LOG_TAIL_BYTES)
+                c.readiness(&pr.written.target.url, false, MAX_LOG_TAIL_BYTES)
                     .await
                     .unwrap()
+                    .report
                     .required_checks,
                 RequiredChecks::Passed
             );
@@ -110,6 +112,7 @@ pub(super) async fn reused_and_gates(
         );
         let other = open(c, &repo, "advance").await;
         let other_n = other
+            .written
             .target
             .url
             .rsplit('/')
@@ -136,11 +139,11 @@ pub(super) async fn reused_and_gates(
             .unwrap();
         if conclusion == "conflict" {
             let before_review = c
-                .readiness(&feature.target.url, false, MAX_LOG_TAIL_BYTES)
+                .readiness(&feature.written.target.url, false, MAX_LOG_TAIL_BYTES)
                 .await
                 .unwrap();
-            assert_eq!(before_review.required_checks, RequiredChecks::Passed);
-            assert!(before_review.checks.iter().all(|c| c.name != "gate"));
+            assert_eq!(before_review.report.required_checks, RequiredChecks::Passed);
+            assert!(before_review.report.checks.iter().all(|c| c.name != "gate"));
         }
         owner
             .pulls_review(
@@ -151,16 +154,16 @@ pub(super) async fn reused_and_gates(
             .await
             .unwrap();
         let result = c
-            .readiness(&feature.target.url, false, MAX_LOG_TAIL_BYTES)
+            .readiness(&feature.written.target.url, false, MAX_LOG_TAIL_BYTES)
             .await
             .unwrap();
-        assert_eq!(result.head_sha, head);
+        assert_eq!(result.report.head_sha, head);
         if conclusion == "conflict" {
-            assert_eq!(result.required_checks, RequiredChecks::Passed);
+            assert_eq!(result.report.required_checks, RequiredChecks::Passed);
             let page = c
                 .read(
                     Resource::PullRequestReadiness,
-                    &feature.target.url,
+                    &feature.written.target.url,
                     Some(&json!({"failed_logs":true})),
                     "",
                 )
@@ -168,8 +171,14 @@ pub(super) async fn reused_and_gates(
                 .unwrap();
             assert_eq!(page.items()[0]["failed_logs"], json!([]));
         } else {
-            assert!(result.checks.iter().all(|c| !c.name.starts_with("gate/")));
-            assert_eq!(result.required_checks, RequiredChecks::Passed);
+            assert!(
+                result
+                    .report
+                    .checks
+                    .iter()
+                    .all(|c| !c.name.starts_with("gate/"))
+            );
+            assert_eq!(result.report.required_checks, RequiredChecks::Passed);
         }
     }
 }

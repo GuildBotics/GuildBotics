@@ -1,17 +1,18 @@
 # Member capabilities
 
-ticket・PR・repository 情報・chat・memory と、member context/help の共通処理。
-サービスの契約は [gb-ports](../gb-ports/src/lib.rs)、provider の実装は
-[gb-integrations](../gb-integrations/src/factory.rs) にある。
-CLI の引数解析、資格情報の取得、git 操作、guest への転送はこの crate の責務に含まない。
+member のコマンドの解析、memory、member context/help、成果物と出力の共通処理と、
+Windows のクライアントも使う部分（archive・output・`MemberError`）。
+クライアントのビルドに Branvil を含めないため、チケット・PR・repository 情報・chat・git を
+扱う処理は [gb-server の member](../gb-server/src/member/) に置き、Branvil の agent モジュールを
+直接呼ぶ。資格情報の取得と guest への転送はこの crate の責務に含まない。
 
-`RepositoryServices` はサービスを遅延取得する。ticket の人による承認、入力の検証、
+`gb-server` の `RepositoryServices` はサービスを遅延取得する。ticket の人による承認、入力の検証、
 `WriteGuard::ensure_current` が済むまで provider を生成しない。
 read は更新確認を必要とせず、write は更新確認を通す。provider のエラーは
 `MemberError::Service` のまま保持し、failure / not found / unavailable / unsupported を区別する。
 案内文は `MemberError::render` に locale renderer を渡して得る。
 
-`Chat` は public account と participant labels を扱い、チャンネル名、URL、thread の解決を
+`gb-server` の `Chat` は public account と participant labels を扱い、チャンネル名、URL、thread の解決を
 provider に任せる。操作の返り値は送信・reaction の receipt であり、呼び出し側が
 実行中 run の evidence として保存する。`await_checks` は告知ごとに記録 callback を呼び、
 次の告知に進む前に成功分を渡す。後続の投稿失敗で先の成功分を失わない。notice は元の work identity と
@@ -45,6 +46,7 @@ context/help は [参照カタログ](../../guildbotics/templates/member/referen
 
 ```bash
 cargo nextest run --locked -p gb-member
+cargo nextest run --locked -p gb-server --test member
 cargo nextest run --locked -p gb-integrations --lib 'factory::local::'
 cargo nextest run --locked -p gb-server --lib 'i18n::'
 ```

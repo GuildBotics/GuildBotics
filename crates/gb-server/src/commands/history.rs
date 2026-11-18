@@ -2,13 +2,10 @@
 use super::RunRequest;
 use crate::api::Shared;
 use base64::{Engine, engine::general_purpose::STANDARD};
-use gb_config::{commands::CommandRoots, resolved_guest, secrets::*};
+use gb_config::{commands::CommandRoots, resolved_guest};
 use std::{sync::Arc, time::Instant};
 
-async fn service(
-    api: &Shared,
-    person: &str,
-) -> anyhow::Result<Arc<dyn gb_ports::CodeHostingService>> {
+async fn service(api: &Shared, person: &str) -> anyhow::Result<Arc<branvil::agent::CodeAgent>> {
     let selected = api.selected();
     let workspace = selected
         .workspace
@@ -27,30 +24,7 @@ async fn service(
     let project = gb_config::yaml_value(&std::fs::read_to_string(
         roots.config.join("team/project.yml"),
     )?)?;
-    let writes = gb_base::shared_writes::SharedWrites::new(
-        api.identity_root.clone(),
-        Some(workspace.clone()),
-    );
-    let secrets = SecretStore::new(
-        &writes,
-        Scope::Identity,
-        DeviceKey {
-            machine_root: api.data.parent().unwrap_or(&api.data).into(),
-            keychain: api.keychain.as_ref(),
-        },
-    )?;
-    let config =
-        crate::member::native::integration(workspace, &api.identity_root, &project, &person, &[]);
-    Ok(gb_integrations::ServiceIntegrationFactory::new(
-        config,
-        &secrets,
-        api.branvil.get().cloned(),
-        Arc::new(|_| {}),
-    )?
-    .create_code_hosting_service(crate::member::native::service_workspace(
-        &project,
-        "code_hosting_service",
-    ))?)
+    Ok(crate::member::Agents::new(api.branvil.get(), &project, &person, &[]).code()?)
 }
 
 pub(super) async fn recognized(
@@ -117,7 +91,7 @@ pub(super) async fn complete(api: &Shared, request: &mut RunRequest) -> anyhow::
         }
         let mut origins = Vec::new();
         for repository in repositories {
-            let origin = gb_member::git::Origin::open(
+            let origin = crate::member::git::Origin::open(
                 &root,
                 &repository,
                 code.clone_url(&repository).await?,

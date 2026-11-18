@@ -598,6 +598,37 @@ fn pinned(reference: &str) -> bool {
 /// Where a job's log directory is mounted in the VM.
 pub const LOG_MOUNT: &str = "/.branvil-log";
 
+/// A mount source after its Windows drive (`C:\`): msb reads that colon as
+/// part of the path, and any other ':' or ',' as a separator.
+fn after_drive(dir: &str) -> &str {
+    match dir.as_bytes() {
+        [d, b':', b'\\', ..] if d.is_ascii_alphabetic() => &dir[2..],
+        _ => dir,
+    }
+}
+
+/// The spelling of the canonical directory `dir` that Git and msb take on
+/// the host. Windows' canonical form is verbatim (`\\?\C:\…`), which both
+/// refuse; its plain drive path is used only when `resolve` (the OS's
+/// canonical form) takes it back to `dir`, as Windows normalizes a plain path
+/// (dropping a component's trailing dots, for one) and it could then name
+/// another directory. Other directories are kept as they are.
+pub fn plain_path(
+    dir: PathBuf,
+    resolve: impl Fn(&Path) -> std::io::Result<PathBuf>,
+) -> std::io::Result<PathBuf> {
+    let Some(plain) = dir.to_str().and_then(|s| s.strip_prefix(r"\\?\")) else {
+        return Ok(dir);
+    };
+    if after_drive(plain).len() < plain.len() && resolve(Path::new(plain)).is_ok_and(|p| p == dir) {
+        return Ok(PathBuf::from(plain));
+    }
+    Err(std::io::Error::other(format!(
+        "{} has no drive path naming it",
+        dir.display()
+    )))
+}
+
 /// The uid and gid of the fixed non-root user a job's commands run as. The
 /// work and log directories are presented to the VM as this user's.
 pub const JOB_USER_ID: u32 = 1000;
@@ -748,10 +779,10 @@ impl Executor for Microsandbox {
         };
         let work = job.work.to_string_lossy().to_string();
         let log_dir = job.log_dir.to_string_lossy().to_string();
-        if let Some(dir) = [&work, &log_dir]
-            .into_iter()
-            .find(|d| d.contains(':') || d.contains(','))
-        {
+        if let Some(dir) = [&work, &log_dir].into_iter().find(|d| {
+            let body = after_drive(d);
+            body.contains(':') || body.contains(',')
+        }) {
             return Outcome::StartupFailure(format!(
                 "the work directory {dir} contains ':' or ',', which msb mount specifications cannot carry"
             ));
@@ -1037,6 +1068,56 @@ pub(crate) mod tests {
         assert!(set_runtime_binary(dir.path().join("other-msb")).is_err());
     }
     use super::*;
+
+    #[test]
+    fn windows_directories_reach_msb_as_plain_drive_paths() {
+        // Windows' canonical form of a plain path: it drops a component's
+        // trailing dots and spaces, which the verbatim form keeps.
+        let windows = |p: &Path| -> std::io::Result<PathBuf> {
+            let parts: Vec<&str> = p
+                .to_str()
+                .unwrap()
+                .split('\\')
+                .map(|c| c.trim_end_matches(['.', ' ']))
+                .collect();
+            Ok(PathBuf::from(format!(r"\\?\{}", parts.join(r"\"))))
+        };
+        let missing =
+            |_: &Path| -> std::io::Result<PathBuf> { Err(std::io::ErrorKind::NotFound.into()) };
+        let unused = |p: &Path| -> std::io::Result<PathBuf> {
+            panic!("{} has no verbatim prefix to resolve", p.display())
+        };
+        type Resolve<'a> = &'a dyn Fn(&Path) -> std::io::Result<PathBuf>;
+        let cases: [(&str, Resolve, Option<&str>); 6] = [
+            (
+                r"\\?\C:\Users\x\.branvil\runner",
+                &windows,
+                Some(r"C:\Users\x\.branvil\runner"),
+            ),
+            (r"\\?\C:\Review\runner.", &windows, None),
+            (r"\\?\C:\Review\runner ", &windows, None),
+            (r"\\?\C:\gone", &missing, None),
+            (r"\\?\UNC\srv\share\runner", &windows, None),
+            ("/var/lib/runner", &unused, Some("/var/lib/runner")),
+        ];
+        for (dir, resolve, expected) in cases {
+            match (plain_path(PathBuf::from(dir), resolve), expected) {
+                (Ok(plain), Some(want)) => assert_eq!(plain, PathBuf::from(want), "{dir}"),
+                (Err(e), None) => assert!(e.to_string().contains("no drive path"), "{dir}: {e}"),
+                (got, want) => panic!("{dir}: {got:?}, expected {want:?}"),
+            }
+        }
+        // Only the drive's colon is part of a path; msb splits at any other.
+        for (dir, body) in [
+            (r"C:\runner\jobs\1\work", r"\runner\jobs\1\work"),
+            (r"C:\a:b\work", r"\a:b\work"),
+            (r"\\?\C:\work", r"\\?\C:\work"),
+            ("C:relative", "C:relative"),
+            ("/srv/C:/work", "/srv/C:/work"),
+        ] {
+            assert_eq!(after_drive(dir), body, "{dir}");
+        }
+    }
 
     #[tokio::test]
     async fn memory_logging_requires_a_positive_sample() {

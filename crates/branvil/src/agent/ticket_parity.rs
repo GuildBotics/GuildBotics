@@ -44,7 +44,6 @@ impl Fixture {
             title: "Work".into(),
             body: String::new(),
             labels: vec![],
-            add_to_board: true,
             interactive: false,
             assignee: None,
             lane: None,
@@ -61,7 +60,7 @@ impl Fixture {
             .url
     }
     async fn read(&self, url: &str) -> Value {
-        TicketService::read(&self.service, Resource::Tickets, url, None, "")
+        TicketAgent::read(&self.service, Resource::Tickets, url, None, "")
             .await
             .unwrap()
             .items()[0]
@@ -111,7 +110,7 @@ async fn waiting_eligibility_and_comment_changes_are_reread() {
             .await
             .unwrap();
         assert_eq!(
-            TicketService::can_receive_work(&f.service, &url)
+            TicketAgent::can_receive_work(&f.service, &url)
                 .await
                 .unwrap(),
             !interactive
@@ -132,11 +131,11 @@ async fn waiting_eligibility_and_comment_changes_are_reread() {
         )
         .await
         .unwrap();
-    TicketService::comment(&f.service, &url, "Answered", None)
+    TicketAgent::comment(&f.service, &url, "Answered", None)
         .await
         .unwrap();
     assert!(
-        !TicketService::can_receive_work(&f.service, &url)
+        !TicketAgent::can_receive_work(&f.service, &url)
             .await
             .unwrap()
     );
@@ -337,36 +336,27 @@ async fn assignment_filters_mentions_without_dropping_visible_comments() {
 #[tokio::test]
 async fn creation_assignees_labels_status_and_parent_preserve_contract() {
     let f = Fixture::new().await;
-    let mut request = f.request();
-    request.add_to_board = false;
-    assert!(f.service.create_ticket(request).await.is_err());
     let url = f.create().await;
     let read = f.read(&url).await;
     assert_eq!(
         (
             read["lane"].clone(),
             read["key"].clone(),
-            read["tracker"].clone(),
             read["repository"].clone()
         ),
-        (
-            json!("new"),
-            json!("1"),
-            json!("test/repo"),
-            json!("test/repo")
-        )
+        (json!("new"), json!("1"), json!("test/repo"))
     );
-    assert_eq!(read["assignees"], json!([]));
+    assert!(read["assignee"].is_null());
     f.owner
         .tickets_set_assignee("test/repo", "1", Some("agent1".into()))
         .await
         .unwrap();
-    assert_eq!(f.read(&url).await["assignees"], json!(["agent1"]));
+    assert_eq!(f.read(&url).await["assignee"]["name"], "agent1");
     f.owner
         .tickets_set_assignee("test/repo", "1", None)
         .await
         .unwrap();
-    assert_eq!(f.read(&url).await["assignees"], json!([]));
+    assert!(f.read(&url).await["assignee"].is_null());
     let mut valid = f.request();
     valid.labels = vec!["bug".into()];
     assert!(f.service.create_ticket(valid).await.is_ok());
@@ -396,13 +386,13 @@ async fn creation_assignees_labels_status_and_parent_preserve_contract() {
         .url;
     let status: WorkflowStatus =
         decode(json!({"reason":"failed","person_id":"aiko","run_id":"r","subject":url})).unwrap();
-    TicketService::comment(&f.service, &authored, "It failed", Some(&status))
+    TicketAgent::comment(&f.service, &authored, "It failed", Some(&status))
         .await
         .unwrap();
-    TicketService::comment(&f.service, &authored, "Plain", None)
+    TicketAgent::comment(&f.service, &authored, "Plain", None)
         .await
         .unwrap();
-    let comments = TicketService::read(&f.service, Resource::TicketComments, &authored, None, "")
+    let comments = TicketAgent::read(&f.service, Resource::TicketComments, &authored, None, "")
         .await
         .unwrap();
     assert_eq!(comments.items()[0]["body"], "@owner1\n\nIt failed");
@@ -442,7 +432,7 @@ async fn creation_assignees_labels_status_and_parent_preserve_contract() {
     let read = f.read(&child).await;
     assert_eq!(read["title"], "Renamed");
     assert_eq!(read["parent"]["url"], url);
-    assert_eq!(read["parent"]["label"], "#1");
+    assert_eq!(read["parent"]["key"], "1");
     f.running.stop().await;
 }
 
@@ -507,7 +497,7 @@ async fn blocked_ready_work_and_cross_workspace_mutations_are_refused() {
             .unwrap()
             .is_none()
     );
-    assert!(f.read(&foreign).await["lane"].is_null());
+    assert_eq!(f.read(&foreign).await["lane"], "ready");
     assert!(
         f.service
             .move_ticket(
@@ -569,7 +559,7 @@ async fn edited_and_deleted_comments_are_reread_before_dispatch() {
         .tickets_change_comment("test/repo", key, &original.id, Some("Edited".into()))
         .await
         .unwrap();
-    let page = TicketService::read(&f.service, Resource::TicketComments, &url, None, "")
+    let page = TicketAgent::read(&f.service, Resource::TicketComments, &url, None, "")
         .await
         .unwrap();
     assert_eq!(page.items()[0]["id"], original.id);
@@ -581,12 +571,12 @@ async fn edited_and_deleted_comments_are_reread_before_dispatch() {
     );
     let held: WorkflowStatus =
         decode(json!({"reason":"failed","person_id":"aiko","run_id":"r"})).unwrap();
-    let failed = TicketService::comment(&f.service, &url, "Failed", Some(&held))
+    let failed = TicketAgent::comment(&f.service, &url, "Failed", Some(&held))
         .await
         .unwrap();
     assert!(f.service.refresh(&task).await.unwrap().is_none());
     f.owner
-        .tickets_change_comment("test/repo", key, &failed.id, None)
+        .tickets_change_comment("test/repo", key, &failed.view.id, None)
         .await
         .unwrap();
     assert_eq!(
@@ -598,7 +588,7 @@ async fn edited_and_deleted_comments_are_reread_before_dispatch() {
         .await
         .unwrap();
     assert!(
-        TicketService::read(&f.service, Resource::TicketComments, &url, None, "")
+        TicketAgent::read(&f.service, Resource::TicketComments, &url, None, "")
             .await
             .unwrap()
             .items()
@@ -645,7 +635,7 @@ async fn other_assignee_mentions_preserve_human_assignment_and_lane() {
         assert_eq!(tasks[0].trigger_reason.as_deref(), Some("issue_mention"));
     }
     let task = f.service.candidates().await.unwrap().remove(0);
-    TicketService::comment(&f.service, &url, "Context provided", None)
+    TicketAgent::comment(&f.service, &url, "Context provided", None)
         .await
         .unwrap();
     f.owner
@@ -706,7 +696,7 @@ async fn interactive_ancestors_block_candidates_and_refresh_for_every_trigger() 
                 .unwrap();
             for (author, text) in &comments {
                 if *author == "agent1" {
-                    TicketService::comment(&f.service, &url, text, None)
+                    TicketAgent::comment(&f.service, &url, text, None)
                         .await
                         .unwrap();
                 } else {
@@ -821,7 +811,7 @@ async fn canonical_ticket_addresses_fail_without_mutation() {
         format!("{base}/test/-/tickets/1"),
     ] {
         assert_eq!(
-            TicketService::comment(&f.service, &address, "Hi", None)
+            TicketAgent::comment(&f.service, &address, "Hi", None)
                 .await
                 .unwrap_err(),
             diagnostic(
@@ -831,7 +821,7 @@ async fn canonical_ticket_addresses_fail_without_mutation() {
         );
     }
     assert!(
-        TicketService::read(&f.service, Resource::TicketComments, &url, None, "")
+        TicketAgent::read(&f.service, Resource::TicketComments, &url, None, "")
             .await
             .unwrap()
             .items()
@@ -905,7 +895,7 @@ async fn linked_pulls_yield_to_conversations_and_finish_only_after_answer() {
                     .await
                     .unwrap();
             } else {
-                TicketService::comment(&f.service, &url, "Question", None)
+                TicketAgent::comment(&f.service, &url, "Question", None)
                     .await
                     .unwrap();
                 f.owner
@@ -930,7 +920,7 @@ async fn linked_pulls_yield_to_conversations_and_finish_only_after_answer() {
                 })
             );
             assert_eq!(f.read(&url).await["lane"], "in_progress");
-            TicketService::comment(&f.service, &url, "Done", None)
+            TicketAgent::comment(&f.service, &url, "Done", None)
                 .await
                 .unwrap();
             assert!(f.service.refresh(&task).await.unwrap().is_none());
@@ -1212,18 +1202,18 @@ async fn repository_ticket_numbers_and_assignee_projection_are_independent() {
             f.running.running.data.base_url()
         )
     );
-    assert_eq!(f.read(&url).await["label"], "#1");
+    assert_eq!(f.read(&url).await["key"], "1");
     assert_eq!(f.read(&url).await["author"], "agent1");
     for (assigned, expected) in [
-        (None, json!([])),
-        (Some("agent1"), json!(["agent1"])),
-        (Some("owner1"), json!(["owner1"])),
+        (None, json!(null)),
+        (Some("agent1"), json!("agent1")),
+        (Some("owner1"), json!("owner1")),
     ] {
         f.owner
             .tickets_set_assignee("test/repo", "1", assigned.map(Into::into))
             .await
             .unwrap();
-        assert_eq!(f.read(&url).await["assignees"], expected);
+        assert_eq!(f.read(&url).await["assignee"]["name"], expected);
         assert_eq!(f.read(&url).await["author"], "agent1");
     }
     f.running.stop().await;
@@ -1435,7 +1425,6 @@ async fn a_roster_member_that_never_acted_can_be_assigned() {
             title: "for kenji".into(),
             body: String::new(),
             labels: vec![],
-            add_to_board: true,
             interactive: false,
             assignee: Some(ActorName("kenji".into())),
             lane: None,

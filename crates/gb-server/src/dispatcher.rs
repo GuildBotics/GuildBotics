@@ -13,7 +13,7 @@ pub enum DispatchFailure {
     Guest(Box<CommandFailure>),
     InvalidCommand,
     Cancelled,
-    Service(gb_ports::ServiceError),
+    Service(gb_base::service::ServiceError),
     Journal,
 }
 impl DispatchFailure {

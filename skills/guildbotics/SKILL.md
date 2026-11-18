@@ -66,7 +66,7 @@ Run `member git commit` without `member git push` when the user asks for a commi
 When the user explicitly asks to create a ticket and implement it in the same
 interactive session, create it with `--interactive --assignee <active_person_id>
 --lane in_progress --human-approved`. Use the roster's `person_id` for
-`--assignee`; the CLI resolves the ticket provider's account, including human
+`--assignee`; the CLI resolves the member's account on the code host, including human
 members when the user names one. These initial settings are part of the user's
 approval to create the ticket. Do not create it ready and then set interactive
 mode or assignment separately: patrol could take the intermediate state.
@@ -79,17 +79,16 @@ mode or assignment separately: patrol could take the intermediate state.
 Pass `--parent <ticket_url>` and repeated `--blocked-by <ticket_url>` when
 requested. Without `--lane`, the default is `ready` with a parent or blockers,
 and `new` otherwise, with or without `--interactive`. An ordinary assigned
-ticket in `ready` need not be interactive. Providers that do not support
-interactive tickets refuse `--interactive` before creating anything.
+ticket in `ready` need not be interactive.
 
 When the user asks to work on an existing ticket interactively, read it before
 starting work. The request approves the following changes. Closed tickets stay
 unchanged; report that reopening is a human decision.
 
-1. Check `assignees`. If empty, assign yourself; if only you, keep it. If anyone
-   else is assigned (including a human or alongside you), ask before changing
-   anything: setting interactive mode stops their patrol too. If the user agrees,
-   replace all assignees with yourself; otherwise keep the assignment.
+1. Check `assignee`. If it is null, assign yourself; if it is you, keep it. If
+   anyone else is assigned (including a human), ask before changing anything:
+   setting interactive mode stops their patrol too. If the user agrees, assign
+   yourself in their place; otherwise keep the assignment.
 2. Set the ticket's own `interactive` flag if false, even with an
    `interactive_ancestor`, since the ancestor setting may be removed independently.
 3. If any `blocked_by` ticket is open, keep the lane, omit `--lane`, and report
@@ -100,20 +99,18 @@ unchanged; report that reopening is a human decision.
 Apply the decided changes in ONE `member ticket update --person <person_id>
 --url <ticket_url> --interactive --assignee <person_id> --lane in_progress
 --human-approved`, omitting unchanged fields. Separate writes could let patrol
-start the ticket in an intermediate state. If the provider returns unsupported,
-nothing changed: explain which change is unavailable and that patrol may still
-work in parallel, then ask whether to continue interactively. Report the resulting
-assignees, interactive flag, and lane. For other update failures, read the ticket
-again and report its actual state: an error can follow partial writes. To return to automatic patrol on request,
+start the ticket in an intermediate state. Report the resulting assignee,
+interactive flag, and lane. If the update fails, read the ticket again and
+report its actual state: an error can follow partial writes. To return to automatic patrol on request,
 use `--no-interactive --human-approved`; an `interactive_ancestor` means the
 inherited interactive mode still applies and must be reported.
 
 人が既存のチケットを対話で進めるよう依頼したら、着手前に読み取り、次をそろえる。
 依頼をこの変更への承認として扱う。閉じたチケットは変更せず、開き直すかは人が決めると伝える。
 
-1. `assignees` が空なら自分にする。自分だけならそのまま。
-   人や自分と一緒の場合も含め、自分以外の担当がいれば、何も変える前にユーザーに確認する。
-   対話指定だけでも担当者の巡回が止まるため。了承されたら自分だけにし、替えない場合は担当を保つ。
+1. `assignee` が null なら自分にする。自分ならそのまま。
+   人を含め、自分以外の担当がいれば、何も変える前にユーザーに確認する。
+   対話指定だけでも担当者の巡回が止まるため。了承されたら自分に替え、替えない場合は担当を保つ。
 2. 自身の `interactive` が false なら付ける。`interactive_ancestor` からの継承だけでも付ける。
    祖先の指定はこのセッションと関係なく外されうる。
 3. `blocked_by` に開いたチケットがあれば、レーンを保ち `--lane` を付けず、依存先が閉じるまで着手できないと伝える。
@@ -121,10 +118,8 @@ inherited interactive mode still applies and must be reported.
 
 決めた変更を1回の `ticket update --interactive --assignee <自分のperson_id>
 --lane in_progress --human-approved` にまとめ、変更不要な項目は省く。
-分けると巡回が途中の状態を拾いうる。provider が unsupported で断った場合は何も変わらない。
-できない変更と巡回が並行して進めうることを伝え、このまま対話で進めるか確認する。
-結果の担当・対話指定・レーンを伝える。unsupported 以外の失敗では、一部が書き込まれている可能性があるため、
-チケットを読み直して実際の状態を伝える。自動巡回へ戻す依頼には
+分けると巡回が途中の状態を拾いうる。結果の担当・対話指定・レーンを伝える。
+失敗したときは、一部が書き込まれている可能性があるため、チケットを読み直して実際の状態を伝える。自動巡回へ戻す依頼には
 `--no-interactive --human-approved` を使い、`interactive_ancestor` による継承が残るなら伝える。
 
 ## Definition of Done

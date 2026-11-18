@@ -357,22 +357,22 @@ guildbotics run repository/security_alerts --person alice repo=org/repo state=re
 
 1回の実行で1ページ返します。`continuation` があれば、同じリポジトリ・条件に `continuation=<返された値>` を加えて続けてください。Markdown にはメンバー・リポジトリ・状態・ページサイズを維持した次ページの実行コマンドを表示します。空ページは取得成功ですが、アクセス失敗はエラーです。サイズ上限を超えた場合は JSON を切り詰めず失敗します。一覧では `page_size` を下げてください。上限を超える個別アラートは返せません。GitHub の403・404には権限不足、未承認の追加権限、参照できないリソース、Dependabot alerts の無効化など複数の原因があります。レート制限では時間を置いて再実行してください。
 
-後続の Python コマンドは `context.pipe`、または `await context.invoke("repository/security_alerts", repo="org/repo", output="json")` の返り値を JSON として読み取れます。型付きの結果を直接使うこともできます。
+後続の Python コマンドは `context.pipe`、または `await context.invoke("repository/security_alerts", repo="org/repo", output="json")` の返り値を JSON として読み取れます。項目を直接読むこともできます。
 
 ```python
 async def main(context, repo):
     page = await context.get_code_hosting_service().read(
         "dependency_alerts", repo, parameters={"state": "open", "page_size": 10},
     )
-    return [alert.package for alert in page.items]
+    return [alert["package"] for alert in page.items]
 ```
 
-member CLI は `guildbotics member repo-info read --person alice --resource dependency_alerts --subject org/repo --params '{"state":"open","page_size":10}'` です。共通形式の `items` と `continuation` を返します。個別取得は `--params '{"id":"42"}'` を指定し、ほかの条件と continuation は渡しません。依存の脆弱性アラートを持たないコードホストは、0 件と答えずに未対応として拒否します。
+member CLI は `guildbotics member repo-info read --person alice --resource dependency_alerts --subject org/repo --params '{"state":"open","page_size":10}'` です。`items` と `continuation` を返します。個別取得は `--params '{"id":"42"}'` を指定し、ほかの条件と continuation は渡しません。
 
 チケット・PR・CI は、LLM を使わない同梱コマンドで確認できます。チケットと PR は URL で指定します。
 
 ```shell
-# チケットの本文・ラベル・担当者・コメント・ボードのレーン・関係するチケット・添付・参照している PR
+# チケットの本文・ラベル・担当・コメント・ボードのレーン・関係するチケット・添付・参照している PR
 guildbotics run repository/issue_inspect --person alice url=https://github.com/org/repo/issues/42
 # PR の情報・レビューの判定と会話・コメント可能な差分座標
 guildbotics run repository/pr_inspect --person alice url=https://github.com/org/repo/pull/43 include_comments=true include_diff=true
@@ -382,15 +382,15 @@ guildbotics run repository/pr_checks --person alice url=https://github.com/org/r
 
 結果は JSON です。実行環境の準備が必要です。実行中の workflow や委任コマンドの中では、`/opt/guildbotics/venv/bin/python -m guildbotics.guest.entry repository/pr_inspect url=https://github.com/org/repo/pull/43 include_comments=true` で呼び出します。同じ microVM・メンバー・メインコマンドのアクセス契約で動きます。Python コマンドからは `context.invoke("repository/pr_inspect", url="https://github.com/org/repo/pull/43")` でも呼べます。
 
-各コマンドはレビューのスレッド内コメントも含めてページを取得します。ファイル差分には行ごとのコメント座標も含むため、1 ページ 5 ファイルずつ取得します。途中の取得失敗、同じ continuation の繰り返し、1 リソース 100 ページ超過、集約結果のサイズ超過はエラーとなり、部分取得を完全な結果として返しません。例外はチケットの添付で、チケットの内容を補うものなので、一覧を取得できないとき（添付を持たないチケットサービス、取得の失敗）は、`repository/issue_inspect` が `attachments: null` と理由の `attachments_unavailable` を返し、ほかの内容はそのまま返します。取得できないファイル差分には `patch_available=false` を付けます。差分の欠落や切り詰めは `patch_complete=false` とし、全体も `diff_complete=false` にします。取得ファイル数が PR の `changed_files` より少なければエラーにします。各ファイルのパスと patch 本文は 1 回だけ返し、`commentable_lines` には行番号と side を返します。大きな結果は `member ticket read` または `member pr read` でページごとに確認してください。
+各コマンドはすべてのページを取得します。ファイル差分には行ごとのコメント座標も含むため、1 ページ 5 ファイルずつ取得します。途中の取得失敗、同じ continuation の繰り返し、1 リソース 100 ページ超過、集約結果のサイズ超過はエラーとなり、部分取得を完全な結果として返しません。差分の欠落や切り詰めは `patch_complete=false` とし、全体も `diff_complete=false` にします。取得ファイル数が PR の `changed_files` より少なければエラーにします。各ファイルのパスと patch 本文は 1 回だけ返し、`commentable_lines` には行番号と side を返します。大きな結果は `member ticket read` または `member pr read` でページごとに確認してください。
 
-`member ticket read` はチケットの `tickets`（チケット自身。`key`・`tracker`・`repository`・`lane` と、ほかのチケットとの関係 `parent`・`children`・`blocked_by`・`blocks` を持つ。関係はそれぞれ相手の URL・タイトル・状態を持つ）、`ticket_comments`、`ticket_attachments`（本文とコメントが参照する添付。`id`・`name`・`media_type`・`size` と、参照元 `referenced_by`（`body` かコメントの ID））、`ticket_pull_requests`（そのチケットを参照する、コードホストの PR）を、`member pr read` は PR の `pull_requests`、`pull_request_comments`（会話コメント）、`pull_request_reviews`、`pull_request_files`、`pull_request_threads`、`review_thread_comments`、`pull_request_readiness` を読みます。いずれも `--subject` にチケットまたは PR の URL を指定します。コメント・レビュー・スレッドは、項目の URL と組で意味を持つ不透明な文字列の ID で指します。一覧は `page_size`（1〜100、既定 30）を受け取り、`review_thread_comments` は取得済みスレッドの `node` も必要です。個別のチケット・PR は条件や continuation を受け取りません。`pull_request_readiness` は `failed_logs` と `log_tail_bytes`（1〜65536、既定 65536）を受け取り、push 後とタスク完了時にも使う host の判定結果を返します。その `feedback` は、PR の作者以外が付けたレビュー・会話コメント・スレッドのコメント（ワークフローの状態通知を除く）の件数と、種類ごとに最新の項目の `id` と `at` を持ちます。2 回の読み取りで値が変われば、新しい発言が届いています。`repository/pr_inspect` はその結果を `checks` に含め、`repository/pr_checks` は直接返します。タスク完了時には、コマンドの返した値を信用せず、host がコードのホストを再確認します。そのために別の実行環境は起動しません。host が取得した作業対象は `inspected` として記録し、trace のタイトルに使いますが、Activity の書き込みには数えません。
+`member ticket read` はチケットの `tickets`（チケット自身。`key`・`repository`・`assignee`・`lane` と、ほかのチケットとの関係 `parent`・`children`・`blocked_by`・`blocks` を持つ。関係はそれぞれ相手の URL・リポジトリ・key・タイトル・状態を持つ）、`ticket_comments`、`ticket_attachments`（本文とコメントが参照する添付。`id`・`name`・`media_type`・`size` と、参照元 `referenced_by`（`body` かコメントの ID））、`ticket_pull_requests`（そのチケットを参照する、コードホストの PR）を、`member pr read` は PR の `pull_requests`、`pull_request_comments`（会話コメント）、`pull_request_reviews`、`pull_request_files`、`pull_request_threads`（スレッドのコメントをすべて含む）、`pull_request_readiness` を読みます。いずれも `--subject` にチケットまたは PR の URL を指定します。コメント・レビュー・スレッドは、項目の URL と組で意味を持つ不透明な文字列の ID で指します。一覧は `page_size`（1〜100、既定 30）を受け取ります。個別のチケット・PR は条件や continuation を受け取りません。`pull_request_readiness` は `failed_logs` と `log_tail_bytes`（1〜65536、既定 65536）を受け取り、push 後とタスク完了時にも使う host の判定結果を返します。その `feedback` は、PR の作者以外が付けたレビュー・会話コメント・スレッドのコメント（ワークフローの状態通知を除く）の件数と、種類ごとに最新の項目の `id` と `at` を持ちます。2 回の読み取りで値が変われば、新しい発言が届いています。`repository/pr_inspect` はその結果を `checks` に含め、`repository/pr_checks` は直接返します。タスク完了時には、コマンドの返した値を信用せず、host がコードのホストを再確認します。そのために別の実行環境は起動しません。host が取得した作業対象は `inspected` として記録し、trace のタイトルに使いますが、Activity の書き込みには数えません。
 
-`guildbotics member ticket attachment download --person alice --url <ticket_url> --id <id> [--dest <dir>]` は、チケットが参照する添付を 1 つ（10 MiB まで）、添付されたときの名前で保存先（既定は現在のディレクトリ）のファイルとしてダウンロードします。1 つの素のファイル名でない名前は ID に置き換え、すでにあるファイルは上書きしません。`member pr artifact download` と同じく、host がダウンロードし、隔離環境のコマンドならその環境が書き込みます。添付を持たないチケットサービスは、一覧とダウンロードのどちらも未対応として拒否します。
+`guildbotics member ticket attachment download --person alice --url <ticket_url> --id <id> [--dest <dir>]` は、チケットが参照する添付を 1 つ（10 MiB まで）、添付されたときの名前で保存先（既定は現在のディレクトリ）のファイルとしてダウンロードします。1 つの素のファイル名でない名前は ID に置き換え、すでにあるファイルは上書きしません。`member pr artifact download` と同じく、host がダウンロードし、隔離環境のコマンドならその環境が書き込みます。
 
 readiness は host サービス自身の通信を使うため、内部の compare 応答には参照ページ用の受信上限を適用しません。返すページの上限は維持し、JSON のエスケープと付帯情報を除いた残りを失敗ログで分け合います。短くしたログは `truncated=true` と `tail_limit_bytes` で分かります。GitHub の権限エラーは必要な権限名を示し、HTTP が成功でも GraphQL の権限不足・レート制限はエラーとして案内します。
 
-サービス操作の契約は `crates/gb-ports` にあり、`crates/gb-integrations` がproviderを選びます。メンバーの資格情報はhostに保持します。
+チケットと PR の操作は `crates/branvil/src/agent/`、チャットの provider の選択は `crates/gb-integrations` にあります。メンバーの資格情報は host に保持します。
 
 ## 5. サブコマンドの利用
 複数のサブコマンドを組み合わせて一連の処理を行うことができます。
