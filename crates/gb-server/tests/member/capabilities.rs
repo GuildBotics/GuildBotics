@@ -1,5 +1,6 @@
 use crate::support;
 use branvil::agent::port::*;
+use branvil::agent::{CodeAgent, TicketAgent};
 use gb_member::{MemberError, WriteGuard};
 use gb_server::member::repository::*;
 use serde_json::json;
@@ -27,11 +28,10 @@ impl WriteGuard for Stale {
 }
 fn request() -> CreateTicket {
     CreateTicket {
-        tracker: "tracker".into(),
+        tracker: support::REPO.into(),
         title: "Title".into(),
         body: "Body".into(),
         labels: vec![],
-        add_to_board: true,
         interactive: false,
         assignee: None,
         lane: None,
@@ -246,7 +246,31 @@ fn evidence_includes_written_pushed_and_resumed_prs_once() {
     );
 }
 fn readiness(states: &[&str]) -> Readiness {
-    serde_json::from_value(json!({"target":{"kind":"pull_request","url":"url","title":"T","label":"!1"},"head_sha":"head", "checks":[], "required_checks":states.first().copied().unwrap_or("passed"), "feedback":branvil::agent::port::Feedback::default()})).unwrap()
+    readiness_of("url", states.first().copied().unwrap_or("passed"))
+}
+fn readiness_of(url: &str, state: &str) -> Readiness {
+    Readiness {
+        target: WorkTarget {
+            kind: WorkKind::PullRequest,
+            url: url.into(),
+            title: "T".into(),
+            label: "!1".into(),
+            closed: false,
+        },
+        report: branvil::api::pulls::ChecksView {
+            head_sha: "head".into(),
+            base_sha: String::new(),
+            behind_by: None,
+            conflicts: None,
+            checks: vec![],
+            required_checks: serde_json::from_value(json!(state)).unwrap(),
+            required_names: vec![],
+            checks_expected: false,
+            base_checks: 0,
+        },
+        feedback: Feedback::default(),
+        failed_logs: None,
+    }
 }
 #[test]
 fn run_completion_uses_only_required_checks() {
@@ -272,6 +296,10 @@ fn run_completion_uses_only_required_checks() {
 }
 #[tokio::test]
 async fn service_failures_keep_the_original_category_and_safe_diagnosis() {
+    let providers = support::Embedded::new().await;
+    let ticket = providers.ticket("T").await;
+    let pr = providers.pull("feature", true, &[]).await;
+    let roster = BTreeMap::new();
     for error in [
         ServiceError::Failed,
         ServiceError::NotFound,
@@ -283,8 +311,7 @@ async fn service_failures_keep_the_original_category_and_safe_diagnosis() {
             args: BTreeMap::new(),
         },
     ] {
-        let providers = support::Probe::new(Some(error.clone()));
-        let roster = BTreeMap::new();
+        providers.fail_all(error.clone());
         let r = Repository {
             services: &providers,
             guard: &Current,
@@ -292,32 +319,48 @@ async fn service_failures_keep_the_original_category_and_safe_diagnosis() {
         };
         for result in [
             r.ticket_create(request(), None, true).await,
-            r.ticket_comment("ticket", "body").await,
-            r.pr_comment("pr", "body").await,
+            r.ticket_comment(&ticket, "body").await,
+            r.pr_comment(&pr, "body").await,
             r.pr_update(
-                "pr",
+                &pr,
                 UpdatePullRequest {
                     title: Some("title".into()),
                     ..Default::default()
                 },
             )
             .await,
-            r.pr_review("pr", "body", ReviewVerdict::Approve, "head")
+            r.pr_review(&pr, "body", ReviewVerdict::Approve, "head")
                 .await,
-            r.pr_reply("pr", "id", "body").await,
-            r.pr_reaction("pr", "id", SemanticReaction::Ack).await,
-            r.ticket_reaction("ticket", "id", SemanticReaction::Ack)
+            r.pr_reply(&pr, "id", "body").await,
+            r.pr_reaction(&pr, "id", SemanticReaction::Ack).await,
+            r.ticket_reaction(&ticket, "id", SemanticReaction::Ack)
                 .await,
-            r.read(Resource::Tickets, "ticket", None, "").await,
-            r.read(Resource::DependencyAlerts, "repo", None, "").await,
+            r.read(Resource::Tickets, &ticket, None, "").await,
+            r.read(Resource::DependencyAlerts, support::REPO, None, "")
+                .await,
         ] {
             assert!(matches!(result,Err(MemberError::Service(ref e)) if e==&error));
         }
     }
+    providers.stop().await;
 }
-fn pr_page(author_type: &str, state: &str) -> ReadPage {
-    ReadPage::of(Resource::PullRequests,[json!({"kind":"pull_request","url":"url","title":"T","label":"!1","repository":"repo","body":"","state":state,
-        "assignees":[],"author":"local-aiko","requested_reviewers":[],"labels":[],"author_type":author_type,"head":"feature","head_repository":"repo","head_sha":"head","base":"main","merged":false,"draft":false,"changed_files":null})],None,None).unwrap()
+/// Renders a member diagnostic from the shipped catalog; a missing key fails.
+fn localized(error: &MemberError, language: &str) -> String {
+    let source = match language {
+        "en" => include_str!("../../../../guildbotics/templates/locales/cli/member.en.yml"),
+        _ => include_str!("../../../../guildbotics/templates/locales/cli/member.ja.yml"),
+    };
+    let catalog: serde_json::Value = serde_saphyr::from_str(source).unwrap();
+    error.render(|key: &str, args: &BTreeMap<String, String>| {
+        let mut text = catalog[language][key.strip_prefix("cli.member.").unwrap()]
+            .as_str()
+            .unwrap_or_else(|| panic!("{key} is not in the {language} catalog"))
+            .to_owned();
+        for (key, value) in args {
+            text = text.replace(&format!("%{{{key}}}"), value);
+        }
+        text
+    })
 }
 #[tokio::test]
 async fn completion_revalidates_only_owned_open_prs_and_preserves_read_failures() {
@@ -327,72 +370,75 @@ async fn completion_revalidates_only_owned_open_prs_and_preserves_read_failures(
             .unwrap()
             .is_empty()
     );
-    let mut provider = support::Probe::new(None);
-    provider.pages.insert(
-        "pull_requests|url|".into(),
-        Ok(pr_page("Assistant", "open")),
-    );
-    provider.checks.insert("url".into(), readiness(&[]));
-    assert_eq!(
-        completion_readiness(&provider, Some("url"), &[])
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-    provider
-        .checks
-        .insert("url".into(), readiness(&["running"]));
-    assert!(
-        completion_readiness(&provider, Some("url"), &[])
-            .await
-            .is_err()
-    );
-    for (author, state) in [("User", "open"), ("Assistant", "closed")] {
-        provider
-            .pages
-            .insert("pull_requests|url|".into(), Ok(pr_page(author, state)));
+    let provider = support::Embedded::new().await;
+    let mine = provider.pull("mine", true, &[]).await;
+    let ready = completion_readiness(&provider, Some(&mine), &[])
+        .await
+        .unwrap();
+    assert_eq!(ready.len(), 1);
+    assert_eq!(ready[0].target.url, mine);
+    provider.require_checks().await;
+    let incomplete = completion_readiness(&provider, Some(&mine), &[])
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        incomplete,
+        MemberError::CapabilityArgs {
+            key: "cli.member.required_checks_incomplete",
+            ..
+        }
+    ));
+    // The key and its blockers argument resolve in both catalogs.
+    for language in ["en", "ja"] {
         assert!(
-            completion_readiness(&provider, Some("url"), &[])
+            localized(&incomplete, language).contains(&format!("{mine}: running")),
+            "{language}"
+        );
+    }
+    let theirs = provider.pull("theirs", false, &[]).await;
+    let closed = provider.pull("closed", true, &[]).await;
+    provider.close_pull(&closed).await;
+    for url in [&theirs, &closed] {
+        assert!(
+            completion_readiness(&provider, Some(url), &[])
                 .await
                 .unwrap()
                 .is_empty()
         );
     }
-    provider
-        .pages
-        .insert("pull_requests|ticket|".into(), Err(ServiceError::NotFound));
-    provider.pages.insert(
-        "ticket_pull_requests|ticket|".into(),
-        Err(ServiceError::Unsupported),
-    );
+    // A ticket kept outside this code host has no pull requests here.
+    let foreign = "https://elsewhere.invalid/acme/repo/-/tickets/1";
     assert!(
-        completion_readiness(&provider, Some("ticket"), &[])
+        completion_readiness(&provider, Some(foreign), &[])
             .await
             .unwrap()
             .is_empty()
     );
-    provider.pages.insert(
-        "pull_requests|ticket|".into(),
-        Err(ServiceError::Unavailable),
-    );
+    provider.code.faults.fail("read", ServiceError::Unavailable);
     assert!(matches!(
-        completion_readiness(&provider, Some("ticket"), &[]).await,
+        completion_readiness(&provider, Some(foreign), &[]).await,
         Err(MemberError::Service(ServiceError::Unavailable))
     ));
+    provider.stop().await;
 }
 #[tokio::test]
 async fn wait_notices_keep_the_work_identity_and_do_not_wait_for_ready_prs() {
-    let mut provider = support::Probe::new(None);
+    let provider = support::Embedded::new().await;
+    provider.require_checks().await;
+    let pr = provider.pull("feature", true, &[]).await;
+    let pending = provider
+        .code
+        .readiness(&pr, false, MAX_LOG_TAIL_BYTES)
+        .await
+        .unwrap();
+    assert_eq!(pending.report.required_checks, RequiredChecks::Running);
     let roster = BTreeMap::new();
-    let pending = readiness(&["running"]);
-    provider.checks.insert("url".into(), pending.clone());
     let r = Repository {
         services: &provider,
         guard: &Current,
         roster: &roster,
     };
-    let results = vec![(json!({"draft":false}), pending)];
+    let results = vec![(json!({"draft":false}), pending.clone())];
     let work = || AwaitWork {
         person_id: "aiko",
         run_id: "run-1",
@@ -410,49 +456,52 @@ async fn wait_notices_keep_the_work_identity_and_do_not_wait_for_ready_prs() {
         .await
         .unwrap();
     assert_eq!(notices.len(), 1);
-    {
-        let rows = provider.notices.lock().unwrap();
-        assert_eq!(rows[0]["work_identity"], "ticket-url");
-        assert_eq!(rows[0]["head"], "head");
-    }
-    assert!(
-        r.await_checks(
-            &[(json!({"draft":true}), readiness(&["running"]))],
+    let rows = provider.notices(&pr).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["work_identity"], "ticket-url");
+    assert_eq!(rows[0]["head"], pending.report.head_sha);
+    let draft = r
+        .await_checks(
+            &[(json!({"draft":true}), pending.clone())],
             work(),
-            |_| String::new(),
-            |_| Ok(())
+            |_| "draft wait notice".into(),
+            |_| Ok(()),
         )
-        .await
-        .is_ok()
-    );
-    assert_eq!(provider.notices.lock().unwrap().len(), 2);
+        .await;
+    assert!(draft.is_ok(), "{draft:?}");
+    assert_eq!(provider.notices(&pr).await.len(), 2);
+    provider.stop().await;
 }
 #[tokio::test]
 async fn closed_board_imports_are_idempotent_and_keep_merge_identity() {
     let d = tempfile::tempdir().unwrap();
     let writes = gb_base::shared_writes::SharedWrites::new(d.path().into(), None);
     let redactor = gb_observability::redaction::Redactor::default();
-    let mut provider = support::Probe::new(None);
-    provider.closed = vec![
-        ClosedItem {
-            kind: WorkKind::Ticket,
-            url: "ticket".into(),
-            title: "T".into(),
-            label: "T-1".into(),
-            closed_at: "2026-01-01T01:00:00Z".into(),
-            merged: false,
-        },
-        ClosedItem {
-            kind: WorkKind::PullRequest,
-            url: "pr".into(),
-            title: "PR".into(),
-            label: "!1".into(),
-            closed_at: "2026-01-01T02:00:00Z".into(),
-            merged: true,
-        },
-    ];
-    let start = "2026-01-01T00:00:00Z".parse().unwrap();
-    let end = "2026-01-02T00:00:00Z".parse().unwrap();
+    let provider = support::Embedded::new().await;
+    let start = chrono::Utc::now() - chrono::Duration::minutes(1);
+    let ticket = provider.ticket("T").await;
+    let pr = provider.pull("feature", true, &[]).await;
+    provider.close_ticket(&ticket).await;
+    let view = provider.code.pull_view(&pr).await.unwrap();
+    provider
+        .fixture
+        .merge(support::REPO, view.number, &view.head_sha, &view.base_sha)
+        .await;
+    let end = chrono::Utc::now() + chrono::Duration::minutes(1);
+    let ticket_closed = provider
+        .code
+        .ticket_view(&ticket)
+        .await
+        .unwrap()
+        .closed_at
+        .unwrap();
+    let pr_closed = provider
+        .code
+        .pull_view(&pr)
+        .await
+        .unwrap()
+        .closed_at
+        .unwrap();
     assert_eq!(
         gb_server::member::events::refresh(d.path(), &writes, None, "", start, end, &redactor)
             .await
@@ -464,7 +513,7 @@ async fn closed_board_imports_are_idempotent_and_keep_merge_identity() {
             gb_server::member::events::refresh(
                 d.path(),
                 &writes,
-                Some(&provider),
+                Some(&provider.code),
                 "local",
                 start,
                 end,
@@ -478,22 +527,23 @@ async fn closed_board_imports_are_idempotent_and_keep_merge_identity() {
     let events = gb_observability::activity::ActivityEvents::open(d.path())
         .list_between(start, end)
         .unwrap();
+    assert_eq!(events.len(), 2);
     assert!(
         events
             .iter()
-            .any(|r| r["attributes"]["target.activity_id"] == "pull_request:pr:merged")
+            .any(|r| r["attributes"]["target.activity_id"] == format!("pull_request:{pr}:merged"))
     );
     assert!(
         events
             .iter()
-            .any(|r| r["attributes"]["target.activity_id"] == "ticket:ticket:closed")
+            .any(|r| r["attributes"]["target.activity_id"] == format!("ticket:{ticket}:closed"))
     );
     for event in &events {
         assert_eq!(event["member_id"], "");
-        let pr = event["kind"] == "pull_request.item";
+        let is_pr = event["kind"] == "pull_request.item";
         assert_eq!(
             event["kind"],
-            if pr {
+            if is_pr {
                 "pull_request.item"
             } else {
                 "ticket.item"
@@ -501,19 +551,15 @@ async fn closed_board_imports_are_idempotent_and_keep_merge_identity() {
         );
         assert_eq!(
             event["occurred_at"],
-            if pr {
-                "2026-01-01T02:00:00Z"
-            } else {
-                "2026-01-01T01:00:00Z"
-            }
+            if is_pr { &pr_closed } else { &ticket_closed }.as_str()
         );
         assert_eq!(
-            event["payload"][if pr { "pull_request" } else { "ticket" }]["url"],
-            if pr { "pr" } else { "ticket" }
+            event["payload"][if is_pr { "pull_request" } else { "ticket" }]["url"],
+            if is_pr { &pr } else { &ticket }.as_str()
         );
     }
+    provider.stop().await;
 }
-
 #[tokio::test]
 async fn approval_diagnostics_are_localized_before_service_access() {
     let provider = Forbidden;
@@ -637,37 +683,53 @@ async fn approval_diagnostics_are_localized_before_service_access() {
 }
 #[tokio::test]
 async fn roster_assignment_and_initial_ticket_state_reach_the_provider() {
-    let provider = support::Probe::new(Some(ServiceError::Unsupported));
+    let provider = support::Embedded::new().await;
+    provider.fixture.member("agent1").await;
     let roster = BTreeMap::from([
-        ("agent".into(), ActorName("agent-account".into())),
-        ("human".into(), ActorName("human-account".into())),
+        ("agent".into(), ActorName("agent1".into())),
+        ("human".into(), ActorName("owner".into())),
     ]);
     let r = Repository {
         services: &provider,
         guard: &Current,
         roster: &roster,
     };
+    let parent = provider.ticket("parent").await;
+    let blocker = provider.ticket("blocker").await;
+    // A ticket started in progress is blocked only by open tickets.
+    provider.close_ticket(&blocker).await;
     for person in ["agent", "human"] {
         let mut request = request();
         request.interactive = true;
         request.lane = Some(CreateLane::InProgress);
-        request.parent = Some("parent".into());
-        request.blocked_by = vec![" blocker ".into(), " ".into()];
+        request.parent = Some(parent.clone());
+        request.blocked_by = vec![format!(" {blocker} "), " ".into()];
         request.labels = vec![" bug ".into()];
-        request.add_to_board = false;
-        assert!(r.ticket_create(request, Some(person), true).await.is_err());
-        let requests = provider.ticket_requests.lock().unwrap();
-        let sent = requests.last().unwrap();
-        assert_eq!(sent.assignee.as_ref(), roster.get(person));
-        assert_eq!(sent.blocked_by, vec!["blocker"]);
-        assert_eq!(sent.labels, vec!["bug"]);
-        assert_eq!(sent.lane, Some(CreateLane::InProgress));
-        assert!(sent.interactive);
-        assert!(!sent.add_to_board);
-        assert_eq!(sent.parent.as_deref(), Some("parent"));
+        let created = r.ticket_create(request, Some(person), true).await.unwrap();
+        let ticket = provider
+            .code
+            .ticket_view(created["url"].as_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            ticket.assignee.map(|a| a.name),
+            Some(roster[person].0.clone())
+        );
+        assert_eq!(
+            ticket
+                .blocked_by
+                .iter()
+                .map(|t| t.url.as_str())
+                .collect::<Vec<_>>(),
+            vec![blocker.as_str()]
+        );
+        assert_eq!(ticket.labels, vec!["bug"]);
+        assert_eq!(ticket.lane, "in_progress");
+        assert!(ticket.interactive);
+        assert_eq!(ticket.parent.map(|t| t.url), Some(parent.clone()));
     }
+    provider.stop().await;
 }
-
 #[test]
 fn blockers_keep_diagnostics_and_omit_ready_targets() {
     let ready = (json!({}), readiness(&[]));
@@ -720,39 +782,15 @@ async fn completion_preserves_factory_failure_and_orders_owned_references() {
             ..
         }))
     ));
-    let mut p = support::Probe::new(None);
-    p.pages
-        .insert("pull_requests|ticket|".into(), Err(ServiceError::NotFound));
-    p.pages.insert(
-        "ticket_pull_requests|ticket|".into(),
-        Ok(ReadPage::of(
-            Resource::TicketPullRequests,
-            ["mine", "foreign", "closed"].map(
-                |url| json!({"url":url,"label":"!1","title":"T","state":"open","merged":false}),
-            ),
-            None,
-            None,
-        )
-        .unwrap()),
-    );
-    for (url, author, state) in [
-        ("mine", "Assistant", "open"),
-        ("touched", "Assistant", "open"),
-        ("foreign", "User", "open"),
-        ("closed", "Assistant", "closed"),
-    ] {
-        let mut items = pr_page(author, state).items().to_vec();
-        items[0]["url"] = url.into();
-        p.pages.insert(
-            format!("pull_requests|{url}|"),
-            Ok(ReadPage::of(Resource::PullRequests, items, None, None).unwrap()),
-        );
-        let mut check = readiness(&[]);
-        check.target.url = url.into();
-        p.checks.insert(url.into(), check);
-    }
-    let evidence = [json!({"payload":{"pull_requests":[{"url":"mine"},{"url":"touched"}]}})];
-    let result = completion_readiness(&p, Some("ticket"), &evidence)
+    let p = support::Embedded::new().await;
+    let ticket = p.ticket("T").await;
+    let mine = p.pull("mine", true, &[&ticket]).await;
+    p.pull("foreign", false, &[&ticket]).await;
+    let closed = p.pull("closed", true, &[&ticket]).await;
+    p.close_pull(&closed).await;
+    let touched = p.pull("touched", true, &[]).await;
+    let evidence = [json!({"payload":{"pull_requests":[{"url":mine},{"url":touched}]}})];
+    let result = completion_readiness(&p, Some(&ticket), &evidence)
         .await
         .unwrap();
     assert_eq!(
@@ -760,18 +798,21 @@ async fn completion_preserves_factory_failure_and_orders_owned_references() {
             .iter()
             .map(|r| r.target.url.as_str())
             .collect::<Vec<_>>(),
-        vec!["mine", "touched"]
+        vec![mine.as_str(), touched.as_str()]
     );
+    p.stop().await;
 }
 #[tokio::test]
 async fn waits_record_each_success_and_retain_all_work_status_fields() {
-    let mut p = support::Probe::new(None);
+    let p = support::Embedded::new().await;
+    p.require_checks().await;
+    let a = p.pull("a", true, &[]).await;
+    let pending = p
+        .code
+        .readiness(&a, false, MAX_LOG_TAIL_BYTES)
+        .await
+        .unwrap();
     let roster = BTreeMap::new();
-    for url in ["A", "B"] {
-        let mut check = readiness(&["running"]);
-        check.target.url = url.into();
-        p.checks.insert(url.into(), check);
-    }
     for kind in ["ticket", "chat", "manual", "checks_resumed"] {
         let r = Repository {
             services: &p,
@@ -782,7 +823,7 @@ async fn waits_record_each_success_and_retain_all_work_status_fields() {
         r.await_checks(
             &[
                 (json!({"draft":false}), readiness(&[])),
-                (json!({"draft":false}), p.checks["A"].clone()),
+                (json!({"draft":false}), pending.clone()),
             ],
             AwaitWork {
                 person_id: "aiko",
@@ -800,20 +841,24 @@ async fn waits_record_each_success_and_retain_all_work_status_fields() {
         .await
         .unwrap();
         assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0]["target"]["url"], "A");
+        assert_eq!(recorded[0]["target"]["url"], a);
         assert_eq!(
-            p.notices.lock().unwrap().last().unwrap(),
-            &json!({"reason":"awaiting_checks","person_id":"aiko","run_id":"run","subject":"subject","head":"head","work_kind":kind,"work_identity":"original","kind":"workflow_error","routing":"suppress"})
+            p.notices(&a).await.last().unwrap(),
+            &json!({"reason":"awaiting_checks","person_id":"aiko","run_id":"run","subject":"subject","head":pending.report.head_sha,"work_kind":kind,"work_identity":"original","kind":"workflow_error","routing":"suppress"})
         );
     }
-    p.fail_on = Some("B".into());
+    // The notice on a pull request that no longer exists fails after the first.
+    let gone = readiness_of(
+        &format!("{}/{}/-/pulls/999", p.base(), support::REPO),
+        "running",
+    );
     let r = Repository {
         services: &p,
         guard: &Current,
         roster: &roster,
     };
     let mut recorded = vec![];
-    let results = ["A", "B"].map(|url| (json!({"draft":false}), p.checks[url].clone()));
+    let results = [pending.clone(), gone].map(|r| (json!({"draft":false}), r));
     assert!(
         r.await_checks(
             &results,
@@ -834,5 +879,6 @@ async fn waits_record_each_success_and_retain_all_work_status_fields() {
         .is_err()
     );
     assert_eq!(recorded.len(), 1);
-    assert_eq!(recorded[0]["target"]["url"], "A");
+    assert_eq!(recorded[0]["target"]["url"], a);
+    p.stop().await;
 }

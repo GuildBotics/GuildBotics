@@ -1,337 +1,227 @@
+//! Member agents over an embedded Branvil, with its test hook for failures.
 use branvil::agent::port::*;
-use chrono::{DateTime, Utc};
-use serde_json::Value;
-use std::collections::BTreeMap;
-pub struct Probe {
-    pub error: Option<ServiceError>,
-    pub links: BTreeMap<String, Vec<TicketLink>>,
-    pub ticket_updates: std::sync::Mutex<Vec<UpdateTicket>>,
-    pub update_result: Option<TicketUpdated>,
-    pub ticket_requests: std::sync::Mutex<Vec<CreateTicket>>,
-    pub closed: Vec<ClosedItem>,
-    pub pages: BTreeMap<String, std::result::Result<ReadPage, ServiceError>>,
-    pub checks: BTreeMap<String, Readiness>,
-    pub notices: std::sync::Mutex<Vec<Value>>,
-    pub open: Vec<String>,
-    pub fail_on: Option<String>,
-    pub git_urls: BTreeMap<String, String>,
-    pub git_head: Option<PullRequestHead>,
-    pub git_default: std::sync::Mutex<String>,
+use branvil::agent::{CodeAgent, TicketAgent};
+use branvil::test_support::{Fixture, input};
+use serde_json::json;
+
+/// Every operation of a code agent and of the ticket agent it derefs to.
+pub const OPERATIONS: &[&str] = &[
+    "read",
+    "attachment",
+    "comment",
+    "create_ticket",
+    "update_ticket",
+    "add_reaction",
+    "candidates",
+    "refresh",
+    "can_receive_work",
+    "move_ticket",
+    "closed_since",
+    "retry_job",
+    "yield_pull_request_checks",
+    "linked_tickets",
+    "create_pull_request",
+    "update_pull_request",
+    "review",
+    "review_comment",
+    "reply",
+    "readiness",
+    "open_pull_requests",
+    "artifact",
+    "clone_url",
+    "default_branch",
+    "pull_request_head",
+    "git_credential",
+    "authored_open_pull_requests",
+    "pull_request_candidates",
+    "refresh_pull_request",
+    "convert_pull_request_to_draft",
+];
+const PIPELINE: &str =
+    "[[jobs]]\nname = \"test\"\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\n";
+pub const WORKSPACE: &str = "acme";
+pub const REPO: &str = "acme/repo";
+/// A repository of another workspace: readable, outside the write scope.
+pub const FORK: &str = "fork/repo";
+
+/// The member `aiko` acting on `acme`, whose `acme/repo` main has a readme and a pipeline.
+pub struct Embedded {
+    pub fixture: Fixture,
+    pub code: CodeAgent,
+    pub main: String,
 }
-impl Probe {
-    pub fn new(error: Option<ServiceError>) -> Self {
+impl Embedded {
+    pub async fn new() -> Self {
+        let fixture = Fixture::new("owner").await;
+        fixture.install_test_hooks("hook");
+        fixture.workspace(WORKSPACE).await;
+        fixture.repository(REPO).await;
+        let first = fixture.commit(REPO, "main", None, "readme", "first\n");
+        // Every head registers a `test` job; no runner ever finishes it.
+        let main = fixture.commit(REPO, "main", Some(&first), ".branvil/ci.toml", PIPELINE);
+        let code = CodeAgent::new(
+            fixture.data(),
+            WORKSPACE.into(),
+            "aiko".into(),
+            "Aiko".into(),
+        );
         Self {
-            error,
-            links: Default::default(),
-            ticket_updates: Default::default(),
-            update_result: None,
-            ticket_requests: Default::default(),
-            closed: vec![],
-            pages: BTreeMap::new(),
-            checks: BTreeMap::new(),
-            notices: Default::default(),
-            open: vec![],
-            fail_on: None,
-            git_urls: BTreeMap::new(),
-            git_head: None,
-            git_default: std::sync::Mutex::new("main".into()),
+            fixture,
+            code,
+            main,
         }
     }
-}
-
-impl TicketService for Probe {
-    fn read<'a>(
-        &'a self,
-        _resource: Resource,
-        _subject: &'a str,
-        _parameters: Option<&'a Value>,
-        _continuation: &'a str,
-    ) -> ServiceFuture<'a, ReadPage> {
-        Box::pin(async move {
-            self.pages
-                .get(&format!(
-                    "{}|{}|{}",
-                    _resource.name(),
-                    _subject,
-                    _continuation
-                ))
-                .cloned()
-                .unwrap_or_else(|| Err(self.error.clone().expect("unexpected provider access")))
-        })
+    /// A second workspace whose repository has the same first commit.
+    pub async fn fork(&self) -> String {
+        self.fixture.workspace("fork").await;
+        self.fixture.repository(FORK).await;
+        self.fixture.commit(FORK, "main", None, "readme", "first\n")
     }
-    fn attachment<'a>(
-        &'a self,
-        _url: &'a str,
-        _id: &'a str,
-        _limit: usize,
-    ) -> ServiceFuture<'a, Download<Attachment>> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
+    pub fn fail_all(&self, error: ServiceError) {
+        for operation in OPERATIONS {
+            self.code.faults.fail(operation, error.clone());
+        }
     }
-    fn comment<'a>(
-        &'a self,
-        _url: &'a str,
-        _body: &'a str,
-        _status: Option<&'a WorkflowStatus>,
-    ) -> ServiceFuture<'a, CommentWritten> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
+    pub fn calls(&self) -> Vec<(&'static str, String)> {
+        self.code.faults.calls()
     }
-    fn create_ticket(&self, request: CreateTicket) -> ServiceFuture<'_, TicketCreated> {
-        Box::pin(async move {
-            self.ticket_requests.lock().unwrap().push(request);
-            Err(self.error.clone().expect("unexpected provider access"))
-        })
+    pub fn base(&self) -> String {
+        self.fixture.data().base_url().to_owned()
     }
-    fn update_ticket<'a>(
-        &'a self,
-        _url: &'a str,
-        _request: UpdateTicket,
-    ) -> ServiceFuture<'a, TicketUpdated> {
-        Box::pin(async move {
-            self.ticket_updates.lock().unwrap().push(_request);
-            if let Some(result) = &self.update_result {
-                Ok(result.clone())
-            } else {
-                Err(self.error.clone().expect("unexpected provider access"))
-            }
-        })
+    /// A ticket of `acme/repo` created by the owner.
+    pub async fn ticket(&self, title: &str) -> String {
+        self.fixture
+            .owner
+            .tickets_create_ticket(REPO, input(json!({"title":title})))
+            .await
+            .unwrap()
+            .url
     }
-    fn add_reaction<'a>(
-        &'a self,
-        _url: &'a str,
-        _target_id: &'a str,
-        _reaction: SemanticReaction,
-    ) -> ServiceFuture<'a, ReactionAdded> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
+    pub async fn close_ticket(&self, url: &str) {
+        self.code
+            .update_ticket(
+                url,
+                UpdateTicket {
+                    state: Some("closed".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
     }
-    fn candidates(&self) -> ServiceFuture<'_, Vec<Task>> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
-    }
-    fn refresh<'a>(&'a self, _task: &'a Task) -> ServiceFuture<'a, Option<Task>> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
-    }
-    fn can_receive_work<'a>(&'a self, _url: &'a str) -> ServiceFuture<'a, bool> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
-    }
-    fn move_ticket<'a>(&'a self, _task: &'a Task, _lane: MoveLane) -> ServiceFuture<'a, bool> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
-    }
-    fn closed_since(
-        &self,
-        _start: DateTime<Utc>,
-        _end: DateTime<Utc>,
-    ) -> ServiceFuture<'_, Vec<ClosedItem>> {
-        Box::pin(async {
-            if let Some(e) = &self.error {
-                Err(e.clone())
-            } else {
-                Ok(self.closed.clone())
-            }
-        })
-    }
-    fn aclose(&self) -> ServiceFuture<'_, ()> {
-        Box::pin(async { self.error.clone().map_or(Ok(()), Err) })
-    }
-}
-impl CodeHostingService for Probe {
-    fn linked_tickets<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, Vec<TicketLink>> {
-        Box::pin(async move {
-            self.links
-                .get(url)
-                .cloned()
-                .ok_or(ServiceError::Unsupported)
-        })
-    }
-
-    fn retry_job<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, String> {
-        Box::pin(async move {
-            self.error
-                .clone()
-                .map_or_else(|| Ok(format!("{url}/next")), Err)
-        })
-    }
-
-    fn read<'a>(
-        &'a self,
-        _resource: Resource,
-        _subject: &'a str,
-        _parameters: Option<&'a Value>,
-        _continuation: &'a str,
-    ) -> ServiceFuture<'a, ReadPage> {
-        Box::pin(async move {
-            self.pages
-                .get(&format!(
-                    "{}|{}|{}",
-                    _resource.name(),
-                    _subject,
-                    _continuation
-                ))
-                .cloned()
-                .unwrap_or_else(|| Err(self.error.clone().expect("unexpected provider access")))
-        })
-    }
-    fn comment<'a>(
-        &'a self,
-        _url: &'a str,
-        _body: &'a str,
-        _status: Option<&'a WorkflowStatus>,
-    ) -> ServiceFuture<'a, CommentWritten> {
-        Box::pin(async move {
-            if self.fail_on.as_deref() == Some(_url) {
-                return Err(ServiceError::Failed);
-            }
-            if let Some(e) = &self.error {
-                return Err(e.clone());
-            }
-            self.notices
-                .lock()
+    /// A pull request from a new branch of main, by aiko or by the owner.
+    pub async fn pull(&self, branch: &str, by_aiko: bool, tickets: &[&str]) -> String {
+        self.fixture
+            .commit(REPO, branch, Some(&self.main), "readme", branch);
+        if by_aiko {
+            self.code
+                .create_pull_request(CreatePullRequest {
+                    repository: REPO.into(),
+                    head: branch.into(),
+                    base: "main".into(),
+                    title: branch.into(),
+                    body: String::new(),
+                    draft: false,
+                    tickets: tickets
+                        .iter()
+                        .map(|url| TicketLink {
+                            url: (*url).into(),
+                            closes: false,
+                        })
+                        .collect(),
+                })
+                .await
                 .unwrap()
-                .push(_status.map(WorkflowStatus::payload).unwrap_or(Value::Null));
-            serde_json::from_value(serde_json::json!({"id":"notice","url":null,"author":"local-aiko","created_at":"2026-01-01T00:00:00Z","target":self.checks.get(_url).expect("expected URL").target})).map_err(|_|ServiceError::InvalidResult)
-        })
-    }
-    fn create_pull_request(
-        &self,
-        _request: CreatePullRequest,
-    ) -> ServiceFuture<'_, PullRequestCreated> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
-    }
-    fn update_pull_request<'a>(
-        &'a self,
-        _url: &'a str,
-        _request: UpdatePullRequest,
-    ) -> ServiceFuture<'a, PullRequestUpdated> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
-    }
-    fn review<'a>(
-        &'a self,
-        _url: &'a str,
-        _body: &'a str,
-        _verdict: ReviewVerdict,
-        _head: &'a str,
-    ) -> ServiceFuture<'a, ReviewSubmitted> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
-    }
-    fn review_comment<'a>(
-        &'a self,
-        _url: &'a str,
-        _request: ReviewComment,
-    ) -> ServiceFuture<'a, ReviewCommentWritten> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
-    }
-    fn reply<'a>(
-        &'a self,
-        _url: &'a str,
-        _reply_to: &'a str,
-        _body: &'a str,
-    ) -> ServiceFuture<'a, ReplyWritten> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
-    }
-    fn add_reaction<'a>(
-        &'a self,
-        _url: &'a str,
-        _target_id: &'a str,
-        _reaction: SemanticReaction,
-    ) -> ServiceFuture<'a, ReactionAdded> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
-    }
-    fn readiness<'a>(
-        &'a self,
-        _url: &'a str,
-        _failed_logs: bool,
-        _log_tail_bytes: usize,
-    ) -> ServiceFuture<'a, Readiness> {
-        Box::pin(async move {
-            self.checks
-                .get(_url)
-                .cloned()
-                .ok_or_else(|| self.error.clone().expect("unexpected readiness access"))
-        })
-    }
-    fn open_pull_requests<'a>(
-        &'a self,
-        _repository: &'a str,
-        _branch: &'a str,
-    ) -> ServiceFuture<'a, Vec<String>> {
-        Box::pin(async {
-            if let Some(e) = &self.error {
-                Err(e.clone())
-            } else {
-                Ok(self.open.clone())
-            }
-        })
-    }
-    fn artifact<'a>(
-        &'a self,
-        _url: &'a str,
-        _name: &'a str,
-        _limit: usize,
-    ) -> ServiceFuture<'a, Download<ArtifactRef>> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
-    }
-    fn clone_url<'a>(&'a self, repository: &'a str) -> ServiceFuture<'a, String> {
-        Box::pin(async move {
-            self.git_urls
-                .get(repository)
-                .cloned()
-                .ok_or(ServiceError::NotFound)
-        })
-    }
-    fn default_branch<'a>(&'a self, repository: &'a str) -> ServiceFuture<'a, String> {
-        Box::pin(async move {
-            if self.git_urls.contains_key(repository) {
-                Ok(self.git_default.lock().unwrap().clone())
-            } else {
-                Err(ServiceError::NotFound)
-            }
-        })
-    }
-    fn pull_request_head<'a>(&'a self, _url: &'a str) -> ServiceFuture<'a, PullRequestHead> {
-        Box::pin(async { self.git_head.clone().ok_or(ServiceError::NotFound) })
-    }
-    fn git_credential(&self) -> ServiceFuture<'_, Option<GitCredential>> {
-        Box::pin(async { Ok(None) })
-    }
-    fn check_push(&self, repository: &str) -> Result<(), ServiceError> {
-        if repository.starts_with("owner/") {
-            Ok(())
+                .written
+                .target
+                .url
         } else {
-            Err(ServiceError::OutOfScope)
+            self.fixture
+                .pull(
+                    &self.fixture.owner,
+                    REPO,
+                    json!({"title":branch,"head":branch,"base":"main",
+                        "tickets":tickets.iter().map(|url| json!({"url":url})).collect::<Vec<_>>()}),
+                )
+                .await
         }
     }
-    fn commit_url(&self, repository: &str, sha: &str) -> String {
-        format!("https://fixture/{repository}/commit/{sha}")
-    }
-    fn repository_from_remote(&self, url: &str) -> Option<String> {
-        self.git_urls
+    /// The status notices on a pull request, oldest first.
+    pub async fn notices(&self, pull: &str) -> Vec<serde_json::Value> {
+        self.code
+            .read(Resource::PullRequestComments, pull, None, "")
+            .await
+            .unwrap()
+            .items()
             .iter()
-            .find(|(_, v)| v.as_str() == url)
-            .map(|(k, _)| k.clone())
+            .filter(|c| !c["meta"].is_null())
+            .map(|c| c["meta"].clone())
+            .collect()
     }
-    fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>> {
-        Box::pin(async { Ok(Vec::new()) })
+    pub async fn close_pull(&self, url: &str) {
+        let number = url.rsplit('/').next().unwrap().parse().unwrap();
+        self.fixture
+            .owner
+            .pulls_set_open(REPO, number, false)
+            .await
+            .unwrap();
     }
-    fn pull_request_candidates(&self) -> ServiceFuture<'_, Vec<Task>> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
+    /// Required checks make a head without a finished `test` check running.
+    pub async fn require_checks(&self) {
+        let owner = &self.fixture.owner;
+        let revision = owner.repos_get(REPO).await.unwrap().revision;
+        owner
+            .repos_update(
+                REPO,
+                input(json!({"revision":revision,"required_checks":["test"]})),
+            )
+            .await
+            .unwrap();
     }
-    fn refresh_pull_request<'a>(&'a self, _task: &'a Task) -> ServiceFuture<'a, Option<Task>> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
+    /// Main's verification fails each automatic retry, so the service opens
+    /// its repair ticket.
+    pub async fn repair_ticket(&self) -> String {
+        let owner = &self.fixture.owner;
+        let state = || async {
+            serde_json::to_value(owner.repos_verification(REPO).await.unwrap()).unwrap()
+        };
+        let mut poke = 0;
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            loop {
+                let before = state().await;
+                if let Some(url) = before["repair"]["url"].as_str() {
+                    return url.to_owned();
+                }
+                self.fixture
+                    .check(REPO, "main", &self.main, Some("failure"))
+                    .await;
+                // A new pull request registers its checks, which advances the verification.
+                poke += 1;
+                self.pull(&format!("verify-{poke}"), true, &[]).await;
+                for _ in 0..100 {
+                    let now = state().await;
+                    if now["current"] != before["current"] || now["repair"].is_object() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            }
+        })
+        .await
+        .expect("main's failed verification did not open its repair ticket")
     }
-    fn convert_pull_request_to_draft<'a>(&'a self, _url: &'a str) -> ServiceFuture<'a, bool> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
-    }
-    fn can_receive_work<'a>(&'a self, _url: &'a str) -> ServiceFuture<'a, bool> {
-        Box::pin(async { Err(self.error.clone().expect("unexpected provider access")) })
-    }
-    fn aclose(&self) -> ServiceFuture<'_, ()> {
-        Box::pin(async { self.error.clone().map_or(Ok(()), Err) })
+    pub async fn stop(self) {
+        self.code.aclose().await.unwrap();
+        drop(self.code);
+        self.fixture.stop().await;
     }
 }
 
-impl gb_server::member::repository::RepositoryServices for Probe {
+impl gb_server::member::repository::RepositoryServices for Embedded {
     fn tickets(&self) -> gb_member::Result<&TicketAgent> {
-        Ok(self)
+        Ok(&self.code)
     }
     fn code(&self) -> gb_member::Result<&CodeAgent> {
-        Ok(self)
+        Ok(&self.code)
     }
 }

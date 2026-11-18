@@ -401,21 +401,9 @@ impl Session<'_> {
                     let ticket = r
                         .services
                         .tickets()?
-                        .read(Resource::Tickets, p.text("issue-url"), None, "")
+                        .ticket_view(p.text("issue-url"))
                         .await?;
-                    let ticket = ticket.items().first().ok_or(ServiceError::InvalidResult)?;
-                    let repository = ticket["repository"]
-                        .as_str()
-                        .filter(|v| !v.is_empty())
-                        .unwrap_or(p.text("repo"))
-                        .to_owned();
-                    if repository.is_empty() {
-                        return Err(MemberError::CapabilityArgs {
-                            key: "cli.member.ticket_no_repository",
-                            args: [("url".into(), p.text("issue-url").into())].into(),
-                        }
-                        .into());
-                    }
+                    let repository = ticket.repository;
                     if !p.text("repo").is_empty() && p.text("repo") != repository {
                         return Err(MemberError::CapabilityArgs {
                             key: "cli.member.ticket_repository_mismatch",
@@ -428,14 +416,7 @@ impl Session<'_> {
                         }
                         .into());
                     }
-                    (
-                        repository,
-                        format!(
-                            "ticket/{}",
-                            ticket["key"].as_str().ok_or(ServiceError::InvalidResult)?
-                        ),
-                        "issue",
-                    )
+                    (repository, format!("ticket/{}", ticket.key), "issue")
                 } else {
                     (p.text("repo").into(), p.text("branch").into(), "branch")
                 };

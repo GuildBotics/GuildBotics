@@ -7,7 +7,6 @@ pub fn ticket_request(tracker: &str, title: &str) -> CreateTicket {
         title: title.into(),
         body: String::new(),
         labels: vec![],
-        add_to_board: true,
         interactive: false,
         assignee: None,
         lane: None,
@@ -37,7 +36,7 @@ pub async fn ticket_search_decoy_contract(
         })
         .await
         .unwrap();
-    assert_eq!(pr.target.title, title);
+    assert_eq!(pr.written.target.title, title);
     assert!(
         tracker_items(t, tracker, &json!({"text":title,"state":"all"}))
             .await
@@ -67,28 +66,28 @@ pub async fn code_contract(service: &CodeAgent, repository: &str, head_branch: &
             .authored_open_pull_requests()
             .await
             .unwrap()
-            .contains(&pr.target.url)
+            .contains(&pr.written.target.url)
     );
     let again = service
         .create_pull_request(request(head_branch))
         .await
         .unwrap();
     assert!(!again.created);
-    assert_eq!(again.target, pr.target);
+    assert_eq!(again.written.target, pr.written.target);
     let other = service
         .create_pull_request(request(&format!("{head_branch}-other")))
         .await
         .unwrap();
-    let url = &pr.target.url;
+    let url = &pr.written.target.url;
     let page = service
         .read(Resource::PullRequests, url, None, "")
         .await
         .unwrap();
-    assert_eq!(page.target(), Some(&pr.target));
+    assert_eq!(page.target(), Some(&pr.written.target));
     let read = &page.items()[0];
     assert_eq!(read["head"], head_branch);
     assert_eq!(read["base"], base);
-    assert_eq!(read["author_type"], "Assistant");
+    assert_eq!(read["author"], service.person_id());
     assert_eq!(read["repository"], repository);
     assert_eq!(read["head_repository"], repository);
     let head = read["head_sha"].as_str().unwrap();
@@ -155,8 +154,8 @@ pub async fn code_contract(service: &CodeAgent, repository: &str, head_branch: &
         .readiness(url, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
-    assert_eq!(ready.head_sha, head);
-    assert_eq!(ready.target, pr.target);
+    assert_eq!(ready.report.head_sha, head);
+    assert_eq!(ready.target, pr.written.target);
     assert!(ready.failed_logs.is_none());
     let read_ready = service
         .read(Resource::PullRequestReadiness, url, None, "")
@@ -172,7 +171,7 @@ pub async fn code_contract(service: &CodeAgent, repository: &str, head_branch: &
         .iter()
         .find(|v| v["path"] == "README.md")
         .expect("README change");
-    assert_eq!(readme["patch_available"], true);
+    assert!(readme["patch"].is_string());
     assert_eq!(readme["patch_complete"], true);
     assert!(
         readme["commentable_lines"]
@@ -185,9 +184,9 @@ pub async fn code_contract(service: &CodeAgent, repository: &str, head_branch: &
         .review(url, "review \n", ReviewVerdict::Comment, head)
         .await
         .unwrap();
-    assert_eq!(review.commit, head);
-    assert_eq!(review.verdict, ReviewVerdict::Comment);
-    assert_eq!(review.target, pr.target);
+    assert_eq!(review.view.commit, head);
+    assert_eq!(review.view.verdict, "comment");
+    assert_eq!(review.target, pr.written.target);
     let reviews = service
         .read(Resource::PullRequestReviews, url, None, "")
         .await
@@ -227,12 +226,12 @@ pub async fn code_contract(service: &CodeAgent, repository: &str, head_branch: &
         )
         .await
         .unwrap();
-    assert_eq!(inline.target, pr.target);
-    assert_eq!(inline.path, "README.md");
-    assert_eq!(inline.line, 1);
-    let reply = service.reply(url, &inline.id, "reply \n").await.unwrap();
-    assert_ne!(reply.id, inline.id);
-    assert_eq!(reply.target, pr.target);
+    assert_eq!(inline.target, pr.written.target);
+    let inline_id = inline.view["id"].as_str().unwrap().to_owned();
+    let reply = service.reply(url, &inline_id, "reply \n").await.unwrap();
+    assert_ne!(reply.view["id"], inline_id);
+    assert_eq!(reply.view["reply_to_id"], inline_id);
+    assert_eq!(reply.target, pr.written.target);
     let threads = service
         .read(Resource::PullRequestThreads, url, None, "")
         .await
@@ -245,40 +244,31 @@ pub async fn code_contract(service: &CodeAgent, repository: &str, head_branch: &
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|c| c["id"] == inline.id)
+                .any(|c| c["id"] == inline_id)
         })
         .unwrap();
+    assert_eq!(thread["path"], "README.md");
+    assert_eq!(thread["line"], 1);
     assert_eq!(thread["comments"].as_array().unwrap().len(), 2);
     assert_eq!(thread["comments"][0]["body"], "inline");
     assert_eq!(thread["comments"][1]["body"], "reply");
-    assert_eq!(thread["comments_complete"], true);
-    let thread_comments = service
-        .read(
-            Resource::ReviewThreadComments,
-            url,
-            Some(&json!({"node":thread["id"]})),
-            "",
-        )
-        .await
-        .unwrap();
-    assert_eq!(thread_comments.items().len(), 2);
-    assert_eq!(thread_comments.items()[1]["reply_to_id"], inline.id);
+    assert_eq!(thread["comments"][1]["reply_to_id"], inline_id);
     let written = service.comment(url, "comment \n", None).await.unwrap();
-    assert_eq!(written.target, pr.target);
+    assert_eq!(written.target, pr.written.target);
     let comments = service
         .read(Resource::PullRequestComments, url, None, "")
         .await
         .unwrap();
     assert_eq!(comments.items().last().unwrap()["body"], "comment");
-    for id in [&written.id, &inline.id, &review_id] {
+    for id in [&written.view.id, &inline_id, &review_id] {
         assert!(matches!(
             service
-                .add_reaction(&other.target.url, id, SemanticReaction::Agree)
+                .add_reaction(&other.written.target.url, id, SemanticReaction::Agree)
                 .await,
             Err(ref error) if error.is_not_found()
         ));
         assert!(matches!(
-            service.reply(&other.target.url, id, "wrong PR").await,
+            service.reply(&other.written.target.url, id, "wrong PR").await,
             Err(ref error) if error.is_not_found()
         ));
         let r = service
@@ -315,7 +305,7 @@ pub async fn code_contract(service: &CodeAgent, repository: &str, head_branch: &
         )
         .await
         .unwrap();
-    assert_eq!(updated.body, "updated body");
+    assert_eq!(updated.view.body, "updated body");
     assert_eq!(updated.target.title, "updated");
     let unsupported = service
         .update_pull_request(
@@ -446,6 +436,7 @@ pub async fn code_stale_head_contract(service: &CodeAgent, url: &str, old_head: 
             .review(url, "current", ReviewVerdict::Comment, head)
             .await
             .unwrap()
+            .view
             .commit,
         head
     );
@@ -519,16 +510,16 @@ pub async fn code_other_actor_contract(author: &CodeAgent, service: &CodeAgent, 
     let comment = service.comment(url, "a remark", None).await.unwrap();
     let after = feedback().await;
     assert_eq!(after.comments.count, before.comments.count + 1);
-    assert_eq!(after.comments.latest.unwrap().id, comment.id);
-    assert_ne!(comment.id, own.id);
+    assert_eq!(after.comments.latest.unwrap().id, comment.view.id);
+    assert_ne!(comment.view.id, own.view.id);
     assert_eq!(
         (&after.reviews, &after.thread_comments),
         (&before.reviews, &before.thread_comments)
     );
     for verdict in [ReviewVerdict::Approve, ReviewVerdict::RequestChanges] {
         let r = service.review(url, "verdict", verdict, head).await.unwrap();
-        assert_eq!(r.verdict, verdict);
-        assert_eq!(r.commit, head);
+        assert_eq!(json!(r.view.verdict), json!(verdict));
+        assert_eq!(r.view.commit, head);
     }
     let reviews = service
         .read(Resource::PullRequestReviews, url, None, "")
@@ -569,8 +560,9 @@ pub async fn code_other_actor_contract(author: &CodeAgent, service: &CodeAgent, 
         after.thread_comments.count,
         before.thread_comments.count + 1
     );
-    assert_eq!(after.thread_comments.latest.as_ref().unwrap().id, inline.id);
-    author.reply(url, &inline.id, "own reply").await.unwrap();
+    let inline_id = inline.view["id"].as_str().unwrap();
+    assert_eq!(after.thread_comments.latest.as_ref().unwrap().id, inline_id);
+    author.reply(url, inline_id, "own reply").await.unwrap();
     assert_eq!(feedback().await, after, "the author's own reply");
 }
 /// The fixture installs the same ZIP bytes on the PR's current head.
@@ -603,7 +595,6 @@ pub async fn code_utf8_files_contract(service: &CodeAgent, url: &str, path: &str
         .find(|v| v["path"] == path)
         .expect("UTF-8 path preserved");
     assert!(file["patch"].as_str().unwrap().contains(text));
-    assert_eq!(file["patch_available"], true);
     assert_eq!(file["patch_complete"], true);
 }
 
@@ -620,7 +611,6 @@ pub async fn code_kind_boundary_contract(
             title: "kind boundary".into(),
             body: String::new(),
             labels: vec![],
-            add_to_board: true,
             interactive: false,
             assignee: None,
             lane: None,
@@ -757,7 +747,6 @@ pub async fn code_link_population(
             title: title.into(),
             body: String::new(),
             labels: vec![],
-            add_to_board: true,
             interactive: false,
             assignee: None,
             lane: None,
@@ -810,12 +799,15 @@ pub async fn code_link_population(
             })
             .await
             .unwrap();
-        assert_eq!(code.linked_tickets(&pr.target.url).await.unwrap(), initial);
+        assert_eq!(
+            code.linked_tickets(&pr.written.target.url).await.unwrap(),
+            initial
+        );
         assert!(
             code.authored_open_pull_requests()
                 .await
                 .unwrap()
-                .contains(&pr.target.url)
+                .contains(&pr.written.target.url)
         );
         for ancestor in [false, true] {
             tickets
@@ -844,7 +836,7 @@ pub async fn code_link_population(
                     .authored_open_pull_requests()
                     .await
                     .unwrap()
-                    .contains(&pr.target.url)
+                    .contains(&pr.written.target.url)
             );
             tickets
                 .update_ticket(
@@ -871,7 +863,7 @@ pub async fn code_link_population(
                 code.authored_open_pull_requests()
                     .await
                     .unwrap()
-                    .contains(&pr.target.url)
+                    .contains(&pr.written.target.url)
             );
         }
         let mut first_state = "closed";
@@ -879,7 +871,7 @@ pub async fn code_link_population(
         match i {
             2 | 3 => {
                 code.update_pull_request(
-                    &pr.target.url,
+                    &pr.written.target.url,
                     UpdatePullRequest {
                         tickets: Some(vec![TicketLink {
                             url: first.clone(),
@@ -893,7 +885,7 @@ pub async fn code_link_population(
             }
             4 => {
                 code.update_pull_request(
-                    &pr.target.url,
+                    &pr.written.target.url,
                     UpdatePullRequest {
                         tickets: Some(vec![TicketLink {
                             url: first.clone(),
@@ -908,7 +900,7 @@ pub async fn code_link_population(
             }
             5 => {
                 code.update_pull_request(
-                    &pr.target.url,
+                    &pr.written.target.url,
                     UpdatePullRequest {
                         tickets: Some(vec![]),
                         ..Default::default()
@@ -920,7 +912,7 @@ pub async fn code_link_population(
             }
             6 => {
                 code.update_pull_request(
-                    &pr.target.url,
+                    &pr.written.target.url,
                     UpdatePullRequest {
                         tickets: Some(vec![TicketLink {
                             url: second.clone(),
@@ -937,7 +929,7 @@ pub async fn code_link_population(
             _ => {}
         }
         code.update_pull_request(
-            &pr.target.url,
+            &pr.written.target.url,
             UpdatePullRequest {
                 body: Some(format!("{body}\nRefs {first}\nCloses {unlinked}")),
                 ..Default::default()
@@ -959,16 +951,20 @@ pub async fn code_link_population(
         if i >= 5 {
             assert!(refs.items().is_empty());
         } else {
-            assert!(refs.items().iter().any(|p| p["url"] == pr.target.url));
+            assert!(
+                refs.items()
+                    .iter()
+                    .any(|p| p["url"] == pr.written.target.url)
+            );
         }
         let before = code
-            .read(Resource::PullRequests, &pr.target.url, None, "")
+            .read(Resource::PullRequests, &pr.written.target.url, None, "")
             .await
             .unwrap();
         assert!(before.items()[0]["body"].as_str().unwrap().contains(&body));
         assert!(matches!(
             code.update_pull_request(
-                &pr.target.url,
+                &pr.written.target.url,
                 UpdatePullRequest {
                     title: Some("must not land".into()),
                     body: Some("must not land".into()),
@@ -988,7 +984,7 @@ pub async fn code_link_population(
             Err(ref error) if error.is_unsupported()
         ));
         assert_eq!(
-            code.read(Resource::PullRequests, &pr.target.url, None, "")
+            code.read(Resource::PullRequests, &pr.written.target.url, None, "")
                 .await
                 .unwrap()
                 .items(),
@@ -1020,14 +1016,18 @@ pub async fn code_link_population(
                 .read(Resource::TicketPullRequests, &first, None, "")
                 .await
                 .unwrap();
-            assert!(refs.items().iter().any(|v| v["url"] == pr.target.url));
             assert!(
                 refs.items()
                     .iter()
-                    .any(|v| v["url"] == reference.target.url)
+                    .any(|v| v["url"] == pr.written.target.url)
+            );
+            assert!(
+                refs.items()
+                    .iter()
+                    .any(|v| v["url"] == reference.written.target.url)
             );
             cases.push(CodeLinkCase {
-                url: reference.target.url,
+                url: reference.written.target.url,
                 states: vec![
                     (first.clone(), "open".into()),
                     (second.clone(), "open".into()),
@@ -1036,7 +1036,7 @@ pub async fn code_link_population(
             });
         }
         cases.push(CodeLinkCase {
-            url: pr.target.url,
+            url: pr.written.target.url,
             states: vec![
                 (first, first_state.into()),
                 (second, second_state.into()),
@@ -1148,7 +1148,7 @@ pub async fn code_open_order_contract(
             .await
             .unwrap();
         assert!(result.created);
-        created.push(result.target.url);
+        created.push(result.written.target.url);
     }
     let counted = code.authored_open_pull_requests().await.unwrap();
     assert!(created.iter().all(|url| counted.contains(url)));

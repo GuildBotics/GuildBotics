@@ -1,5 +1,6 @@
 use crate::support;
 use branvil::agent::port::*;
+use branvil::agent::{CodeAgent, TicketAgent};
 use gb_base::shared_writes::SharedWrites;
 use gb_member::{MemberError, WriteGuard, command};
 use gb_observability::{
@@ -13,13 +14,14 @@ use gb_server::member::{
 };
 use serde_json::json;
 use std::collections::BTreeMap;
-struct Services(support::Probe);
-impl RepositoryServices for Services {
+/// Completions without pull request work never reach a service.
+struct Unused;
+impl RepositoryServices for Unused {
     fn code(&self) -> gb_member::Result<&CodeAgent> {
-        Ok(&self.0)
+        panic!("unexpected provider access")
     }
     fn tickets(&self) -> gb_member::Result<&TicketAgent> {
-        Ok(&self.0)
+        panic!("unexpected provider access")
     }
 }
 struct Current;
@@ -87,7 +89,7 @@ async fn completion_requires_its_own_evidence_and_stores_a_redacted_summary() {
     let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
     let redactor = Redactor::new(["secret-sentinel".into()]);
     seed(&writes, &workspace, &redactor);
-    let services = Services(support::Probe::new(None));
+    let services = Unused;
     let roster = BTreeMap::new();
     let repository = Repository {
         services: &services,
@@ -157,7 +159,7 @@ async fn asking_and_blocked_need_a_comment_and_foreign_members_cannot_complete_t
     let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
     let redactor = Redactor::new([]);
     seed(&writes, &workspace, &redactor);
-    let services = Services(support::Probe::new(None));
+    let services = Unused;
     let roster = BTreeMap::new();
     let repository = Repository {
         services: &services,
@@ -217,7 +219,7 @@ async fn publishing_code_needs_a_pr_receipt_and_failed_operations_provide_no_evi
     let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
     let redactor = Redactor::new([]);
     seed(&writes, &workspace, &redactor);
-    let services = Services(support::Probe::new(None));
+    let services = Unused;
     let roster = BTreeMap::new();
     let repository = Repository {
         services: &services,
@@ -317,7 +319,7 @@ async fn waiting_uses_only_commented_targets_and_validates_every_recipient() {
         let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
         let redactor = Redactor::default();
         seed(&writes, &workspace, &redactor);
-        let services = Services(support::Probe::new(None));
+        let services = Unused;
         let accounts = BTreeMap::new();
         let repository = Repository {
             services: &services,
@@ -400,7 +402,7 @@ async fn a_journal_changed_during_async_recipient_validation_cannot_complete() {
     let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
     let redactor = Redactor::default();
     seed(&writes, &workspace, &redactor);
-    let services = Services(support::Probe::new(None));
+    let services = Unused;
     let accounts = BTreeMap::new();
     let repository = Repository {
         services: &services,
@@ -487,7 +489,7 @@ async fn completion_evidence_rules_cover_chat_events_threads_and_all_completion_
         let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
         let redactor = Redactor::default();
         seed(&writes, &workspace, &redactor);
-        let services = Services(support::Probe::new(None));
+        let services = Unused;
         let accounts = BTreeMap::new();
         let repository = Repository {
             services: &services,
@@ -522,7 +524,7 @@ async fn chat_completion_can_record_blocked_without_reception_and_task_status_is
     let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
     let redactor = Redactor::default();
     seed(&writes, &workspace, &redactor);
-    let services = Services(support::Probe::new(None));
+    let services = Unused;
     let roster = BTreeMap::new();
     let repository = Repository {
         services: &services,
@@ -580,7 +582,7 @@ async fn git_evidence_distinguishes_committing_pushing_and_publishing() {
         let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
         let redactor = Redactor::default();
         seed(&writes, &workspace, &redactor);
-        let services = Services(support::Probe::new(None));
+        let services = Unused;
         let roster = BTreeMap::new();
         let repository = Repository {
             services: &services,
@@ -621,13 +623,16 @@ async fn awaiting_checks_returns_pending_and_ready_prs_and_retains_the_chat_gate
     let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
     let redactor = Redactor::default();
     seed(&writes, &workspace, &redactor);
-    let mut provider = support::Probe::new(None);
-    for (url, blocked) in [("pending", true), ("ready", false)] {
-        provider.pages.insert(format!("pull_requests|{url}|"),Ok(ReadPage::of(Resource::PullRequests,[json!({"kind":"pull_request","url":url,"title":"T","label":"!1","repository":"repo","body":"","state":"open","assignees":[],"author":"local-aiko","requested_reviewers":[],"labels":[],"author_type":"Assistant","head":"feature","head_repository":"repo","head_sha":"head","base":"main","merged":false,"draft":false,"changed_files":null})],None,None).unwrap()));
-        let readiness=serde_json::from_value(json!({"target":{"kind":"pull_request","url":url,"title":"T","label":"!1"},"head_sha":"head","checks":[],"required_checks":if blocked{"running"}else{"passed"},"feedback":branvil::agent::port::Feedback::default()})).unwrap();
-        provider.checks.insert(url.into(), readiness);
-    }
-    let services = Services(provider);
+    let services = support::Embedded::new().await;
+    services.require_checks().await;
+    let pending = services.pull("pending", true, &[]).await;
+    let ready = services.pull("ready", true, &[]).await;
+    let ready_head = services.code.pull_view(&ready).await.unwrap().head_sha;
+    services
+        .fixture
+        .check(support::REPO, "ready", &ready_head, Some("success"))
+        .await;
+    let pending_head = services.code.pull_view(&pending).await.unwrap().head_sha;
     let roster = BTreeMap::new();
     let mut repository = Repository {
         services: &services,
@@ -648,7 +653,7 @@ async fn awaiting_checks_returns_pending_and_ready_prs_and_retains_the_chat_gate
     }
     repository.guard = &Current;
     let control = control(&workspace, &writes, &repository, &redactor, &Receives, &[]);
-    for url in ["pending", "ready"] {
+    for url in [&pending, &ready] {
         control
             .record(
                 "pr comment",
@@ -659,9 +664,13 @@ async fn awaiting_checks_returns_pending_and_ready_prs_and_retains_the_chat_gate
     }
     let result = control.command(&p, "summary").await.unwrap();
     assert_eq!(result["pr_readiness"].as_array().unwrap().len(), 2);
-    assert_eq!(result["pr_readiness"][0]["target"]["url"], "pending");
-    assert_eq!(result["pr_readiness"][1]["target"]["url"], "ready");
-    assert_eq!(services.0.notices.lock().unwrap().len(), 1);
+    assert_eq!(result["pr_readiness"][0]["head_sha"], pending_head);
+    assert_eq!(result["pr_readiness"][0]["required_checks"], "running");
+    assert_eq!(result["pr_readiness"][1]["head_sha"], ready_head);
+    assert_eq!(result["pr_readiness"][1]["required_checks"], "passed");
+    assert_eq!(services.notices(&pending).await.len(), 1);
+    assert!(services.notices(&ready).await.is_empty());
+    services.stop().await;
 }
 
 #[tokio::test]
@@ -681,7 +690,7 @@ async fn recipient_service_failures_propagate_without_completing() {
     let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
     let redactor = Redactor::default();
     seed(&writes, &workspace, &redactor);
-    let services = Services(support::Probe::new(None));
+    let services = Unused;
     let accounts = BTreeMap::new();
     let repository = Repository {
         services: &services,
@@ -737,7 +746,7 @@ async fn repair_completion_requires_action_and_refuses_handoffs() {
     let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
     let redactor = Redactor::new([]);
     seed(&writes, &workspace, &redactor);
-    let services = Services(support::Probe::new(None));
+    let services = support::Embedded::new().await;
     let roster = BTreeMap::new();
     let repository = Repository {
         services: &services,
@@ -778,17 +787,29 @@ async fn repair_completion_requires_action_and_refuses_handoffs() {
         control.command(&p, "retried").await.unwrap()["status"],
         "done"
     );
+    // Without a ticket or pull request evidence, no operation was needed.
+    assert_eq!(services.calls(), vec![]);
+    services.stop().await;
 }
 
 #[tokio::test]
 async fn repair_report_only_runs_require_a_current_open_repair_pr() {
-    for open in [false, true] {
-        for repair in [false, true] {
+    let services = support::Embedded::new().await;
+    let repair = services.repair_ticket().await;
+    let ordinary = services.ticket("T").await;
+    for (is_repair, ticket) in [(true, &repair), (false, &ordinary)] {
+        let pr = services
+            .pull(&format!("feature-{is_repair}"), false, &[ticket])
+            .await;
+        for open in [true, false] {
+            if !open {
+                services.close_pull(&pr).await;
+            }
             for (kind, report, origin) in [
-                ("ticket", "pr comment", "ticket"),
-                ("pull_request_review", "pr reply", "pr"),
-                ("pull_request", "pr reaction add", "pr"),
-                ("ticket", "ticket comment", "ticket"),
+                ("ticket", "pr comment", ticket.as_str()),
+                ("pull_request_review", "pr reply", pr.as_str()),
+                ("pull_request", "pr reaction add", pr.as_str()),
+                ("ticket", "ticket comment", ticket.as_str()),
             ] {
                 let temp = tempfile::tempdir().unwrap();
                 let workspace = temp.path().join("workspace");
@@ -796,21 +817,6 @@ async fn repair_report_only_runs_require_a_current_open_repair_pr() {
                     SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
                 let redactor = Redactor::default();
                 seed_kind(&writes, &workspace, &redactor, kind);
-                let mut provider = support::Probe::new(None);
-                provider.links.insert(
-                    "pr".into(),
-                    vec![TicketLink {
-                        url: "ticket".into(),
-                        closes: false,
-                    }],
-                );
-                provider.pages.insert("tickets|ticket|".into(), Ok(ReadPage::of(Resource::Tickets, [json!({"repair":repair,"kind":"ticket","url":"ticket","title":"T","label":"T","key":"1","tracker":"repo","repository":"repo","body":"","state":"open","assignees":[],"author":"member","labels":[],"lane":null,"parent":null,"children":[],"blocked_by":[],"blocks":[],"interactive":false,"interactive_ancestor":null})], None, None).unwrap()));
-                provider.pages.insert("pull_requests|pr|".into(), Ok(ReadPage::of(Resource::PullRequests,[json!({"kind":"pull_request","url":"pr","title":"T","label":"!1","repository":"repo","body":"","state":if open {"open"} else {"closed"},"assignees":[],"author":"local-aiko","requested_reviewers":[],"labels":[],"author_type":"User","head":"feature","head_repository":"repo","head_sha":"head","base":"main","merged":false,"draft":false,"changed_files":null})],None,None).unwrap()));
-                provider
-                    .pages
-                    .insert("pull_requests|ticket|".into(), Err(ServiceError::NotFound));
-                provider.pages.insert("ticket_pull_requests|ticket|".into(), Ok(ReadPage::of(Resource::TicketPullRequests, [json!({"url":"pr","title":"P","label":"!1","state":"open","merged":false})], None, None).unwrap()));
-                let services = Services(provider);
                 let roster = BTreeMap::new();
                 let repository = Repository {
                     services: &services,
@@ -827,7 +833,7 @@ async fn repair_report_only_runs_require_a_current_open_repair_pr() {
                     .record(
                         report,
                         false,
-                        &json!({"target":{"kind":"pull_request","url":"pr"}}),
+                        &json!({"target":{"kind":"pull_request","url":pr}}),
                     )
                     .unwrap();
                 let done = parsed(&[
@@ -839,12 +845,19 @@ async fn repair_report_only_runs_require_a_current_open_repair_pr() {
                     "done",
                     "--content-stdin",
                 ]);
-                assert_eq!(
-                    control.command(&done, "repair").await.is_ok(),
-                    open && repair,
-                    "open={open}, repair={repair}, report={report}"
-                );
+                let result = control.command(&done, "repair").await;
+                let context = format!("open={open}, repair={is_repair}, report={report}");
+                if open && is_repair {
+                    assert_eq!(result.unwrap()["status"], "done", "{context}");
+                } else {
+                    assert_eq!(
+                        result.unwrap_err().to_string(),
+                        "capabilities.task_runs.repair_required",
+                        "{context}"
+                    );
+                }
             }
         }
     }
+    services.stop().await;
 }

@@ -240,6 +240,7 @@ impl TicketAgent {
         .map_err(|e| error(e, "page"))
     }
     pub async fn ticket_view(&self, url: &str) -> Result<tickets::TicketView, ServiceError> {
+        self.fault("ticket_view", url).await?;
         let (r, k) = self.item(url, "tickets")?;
         self.member()
             .await?
@@ -453,6 +454,7 @@ impl CodeAgent {
         }
     }
     pub async fn pull_view(&self, url: &str) -> Result<crate::api::pulls::PullView, ServiceError> {
+        self.fault("pull_view", url).await?;
         let (r, k) = self.item(url, "pulls")?;
         self.member()
             .await?

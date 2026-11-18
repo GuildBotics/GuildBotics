@@ -80,19 +80,12 @@ async fn member_identity_scope_and_resource_boundaries() {
         title: "ticket".into(),
         body: "body".into(),
         labels: vec!["bug".into()],
-        add_to_board: true,
         interactive: false,
         assignee: None,
         lane: None,
         parent: None,
         blocked_by: vec![],
     };
-    let mut off_board = request();
-    off_board.add_to_board = false;
-    assert_eq!(
-        tickets.create_ticket(off_board).await.unwrap_err(),
-        diagnostic("integrations.branvil.api.every_on_board", [])
-    );
     let mut undefined = request();
     undefined.labels = vec!["undefined".into()];
     let label_error = tickets.create_ticket(undefined).await.unwrap_err();
@@ -106,8 +99,8 @@ async fn member_identity_scope_and_resource_boundaries() {
     let read = TicketAgent::read(&tickets, Resource::Tickets, &t.target.url, None, "")
         .await
         .unwrap();
-    assert_eq!(read.items()[0]["tracker"], "test/repo");
-    assert_eq!(read.items()[0]["assignees"], json!([]));
+    assert_eq!(read.items()[0]["repository"], "test/repo");
+    assert!(read.items()[0]["assignee"].is_null());
     let c = TicketAgent::comment(&tickets, &t.target.url, "comment \n", None)
         .await
         .unwrap();
@@ -115,8 +108,9 @@ async fn member_identity_scope_and_resource_boundaries() {
         .await
         .unwrap();
     assert_eq!(read.items()[0]["body"], "comment");
-    assert_eq!(read.items()[0]["author_type"], "Assistant");
-    TicketAgent::add_reaction(&tickets, &t.target.url, &c.id, SemanticReaction::Ack)
+    assert_eq!(read.items()[0]["author"], "agent1");
+    assert_eq!(read.items()[0]["id"], c.view.id);
+    TicketAgent::add_reaction(&tickets, &t.target.url, &c.view.id, SemanticReaction::Ack)
         .await
         .unwrap();
     assert!(
@@ -169,7 +163,8 @@ async fn member_identity_scope_and_resource_boundaries() {
     let outside_read = TicketAgent::read(&outside, Resource::Tickets, &t.target.url, None, "")
         .await
         .unwrap();
-    assert_eq!(outside_read.items()[0]["lane"], Value::Null);
+    assert_eq!(outside_read.items()[0]["url"], t.target.url);
+    assert_eq!(outside_read.items()[0]["lane"], "new");
     tickets.create_ticket(request()).await.unwrap();
     let first = TicketAgent::read(
         &tickets,

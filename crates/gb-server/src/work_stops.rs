@@ -329,7 +329,6 @@ mod tests {
             person_id: "aiko".into(),
             display_name: "Aiko".into(),
             accounts: Default::default(),
-            branvil_members: Default::default(),
 
             chat_provider: "local".into(),
 
@@ -338,7 +337,6 @@ mod tests {
         let factory = gb_integrations::ServiceIntegrationFactory::new(
             config,
             &secrets,
-            None,
             std::sync::Arc::new(|_| {}),
         )
         .unwrap();

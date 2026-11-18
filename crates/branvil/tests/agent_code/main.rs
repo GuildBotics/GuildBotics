@@ -199,7 +199,6 @@ async fn create(t: &TicketAgent, title: &str) -> String {
         title: title.into(),
         body: String::new(),
         labels: vec![],
-        add_to_board: true,
         interactive: false,
         assignee: None,
         lane: None,
@@ -462,18 +461,26 @@ async fn merge_closes_ticket() {
         .await
         .unwrap();
     let pending = c
-        .readiness(&pr.target.url, false, MAX_LOG_TAIL_BYTES)
+        .readiness(&pr.written.target.url, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
-    assert_eq!(pending.head_sha, head);
-    assert_eq!(pending.required_checks, RequiredChecks::Running);
+    assert_eq!(pending.report.head_sha, head);
+    assert_eq!(pending.report.required_checks, RequiredChecks::Running);
     finish(base, runner, &head, "success").await;
     let ready = c
-        .readiness(&pr.target.url, false, MAX_LOG_TAIL_BYTES)
+        .readiness(&pr.written.target.url, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
-    assert_eq!(ready.required_checks, RequiredChecks::Passed);
-    let number = pr.target.url.rsplit('/').next().unwrap().parse().unwrap();
+    assert_eq!(ready.report.required_checks, RequiredChecks::Passed);
+    let number = pr
+        .written
+        .target
+        .url
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
     owner
         .pulls_review(
             REPO,
@@ -491,7 +498,7 @@ async fn merge_closes_ticket() {
         .await
         .unwrap();
     assert_eq!(
-        c.read(Resource::PullRequests, &pr.target.url, None, "")
+        c.read(Resource::PullRequests, &pr.written.target.url, None, "")
             .await
             .unwrap()
             .items()[0]["merged"],
@@ -504,7 +511,7 @@ async fn merge_closes_ticket() {
             .items()[0]["state"],
         "closed"
     );
-    contracts::code_closed_contract(c.as_ref(), &pr.target.url).await;
+    contracts::code_closed_contract(c.as_ref(), &pr.written.target.url).await;
     f.stop().await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -565,14 +572,17 @@ async fn artifacts_and_stale_head() {
         .await
         .unwrap();
     let again = c
-        .readiness(&next.target.url, false, MAX_LOG_TAIL_BYTES)
+        .readiness(&next.written.target.url, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
-    assert_eq!(again.head_sha, moved);
-    assert_eq!(again.required_checks, RequiredChecks::Running);
+    assert_eq!(again.report.head_sha, moved);
+    assert_eq!(again.report.required_checks, RequiredChecks::Running);
     let artifact = b"PK\x03\x04synthetic test artifact";
     finish_artifact(base, runner, &moved, "success", Some(artifact)).await;
-    let too_large = c.artifact(&next.target.url, "report", 1).await.unwrap_err();
+    let too_large = c
+        .artifact(&next.written.target.url, "report", 1)
+        .await
+        .unwrap_err();
     assert_eq!(
         too_large.translation_key(),
         "integrations.branvil.api.artifact_too_large"
@@ -585,11 +595,12 @@ async fn artifacts_and_stale_head() {
         ]
         .into()
     );
-    contracts::code_artifact_contract(c.as_ref(), &next.target.url, &moved, artifact).await;
+    contracts::code_artifact_contract(c.as_ref(), &next.written.target.url, &moved, artifact).await;
     assert_eq!(
-        c.readiness(&next.target.url, false, MAX_LOG_TAIL_BYTES)
+        c.readiness(&next.written.target.url, false, MAX_LOG_TAIL_BYTES)
             .await
             .unwrap()
+            .report
             .required_checks,
         RequiredChecks::Passed
     );
@@ -602,18 +613,19 @@ async fn artifacts_and_stale_head() {
         &credential.password,
     );
     let changed = c
-        .readiness(&next.target.url, false, MAX_LOG_TAIL_BYTES)
+        .readiness(&next.written.target.url, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
-    assert_eq!(changed.head_sha, advanced);
-    assert_eq!(changed.required_checks, RequiredChecks::Running);
-    contracts::code_stale_head_contract(c.as_ref(), &next.target.url, &moved).await;
-    contracts::code_old_artifact_contract(c.as_ref(), &next.target.url).await;
+    assert_eq!(changed.report.head_sha, advanced);
+    assert_eq!(changed.report.required_checks, RequiredChecks::Running);
+    contracts::code_stale_head_contract(c.as_ref(), &next.written.target.url, &moved).await;
+    contracts::code_old_artifact_contract(c.as_ref(), &next.written.target.url).await;
     finish(base, runner, &advanced, "failure").await;
     assert_eq!(
-        c.readiness(&next.target.url, false, MAX_LOG_TAIL_BYTES)
+        c.readiness(&next.written.target.url, false, MAX_LOG_TAIL_BYTES)
             .await
             .unwrap()
+            .report
             .required_checks,
         RequiredChecks::Failed
     );
@@ -771,6 +783,7 @@ async fn code_links() {
         if c.readiness(&case.url, false, MAX_LOG_TAIL_BYTES)
             .await
             .unwrap()
+            .report
             .required_checks
             == RequiredChecks::Running
         {
@@ -796,7 +809,12 @@ async fn code_other_actor() {
     let f = Context::new().await;
     let Context { c, .. } = &f;
     let (_, _, next) = f.open().await;
-    contracts::code_other_actor_contract(c.as_ref(), f.other_code.as_ref(), &next.target.url).await;
+    contracts::code_other_actor_contract(
+        c.as_ref(),
+        f.other_code.as_ref(),
+        &next.written.target.url,
+    )
+    .await;
     f.stop().await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -827,7 +845,7 @@ async fn member_show_and_missing_base() {
         "owner",
         owner_token.trim(),
     );
-    contracts::code_missing_base_contract(c.as_ref(), &next.target.url).await;
+    contracts::code_missing_base_contract(c.as_ref(), &next.written.target.url).await;
 
     f.stop().await;
 }
@@ -997,6 +1015,7 @@ async fn ticket_and_code_scope() {
         )
         .await
         .unwrap();
-    contracts::code_cross_repo_link_contract(c.as_ref(), &next.target.url, &their.url).await;
+    contracts::code_cross_repo_link_contract(c.as_ref(), &next.written.target.url, &their.url)
+        .await;
     f.stop().await;
 }

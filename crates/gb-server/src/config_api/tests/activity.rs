@@ -334,7 +334,6 @@ async fn history_refresh_imports_closed_board_work_once_without_an_agent_session
             title: "Closed work".into(),
             body: String::new(),
             labels: vec![],
-            add_to_board: true,
             interactive: false,
             assignee: None,
             lane: None,

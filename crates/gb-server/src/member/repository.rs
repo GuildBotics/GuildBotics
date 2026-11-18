@@ -377,7 +377,7 @@ pub fn ensure_ready(results: &[(Value, Readiness)]) -> Result<()> {
         .any(|(_, r)| r.report.required_checks != RequiredChecks::Passed)
     {
         Err(MemberError::CapabilityArgs {
-            key: "cli.member.report.required_checks_incomplete",
+            key: "cli.member.required_checks_incomplete",
             args: [("blockers".into(), required_summary(results))].into(),
         })
     } else {

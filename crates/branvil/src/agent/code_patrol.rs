@@ -169,7 +169,8 @@ impl CodeAgent {
         Ok(out)
     }
     pub async fn refresh_pull_request(&self, task: &Task) -> Result<Option<Task>, ServiceError> {
-        self.fault("refresh_pull_request", task.url.as_deref().unwrap_or("")).await?;
+        self.fault("refresh_pull_request", task.url.as_deref().unwrap_or(""))
+            .await?;
         let url = task
             .pull_request_url
             .as_deref()

@@ -44,7 +44,6 @@ impl Fixture {
             title: "Work".into(),
             body: String::new(),
             labels: vec![],
-            add_to_board: true,
             interactive: false,
             assignee: None,
             lane: None,
@@ -337,36 +336,27 @@ async fn assignment_filters_mentions_without_dropping_visible_comments() {
 #[tokio::test]
 async fn creation_assignees_labels_status_and_parent_preserve_contract() {
     let f = Fixture::new().await;
-    let mut request = f.request();
-    request.add_to_board = false;
-    assert!(f.service.create_ticket(request).await.is_err());
     let url = f.create().await;
     let read = f.read(&url).await;
     assert_eq!(
         (
             read["lane"].clone(),
             read["key"].clone(),
-            read["tracker"].clone(),
             read["repository"].clone()
         ),
-        (
-            json!("new"),
-            json!("1"),
-            json!("test/repo"),
-            json!("test/repo")
-        )
+        (json!("new"), json!("1"), json!("test/repo"))
     );
-    assert_eq!(read["assignees"], json!([]));
+    assert!(read["assignee"].is_null());
     f.owner
         .tickets_set_assignee("test/repo", "1", Some("agent1".into()))
         .await
         .unwrap();
-    assert_eq!(f.read(&url).await["assignees"], json!(["agent1"]));
+    assert_eq!(f.read(&url).await["assignee"]["name"], "agent1");
     f.owner
         .tickets_set_assignee("test/repo", "1", None)
         .await
         .unwrap();
-    assert_eq!(f.read(&url).await["assignees"], json!([]));
+    assert!(f.read(&url).await["assignee"].is_null());
     let mut valid = f.request();
     valid.labels = vec!["bug".into()];
     assert!(f.service.create_ticket(valid).await.is_ok());
@@ -442,7 +432,7 @@ async fn creation_assignees_labels_status_and_parent_preserve_contract() {
     let read = f.read(&child).await;
     assert_eq!(read["title"], "Renamed");
     assert_eq!(read["parent"]["url"], url);
-    assert_eq!(read["parent"]["label"], "#1");
+    assert_eq!(read["parent"]["key"], "1");
     f.running.stop().await;
 }
 
@@ -507,7 +497,7 @@ async fn blocked_ready_work_and_cross_workspace_mutations_are_refused() {
             .unwrap()
             .is_none()
     );
-    assert!(f.read(&foreign).await["lane"].is_null());
+    assert_eq!(f.read(&foreign).await["lane"], "ready");
     assert!(
         f.service
             .move_ticket(
@@ -586,7 +576,7 @@ async fn edited_and_deleted_comments_are_reread_before_dispatch() {
         .unwrap();
     assert!(f.service.refresh(&task).await.unwrap().is_none());
     f.owner
-        .tickets_change_comment("test/repo", key, &failed.id, None)
+        .tickets_change_comment("test/repo", key, &failed.view.id, None)
         .await
         .unwrap();
     assert_eq!(
@@ -1212,18 +1202,18 @@ async fn repository_ticket_numbers_and_assignee_projection_are_independent() {
             f.running.running.data.base_url()
         )
     );
-    assert_eq!(f.read(&url).await["label"], "#1");
+    assert_eq!(f.read(&url).await["key"], "1");
     assert_eq!(f.read(&url).await["author"], "agent1");
     for (assigned, expected) in [
-        (None, json!([])),
-        (Some("agent1"), json!(["agent1"])),
-        (Some("owner1"), json!(["owner1"])),
+        (None, json!(null)),
+        (Some("agent1"), json!("agent1")),
+        (Some("owner1"), json!("owner1")),
     ] {
         f.owner
             .tickets_set_assignee("test/repo", "1", assigned.map(Into::into))
             .await
             .unwrap();
-        assert_eq!(f.read(&url).await["assignees"], expected);
+        assert_eq!(f.read(&url).await["assignee"]["name"], expected);
         assert_eq!(f.read(&url).await["author"], "agent1");
     }
     f.running.stop().await;
@@ -1435,7 +1425,6 @@ async fn a_roster_member_that_never_acted_can_be_assigned() {
             title: "for kenji".into(),
             body: String::new(),
             labels: vec![],
-            add_to_board: true,
             interactive: false,
             assignee: Some(ActorName("kenji".into())),
             lane: None,

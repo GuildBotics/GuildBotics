@@ -113,14 +113,8 @@ async fn default_and_clamped_budgets_reach_the_turn_without_moving_in_progress_w
         let f = Fixture::new().await;
         let mut task = f.task().await;
         task.status = "in_progress".into();
-        let faults = crate::test_ticket::Faults::new(f.ticket.clone());
-        faults
-            .errors
-            .lock()
-            .unwrap()
-            .insert("move", ServiceError::Failed);
-        let mut selector = f.selector("routine");
-        selector.ticket = &faults;
+        f.ticket.faults.fail("move_ticket", ServiceError::Failed);
+        let selector = f.selector("routine");
         let trace = f.trace("routine");
         selector
             .run(
@@ -137,6 +131,13 @@ async fn default_and_clamped_budgets_reach_the_turn_without_moving_in_progress_w
         assert_eq!(calls[0].payload["max_completion_attempts"], expected);
         let stored = f.stored_ticket("1").await;
         assert_eq!(stored["lane"], "ready");
+        assert!(
+            f.ticket
+                .faults
+                .calls()
+                .iter()
+                .all(|(operation, _)| *operation != "move_ticket")
+        );
     }
 }
 
@@ -145,19 +146,39 @@ async fn listing_limited_pulls_uses_distinct_traces_and_refresh_limit_still_runs
     for source in ["manual", "scheduled", "routine"] {
         for at_refresh in [false, true] {
             let f = Fixture::new().await;
-            let mut first = f.pull().await;
-            let mut second = f.pull_branch("other").await;
             let ticket = f.task().await;
-            let mut faults = CodeFaults::new(f.code.clone());
-            faults.refresh_limit = at_refresh;
-            if !at_refresh {
-                first.trigger_reason = Some(REVIEW_LIMIT.into());
-                second.trigger_reason = Some(REVIEW_LIMIT.into());
+            for branch in ["one", "two"] {
+                f.reviewed_pull(branch).await;
             }
-            faults.candidates = Some(vec![first.clone(), second.clone()]);
-            let mut selector = f.selector(source);
-            selector.code = Some(&faults);
-            let (selected, invocation) = selector.next().await.unwrap().unwrap();
+            let selector = f.selector(source);
+            let (selected, invocation) = if at_refresh {
+                // Listed for review, both reach the limit before their refresh.
+                let candidates = selector.candidates().await.unwrap();
+                assert_eq!(
+                    candidates
+                        .iter()
+                        .filter(|t| t.trigger_reason.as_deref() == Some("pull_request_review"))
+                        .count(),
+                    2
+                );
+                assert!(f.runner.activity.lock().unwrap().is_empty());
+                for branch in ["one", "two"] {
+                    f.push(branch);
+                }
+                let mut selected = None;
+                for candidate in candidates {
+                    if let Some(invocation) = selector.refresh(&candidate).await.unwrap() {
+                        selected = Some((candidate, invocation));
+                        break;
+                    }
+                }
+                selected.unwrap()
+            } else {
+                for branch in ["one", "two"] {
+                    f.push(branch);
+                }
+                selector.next().await.unwrap().unwrap()
+            };
             assert_eq!(selected.url, ticket.url);
             let outer = f.trace(source);
             selector
@@ -239,10 +260,8 @@ async fn move_errors_preserve_the_ready_lane_and_only_unavailable_autonomous_wor
         ] {
             let f = Fixture::new().await;
             let task = f.task().await;
-            let faults = crate::test_ticket::Faults::new(f.ticket.clone());
-            faults.errors.lock().unwrap().insert("move", error.clone());
-            let mut selector = f.selector(source);
-            selector.ticket = &faults;
+            f.ticket.faults.fail("move_ticket", error.clone());
+            let selector = f.selector(source);
             let trace = f.trace(source);
             assert!(
                 matches!(selector.run(&task,selector.invocation(&task).unwrap(),&trace,5).await,Err(DispatchFailure::Service(e)) if e==error)
@@ -270,17 +289,10 @@ async fn failed_comment_delivery_keeps_rate_limit_evidence_and_an_unaddressed_fa
         for limited in [false, true] {
             let f = Fixture::new().await;
             let task = f.task().await;
-            let mut faults = crate::test_ticket::Faults::new(f.ticket.clone());
-            faults.omit_comment_url = true;
             if fail_post {
-                faults
-                    .errors
-                    .lock()
-                    .unwrap()
-                    .insert("comment", ServiceError::Failed);
+                f.ticket.faults.fail("comment", ServiceError::Failed);
             }
-            let mut selector = f.selector("routine");
-            selector.ticket = &faults;
+            let selector = f.selector("routine");
             *f.runner.failure.lock().unwrap() =
                 Some(guest(if limited { "rate_limited" } else { "unknown" }));
             let trace = f.trace("routine");
@@ -288,7 +300,8 @@ async fn failed_comment_delivery_keeps_rate_limit_evidence_and_an_unaddressed_fa
                 .run(&task, selector.invocation(&task).unwrap(), &trace, 5)
                 .await;
             assert_eq!(result.is_ok(), limited);
-            assert_eq!(f.comments(&task).await.len(), usize::from(!fail_post));
+            let comments = f.comments(&task).await;
+            assert_eq!(comments.len(), usize::from(!fail_post));
             assert_eq!(
                 f.runner.activity.lock().unwrap().len(),
                 usize::from(limited)
@@ -297,7 +310,7 @@ async fn failed_comment_delivery_keeps_rate_limit_evidence_and_an_unaddressed_fa
             assert_eq!(stops.len(), usize::from(!fail_post && !limited));
             if let Some(stop) = stops.first() {
                 assert_eq!(stop.url, task.url.as_deref().unwrap());
-                assert!(stop.comment_url.is_empty());
+                assert_eq!(stop.comment_url, comments[0]["url"].as_str().unwrap());
             }
         }
     }
@@ -316,23 +329,8 @@ fn task_trace_attributes_distinguish_ticket_and_pull_request_without_changing_th
 }
 
 use branvil::agent::port::*;
-use gb_config::secrets::{DeviceKey, Keychain, Scope, SecretStore};
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
-#[derive(Default)]
-struct NoKeys(Mutex<Option<String>>);
-impl Keychain for NoKeys {
-    fn read(&self) -> anyhow::Result<Option<String>> {
-        Ok(self.0.lock().unwrap().clone())
-    }
-    fn create(&self, value: &str) -> anyhow::Result<()> {
-        *self.0.lock().unwrap() = Some(value.into());
-        Ok(())
-    }
-}
 #[derive(Default)]
 struct FakeRunner {
     calls: Arc<Mutex<Vec<WorkflowInvocation>>>,
@@ -345,6 +343,9 @@ struct FakeRunner {
     completed: Mutex<usize>,
     voice: Mutex<Option<String>>,
     activity: Mutex<Vec<Value>>,
+    /// The code agent's operations called so far, as each turn began.
+    observed: Option<Arc<branvil::agent::Faults>>,
+    seen: Mutex<Vec<Vec<(&'static str, String)>>>,
 }
 impl Runner for FakeRunner {
     fn run<'a>(
@@ -353,6 +354,9 @@ impl Runner for FakeRunner {
         _: &'a Trace,
     ) -> Pending<'a, Result<CommandReply, DispatchFailure>> {
         Box::pin(async move {
+            if let Some(faults) = &self.observed {
+                self.seen.lock().unwrap().push(faults.calls());
+            }
             self.calls.lock().unwrap().push(invocation);
             match self.failure.lock().unwrap().take() {
                 Some(error) => Err(error),
@@ -423,47 +427,29 @@ impl Fixture {
         embedded.repository("acme/repo").await;
         embedded.member("yuki").await;
         embedded.member("aiko").await;
-        let keys = NoKeys::default();
-        let writes = gb_base::shared_writes::SharedWrites::new(
-            root.path().join("identity"),
-            Some(root.path().join("workspace")),
-        );
-        let secrets = SecretStore::new(
-            &writes,
-            Scope::Identity,
-            DeviceKey {
-                machine_root: root.path().into(),
-                keychain: &keys,
-            },
-        )
-        .unwrap();
-        let factory = gb_integrations::ServiceIntegrationFactory::new(
-            gb_integrations::IntegrationConfig {
-                local_root: root.path().join("services"),
-                identity_root: root.path().join("identity"),
-                person_id: "aiko".into(),
-                display_name: "Aiko".into(),
-                accounts: BTreeMap::new(),
-                branvil_members: Default::default(),
-
-                chat_provider: "local".into(),
-
-                slack_base_url: String::new(),
-            },
-            &secrets,
-            Some(embedded.data()),
-            Arc::new(|_| {}),
-        )
-        .unwrap();
-        let ticket = factory.create_ticket_service("acme").unwrap();
-        let code = factory.create_code_hosting_service("acme").unwrap();
+        let ticket = Arc::new(TicketAgent::new(
+            embedded.data(),
+            "acme".into(),
+            "aiko".into(),
+            "Aiko".into(),
+        ));
+        let code = Arc::new(CodeAgent::new(
+            embedded.data(),
+            "acme".into(),
+            "aiko".into(),
+            "Aiko".into(),
+        ));
         let diagnostics = Diagnostics::open(root.path());
+        let runner = FakeRunner {
+            observed: Some(code.faults.clone()),
+            ..Default::default()
+        };
         Self {
             root,
             embedded,
             ticket,
             code,
-            runner: FakeRunner::default(),
+            runner,
             diagnostics,
         }
     }
@@ -487,7 +473,6 @@ impl Fixture {
                 title: "Fix login".into(),
                 body: String::new(),
                 labels: vec![],
-                add_to_board: true,
                 interactive: false,
                 assignee: Some(ActorName("aiko".into())),
                 lane: Some(CreateLane::Ready),
@@ -523,16 +508,7 @@ impl Fixture {
         self.pull_branch("feature").await
     }
     async fn pull_branch(&self, branch: &str) -> Task {
-        let base = self.embedded.git(
-            "acme/repo",
-            &["for-each-ref", "--format=%(objectname)", "refs/heads/main"],
-        );
-        let base = if base.is_empty() {
-            self.embedded
-                .commit("acme/repo", "main", None, "README.md", "base")
-        } else {
-            base
-        };
+        let base = self.base();
         self.embedded.commit(
             "acme/repo",
             branch,
@@ -553,7 +529,15 @@ impl Fixture {
             })
             .await
             .unwrap();
-        let number = pull.target.url.rsplit('/').next().unwrap().parse().unwrap();
+        let number = pull
+            .written
+            .target
+            .url
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
         self.embedded
             .owner
             .pulls_add_comment(
@@ -568,8 +552,151 @@ impl Fixture {
             .await
             .unwrap()
             .into_iter()
-            .find(|task| task.url.as_deref() == Some(&pull.target.url))
+            .find(|task| task.url.as_deref() == Some(&pull.written.target.url))
             .unwrap()
+    }
+    fn base(&self) -> String {
+        let base = self.embedded.git(
+            "acme/repo",
+            &["for-each-ref", "--format=%(objectname)", "refs/heads/main"],
+        );
+        if base.is_empty() {
+            self.embedded
+                .commit("acme/repo", "main", None, "README.md", "base")
+        } else {
+            base
+        }
+    }
+    fn head(&self, branch: &str) -> String {
+        self.embedded
+            .git("acme/repo", &["rev-parse", &format!("refs/heads/{branch}")])
+    }
+    /// A new head on `branch`, as its author pushes again.
+    fn push(&self, branch: &str) -> String {
+        let head = self.head(branch);
+        self.embedded.commit(
+            "acme/repo",
+            branch,
+            Some(&head),
+            &format!("{branch}.txt"),
+            &format!("{branch} after {head}"),
+        )
+    }
+    /// A PR by yuki whose three heads aiko reviewed, followed by the owner's
+    /// comment: aiko reviews it again until yuki pushes a fourth head, which
+    /// reaches aiko's review limit.
+    async fn reviewed_pull(&self, branch: &str) {
+        let yuki = CodeAgent::new(
+            self.embedded.data(),
+            "acme".into(),
+            "yuki".into(),
+            "yuki".into(),
+        );
+        let base = self.base();
+        self.embedded.commit(
+            "acme/repo",
+            branch,
+            Some(&base),
+            &format!("{branch}.txt"),
+            branch,
+        );
+        let url = yuki
+            .create_pull_request(CreatePullRequest {
+                repository: "acme/repo".into(),
+                head: branch.into(),
+                base: "main".into(),
+                title: "Fix login".into(),
+                body: String::new(),
+                draft: false,
+                tickets: vec![],
+            })
+            .await
+            .unwrap()
+            .written
+            .target
+            .url;
+        for round in 0..3 {
+            let head = if round == 0 {
+                self.head(branch)
+            } else {
+                self.push(branch)
+            };
+            self.code
+                .review(&url, "Please fix", ReviewVerdict::RequestChanges, &head)
+                .await
+                .unwrap();
+        }
+        self.embedded
+            .owner
+            .pulls_add_comment(
+                "acme/repo",
+                url.rsplit('/').next().unwrap().parse().unwrap(),
+                branvil::test_support::input(json!({"body":"Please fix"})),
+            )
+            .await
+            .unwrap();
+    }
+    /// A check of the PR's head that a runner has started, while the owner's
+    /// requested changes defer its run, so its author can yield it.
+    async fn running_check(&self, url: &str) {
+        let owner = &self.embedded.owner;
+        let number = url.rsplit('/').next().unwrap().parse().unwrap();
+        let head = self.head("feature");
+        owner
+            .members_create(branvil::test_support::input(
+                json!({"name":"runner1","kind":"runner"}),
+            ))
+            .await
+            .unwrap();
+        let token = owner
+            .members_issue_token(
+                "runner1".into(),
+                branvil::test_support::input(json!({"label":"fixture"})),
+            )
+            .await
+            .unwrap()
+            .token;
+        self.embedded
+            .check("acme/repo", "feature", &head, None)
+            .await;
+        let claim: Value = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap()
+            .post(format!(
+                "{}/api/v1/runner/claim",
+                self.embedded.data().base_url()
+            ))
+            .bearer_auth(token)
+            .json(&json!({"executor":"microsandbox","executor_state":"ready"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(claim["sha"], head);
+        let revision = owner.repos_get("acme/repo").await.unwrap().revision;
+        owner
+            .repos_update(
+                "acme/repo",
+                branvil::test_support::input(json!({"revision":revision,"required_approvals":1})),
+            )
+            .await
+            .unwrap();
+        owner
+            .pulls_review(
+                "acme/repo",
+                number,
+                branvil::test_support::input(
+                    json!({"verdict":"request_changes","commit":head,"body":"Fix before landing"}),
+                ),
+            )
+            .await
+            .unwrap();
     }
 
     async fn stored_ticket(&self, key: &str) -> Value {
@@ -1069,222 +1196,6 @@ async fn review_limit_conversion_elects_one_notice_in_its_own_trace_without_an_a
     );
 }
 
-struct CodeFaults {
-    yield_result: Option<Result<usize, ServiceError>>,
-    yield_calls: Mutex<Vec<String>>,
-    runner_calls: Option<Arc<Mutex<Vec<WorkflowInvocation>>>>,
-
-    candidates: Option<Vec<Task>>,
-    refresh_limit: bool,
-    block: Option<(&'static str, tokio_util::sync::CancellationToken)>,
-    inner: Arc<CodeAgent>,
-    draft: Option<ServiceError>,
-    fail_comment: bool,
-    fail_links: bool,
-    link_override: Option<Vec<TicketLink>>,
-    quota_error: Option<ServiceError>,
-}
-impl CodeFaults {
-    fn new(inner: Arc<CodeAgent>) -> Self {
-        Self {
-            inner,
-            yield_result: None,
-            yield_calls: Mutex::default(),
-            runner_calls: None,
-            candidates: None,
-            refresh_limit: false,
-            block: None,
-            draft: None,
-            fail_comment: false,
-            fail_links: false,
-            link_override: None,
-            quota_error: None,
-        }
-    }
-}
-impl CodeHostingService for CodeFaults {
-    fn yield_pull_request_checks<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, usize> {
-        Box::pin(async move {
-            if let Some(calls) = &self.runner_calls {
-                assert!(calls.lock().unwrap().is_empty());
-            }
-            self.yield_calls.lock().unwrap().push(url.into());
-            self.yield_result
-                .clone()
-                .unwrap_or(Err(ServiceError::Unsupported))
-        })
-    }
-
-    fn linked_tickets<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, Vec<TicketLink>> {
-        if let Some(links) = &self.link_override {
-            return Box::pin(async move { Ok(links.clone()) });
-        }
-        if self.fail_links {
-            Box::pin(async { Err(ServiceError::Unavailable) })
-        } else {
-            self.inner.linked_tickets(url)
-        }
-    }
-    fn read<'a>(
-        &'a self,
-        resource: Resource,
-        subject: &'a str,
-        parameters: Option<&'a Value>,
-        continuation: &'a str,
-    ) -> ServiceFuture<'a, ReadPage> {
-        self.inner.read(resource, subject, parameters, continuation)
-    }
-    fn comment<'a>(
-        &'a self,
-        url: &'a str,
-        body: &'a str,
-        status: Option<&'a WorkflowStatus>,
-    ) -> ServiceFuture<'a, CommentWritten> {
-        if let Some(("comment", entered)) = &self.block {
-            Box::pin(async move {
-                entered.cancel();
-                std::future::pending().await
-            })
-        } else if self.fail_comment {
-            Box::pin(async { Err(ServiceError::Failed) })
-        } else {
-            self.inner.comment(url, body, status)
-        }
-    }
-    fn create_pull_request(
-        &self,
-        request: CreatePullRequest,
-    ) -> ServiceFuture<'_, PullRequestCreated> {
-        self.inner.create_pull_request(request)
-    }
-    fn update_pull_request<'a>(
-        &'a self,
-        url: &'a str,
-        request: UpdatePullRequest,
-    ) -> ServiceFuture<'a, PullRequestUpdated> {
-        self.inner.update_pull_request(url, request)
-    }
-    fn review<'a>(
-        &'a self,
-        url: &'a str,
-        body: &'a str,
-        verdict: ReviewVerdict,
-        head: &'a str,
-    ) -> ServiceFuture<'a, ReviewSubmitted> {
-        self.inner.review(url, body, verdict, head)
-    }
-    fn review_comment<'a>(
-        &'a self,
-        url: &'a str,
-        request: ReviewComment,
-    ) -> ServiceFuture<'a, ReviewCommentWritten> {
-        self.inner.review_comment(url, request)
-    }
-    fn reply<'a>(
-        &'a self,
-        url: &'a str,
-        reply_to: &'a str,
-        body: &'a str,
-    ) -> ServiceFuture<'a, ReplyWritten> {
-        self.inner.reply(url, reply_to, body)
-    }
-    fn add_reaction<'a>(
-        &'a self,
-        url: &'a str,
-        target_id: &'a str,
-        reaction: SemanticReaction,
-    ) -> ServiceFuture<'a, ReactionAdded> {
-        self.inner.add_reaction(url, target_id, reaction)
-    }
-    fn readiness<'a>(
-        &'a self,
-        url: &'a str,
-        failed_logs: bool,
-        log_tail_bytes: usize,
-    ) -> ServiceFuture<'a, Readiness> {
-        self.inner.readiness(url, failed_logs, log_tail_bytes)
-    }
-    fn open_pull_requests<'a>(
-        &'a self,
-        repository: &'a str,
-        branch: &'a str,
-    ) -> ServiceFuture<'a, Vec<String>> {
-        self.inner.open_pull_requests(repository, branch)
-    }
-    fn artifact<'a>(
-        &'a self,
-        url: &'a str,
-        name: &'a str,
-        limit: usize,
-    ) -> ServiceFuture<'a, Download<ArtifactRef>> {
-        self.inner.artifact(url, name, limit)
-    }
-    fn clone_url<'a>(&'a self, repository: &'a str) -> ServiceFuture<'a, String> {
-        self.inner.clone_url(repository)
-    }
-    fn default_branch<'a>(&'a self, repository: &'a str) -> ServiceFuture<'a, String> {
-        self.inner.default_branch(repository)
-    }
-    fn pull_request_head<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, PullRequestHead> {
-        self.inner.pull_request_head(url)
-    }
-    fn git_credential(&self) -> ServiceFuture<'_, Option<GitCredential>> {
-        self.inner.git_credential()
-    }
-    fn check_push(&self, repository: &str) -> Result<(), ServiceError> {
-        self.inner.check_push(repository)
-    }
-    fn commit_url(&self, repository: &str, sha: &str) -> String {
-        self.inner.commit_url(repository, sha)
-    }
-    fn repository_from_remote(&self, remote_url: &str) -> Option<String> {
-        self.inner.repository_from_remote(remote_url)
-    }
-    fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>> {
-        if let Some(error) = &self.quota_error {
-            Box::pin(async move { Err(error.clone()) })
-        } else {
-            self.inner.authored_open_pull_requests()
-        }
-    }
-    fn pull_request_candidates(&self) -> ServiceFuture<'_, Vec<Task>> {
-        if let Some(tasks) = &self.candidates {
-            Box::pin(async { Ok(tasks.clone()) })
-        } else {
-            self.inner.pull_request_candidates()
-        }
-    }
-    fn refresh_pull_request<'a>(&'a self, task: &'a Task) -> ServiceFuture<'a, Option<Task>> {
-        if self.refresh_limit {
-            Box::pin(async move {
-                let mut task = task.clone();
-                task.trigger_reason = Some(REVIEW_LIMIT.into());
-                Ok(Some(task))
-            })
-        } else {
-            self.inner.refresh_pull_request(task)
-        }
-    }
-    fn convert_pull_request_to_draft<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, bool> {
-        if let Some(("convert", entered)) = &self.block {
-            Box::pin(async move {
-                entered.cancel();
-                std::future::pending().await
-            })
-        } else if let Some(error) = &self.draft {
-            Box::pin(async move { Err(error.clone()) })
-        } else {
-            self.inner.convert_pull_request_to_draft(url)
-        }
-    }
-    fn can_receive_work<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, bool> {
-        self.inner.can_receive_work(url)
-    }
-    fn aclose(&self) -> ServiceFuture<'_, ()> {
-        self.inner.aclose()
-    }
-}
-
 #[tokio::test]
 async fn review_limit_conversion_failures_notify_but_unavailability_defers_and_retries_without_an_agent()
  {
@@ -1297,11 +1208,10 @@ async fn review_limit_conversion_failures_notify_but_unavailability_defers_and_r
         let f = Fixture::new().await;
         let mut pull = f.pull().await;
         pull.trigger_reason = Some(REVIEW_LIMIT.into());
-        let mut faults = CodeFaults::new(f.code.clone());
-        faults.draft = Some(error.clone());
-        let mut selector = f.selector("manual");
-        selector.code = Some(&faults);
-        selector.hand_over(&pull).await;
+        f.code
+            .faults
+            .fail("convert_pull_request_to_draft", error.clone());
+        f.selector("manual").hand_over(&pull).await;
         let stored = f.stored_pull(1).await;
         assert_eq!(stored["draft"], false);
         assert!(f.runner.calls.lock().unwrap().is_empty());
@@ -1333,6 +1243,7 @@ async fn review_limit_conversion_failures_notify_but_unavailability_defers_and_r
         if error == ServiceError::Unavailable {
             assert_eq!(stored["comments"].as_array().unwrap().len(), 1);
             assert!(f.runner.stops.lock().unwrap().is_empty());
+            f.code.faults.clear();
             f.selector("manual").hand_over(&pull).await;
             assert_eq!(f.runner.stops.lock().unwrap()[0].reason, "review_limit");
         } else {
@@ -1347,11 +1258,8 @@ async fn review_limit_failed_pr_notice_still_records_and_notifies_with_the_pr_ad
     let f = Fixture::new().await;
     let mut pull = f.pull().await;
     pull.trigger_reason = Some(REVIEW_LIMIT.into());
-    let mut faults = CodeFaults::new(f.code.clone());
-    faults.fail_comment = true;
-    let mut selector = f.selector("routine");
-    selector.code = Some(&faults);
-    selector.hand_over(&pull).await;
+    f.code.faults.fail("comment", ServiceError::Failed);
+    f.selector("routine").hand_over(&pull).await;
     let activity = f.runner.activity.lock().unwrap();
     assert_eq!(activity.len(), 1);
     assert_eq!(activity[0]["type"], "pull_request.review_limit");
@@ -1366,17 +1274,14 @@ async fn review_limit_failed_pr_notice_still_records_and_notifies_with_the_pr_ad
 #[tokio::test]
 async fn cancelled_review_limit_conversion_and_comment_close_the_trace_and_record_any_completed_draft()
  {
-    for phase in ["convert", "comment"] {
+    for phase in ["convert_pull_request_to_draft", "comment"] {
         let f = Fixture::new().await;
         let mut pull = f.pull().await;
         pull.trigger_reason = Some(REVIEW_LIMIT.into());
-        let entered = tokio_util::sync::CancellationToken::new();
-        let mut faults = CodeFaults::new(f.code.clone());
-        faults.block = Some((phase, entered.clone()));
-        let mut selector = f.selector("manual");
-        selector.code = Some(&faults);
+        let entered = f.code.faults.block(phase);
+        let selector = f.selector("manual");
         let mut run = Box::pin(selector.hand_over(&pull));
-        tokio::select! {()=entered.cancelled()=>(),()=&mut run=>panic!("operation did not wait")}
+        tokio::select! {()=entered.notified()=>(),()=&mut run=>panic!("operation did not wait")}
         drop(run);
         let activity = f.runner.activity.lock().unwrap();
         assert_eq!(activity.len(), usize::from(phase == "comment"));
@@ -1451,7 +1356,6 @@ async fn author_feedback_uses_the_only_open_owned_ticket_and_preserves_resumes()
                 title: "Second".into(),
                 body: String::new(),
                 labels: vec![],
-                add_to_board: true,
                 interactive: false,
                 assignee: Some(ActorName("aiko".into())),
                 lane: Some(CreateLane::Ready),
@@ -1500,18 +1404,34 @@ async fn unreadable_author_links_keep_pr_work_selectable() {
     for missing_ticket in [false, true] {
         let f = Fixture::new().await;
         let pull = f.pull().await;
-        let mut faulty = CodeFaults::new(f.code.clone());
-        faulty.fail_links = !missing_ticket;
-        if missing_ticket {
-            faulty.link_override = Some(vec![TicketLink {
-                url: "local://ticket/acme/team/999999".into(),
-                closes: false,
-            }]);
-        }
-        let mut selector = f.selector("routine");
-        selector.code = Some(&faulty);
-        let selected = selector.next().await.unwrap().unwrap().1;
-        assert_eq!(selected.work.unwrap().identity, pull.url.unwrap());
+        let url = pull.url.clone().unwrap();
+        let (faults, operation, subject) = if missing_ticket {
+            // Readable, the linked ticket would own the work instead.
+            let ticket = f.task().await.url.unwrap();
+            f.code
+                .update_pull_request(
+                    &url,
+                    UpdatePullRequest {
+                        tickets: Some(vec![TicketLink {
+                            url: ticket.clone(),
+                            closes: false,
+                        }]),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            f.ticket.faults.fail("ticket_view", ServiceError::NotFound);
+            (&f.ticket.faults, "ticket_view", ticket)
+        } else {
+            f.code
+                .faults
+                .fail("linked_tickets", ServiceError::Unavailable);
+            (&f.code.faults, "linked_tickets", url.clone())
+        };
+        let selected = f.selector("routine").next().await.unwrap().unwrap().1;
+        assert_eq!(selected.work.unwrap().identity, url);
+        assert!(faults.calls().contains(&(operation, subject)));
     }
 }
 
@@ -1631,9 +1551,9 @@ async fn quota_read_errors_defer_only_new_ready_work_and_clear_the_display() {
             selector.quota = Some(&quota);
             selector.candidates().await.unwrap();
             assert!(quota.snapshot().is_some());
-            let mut faults = CodeFaults::new(f.code.clone());
-            faults.quota_error = Some(error);
-            selector.code = Some(&faults);
+            f.code
+                .faults
+                .fail("authored_open_pull_requests", error.clone());
             assert!(!selector.candidates().await.unwrap().is_empty());
             assert!(quota.snapshot().is_none());
             assert_eq!(selector.next().await.unwrap().unwrap().0.url, pull.url);
@@ -1684,16 +1604,16 @@ async fn quota_read_errors_defer_only_new_ready_work_and_clear_the_display() {
                 .move_ticket(&working, MoveLane::InProgress)
                 .await
                 .unwrap();
-            let mut working = working;
-            working.status = "in_progress".into();
-            let mut working_faults = CodeFaults::new(f.code.clone());
-            working_faults.quota_error = faults.quota_error.clone();
-            working_faults.candidates = Some(vec![ready.clone(), working.clone()]);
-            selector.code = Some(&working_faults);
+            // Without the PR's feedback, only ready and working tickets remain.
+            f.embedded
+                .owner
+                .pulls_set_open("acme/repo", 1, false)
+                .await
+                .unwrap();
             if source != "manual" {
                 assert_eq!(selector.next().await.unwrap().unwrap().0.url, working.url);
             }
-            selector.code = Some(f.code.as_ref());
+            f.code.faults.clear();
             selector.candidates().await.unwrap();
             assert!(quota.snapshot().is_some());
         }
@@ -1711,7 +1631,7 @@ async fn feedback_yields_once_before_author_runs_and_failures_are_best_effort() 
     ] {
         for resumes in [false, true] {
             for result in [
-                Ok(2),
+                Ok(1),
                 Ok(0),
                 Err(ServiceError::Unsupported),
                 Err(ServiceError::Unavailable),
@@ -1720,32 +1640,42 @@ async fn feedback_yields_once_before_author_runs_and_failures_are_best_effort() 
                     let mut f = Fixture::new().await;
                     f.runner.fail_evidence = fail_evidence;
                     let mut task = f.pull().await;
+                    let url = task.pull_request_url.clone().unwrap();
+                    let feedback = trigger == "pull_request_feedback";
+                    match &result {
+                        // Only feedback yields: other work leaves the checks as they are.
+                        Ok(0) => {}
+                        Ok(_) if !feedback => {}
+                        Ok(_) => f.running_check(&url).await,
+                        Err(error) => f
+                            .code
+                            .faults
+                            .fail("yield_pull_request_checks", error.clone()),
+                    }
                     task.trigger_reason = Some(trigger.into());
                     task.resumes = resumes.then(|| AwaitedRun {
                         run_id: "old".into(),
                         work_kind: "pull_request".into(),
                         work_identity: "pull".into(),
                     });
-                    let mut code = CodeFaults::new(f.code.clone());
-                    code.yield_result = Some(result.clone());
-                    code.runner_calls = Some(f.runner.calls.clone());
-                    let mut selector = f.selector("routine");
-                    selector.code = Some(&code);
+                    let selector = f.selector("routine");
                     let trace = f.trace("routine");
                     selector
                         .run(&task, selector.invocation(&task).unwrap(), &trace, 5)
                         .await
                         .unwrap();
                     assert_eq!(f.runner.calls.lock().unwrap().len(), 1);
-                    let feedback = trigger == "pull_request_feedback";
-                    assert_eq!(
-                        code.yield_calls.lock().unwrap().as_slice(),
-                        if feedback {
-                            vec![task.pull_request_url.clone().unwrap()]
-                        } else {
-                            vec![]
-                        }
-                    );
+                    let yields = |calls: &[(&'static str, String)]| {
+                        calls
+                            .iter()
+                            .filter(|(operation, _)| *operation == "yield_pull_request_checks")
+                            .map(|(_, url)| url.clone())
+                            .collect::<Vec<_>>()
+                    };
+                    let expected = if feedback { vec![url.clone()] } else { vec![] };
+                    // The yield happened once, before the author's turn began.
+                    assert_eq!(yields(&f.code.faults.calls()), expected);
+                    assert_eq!(yields(&f.runner.seen.lock().unwrap()[0]), expected);
                     let evidence = f.runner.evidence.lock().unwrap().clone();
                     let yielded = evidence
                         .iter()
@@ -1755,17 +1685,14 @@ async fn feedback_yields_once_before_author_runs_and_failures_are_best_effort() 
                         .iter()
                         .filter(|e| e["type"] == "checks_yield_failed")
                         .count();
-                    assert_eq!(yielded.len(), usize::from(feedback && result == Ok(2)));
+                    assert_eq!(yielded.len(), usize::from(feedback && result == Ok(1)));
                     assert_eq!(
                         failed,
                         usize::from(feedback && result == Err(ServiceError::Unavailable))
                     );
                     if let Some(fact) = yielded.first() {
-                        assert_eq!(fact["payload"]["count"], 2);
-                        assert_eq!(
-                            fact["payload"]["target"]["url"],
-                            task.pull_request_url.as_deref().unwrap()
-                        );
+                        assert_eq!(fact["payload"]["count"], 1);
+                        assert_eq!(fact["payload"]["target"]["url"], url);
                     }
                 }
             }

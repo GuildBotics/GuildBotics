@@ -1,5 +1,6 @@
 use crate::support;
 use branvil::agent::port::*;
+use branvil::agent::{CodeAgent, TicketAgent};
 use gb_base::shared_writes::SharedWrites;
 use gb_member::{
     MemberError, WriteGuard,
@@ -13,13 +14,14 @@ use gb_server::member::{
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path, sync::Mutex};
-struct Services(support::Probe);
-impl RepositoryServices for Services {
+/// Commands that end before a service operation.
+struct Unused;
+impl RepositoryServices for Unused {
     fn code(&self) -> gb_member::Result<&CodeAgent> {
-        Ok(&self.0)
+        panic!("unexpected provider access")
     }
     fn tickets(&self) -> gb_member::Result<&TicketAgent> {
-        Ok(&self.0)
+        panic!("unexpected provider access")
     }
 }
 struct Current;
@@ -47,7 +49,7 @@ impl Control for Records {
     }
 }
 fn session<'a>(
-    services: &'a Services,
+    services: &'a dyn RepositoryServices,
     roster: &'a BTreeMap<String, ActorName>,
     records: &'a Records,
 ) -> Session<'a> {
@@ -74,7 +76,7 @@ fn args(values: &[&str]) -> Vec<String> {
 }
 #[tokio::test]
 async fn human_subject_and_missing_or_foreign_delegation_fail_before_a_write() {
-    let services = Services(support::Probe::new(None));
+    let services = Unused;
     let roster = BTreeMap::new();
     let records = Records::default();
     let input = args(&[
@@ -107,7 +109,8 @@ async fn human_subject_and_missing_or_foreign_delegation_fail_before_a_write() {
 }
 #[tokio::test]
 async fn read_only_commands_need_no_workflow_delegation_and_failed_providers_keep_their_category() {
-    let services = Services(support::Probe::new(Some(ServiceError::Unavailable)));
+    let services = support::Embedded::new().await;
+    services.fail_all(ServiceError::Unavailable);
     let roster = BTreeMap::new();
     let records = Records::default();
     let mut session = session(&services, &roster, &records);
@@ -142,6 +145,7 @@ async fn read_only_commands_need_no_workflow_delegation_and_failed_providers_kee
         Some(MemberError::Service(ServiceError::Unavailable))
     ));
     assert_eq!(records.0.lock().unwrap().len(), 1);
+    services.stop().await;
 }
 #[tokio::test]
 async fn memory_dispatch_masks_four_character_values_and_preserves_source_scope_and_optional_body()
@@ -161,7 +165,7 @@ async fn memory_dispatch_masks_four_character_values_and_preserves_source_scope_
         json!({}),
     )
     .unwrap();
-    let services = Services(support::Probe::new(None));
+    let services = Unused;
     let roster = BTreeMap::new();
     let records = Records::default();
     let mut session = session(&services, &roster, &records);
@@ -213,7 +217,7 @@ async fn memory_dispatch_masks_four_character_values_and_preserves_source_scope_
 }
 #[tokio::test]
 async fn usage_and_content_errors_never_access_services_or_record_evidence() {
-    let services = Services(support::Probe::new(None));
+    let services = Unused;
     let roster = BTreeMap::new();
     let records = Records::default();
     let session = session(&services, &roster, &records);
@@ -248,7 +252,7 @@ async fn usage_and_content_errors_never_access_services_or_record_evidence() {
 }
 #[tokio::test]
 async fn run_commands_dispatch_only_through_the_bound_control_and_reject_caller_run_ids() {
-    let services = Services(support::Probe::new(None));
+    let services = Unused;
     let roster = BTreeMap::new();
     let records = Records::default();
     let session = session(&services, &roster, &records);
@@ -304,11 +308,9 @@ async fn context_credential_check_never_consults_the_code_host() {
             panic!("no ticket access")
         }
     }
-    let services = Services(support::Probe::new(None));
     let roster = BTreeMap::new();
     let records = Records::default();
-    let mut session = session(&services, &roster, &records);
-    session.repository.services = &Absent;
+    let session = session(&Absent, &roster, &records);
     let result = session
         .execute(
             &args(&["context", "--person", "aiko", "--check-credentials"]),
@@ -322,18 +324,41 @@ async fn context_credential_check_never_consults_the_code_host() {
 
 #[tokio::test]
 async fn checks_retry_returns_url_and_preserves_service_errors() {
+    let services = support::Embedded::new().await;
+    let pr = services.pull("feature", true, &[]).await;
+    let head = services.code.pull_view(&pr).await.unwrap().head_sha;
+    services
+        .fixture
+        .check(support::REPO, "feature", &head, Some("failure"))
+        .await;
+    let checks = services
+        .code
+        .readiness(&pr, false, MAX_LOG_TAIL_BYTES)
+        .await
+        .unwrap()
+        .report
+        .checks;
+    let job = format!(
+        "{}/{}/-/jobs/{}",
+        services.base(),
+        support::REPO,
+        checks[0].attempt_id.as_deref().unwrap()
+    );
+    let roster = BTreeMap::new();
     for error in [
-        None,
         Some(ServiceError::NotFound),
         Some(ServiceError::Unsupported),
+        None,
     ] {
-        let services = Services(support::Probe::new(error.clone()));
-        let roster = BTreeMap::new();
+        services.code.faults.clear();
+        if let Some(error) = &error {
+            services.code.faults.fail("retry_job", error.clone());
+        }
         let records = Records::default();
         let session = session(&services, &roster, &records);
         let result = session
             .execute(
-                &args(&["checks", "retry", "--person", "aiko", "--job-url", "job"]),
+                &args(&["checks", "retry", "--person", "aiko", "--job-url", &job]),
                 "",
             )
             .await;
@@ -343,15 +368,22 @@ async fn checks_retry_returns_url_and_preserves_service_errors() {
             );
             assert!(records.0.lock().unwrap().is_empty());
         } else {
-            assert_eq!(result.unwrap().payload["url"], "job/next");
+            let next = result.unwrap().payload["url"].as_str().unwrap().to_owned();
+            assert!(next.starts_with(&format!("{}/{}/-/jobs/", services.base(), support::REPO)));
+            assert_ne!(next, job);
             assert_eq!(records.0.lock().unwrap()[0]["command"], "checks retry");
         }
     }
+    services.stop().await;
 }
 
 #[tokio::test]
 async fn ticket_assignment_and_lane_require_interactive_approval_and_roster() {
-    let services = Services(support::Probe::new(Some(ServiceError::Unsupported)));
+    let services = support::Embedded::new().await;
+    services
+        .code
+        .faults
+        .fail("update_ticket", ServiceError::Unsupported);
     let roster = [
         ("aiko".into(), ActorName("agent1".into())),
         ("owner".into(), ActorName("human1".into())),
@@ -415,22 +447,15 @@ async fn ticket_assignment_and_lane_require_interactive_approval_and_roster() {
         );
     }
     assert!(records.0.lock().unwrap().is_empty());
+    services.stop().await;
 }
 
 #[tokio::test]
 async fn interactive_ticket_update_resolves_roster_and_returns_complete_state() {
-    for (person, actor) in [("aiko", "agent1"), ("owner", "human1")] {
-        let mut probe = support::Probe::new(None);
-        probe.update_result = Some(
-            serde_json::from_value(json!({
-                "body":"", "state":"open", "state_changed":false, "labels":[],
-                "target":{"kind":"ticket","url":"url","title":"Work","label":"#1"},
-                "assignees":[actor], "lane":"in_progress", "interactive":true,
-                "interactive_ancestor":null
-            }))
-            .unwrap(),
-        );
-        let services = Services(probe);
+    let services = support::Embedded::new().await;
+    services.fixture.member("agent1").await;
+    for (person, actor) in [("aiko", "agent1"), ("owner", "owner")] {
+        let url = services.ticket("Work").await;
         let roster = [(person.into(), ActorName(actor.into()))].into();
         let records = Records::default();
         let mut session = session(&services, &roster, &records);
@@ -444,7 +469,7 @@ async fn interactive_ticket_update_resolves_roster_and_returns_complete_state() 
                     "--person",
                     "aiko",
                     "--url",
-                    "url",
+                    &url,
                     "--assignee",
                     person,
                     "--interactive",
@@ -456,20 +481,24 @@ async fn interactive_ticket_update_resolves_roster_and_returns_complete_state() 
             )
             .await
             .unwrap();
-        assert_eq!(result.payload["assignees"], json!([actor]));
+        assert_eq!(result.payload["assignee"]["name"], actor);
         assert_eq!(result.payload["lane"], "in_progress");
         assert_eq!(result.payload["interactive"], true);
-        let requests = services.0.ticket_updates.lock().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].assignee, Some(ActorName(actor.into())));
-        assert_eq!(requests[0].lane, Some(MoveLane::InProgress));
-        assert_eq!(requests[0].interactive, Some(true));
+        let ticket = services.code.ticket_view(&url).await.unwrap();
+        assert_eq!(ticket.assignee.map(|a| a.name).as_deref(), Some(actor));
+        assert_eq!(ticket.lane, "in_progress");
+        assert!(ticket.interactive);
     }
+    services.stop().await;
 }
 
 #[tokio::test]
 async fn ticket_order_requires_interactive_approval_and_exclusive_anchor() {
-    let services = Services(support::Probe::new(Some(ServiceError::Unavailable)));
+    let services = support::Embedded::new().await;
+    services
+        .code
+        .faults
+        .fail("update_ticket", ServiceError::Unavailable);
     let roster = BTreeMap::new();
     let records = Records::default();
     for flag in ["--before", "--after"] {
@@ -528,4 +557,5 @@ async fn ticket_order_requires_interactive_approval_and_exclusive_anchor() {
         s.execute(&input, "").await.err().unwrap().to_string(),
         "cli.member.ticket_order_conflict"
     );
+    services.stop().await;
 }

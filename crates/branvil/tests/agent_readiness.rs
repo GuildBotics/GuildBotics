@@ -5,9 +5,17 @@ use serde_json::{Value, json};
 fn run(input: &Value) -> Result<Readiness, ServiceError> {
     let mut result = Readiness {
         target: serde_json::from_value(input["target"].clone()).unwrap(),
-        head_sha: input["head_sha"].as_str().unwrap().into(),
-        checks: vec![],
-        required_checks: RequiredChecks::Passed,
+        report: branvil::api::pulls::ChecksView {
+            head_sha: input["head_sha"].as_str().unwrap().into(),
+            base_sha: String::new(),
+            behind_by: None,
+            conflicts: None,
+            checks: vec![],
+            required_checks: RequiredChecks::Passed,
+            required_names: vec![],
+            checks_expected: false,
+            base_checks: 0,
+        },
         feedback: Feedback::default(),
         failed_logs: serde_json::from_value(input["failed_logs"].clone()).unwrap(),
     };
@@ -118,22 +126,7 @@ fn empty_and_short_logs_and_oversized_metadata() {
 }
 
 #[test]
-fn primary_failures_and_download_budgets() {
-    let checks: Vec<Check> = serde_json::from_value(json!([
-        {"required":false,"name":"cancelled", "status":"completed", "conclusion":"cancelled", "details_url":""},
-        {"required":false,"name":"failed", "status":"completed", "conclusion":"failure", "details_url":""},
-        {"required":false,"name":"stale", "status":"completed", "conclusion":"stale", "details_url":""}
-    ]))
-    .unwrap();
-    assert_eq!(
-        inspected(&checks)
-            .iter()
-            .map(|c| c.name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["failed"]
-    );
-    assert_eq!(inspected(&checks[..1]).len(), 1);
-    assert!(inspected(&[]).is_empty());
+fn download_budgets() {
     assert_eq!(
         effective_tail_bytes(MAX_PAGE_BYTES, 2),
         Ok(MAX_PAGE_BYTES / 2)

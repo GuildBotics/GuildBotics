@@ -104,6 +104,7 @@ impl<'a> Fixture<'a> {
                 })
                 .await
                 .unwrap()
+                .written
                 .target
                 .url
         } else {
@@ -419,7 +420,10 @@ async fn inline_coordinates_and_own_verdicts() {
         .unwrap();
     let file = files.items().iter().find(|v| v["path"] == "a.py").unwrap();
     assert_eq!(file["patch_complete"], true);
-    assert_eq!(file["changes"], 2);
+    assert_eq!(
+        (&file["additions"], &file["deletions"]),
+        (&json!(1), &json!(1))
+    );
     let first = f
         .code
         .read(
@@ -512,8 +516,9 @@ async fn inline_coordinates_and_own_verdicts() {
             .review(&p.url, "Note", ReviewVerdict::Comment, &p.head)
             .await
             .unwrap()
+            .view
             .verdict,
-        ReviewVerdict::Comment
+        "comment"
     );
     assert_eq!(
         f.code

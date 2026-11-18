@@ -469,7 +469,7 @@ fn classification_patterns_do_not_count_as_production_emissions() {
             r#"
         fn class(key: &str) -> bool {
             match key {
-                "integrations.branvil.api.every_on_board"
+                "integrations.branvil.api.not_found"
                 | "integrations.branvil.api.foreign_ticket" => true,
                 _ => false,
             }

@@ -9,7 +9,6 @@ pub fn ticket_request(tracker: &str, title: &str) -> CreateTicket {
         title: title.into(),
         body: String::new(),
         labels: vec![],
-        add_to_board: true,
         interactive: false,
         assignee: None,
         lane: None,
@@ -53,7 +52,7 @@ pub async fn ticket_contract(t: &TicketAgent, tracker: &str, label: &str, author
     let created = t.create_ticket(request).await.unwrap();
     assert_eq!(created.target.kind, WorkKind::Ticket);
     assert_eq!(created.target.title, "Fix login");
-    assert_eq!(created.labels, vec![label]);
+    assert_eq!(created.view.labels, vec![label]);
     let url = &created.target.url;
     let updated = t
         .update_ticket(
@@ -68,8 +67,8 @@ pub async fn ticket_contract(t: &TicketAgent, tracker: &str, label: &str, author
         .await
         .unwrap();
     assert_eq!(updated.target.title, "Fix the login");
-    assert_eq!(updated.body, "It still fails.");
-    assert!(!updated.state_changed);
+    assert_eq!(updated.view.body, "It still fails.");
+    assert!(!updated.target.closed);
     let written = t.comment(url, "Looking into it. \n", None).await.unwrap();
     let page = t.read(Resource::Tickets, url, None, "").await.unwrap();
     assert_eq!(page.target(), Some(&updated.target));
@@ -84,25 +83,28 @@ pub async fn ticket_contract(t: &TicketAgent, tracker: &str, label: &str, author
         (Some("Fix the login"), Some("It still fails."), Some("open"))
     );
     assert_eq!(detail["labels"], json!([label]));
-    assert_eq!(detail["tracker"], tracker);
+    assert_eq!(detail["repository"], tracker);
     assert_eq!(detail["author"], author);
-    assert!(detail["repository"].is_string());
     assert_eq!(detail["lane"], "new");
     assert!(!detail["key"].as_str().unwrap().is_empty());
-    assert_eq!(detail["label"], created.target.label);
+    assert_eq!(
+        format!("#{}", detail["key"].as_str().unwrap()),
+        created.target.label
+    );
     let comments = t
         .read(Resource::TicketComments, url, None, "")
         .await
         .unwrap();
     assert_eq!(comments.items().len(), 1);
-    assert_eq!(comments.items()[0]["id"], written.id);
+    assert_eq!(comments.items()[0]["id"], written.view.id);
     assert_eq!(comments.items()[0]["body"], "Looking into it.");
-    assert_eq!(comments.items()[0]["author_type"], "Assistant");
+    assert_eq!(comments.items()[0]["author"], author);
+    assert_eq!(written.view.author, author);
     let reaction = t
-        .add_reaction(url, &written.id, SemanticReaction::Support)
+        .add_reaction(url, &written.view.id, SemanticReaction::Support)
         .await
         .unwrap();
-    assert_eq!(reaction.id, written.id);
+    assert_eq!(reaction.id, written.view.id);
     assert_eq!(reaction.reaction, SemanticReaction::Support);
     let removed = t
         .update_ticket(
@@ -114,7 +116,7 @@ pub async fn ticket_contract(t: &TicketAgent, tracker: &str, label: &str, author
         )
         .await
         .unwrap();
-    assert!(removed.labels.is_empty());
+    assert!(removed.view.labels.is_empty());
     let before = ticket_detail(t, url).await;
     assert!(
         t.update_ticket(
@@ -143,17 +145,17 @@ pub async fn ticket_contract(t: &TicketAgent, tracker: &str, label: &str, author
     );
     let other = ticket_create(t, tracker, "Reaction bound to ticket").await;
     assert!(
-        (t.add_reaction(&other, &written.id, SemanticReaction::Ack)
+        (t.add_reaction(&other, &written.view.id, SemanticReaction::Ack)
             .await
             .unwrap_err())
         .is_not_found()
     );
     assert_eq!(
-        t.add_reaction(url, &written.id, SemanticReaction::Ack)
+        t.add_reaction(url, &written.view.id, SemanticReaction::Ack)
             .await
             .unwrap()
             .id,
-        written.id
+        written.view.id
     );
     assert!(serde_json::from_value::<SemanticReaction>(json!("eyes")).is_err());
     for params in [
@@ -200,8 +202,8 @@ pub async fn ticket_contract(t: &TicketAgent, tracker: &str, label: &str, author
     };
     let first = t.update_ticket(url, close()).await.unwrap();
     let again = t.update_ticket(url, close()).await.unwrap();
-    assert_eq!((&*first.state, first.state_changed), ("closed", true));
-    assert_eq!((&*again.state, again.state_changed), ("closed", false));
+    assert_eq!((&*first.view.state, first.target.closed), ("closed", true));
+    assert_eq!((&*again.view.state, again.target.closed), ("closed", false));
     let closed = t
         .closed_since(
             "2026-01-01T00:00:00Z".parse().unwrap(),
@@ -258,13 +260,11 @@ pub async fn ticket_contract(t: &TicketAgent, tracker: &str, label: &str, author
         vec!["open", "open", "closed"]
     );
     for v in &found {
-        assert_eq!(v["kind"], "ticket");
+        assert_eq!(v["repository"], tracker);
         assert!(!v["key"].as_str().unwrap().is_empty());
-        assert!(!v["label"].as_str().unwrap().is_empty());
         assert_eq!(v["labels"], json!([label]));
         assert!([json!("ready"), json!("done")].contains(&v["lane"]));
         assert!(chrono::DateTime::parse_from_rfc3339(v["updated_at"].as_str().unwrap()).is_ok());
-        assert!(v.get("body").is_none());
     }
     for (state, expected) in [("open", &search[..2]), ("closed", &search[2..3])] {
         let found=tracker_items(t,tracker,&json!({"text":"contractneedle secondword","state":state,"label":label,"page_size":100})).await;
@@ -315,7 +315,6 @@ pub async fn ticket_contract(t: &TicketAgent, tracker: &str, label: &str, author
     }
     let p = ticket_detail(t, &parent).await;
     assert_eq!(p["children"][0]["url"], child);
-    assert_eq!(p["children"][0]["kind"], "ticket");
     assert_eq!(p["children"][0]["title"], "Child");
     assert_eq!(p["children"][0]["state"], "open");
     assert_eq!(p["blocked_by"].as_array().unwrap().len(), 1);
@@ -347,21 +346,6 @@ pub async fn ticket_contract(t: &TicketAgent, tracker: &str, label: &str, author
     assert_eq!(p["children"], json!([]));
     assert_eq!(p["blocked_by"], json!([]));
     assert!(ticket_detail(t, &child).await["parent"].is_null());
-    let before = tracker_items(t, tracker, &json!({"state":"all","page_size":100}))
-        .await
-        .len();
-    let mut off = ticket_request(tracker, "Off board");
-    off.add_to_board = false;
-    match t.create_ticket(off).await {
-        Ok(created) => assert!(ticket_detail(t, &created.target.url).await["lane"].is_null()),
-        Err(error) if error.is_unsupported() => assert_eq!(
-            tracker_items(t, tracker, &json!({"state":"all","page_size":100}))
-                .await
-                .len(),
-            before
-        ),
-        Err(e) => panic!("off-board create failed: {e}"),
-    };
 }
 
 pub trait TicketContractDriver: Send + Sync {
@@ -400,7 +384,7 @@ pub async fn ticket_board_order_contract(
             .await
             .into_iter()
             .filter_map(|v| {
-                assert!(v["assignees"].is_array());
+                assert!(v["assignee"]["name"].is_string());
                 assert_eq!(v["lane"], "ready");
                 v["url"]
                     .as_str()
@@ -619,12 +603,12 @@ pub async fn ticket_patrol_contract(
         )
         .await
         .unwrap();
-    assert_eq!(updated.assignees, vec![actor.clone()]);
-    assert_eq!(updated.lane, Some(Lane::InProgress));
-    assert!(updated.interactive);
+    assert_eq!(updated.view.assignee.as_ref().unwrap().name, actor.0);
+    assert_eq!(updated.view.lane, "in_progress");
+    assert!(updated.view.interactive);
     let read = t.read(Resource::Tickets, &url, None, "").await.unwrap();
     let item = &read.items()[0];
-    assert_eq!(item["assignees"], json!([actor]));
+    assert_eq!(item["assignee"]["name"], actor.0);
     assert_eq!(item["lane"], "in_progress");
     assert_eq!(item["interactive"], true);
     let reassigned = t
@@ -637,9 +621,12 @@ pub async fn ticket_patrol_contract(
         )
         .await
         .unwrap();
-    assert_eq!(reassigned.assignees, vec![other_actor.clone()]);
-    assert!(reassigned.interactive);
-    assert_eq!(reassigned.lane, Some(Lane::InProgress));
+    assert_eq!(
+        reassigned.view.assignee.as_ref().unwrap().name,
+        other_actor.0
+    );
+    assert!(reassigned.view.interactive);
+    assert_eq!(reassigned.view.lane, "in_progress");
     finish_task(t, &url).await;
     let mention = format!("@{}", actor.0);
     let elsewhere = format!("@{} Please provide context.", other_actor.0);
@@ -681,7 +668,7 @@ pub async fn ticket_patrol_contract(
             let c = t.create_ticket(q).await.unwrap();
             let v = ticket_detail(t, &c.target.url).await;
             assert_eq!(v["lane"], expected);
-            assert_eq!(v["assignees"], json!([actor]));
+            assert_eq!(v["assignee"]["name"], actor.0);
             assert_eq!(v["labels"], json!([label]));
             assert_eq!(v["parent"]["url"].as_str(), expected_parent.as_deref());
             assert_eq!(
@@ -709,8 +696,8 @@ pub async fn ticket_patrol_contract(
         q.lane = Some(CreateLane::Ready);
         let c = t.create_ticket(q).await.unwrap();
         assert_eq!(
-            ticket_detail(t, &c.target.url).await["assignees"],
-            json!([assigned])
+            ticket_detail(t, &c.target.url).await["assignee"]["name"],
+            assigned.0
         );
         finish_task(t, &c.target.url).await;
     }
@@ -786,8 +773,8 @@ pub async fn ticket_patrol_contract(
         )
         .await
         .unwrap();
-    assert!(enabled.interactive);
-    assert!(enabled.interactive_ancestor.is_none());
+    assert!(enabled.view.interactive);
+    assert!(enabled.view.interactive_ancestor.is_none());
     assert!(task_for(t, &child).await.is_none());
     assert!(t.refresh(&task).await.unwrap().is_none());
     assert!(!t.can_receive_work(&child).await.unwrap());
@@ -795,6 +782,7 @@ pub async fn ticket_patrol_contract(
         t.update_ticket(&child, UpdateTicket::default())
             .await
             .unwrap()
+            .view
             .interactive
     );
     let disabled = t
@@ -807,8 +795,8 @@ pub async fn ticket_patrol_contract(
         )
         .await
         .unwrap();
-    assert!(!disabled.interactive);
-    assert!(disabled.interactive_ancestor.is_none());
+    assert!(!disabled.view.interactive);
+    assert!(disabled.view.interactive_ancestor.is_none());
     assert!(task_for(t, &child).await.is_some());
     assert!(t.refresh(&task).await.unwrap().is_some());
     assert!(t.can_receive_work(&child).await.unwrap());
@@ -832,10 +820,17 @@ pub async fn ticket_patrol_contract(
         .await
         .unwrap();
     assert_eq!(
-        inherited.interactive_ancestor.as_deref(),
+        inherited
+            .view
+            .interactive_ancestor
+            .as_ref()
+            .map(|a| a.url.as_str()),
         Some(root.as_str())
     );
-    assert_eq!(ticket_detail(t, &child).await["interactive_ancestor"], root);
+    assert_eq!(
+        ticket_detail(t, &child).await["interactive_ancestor"]["url"],
+        root
+    );
     assert!(task_for(t, &child).await.is_none());
     assert!(t.refresh(&task).await.unwrap().is_none());
     assert!(!t.can_receive_work(&child).await.unwrap());
@@ -858,10 +853,16 @@ pub async fn ticket_patrol_contract(
         )
         .await
         .unwrap();
-    assert!(both.interactive);
-    assert_eq!(both.interactive_ancestor.as_deref(), Some(parent.as_str()));
+    assert!(both.view.interactive);
     assert_eq!(
-        ticket_detail(t, &child).await["interactive_ancestor"],
+        both.view
+            .interactive_ancestor
+            .as_ref()
+            .map(|a| a.url.as_str()),
+        Some(parent.as_str())
+    );
+    assert_eq!(
+        ticket_detail(t, &child).await["interactive_ancestor"]["url"],
         parent
     );
     t.update_ticket(
@@ -882,7 +883,10 @@ pub async fn ticket_patrol_contract(
     )
     .await
     .unwrap();
-    assert_eq!(ticket_detail(t, &child).await["interactive_ancestor"], root);
+    assert_eq!(
+        ticket_detail(t, &child).await["interactive_ancestor"]["url"],
+        root
+    );
     t.update_ticket(
         &root,
         UpdateTicket {
@@ -914,11 +918,11 @@ pub async fn ticket_patrol_contract(
         )
         .await
         .unwrap();
-    assert!(!detached.interactive);
-    assert!(detached.interactive_ancestor.is_none());
+    assert!(!detached.view.interactive);
+    assert!(detached.view.interactive_ancestor.is_none());
     let v = ticket_detail(t, &child).await;
     assert_eq!(v["lane"], "ready");
-    assert_eq!(v["assignees"], initial["assignees"]);
+    assert_eq!(v["assignee"], initial["assignee"]);
     finish_task(t, &child).await;
     // Ready-to-working refresh and own answer suppression.
     let url = ticket_create(t, tracker, "Move and refresh").await;
@@ -991,7 +995,7 @@ pub async fn ticket_patrol_contract(
         assert!(t.refresh(&task).await.unwrap().is_none());
         let after = ticket_detail(t, &url).await;
         assert_eq!(after["lane"], before["lane"]);
-        assert_eq!(after["assignees"], before["assignees"]);
+        assert_eq!(after["assignee"], before["assignee"]);
     }
     for working in [false, true] {
         let url = ticket_create(t, tracker, "Other recipients").await;
@@ -1337,14 +1341,14 @@ pub async fn ticket_attachment_contract(
             "screen.png",
             "image/png",
             screen.as_slice(),
-            vec!["body".to_string(), comment.id.clone()],
+            vec!["body".to_string(), comment.view.id.clone()],
         ),
         (
             &f.log_id,
             "log.gif",
             "image/gif",
             log.as_slice(),
-            vec![comment.id.clone()],
+            vec![comment.view.id.clone()],
         ),
     ] {
         let v = page.items().iter().find(|v| v["id"] == *id).unwrap();
@@ -1353,7 +1357,22 @@ pub async fn ticket_attachment_contract(
         assert_eq!(v["size"], bytes.len());
         assert_eq!(v["referenced_by"], json!(refs));
         let d = t.attachment(&url, id, bytes.len()).await.unwrap();
-        assert_eq!(serde_json::to_value(d.metadata).unwrap(), *v);
+        assert_eq!(
+            (
+                d.metadata.id.as_str(),
+                d.metadata.name.as_str(),
+                d.metadata.media_type.as_str(),
+                d.metadata.size,
+                serde_json::to_value(&d.metadata.referenced_by).unwrap(),
+            ),
+            (
+                id.as_str(),
+                name,
+                media,
+                bytes.len() as i64,
+                v["referenced_by"].clone()
+            )
+        );
         assert_eq!(d.content, bytes);
     }
     let too_large = t

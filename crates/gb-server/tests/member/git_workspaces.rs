@@ -1,5 +1,6 @@
 use crate::support;
 use branvil::agent::port::*;
+use branvil::test_support::input;
 use gb_member::WriteGuard;
 use gb_server::member::git::{Guest, Output, Pending, Workspace};
 use serde_json::json;
@@ -115,46 +116,62 @@ fn git(path: &Path, args: &[&str]) -> String {
 }
 struct Fixture {
     temp: tempfile::TempDir,
+    /// The main commit of `fork/repo`.
+    fork: String,
+    /// The embedded service's own bare repository of `acme/repo`.
     remote: PathBuf,
+    /// The clone URL the member's workspace uses.
+    url: String,
+    /// A clone that changes `acme/repo` on the service's disk, as another pusher.
     seed: PathBuf,
-    services: support::Probe,
+    services: support::Embedded,
     guest: LocalGuest,
 }
 impl Fixture {
-    fn new() -> Self {
+    async fn new() -> Self {
+        let services = support::Embedded::new().await;
+        let fork = services.fork().await;
+        let url = services.code.clone_url(support::REPO).await.unwrap();
+        Self::with(services, fork, url)
+    }
+    /// The same service with new local state: seed, host root, clones and guest.
+    fn renew(self) -> Self {
+        Self::with(self.services, self.fork, self.url)
+    }
+    fn with(services: support::Embedded, fork: String, url: String) -> Self {
         let temp = tempfile::tempdir().unwrap();
+        let remote = services
+            .fixture
+            .root()
+            .join(format!("repos/{}.git", support::REPO));
         let seed = temp.path().join("seed");
-        std::fs::create_dir(&seed).unwrap();
-        git(&seed, &["init", "-q", "-b", "main"]);
-        std::fs::write(seed.join("readme"), "first\n").unwrap();
-        git(&seed, &["add", "."]);
-        git(&seed, &["commit", "-qm", "first"]);
-        let remote = temp.path().join("remote.git");
         git(
             temp.path(),
             &[
                 "clone",
                 "-q",
-                "--bare",
-                seed.to_str().unwrap(),
                 remote.to_str().unwrap(),
+                seed.to_str().unwrap(),
             ],
         );
+        // Direct pushes skip the service's hooks, as its own fixture commits do.
         git(
             &seed,
-            &["remote", "add", "origin", remote.to_str().unwrap()],
+            &[
+                "config",
+                "remote.origin.receivepack",
+                &format!(
+                    "git -c core.hooksPath={} receive-pack",
+                    temp.path().join("no-hooks").display()
+                ),
+            ],
         );
         std::fs::create_dir(temp.path().join("clones")).unwrap();
-        let mut services = support::Probe::new(None);
-        services
-            .git_urls
-            .insert("owner/repo".into(), remote.to_string_lossy().into());
-        services
-            .git_urls
-            .insert("fork/repo".into(), format!("file://{}", remote.display()));
         Self {
             temp,
+            fork,
             remote,
+            url,
             seed,
             services,
             guest: LocalGuest::default(),
@@ -185,7 +202,7 @@ impl Fixture {
     async fn prepare(&self, work: &str, branch: &str) -> PathBuf {
         let result = self
             .workspace(work)
-            .prepare("owner/repo", branch)
+            .prepare("acme/repo", branch)
             .await
             .unwrap();
         PathBuf::from(result["repo_path"].as_str().unwrap())
@@ -203,7 +220,7 @@ impl Fixture {
 }
 #[tokio::test]
 async fn prepare_reuses_clean_cache_refreshes_remote_and_refuses_previous_owner() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let first = f.prepare("one", "ticket/1").await;
     std::fs::create_dir(first.join("target")).unwrap();
     std::fs::write(first.join("target/cache"), "keep").unwrap();
@@ -221,6 +238,7 @@ async fn prepare_reuses_clean_cache_refreshes_remote_and_refuses_previous_owner(
 }
 #[tokio::test]
 async fn unfinished_population_keeps_owner_index_bytes_and_chosen_branch() {
+    let mut f = Fixture::new().await;
     for state in [
         "staged",
         "untracked",
@@ -244,7 +262,7 @@ async fn unfinished_population_keeps_owner_index_bytes_and_chosen_branch() {
         "detached",
         "tag",
     ] {
-        let f = Fixture::new();
+        f = f.renew();
         let first = f.prepare("one", "ticket/1").await;
         let head = git(&first, &["rev-parse", "HEAD"]);
         match state {
@@ -325,10 +343,13 @@ async fn unfinished_population_keeps_owner_index_bytes_and_chosen_branch() {
 }
 #[tokio::test]
 async fn publish_is_branch_only_keeps_unstaged_work_and_returns_readiness() {
-    let mut f = Fixture::new();
-    f.services.error = Some(ServiceError::MissingCredential {
-        name: "fixture-readiness".into(),
-    });
+    let f = Fixture::new().await;
+    f.services.code.faults.fail(
+        "open_pull_requests",
+        ServiceError::MissingCredential {
+            name: "fixture-readiness".into(),
+        },
+    );
     let path = f.prepare("one", "ticket/1").await;
     f.stage(&path, "ours\n");
     std::fs::write(path.join("untracked"), "keep").unwrap();
@@ -364,7 +385,7 @@ async fn publish_is_branch_only_keeps_unstaged_work_and_returns_readiness() {
 }
 #[tokio::test]
 async fn failed_push_keeps_history_and_remote_rejection_is_reported() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let path = f.prepare("one", "main").await;
     f.stage(&path, "local\n");
     f.workspace("one").commit(&path, "local").await.unwrap();
@@ -385,11 +406,11 @@ async fn failed_push_keeps_history_and_remote_rejection_is_reported() {
 }
 #[tokio::test]
 async fn initialization_and_reassignment_failures_preserve_their_registration() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     *f.guest.fail.lock().unwrap() = Some("init".into());
     assert!(
         f.workspace("one")
-            .prepare("owner/repo", "ticket/1")
+            .prepare("acme/repo", "ticket/1")
             .await
             .is_err()
     );
@@ -398,7 +419,7 @@ async fn initialization_and_reassignment_failures_preserve_their_registration() 
     *f.guest.fail.lock().unwrap() = Some("checkout".into());
     assert!(
         f.workspace("two")
-            .prepare("owner/repo", "ticket/2")
+            .prepare("acme/repo", "ticket/2")
             .await
             .is_err()
     );
@@ -408,7 +429,7 @@ async fn initialization_and_reassignment_failures_preserve_their_registration() 
 }
 #[tokio::test]
 async fn published_and_tag_history_remains_reusable_after_remote_deletion() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let first = f.prepare("one", "ticket/1").await;
     f.stage(&first, "published\n");
     f.workspace("one")
@@ -436,7 +457,7 @@ async fn published_and_tag_history_remains_reusable_after_remote_deletion() {
 }
 #[tokio::test]
 async fn idle_cleanup_retries_and_discarded_paths_cannot_publish() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let first = f.prepare("one", "ticket/1").await;
     f.stage(&first, "dirty\n");
     let second = f.prepare("two", "ticket/2").await;
@@ -471,7 +492,7 @@ async fn idle_cleanup_retries_and_discarded_paths_cannot_publish() {
 }
 #[tokio::test]
 async fn unregistered_commit_worktree_push_and_scope_boundaries() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let manual = f.temp.path().join("clones/manual");
     git(
         f.temp.path(),
@@ -530,13 +551,13 @@ async fn unregistered_commit_worktree_push_and_scope_boundaries() {
 }
 #[tokio::test]
 async fn interactive_exchange_retries_history_and_returns_only_missing_tracking() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let w = f.workspace("one");
     assert_eq!(
         w.client_git("identity", json!({}), None).await.unwrap().0["user"],
         "Member"
     );
-    let remotes = json!([f.remote.to_str().unwrap()]);
+    let remotes = json!([f.url]);
     let metadata = json!({"remotes":remotes,"repo_path":"/never-open-on-host"});
     let (known, bytes) = w.client_git("known", metadata.clone(), None).await.unwrap();
     assert!(bytes.is_empty());
@@ -589,7 +610,7 @@ async fn interactive_exchange_retries_history_and_returns_only_missing_tracking(
 }
 #[tokio::test]
 async fn show_validates_literal_paths_kinds_limits_default_changes_and_failures() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     for (name, bytes) in [
         ("literal*", b"literal".as_slice()),
         ("-option", b"dash"),
@@ -644,8 +665,8 @@ async fn show_validates_literal_paths_kinds_limits_default_changes_and_failures(
     .map(String::from);
     let result = gb_server::member::git::show(
         &root,
-        &f.services,
-        "owner/repo",
+        &f.services.code,
+        "acme/repo",
         &paths,
         Instant::now() + Duration::from_secs(30),
     )
@@ -674,8 +695,8 @@ async fn show_validates_literal_paths_kinds_limits_default_changes_and_failures(
         git(&f.seed, &["push", "-q", "origin", "main"]);
         let result = gb_server::member::git::show(
             &root,
-            &f.services,
-            "owner/repo",
+            &f.services.code,
+            "acme/repo",
             &vec!["escaped".into(); 20],
             Instant::now() + Duration::from_secs(30),
         )
@@ -702,8 +723,8 @@ async fn show_validates_literal_paths_kinds_limits_default_changes_and_failures(
         assert!(
             gb_server::member::git::show(
                 &root,
-                &f.services,
-                "owner/repo",
+                &f.services.code,
+                "acme/repo",
                 &paths,
                 Instant::now() + Duration::from_secs(30)
             )
@@ -715,11 +736,19 @@ async fn show_validates_literal_paths_kinds_limits_default_changes_and_failures(
     f.stage(&f.seed, "new default\n");
     git(&f.seed, &["commit", "-qm", "new default"]);
     git(&f.seed, &["push", "-q", "origin", "new-default"]);
-    *f.services.git_default.lock().unwrap() = "new-default".into();
+    let owner = &f.services.fixture.owner;
+    let revision = owner.repos_get(support::REPO).await.unwrap().revision;
+    owner
+        .repos_update(
+            support::REPO,
+            input(json!({"revision":revision,"default_branch":"new-default"})),
+        )
+        .await
+        .unwrap();
     let next = gb_server::member::git::show(
         &root,
-        &f.services,
-        "owner/repo",
+        &f.services.code,
+        "acme/repo",
         &["readme".into()],
         Instant::now() + Duration::from_secs(30),
     )
@@ -730,8 +759,8 @@ async fn show_validates_literal_paths_kinds_limits_default_changes_and_failures(
     assert!(
         gb_server::member::git::show(
             &root,
-            &f.services,
-            "owner/repo",
+            &f.services.code,
+            "acme/repo",
             &["missing".into()],
             Instant::now() + Duration::from_secs(30)
         )
@@ -741,7 +770,7 @@ async fn show_validates_literal_paths_kinds_limits_default_changes_and_failures(
 }
 #[tokio::test]
 async fn changing_the_anchor_keeps_unpublished_branches_and_repository_slots_separate() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let path = f.prepare("one", "main").await;
     f.stage(&path, "local\n");
     f.workspace("one").commit(&path, "local").await.unwrap();
@@ -757,8 +786,8 @@ async fn changing_the_anchor_keeps_unpublished_branches_and_repository_slots_sep
     assert_ne!(fork["repo_path"], other.to_string_lossy().as_ref());
     let mut missing = f.workspace("one");
     missing.work = None;
-    assert!(missing.prepare("owner/repo", "main").await.is_err());
-    for repo in ["owner", "owner/..", "owner//repo"] {
+    assert!(missing.prepare("acme/repo", "main").await.is_err());
+    for repo in ["acme", "acme/..", "acme//repo"] {
         assert!(f.workspace("one").prepare(repo, "main").await.is_err());
     }
 }
@@ -766,6 +795,7 @@ async fn changing_the_anchor_keeps_unpublished_branches_and_repository_slots_sep
 #[tokio::test]
 async fn clone_programs_and_redirections_execute_only_in_the_guest_without_credentials() {
     use std::os::unix::fs::PermissionsExt;
+    let mut f = Fixture::new().await;
     for plant in [
         "hook",
         "filter",
@@ -775,7 +805,7 @@ async fn clone_programs_and_redirections_execute_only_in_the_guest_without_crede
         "worktree",
         "symlink",
     ] {
-        let f = Fixture::new();
+        f = f.renew();
         let path = f.prepare("one", "topic").await;
         let trap = f.temp.path().join("trap");
         git(
@@ -864,7 +894,7 @@ async fn clone_programs_and_redirections_execute_only_in_the_guest_without_crede
         let _ = f.workspace("one").commit(&path, "planted").await;
         let _ = f.workspace("one").push(&path).await;
         let _ = f.workspace("one").publish(&path, "planted").await;
-        let _ = f.workspace("one").prepare("owner/repo", "topic").await;
+        let _ = f.workspace("one").prepare("acme/repo", "topic").await;
         assert!(!marker.exists(), "{plant}");
         for (_, _, env) in f.guest.calls.lock().unwrap().iter() {
             assert!(env.keys().all(|k| {
@@ -882,8 +912,9 @@ async fn clone_programs_and_redirections_execute_only_in_the_guest_without_crede
 }
 #[tokio::test]
 async fn commit_finishes_conflicted_merge_even_when_the_result_is_ours() {
+    let mut f = Fixture::new().await;
     for ours in [true, false] {
-        let f = Fixture::new();
+        f = f.renew();
         let path = f.prepare("one", "topic").await;
         let base = git(&path, &["rev-parse", "HEAD"]);
         git(&path, &["checkout", "-qb", "other"]);
@@ -913,8 +944,9 @@ async fn commit_finishes_conflicted_merge_even_when_the_result_is_ours() {
 }
 #[tokio::test]
 async fn commits_consume_cherry_pick_and_revert_state_and_report_a_guest_hook_failure() {
+    let mut f = Fixture::new().await;
     for operation in ["cherry-pick", "revert"] {
-        let f = Fixture::new();
+        f = f.renew();
         let path = f.prepare("one", "topic").await;
         git(&path, &["checkout", "-qb", "other"]);
         f.stage(&path, "theirs\n");
@@ -940,7 +972,7 @@ async fn commits_consume_cherry_pick_and_revert_state_and_report_a_guest_hook_fa
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let f = Fixture::new();
+        let f = Fixture::new().await;
         let path = f.prepare("one", "topic").await;
         let hook = path.join(".git/hooks/pre-commit");
         let marker = path.join("hook-ran");
@@ -963,7 +995,7 @@ async fn commits_consume_cherry_pick_and_revert_state_and_report_a_guest_hook_fa
 }
 #[tokio::test]
 async fn public_tracking_refs_do_not_keep_idle_work_and_shallow_history_is_not_advertised() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let path = f.prepare("one", "main").await;
     let baseline = git(&path, &["rev-parse", "HEAD"]);
     f.stage(&path, "discarded\n");
@@ -987,7 +1019,7 @@ async fn public_tracking_refs_do_not_keep_idle_work_and_shallow_history_is_not_a
     let w = f.workspace("two");
     let origin = gb_server::member::git::Origin::open(
         &w.host_root,
-        "owner/repo",
+        "acme/repo",
         f.remote.to_string_lossy().into(),
         w.deadline,
     )
@@ -999,7 +1031,7 @@ async fn public_tracking_refs_do_not_keep_idle_work_and_shallow_history_is_not_a
 }
 #[tokio::test]
 async fn show_omits_oversized_tree_contents_and_keeps_metadata_within_budget() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let blob = git(&f.seed, &["hash-object", "-w", "readme"]);
     let input = (0..5000)
         .map(|n| format!("100644 blob {blob}\t{}-{n}\n", "x".repeat(80)))
@@ -1045,8 +1077,8 @@ async fn show_omits_oversized_tree_contents_and_keeps_metadata_within_budget() {
     git(&f.remote, &["update-ref", "refs/heads/main", sha.trim()]);
     let result = gb_server::member::git::show(
         &f.temp.path().join("host"),
-        &f.services,
-        "owner/repo",
+        &f.services.code,
+        "acme/repo",
         &[".".into()],
         Instant::now() + Duration::from_secs(30),
     )
@@ -1070,19 +1102,21 @@ impl gb_server::member::session::Control for NoRecord {
 }
 #[tokio::test]
 async fn prepare_dispatch_resolves_ticket_and_fork_heads_and_rejects_invalid_anchors() {
-    let mut f = Fixture::new();
-    for (url, repository) in [("ticket", Some("owner/repo")), ("loose", None)] {
-        let ticket = json!({"repair":false,"kind":"ticket","url":url,"title":"Ticket","label":"T-1","key":"T-1","tracker":"owner/repo","repository":repository,"body":"","state":"open","assignees":[],"author":"member","labels":[],"lane":null,"parent":null,"children":[],"blocked_by":[],"blocks":[],"interactive":false,"interactive_ancestor":null});
-        f.services.pages.insert(
-            format!("tickets|{url}|"),
-            Ok(ReadPage::of(Resource::Tickets, vec![ticket], None, None).unwrap()),
-        );
-    }
-    f.services.git_head = Some(PullRequestHead {
-        repository: "fork/repo".into(),
-        branch: "review".into(),
-    });
-    git(&f.remote, &["branch", "review", "main"]);
+    let f = Fixture::new().await;
+    let issue = f.services.ticket("Ticket").await;
+    let key = f.services.code.ticket_view(&issue).await.unwrap().key;
+    f.services
+        .fixture
+        .commit(support::FORK, "review", Some(&f.fork), "readme", "review\n");
+    let pr = f
+        .services
+        .fixture
+        .pull(
+            &f.services.fixture.owner,
+            support::FORK,
+            json!({"title":"Review","head":"review","base":"main"}),
+        )
+        .await;
     let roster = BTreeMap::new();
     let w = f.workspace("ticket");
     let session = gb_server::member::session::Session {
@@ -1103,17 +1137,29 @@ async fn prepare_dispatch_resolves_ticket_and_fork_heads_and_rejects_invalid_anc
         git_root: f.temp.path(),
     };
     let args = |parts: &[&str]| parts.iter().map(|v| (*v).into()).collect::<Vec<String>>();
-    for tail in [
-        vec![],
-        vec!["--repo", "owner/repo"],
-        vec!["--branch", "branch"],
-        vec!["--issue-url", "ticket", "--repo", "fork/repo"],
-        vec!["--pr-url", "pr", "--repo", "owner/repo"],
-        vec!["--issue-url", "loose"],
+    for (tail, key) in [
+        (vec![], "capabilities.member_git.prepare_anchor"),
+        (
+            vec!["--repo", "acme/repo"],
+            "capabilities.member_git.prepare_anchor",
+        ),
+        (
+            vec!["--branch", "branch"],
+            "capabilities.member_git.prepare_anchor",
+        ),
+        (
+            vec!["--issue-url", &issue, "--repo", "fork/repo"],
+            "cli.member.ticket_repository_mismatch",
+        ),
+        (
+            vec!["--pr-url", &pr, "--repo", "acme/repo"],
+            "cli.member.prepare_repo_pr",
+        ),
     ] {
         let mut input = vec!["git", "prepare", "--person", "aiko"];
         input.extend(tail);
-        assert!(session.execute(&args(&input), "").await.is_err());
+        let error = session.execute(&args(&input), "").await.err().unwrap();
+        assert!(error.to_string().contains(key), "{input:?}: {error}");
     }
     let ticket = session
         .execute(
@@ -1123,15 +1169,15 @@ async fn prepare_dispatch_resolves_ticket_and_fork_heads_and_rejects_invalid_anc
                 "--person",
                 "aiko",
                 "--issue-url",
-                "ticket",
+                &issue,
                 "--repo",
-                "owner/repo",
+                "acme/repo",
             ]),
             "",
         )
         .await
         .unwrap();
-    assert_eq!(ticket.payload["branch"], "ticket/T-1");
+    assert_eq!(ticket.payload["branch"], format!("ticket/{key}"));
     let path = PathBuf::from(ticket.payload["repo_path"].as_str().unwrap());
     f.stage(&path, "staged command body");
     let relative = path.file_name().unwrap().to_str().unwrap();
@@ -1152,7 +1198,7 @@ async fn prepare_dispatch_resolves_ticket_and_fork_heads_and_rejects_invalid_anc
         .unwrap();
     assert_eq!(committed.payload["status"], "committed");
     assert_eq!(git(&path, &["log", "-1", "--format=%B"]), "entire\nmessage");
-    let loose = session
+    let review = session
         .execute(
             &args(&[
                 "git",
@@ -1160,52 +1206,36 @@ async fn prepare_dispatch_resolves_ticket_and_fork_heads_and_rejects_invalid_anc
                 "--person",
                 "aiko",
                 "--issue-url",
-                "loose",
-                "--repo",
-                "owner/repo",
-            ]),
-            "",
-        )
-        .await
-        .unwrap();
-    assert_eq!(loose.payload["repository"], "owner/repo");
-    let pr = session
-        .execute(
-            &args(&[
-                "git",
-                "prepare",
-                "--person",
-                "aiko",
-                "--issue-url",
-                "ticket",
+                &issue,
                 "--pr-url",
-                "pr",
+                &pr,
             ]),
             "",
         )
         .await
         .unwrap();
-    assert_eq!(pr.payload["repository"], "fork/repo");
-    assert_eq!(pr.payload["branch"], "review");
-    assert_eq!(pr.payload["mode"], "pull_request_review");
+    assert_eq!(review.payload["repository"], "fork/repo");
+    assert_eq!(review.payload["branch"], "review");
+    assert_eq!(review.payload["mode"], "pull_request_review");
 }
 
 #[tokio::test]
 async fn push_reports_readiness_for_open_prs_without_waiting_for_checks() {
-    let mut f = Fixture::new();
-    f.services.open = vec!["pr".into()];
-    f.services.checks.insert("pr".into(),serde_json::from_value(json!({"target":{"kind":"pull_request","url":"pr","title":"T","label":"!1"},"head_sha":"head","checks":[],"required_checks":"running","feedback":branvil::agent::port::Feedback::default()})).unwrap());
+    let f = Fixture::new().await;
+    f.services.require_checks().await;
+    let pr = f.services.pull("topic", true, &[]).await;
     let path = f.prepare("one", "topic").await;
     f.stage(&path, "ours");
     let result = f.workspace("one").publish(&path, "ours").await.unwrap();
     assert_eq!(result["pushed"], true);
-    assert_eq!(result["pull_requests"][0]["url"], "pr");
+    assert_eq!(result["pull_requests"].as_array().unwrap().len(), 1);
+    assert_eq!(result["pull_requests"][0]["url"], pr);
     assert_eq!(result["pull_requests"][0]["required_checks"], "running");
 }
 
 #[tokio::test]
 async fn dirty_selected_checkout_keeps_one_warm_idle_slot() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let first = f.prepare("one", "ticket/1").await;
     f.stage(&first, "dirty one\n");
     let second = f.prepare("two", "ticket/2").await;
@@ -1222,7 +1252,7 @@ async fn dirty_selected_checkout_keeps_one_warm_idle_slot() {
 }
 #[tokio::test]
 async fn partial_cleanup_retries_without_reading_missing_git_metadata() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let first = f.prepare("one", "ticket/1").await;
     f.stage(&first, "dirty\n");
     let second = f.prepare("two", "ticket/2").await;
@@ -1237,7 +1267,7 @@ async fn partial_cleanup_retries_without_reading_missing_git_metadata() {
 }
 #[tokio::test]
 async fn detached_and_unprepared_pushes_have_actionable_diagnostics() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     assert_eq!(
         f.workspace("one")
             .push(&f.seed)
@@ -1260,7 +1290,7 @@ async fn detached_and_unprepared_pushes_have_actionable_diagnostics() {
 
 #[tokio::test]
 async fn cleanup_nonzero_status_retries_but_success_does_not() {
-    let f = Fixture::new();
+    let f = Fixture::new().await;
     let first = f.prepare("one", "ticket/1").await;
     f.stage(&first, "dirty\n");
     f.prepare("two", "ticket/2").await;
@@ -1283,48 +1313,71 @@ async fn cleanup_nonzero_status_retries_but_success_does_not() {
     );
 }
 
-fn lifecycle_page(f: &mut Fixture, kind: &str, url: &str, state: &str, done: bool, merged: bool) {
-    let resource = if kind == "ticket" {
-        Resource::Tickets
+/// Open work of `kind` on the service: a ticket, or aiko's pull request of its own branch.
+async fn open_work(f: &Fixture, kind: &str, name: &str) -> String {
+    if kind == "ticket" {
+        f.services.ticket(name).await
     } else {
-        Resource::PullRequests
-    };
-    let value = if kind == "ticket" {
-        json!({"repair":false,"kind":"ticket","url":url,"title":"Ticket","label":"T","key":"1","tracker":"owner/repo","repository":"owner/repo","body":"","state":state,"assignees":[],"author":"member","labels":[],"lane":if done {json!("done")} else {json!("in_progress")},"parent":null,"children":[],"blocked_by":[],"blocks":[],"interactive":false,"interactive_ancestor":null})
+        f.services.pull(name, true, &[]).await
+    }
+}
+/// Ends work: a ticket closed or moved to done while open, a pull request merged or closed.
+async fn end_work(f: &Fixture, kind: &str, url: &str, done: bool, merged: bool) {
+    let services = &f.services;
+    if kind == "ticket" {
+        if done {
+            let key = services.code.ticket_view(url).await.unwrap().key;
+            services
+                .fixture
+                .member("aiko")
+                .await
+                .tickets_put_on_board(support::REPO, &key, input(json!({"lane":"done"})))
+                .await
+                .unwrap();
+            let ticket = services.code.ticket_view(url).await.unwrap();
+            assert_eq!(
+                (ticket.state.as_str(), ticket.lane.as_str()),
+                ("open", "done")
+            );
+        } else {
+            services.close_ticket(url).await;
+        }
+    } else if merged {
+        let pull = services.code.pull_view(url).await.unwrap();
+        services
+            .fixture
+            .merge(support::REPO, pull.number, &pull.head_sha, &pull.base_sha)
+            .await;
     } else {
-        json!({"kind":"pull_request","url":url,"title":"PR","label":"P","repository":"owner/repo","body":"","state":state,"assignees":[],"author":"member","requested_reviewers":[],"labels":[],"author_type":"User","head":"feature","head_repository":"owner/repo","head_sha":"a".repeat(40),"base":"main","merged":merged,"draft":false,"changed_files":null})
-    };
-    f.services.pages.insert(
-        format!("{}|{}|", resource.name(), url),
-        Ok(ReadPage::of(resource, [value], None, None).unwrap()),
-    );
+        services.close_pull(url).await;
+    }
+}
+async fn prepare_work(f: &Fixture, kind: &str, work: &str, branch: &str) -> serde_json::Value {
+    let mut w = f.workspace(work);
+    w.work = Some((kind, work));
+    w.prepare("acme/repo", branch).await.unwrap()
 }
 #[tokio::test]
 async fn active_work_keeps_clean_clones_and_terminal_work_releases_them() {
-    for (kind, state, done, merged) in [
-        ("ticket", "closed", false, false),
-        ("ticket", "open", true, false),
-        ("pull_request", "closed", false, true),
-        ("pull_request", "closed", false, false),
+    for (kind, done, merged) in [
+        ("ticket", false, false),
+        ("ticket", true, false),
+        ("pull_request", false, true),
+        ("pull_request", false, false),
     ] {
-        let mut f = Fixture::new();
-        lifecycle_page(&mut f, kind, "one", "open", false, false);
-        lifecycle_page(&mut f, kind, "two", "open", false, false);
-        let prepare = |work, branch| {
-            let mut w = f.workspace(work);
-            w.work = Some((kind, work));
-            async move { w.prepare("owner/repo", branch).await.unwrap() }
-        };
-        let first = prepare("one", "ticket/1").await;
-        let second = prepare("two", "ticket/2").await;
+        let f = Fixture::new().await;
+        let one = open_work(&f, kind, "work-one").await;
+        let two = open_work(&f, kind, "work-two").await;
+        let first = prepare_work(&f, kind, &one, "ticket/1").await;
+        let second = prepare_work(&f, kind, &two, "ticket/2").await;
         assert_ne!(first["repo_path"], second["repo_path"]);
         for _ in 0..2 {
             assert_eq!(
-                prepare("one", "ticket/1").await["repo_path"],
+                prepare_work(&f, kind, &one, "ticket/1").await["repo_path"],
                 first["repo_path"]
             );
             assert_eq!(
-                prepare("two", "ticket/2").await["repo_path"],
+                prepare_work(&f, kind, &two, "ticket/2").await["repo_path"],
                 second["repo_path"]
             );
         }
@@ -1335,7 +1388,7 @@ async fn active_work_keeps_clean_clones_and_terminal_work_releases_them() {
             ),
             "ticket/1"
         );
-        lifecycle_page(&mut f, kind, "one", state, done, merged);
+        end_work(&f, kind, &one, done, merged).await;
         let next = f.prepare("three", "ticket/3").await;
         assert_eq!(next.to_str().unwrap(), first["repo_path"].as_str().unwrap());
         assert!(Path::new(second["repo_path"].as_str().unwrap()).exists());
@@ -1344,6 +1397,7 @@ async fn active_work_keeps_clean_clones_and_terminal_work_releases_them() {
 
 #[tokio::test]
 async fn excluded_work_retains_git_based_reuse() {
+    let mut f = Fixture::new().await;
     for kind in [
         "pull_request_review",
         "ticket_mention",
@@ -1351,10 +1405,10 @@ async fn excluded_work_retains_git_based_reuse() {
         "manual",
         "routine",
     ] {
-        let f = Fixture::new();
+        f = f.renew();
         let mut w = f.workspace("one");
         w.work = Some((kind, "one"));
-        let first = w.prepare("owner/repo", "first").await.unwrap();
+        let first = w.prepare("acme/repo", "first").await.unwrap();
         assert_eq!(
             f.prepare("two", "second").await.to_str().unwrap(),
             first["repo_path"]
@@ -1363,18 +1417,20 @@ async fn excluded_work_retains_git_based_reuse() {
 }
 #[tokio::test]
 async fn active_clones_survive_cleanup_with_one_idle_clone_per_repository() {
-    let mut f = Fixture::new();
-    for repo in ["owner/repo", "fork/repo"] {
-        lifecycle_page(&mut f, "ticket", repo, "open", false, false);
+    let f = Fixture::new().await;
+    let repos = [support::REPO, support::FORK];
+    let mut tickets = vec![];
+    for repo in repos {
+        tickets.push((repo, f.services.ticket(repo).await));
     }
     let mut active = vec![];
-    for repo in ["owner/repo", "fork/repo"] {
-        let mut w = f.workspace(repo);
-        w.work = Some(("ticket", repo));
+    for (repo, ticket) in &tickets {
+        let mut w = f.workspace(ticket);
+        w.work = Some(("ticket", ticket));
         active.push(w.prepare(repo, "active").await.unwrap());
     }
     let mut idle = vec![];
-    for repo in ["owner/repo", "fork/repo"] {
+    for repo in repos {
         let mut paths = vec![];
         for work in ["one", "two", "three"] {
             let value = f.workspace(work).prepare(repo, work).await.unwrap();
@@ -1401,15 +1457,14 @@ async fn active_clones_survive_cleanup_with_one_idle_clone_per_repository() {
 
 #[tokio::test]
 async fn author_feedback_keeps_the_ticket_clone_after_the_agent_chooses_a_branch() {
-    let mut f = Fixture::new();
-    lifecycle_page(&mut f, "ticket", "ticket", "open", false, false);
-    lifecycle_page(&mut f, "pull_request", "pr", "closed", false, false);
-    let mut w = f.workspace("ticket");
-    w.work = Some(("ticket", "ticket"));
-    let first = w.prepare("owner/repo", "ticket/1").await.unwrap();
+    let f = Fixture::new().await;
+    let ticket = f.services.ticket("ticket").await;
+    let mut w = f.workspace(&ticket);
+    w.work = Some(("ticket", &ticket));
+    let first = w.prepare("acme/repo", "ticket/1").await.unwrap();
     let path = Path::new(first["repo_path"].as_str().unwrap());
     git(path, &["switch", "-c", "agent/chosen"]);
-    let feedback = w.prepare("owner/repo", "agent/chosen").await.unwrap();
+    let feedback = w.prepare("acme/repo", "agent/chosen").await.unwrap();
     assert_eq!(feedback["repo_path"], first["repo_path"]);
     assert_eq!(feedback["branch"], "agent/chosen");
     assert_ne!(f.prepare("other", "other").await, path);
@@ -1418,47 +1473,66 @@ async fn author_feedback_keeps_the_ticket_clone_after_the_agent_chooses_a_branch
 #[tokio::test]
 async fn unreadable_targets_stay_reserved_without_blocking_other_work() {
     for kind in ["ticket", "pull_request"] {
-        for error in [
-            ServiceError::NotFound,
-            ServiceError::Unavailable,
-            ServiceError::OutOfScope,
-            ServiceError::InvalidResult,
-        ] {
-            let mut f = Fixture::new();
-            f.services.error = Some(error.clone());
-            lifecycle_page(&mut f, kind, "gone", "open", false, false);
-            let mut w = f.workspace("gone");
-            w.work = Some((kind, "gone"));
-            let first = w.prepare("owner/repo", "first").await.unwrap();
-            f.services.pages.insert(
-                format!(
-                    "{}|gone|",
+        // `None` makes a ticket really gone: it is deleted from the service.
+        let mut errors = vec![
+            Some(ServiceError::NotFound),
+            Some(ServiceError::Unavailable),
+            Some(ServiceError::OutOfScope),
+            Some(ServiceError::InvalidResult),
+        ];
+        if kind == "ticket" {
+            errors.insert(0, None);
+        }
+        for error in errors {
+            let f = Fixture::new().await;
+            let gone = open_work(&f, kind, "gone").await;
+            let mut w = f.workspace(&gone);
+            w.work = Some((kind, &gone));
+            let first = w.prepare("acme/repo", "first").await.unwrap();
+            let faults = &f.services.code.faults;
+            match error {
+                Some(error) => faults.fail(
                     if kind == "ticket" {
-                        "tickets"
+                        "ticket_view"
                     } else {
-                        "pull_requests"
-                    }
+                        "pull_view"
+                    },
+                    error,
                 ),
-                Err(error),
-            );
+                None => {
+                    let key = f.services.code.ticket_view(&gone).await.unwrap().key;
+                    f.services
+                        .fixture
+                        .owner
+                        .tickets_delete_ticket(support::REPO, &key)
+                        .await
+                        .unwrap();
+                }
+            }
             for other_kind in ["manual", "pull_request_review", "ticket_mention", "chat"] {
                 let mut other = f.workspace("other");
                 other.work = Some((other_kind, "other"));
-                let next = other.prepare("owner/repo", "next").await.unwrap();
+                let next = other.prepare("acme/repo", "next").await.unwrap();
                 assert_ne!(first["repo_path"], next["repo_path"]);
                 assert!(Path::new(first["repo_path"].as_str().unwrap()).exists());
             }
+            // The reservation was decided by reading the target, not by skipping it.
+            assert!(
+                faults
+                    .calls()
+                    .iter()
+                    .any(|(op, url)| ["ticket_view", "pull_view"].contains(op) && url == &gone)
+            );
         }
     }
 }
 #[tokio::test]
 async fn resumed_work_keeps_identity_but_records_the_canonical_target_kind() {
-    let mut f = Fixture::new();
-    f.services.error = Some(ServiceError::NotFound);
-    lifecycle_page(&mut f, "pull_request", "pr", "open", false, false);
-    let mut resumed = f.workspace("pr");
-    resumed.work = Some(("ticket", "pr"));
-    let first = resumed.prepare("owner/repo", "feature").await.unwrap();
+    let f = Fixture::new().await;
+    let pr = f.services.pull("pr-branch", true, &[]).await;
+    let mut resumed = f.workspace(&pr);
+    resumed.work = Some(("ticket", &pr));
+    let first = resumed.prepare("acme/repo", "feature").await.unwrap();
     let path = Path::new(first["repo_path"].as_str().unwrap());
     let record: serde_json::Value = serde_json::from_slice(
         &std::fs::read(f.temp.path().join("host/checkouts").join(format!(
@@ -1468,40 +1542,37 @@ async fn resumed_work_keeps_identity_but_records_the_canonical_target_kind() {
         .unwrap(),
     )
     .unwrap();
-    assert_eq!(record["target"], json!(["pull_request", "pr"]));
+    assert_eq!(record["target"], json!(["pull_request", pr]));
     let record_path = f.temp.path().join("host/checkouts").join(format!(
         "{}.json",
         path.file_name().unwrap().to_str().unwrap()
     ));
     let mut old = record.clone();
-    old["target"] = json!(["ticket", "pr"]);
+    old["target"] = json!(["ticket", pr]);
     std::fs::write(&record_path, serde_json::to_vec(&old).unwrap()).unwrap();
     git(path, &["switch", "-c", "agent/renamed"]);
     assert_eq!(
-        resumed
-            .prepare("owner/repo", "agent/renamed")
-            .await
-            .unwrap()["repo_path"],
+        resumed.prepare("acme/repo", "agent/renamed").await.unwrap()["repo_path"],
         first["repo_path"]
     );
     let repaired: serde_json::Value =
         serde_json::from_slice(&std::fs::read(record_path).unwrap()).unwrap();
-    assert_eq!(repaired["target"], json!(["pull_request", "pr"]));
+    assert_eq!(repaired["target"], json!(["pull_request", pr]));
 
     let other = f.prepare("other", "other").await;
     assert_ne!(other, path);
     std::fs::write(other.join("dirty"), "keep").unwrap();
-    lifecycle_page(&mut f, "pull_request", "pr", "closed", false, true);
+    end_work(&f, "pull_request", &pr, false, true).await;
     assert_eq!(f.prepare("final", "final").await, path);
 }
 
 #[tokio::test]
 async fn initially_unknown_target_is_not_treated_as_unreserved_work() {
-    let mut f = Fixture::new();
-    f.services.error = Some(ServiceError::Unavailable);
+    let f = Fixture::new().await;
+    // Neither a ticket nor a pull request of the service.
     let mut w = f.workspace("unknown");
     w.work = Some(("ticket", "unknown"));
-    let first = w.prepare("owner/repo", "first").await.unwrap();
+    let first = w.prepare("acme/repo", "first").await.unwrap();
     assert_ne!(
         f.prepare("other", "other").await.to_str().unwrap(),
         first["repo_path"]

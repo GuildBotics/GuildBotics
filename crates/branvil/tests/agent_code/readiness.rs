@@ -151,10 +151,10 @@ pub(super) async fn primary_failure_logs_and_cancelled_fallback(
             finish_claim(base, runner, &attempt, conclusion).await;
         }
         let readiness = code
-            .readiness(&pull.target.url, true, MAX_LOG_TAIL_BYTES)
+            .readiness(&pull.written.target.url, true, MAX_LOG_TAIL_BYTES)
             .await
             .unwrap();
-        assert_eq!(readiness.required_checks, RequiredChecks::Failed);
+        assert_eq!(readiness.report.required_checks, RequiredChecks::Failed);
         let logs = readiness.failed_logs.unwrap();
         assert_eq!(logs.len(), 1);
         let log = &logs[0];
@@ -207,7 +207,7 @@ pub(super) async fn ten_failed_logs_fit_one_page(
     let page = code
         .read(
             Resource::PullRequestReadiness,
-            &pull.target.url,
+            &pull.written.target.url,
             Some(&json!({"failed_logs":true})),
             "",
         )
@@ -239,17 +239,18 @@ pub(super) async fn pending_closed_and_advanced_heads(
     let (git, repo, head, pull) =
         fixture(root, owner, code, owner_token, "freshness", &["test"]).await;
     let pending = code
-        .readiness(&pull.target.url, false, MAX_LOG_TAIL_BYTES)
+        .readiness(&pull.written.target.url, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
-    assert_eq!(pending.head_sha, head);
-    assert_eq!(pending.required_checks, RequiredChecks::Running);
+    assert_eq!(pending.report.head_sha, head);
+    assert_eq!(pending.report.required_checks, RequiredChecks::Running);
     let attempt = claim_head(base, runner, &head).await;
     finish_claim(base, runner, &attempt, "success").await;
     assert_eq!(
-        code.readiness(&pull.target.url, false, MAX_LOG_TAIL_BYTES)
+        code.readiness(&pull.written.target.url, false, MAX_LOG_TAIL_BYTES)
             .await
             .unwrap()
+            .report
             .required_checks,
         RequiredChecks::Passed
     );
@@ -263,18 +264,26 @@ pub(super) async fn pending_closed_and_advanced_heads(
         &credential.password,
     );
     let moved = code
-        .readiness(&pull.target.url, false, MAX_LOG_TAIL_BYTES)
+        .readiness(&pull.written.target.url, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
-    assert_eq!(moved.head_sha, advanced);
-    assert_ne!(moved.required_checks, RequiredChecks::Passed);
-    let number = pull.target.url.rsplit('/').next().unwrap().parse().unwrap();
+    assert_eq!(moved.report.head_sha, advanced);
+    assert_ne!(moved.report.required_checks, RequiredChecks::Passed);
+    let number = pull
+        .written
+        .target
+        .url
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
     owner.pulls_set_open(&repo, number, false).await.unwrap();
     let closed = code
-        .readiness(&pull.target.url, false, MAX_LOG_TAIL_BYTES)
+        .readiness(&pull.written.target.url, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
-    assert_eq!(closed.head_sha, advanced);
+    assert_eq!(closed.report.head_sha, advanced);
     let attempt = claim_head(base, runner, &advanced).await;
     finish_claim(base, runner, &attempt, "success").await;
 }
@@ -289,7 +298,15 @@ pub(super) async fn author_yields_running_checks(
 ) {
     let (_, repo, head, pull) = fixture(root, owner, code, owner_token, "yield", &["test"]).await;
     let attempt = claim_head(base, runner, &head).await;
-    let n = pull.target.url.rsplit('/').next().unwrap().parse().unwrap();
+    let n = pull
+        .written
+        .target
+        .url
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
     let current = owner.repos_get(&repo).await.unwrap();
     owner
         .repos_update(
@@ -307,24 +324,25 @@ pub(super) async fn author_yields_running_checks(
         .await
         .unwrap();
     assert_eq!(
-        code.yield_pull_request_checks(&pull.target.url)
+        code.yield_pull_request_checks(&pull.written.target.url)
             .await
             .unwrap(),
         1
     );
     assert_eq!(
-        code.yield_pull_request_checks(&pull.target.url)
+        code.yield_pull_request_checks(&pull.written.target.url)
             .await
             .unwrap(),
         0
     );
     finish_claim(base, runner, &attempt, "failure").await;
     let ready = code
-        .readiness(&pull.target.url, false, MAX_LOG_TAIL_BYTES)
+        .readiness(&pull.written.target.url, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
     assert!(
         ready
+            .report
             .checks
             .iter()
             .all(|c| c.conclusion.as_deref() != Some("cancelled"))

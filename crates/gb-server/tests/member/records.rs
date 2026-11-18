@@ -115,14 +115,19 @@ fn domain_payloads_preserve_targets_transitions_comments_and_attempt_limits() {
             ["merged"],
         false
     );
-    for (state, changed, expected) in [
+    // Only an update that closed the ticket marks its target closed; one that
+    // found it closed or left it open does not.
+    for (state, closed, expected) in [
         ("closed", true, true),
         ("closed", false, false),
-        ("open", true, false),
+        ("open", false, false),
     ] {
+        let mut written = target.clone();
+        if closed {
+            written["closed"] = true.into();
+        }
         assert_eq!(
-            events::ticket_closed(&json!({"target":target,"state":state,"state_changed":changed}))
-                .is_some(),
+            events::ticket_closed(&json!({"target":written,"state":state})).is_some(),
             expected
         );
     }
@@ -454,9 +459,9 @@ fn mapped_domain_and_roster_conditions_are_complete() {
         opened["payload"],
         json!({"action":"opened","ticket":{"url":"U","label":"L","title":"Title"}})
     );
-    let closed =
-        events::ticket_closed(&json!({"target":target,"state":"closed","state_changed":true}))
-            .unwrap();
+    let mut written = target.clone();
+    written["closed"] = true.into();
+    let closed = events::ticket_closed(&json!({"target":written,"state":"closed"})).unwrap();
     assert_eq!(closed["payload"]["action"], "closed");
     assert_eq!(closed["payload"]["ticket"]["title"], "Title");
     let created=events::pr_created(&json!({"created":true,"target":{"kind":"pull_request","url":"PR","title":"Title","label":"!1"}})).unwrap();

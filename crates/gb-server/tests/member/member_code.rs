@@ -1,5 +1,8 @@
 use branvil::agent::port::*;
-use branvil::{agent::CodeAgent, test_support::Fixture};
+use branvil::{
+    agent::{CodeAgent, TicketAgent},
+    test_support::Fixture,
+};
 use serde_json::json;
 pub async fn member_show_contract(service: &CodeAgent, repository: &str) {
     let temp = tempfile::tempdir().unwrap();
@@ -62,7 +65,7 @@ async fn author_ticket_requires_exactly_one_open_assigned_link() {
         .await
         .unwrap();
     let original = code
-        .read(Resource::PullRequests, &pr.target.url, None, "")
+        .read(Resource::PullRequests, &pr.written.target.url, None, "")
         .await
         .unwrap();
     let author: ActorName = serde_json::from_value(original.items()[0]["author"].clone()).unwrap();
@@ -74,7 +77,7 @@ async fn author_ticket_requires_exactly_one_open_assigned_link() {
     let two = tickets.create_ticket(request).await.unwrap().target.url;
     for links in [vec![], vec![one.clone()], vec![one.clone(), two.clone()]] {
         code.update_pull_request(
-            &pr.target.url,
+            &pr.written.target.url,
             UpdatePullRequest {
                 tickets: Some(
                     links
@@ -91,7 +94,7 @@ async fn author_ticket_requires_exactly_one_open_assigned_link() {
         .await
         .unwrap();
         assert_eq!(
-            gb_server::member::repository::author_ticket(code, tickets, &pr.target.url)
+            gb_server::member::repository::author_ticket(code, tickets, &pr.written.target.url)
                 .await
                 .unwrap(),
             if links.len() == 1 {
@@ -112,7 +115,7 @@ async fn author_ticket_requires_exactly_one_open_assigned_link() {
         .await
         .unwrap();
     assert_eq!(
-        gb_server::member::repository::author_ticket(code, tickets, &pr.target.url)
+        gb_server::member::repository::author_ticket(code, tickets, &pr.written.target.url)
             .await
             .unwrap(),
         Some(one)
@@ -125,7 +128,6 @@ fn ticket_request(tracker: &str, title: &str) -> CreateTicket {
         title: title.into(),
         body: String::new(),
         labels: vec![],
-        add_to_board: true,
         interactive: false,
         assignee: None,
         lane: None,

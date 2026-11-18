@@ -1495,7 +1495,7 @@ pub(crate) mod tests {
         generation: Arc<crate::execution::Generation>,
         arguments: Mutex<Vec<Vec<String>>>,
         failures: Mutex<std::collections::VecDeque<crate::dispatcher::DispatchFailure>>,
-        tickets: Arc<dyn branvil::agent::port::TicketService>,
+        tickets: Arc<TicketAgent>,
         native: Native,
         calls: Mutex<Vec<gb_wire::WorkflowInvocation>>,
         /// Each command run, by its file and what the file held as it ran.
@@ -1644,7 +1644,7 @@ pub(crate) mod tests {
                         }
                     );
                     if command.work_kind == "ticket_mention" {
-                        assert_eq!(item.items()[0]["assignees"], json!(["yuki"]));
+                        assert_eq!(item.items()[0]["assignee"]["name"], "yuki");
                     }
                     vec![
                         (
@@ -1754,7 +1754,7 @@ pub(crate) mod tests {
                     if args[..2] == ["pr", "create"] {
                         let value: Value = serde_json::from_str(&reply.stdout).unwrap();
                         assert_eq!(value["created"], false);
-                        assert_eq!(value["target"]["url"], expected_pr.as_deref().unwrap());
+                        assert_eq!(value["url"], expected_pr.as_deref().unwrap());
                     }
                 }
                 if let Some(error) = self.after_completion.lock().unwrap().take() {
@@ -1907,7 +1907,7 @@ pub(crate) mod tests {
                     })
                     .await
                     .unwrap();
-                linked_url = Some(created.target.url);
+                linked_url = Some(created.written.target.url);
                 owner
                     .tickets_put_on_board(
                         "acme/demo",
@@ -2307,7 +2307,7 @@ pub(crate) mod tests {
     async fn ready_ticket(
         _native: &Native,
         runtime: &crate::workflow_runtime::Runtime,
-    ) -> branvil::agent::port::TicketCreated {
+    ) -> Written<branvil::api::tickets::TicketView> {
         runtime
             .tickets
             .as_ref()
@@ -2317,7 +2317,6 @@ pub(crate) mod tests {
                 title: "Fix login".into(),
                 body: String::new(),
                 labels: vec![],
-                add_to_board: true,
                 interactive: false,
                 assignee: Some(gb_base::service::ActorName("aiko".into())),
                 lane: Some(branvil::agent::port::CreateLane::Ready),
@@ -2429,17 +2428,10 @@ pub(crate) mod tests {
             let root = tempfile::tempdir().unwrap();
             let native = fixture(root.path());
             let cleanup = tokio_util::task::TaskTracker::new();
-            let (mut runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+            let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
             let ticket = ready_ticket(&native, &runtime).await;
-            let faults = Arc::new(crate::test_ticket::Faults::new(
-                runtime.tickets.clone().unwrap(),
-            ));
-            faults
-                .errors
-                .lock()
-                .unwrap()
-                .insert(phase, gb_base::service::ServiceError::Unavailable);
-            runtime.tickets = Some(faults.clone());
+            let faults = runtime.tickets.as_ref().unwrap().faults.clone();
+            faults.fail(phase, gb_base::service::ServiceError::Unavailable);
             let runtime = Arc::new(runtime);
             let dispatch = crate::chat_dispatch::Dispatcher {
                 person: "aiko".into(),
@@ -2508,7 +2500,7 @@ pub(crate) mod tests {
                 );
                 assert_eq!(driver.calls.lock().unwrap().len(), 1);
             }
-            faults.errors.lock().unwrap().clear();
+            faults.clear();
             let slot = crate::scheduler::slot(
                 "routine",
                 "aiko",
@@ -2632,17 +2624,14 @@ pub(crate) mod tests {
             let root = tempfile::tempdir().unwrap();
             let native = fixture(root.path());
             let cleanup = tokio_util::task::TaskTracker::new();
-            let (mut runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+            let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
             ready_ticket(&native, &runtime).await;
-            let faults = Arc::new(crate::test_ticket::Faults::new(
-                runtime.tickets.clone().unwrap(),
-            ));
-            faults
-                .errors
-                .lock()
+            runtime
+                .tickets
+                .as_ref()
                 .unwrap()
-                .insert(phase, gb_base::service::ServiceError::Failed);
-            runtime.tickets = Some(faults.clone());
+                .faults
+                .fail(phase, gb_base::service::ServiceError::Failed);
             let runtime = Arc::new(runtime);
             let engine = crate::native_scheduler::Engine::new(runtime.clone(), None);
             for minute in 0..3 {
@@ -4308,13 +4297,10 @@ pub(crate) mod tests {
         let root = tempfile::tempdir().unwrap();
         let native = fixture(root.path());
         let cleanup = tokio_util::task::TaskTracker::new();
-        let (mut runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+        let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
         let first = ready_ticket(&native, &runtime).await;
         let second = ready_ticket(&native, &runtime).await;
-        let faults = Arc::new(crate::test_ticket::Faults::new(
-            runtime.tickets.clone().unwrap(),
-        ));
-        runtime.tickets = Some(faults.clone());
+        let faults = runtime.tickets.as_ref().unwrap().faults.clone();
         let runtime = Arc::new(runtime);
         let engine = crate::native_scheduler::Engine::new(runtime.clone(), None);
         let slot = || {
@@ -4366,11 +4352,7 @@ pub(crate) mod tests {
             )
             .await
             .unwrap();
-        faults
-            .errors
-            .lock()
-            .unwrap()
-            .insert("move", ServiceError::Failed);
+        faults.fail("move_ticket", ServiceError::Failed);
         assert_eq!(
             engine.patrol(slot()).await,
             (crate::service::Outcome::Succeeded, true)
@@ -4931,44 +4913,18 @@ pub(crate) mod tests {
     async fn waiting_recipients_need_patrol_and_fall_back_from_code_to_tickets() {
         let temp = tempfile::tempdir().unwrap();
         let native = fixture(temp.path());
-        let writes =
-            SharedWrites::new(native.identity_root.clone(), Some(native.workspace.clone()));
-        let secrets = SecretStore::new(
-            &writes,
-            Scope::Identity,
-            DeviceKey {
-                machine_root: native.data.parent().unwrap().into(),
-                keychain: native.keychain.as_ref(),
-            },
-        )
-        .unwrap();
-        let config = IntegrationConfig {
-            local_root: temp.path().join("services"),
-            identity_root: native.identity_root.clone(),
-            person_id: "aiko".into(),
-            display_name: "Aiko".into(),
-            accounts: BTreeMap::new(),
-            branvil_members: Default::default(),
-
-            chat_provider: "local".into(),
-
-            slack_base_url: String::new(),
-        };
-        let factory = ServiceIntegrationFactory::new(
-            config.clone(),
-            &secrets,
-            native.branvil.clone(),
-            Arc::new(|_| {}),
-        )
-        .unwrap();
-        let tickets = factory.create_ticket_service("acme").unwrap();
+        let tickets = TicketAgent::new(
+            native.branvil.clone().unwrap(),
+            "acme".into(),
+            "aiko".into(),
+            "Aiko".into(),
+        );
         let ticket = tickets
             .create_ticket(CreateTicket {
                 tracker: "acme/demo".into(),
                 title: "assigned".into(),
                 body: String::new(),
                 labels: vec![],
-                add_to_board: true,
                 interactive: false,
                 assignee: Some(ActorName("aiko".into())),
                 lane: Some(CreateLane::Ready),
@@ -4987,11 +4943,9 @@ pub(crate) mod tests {
             speaking_style: String::new(),
             accounts: BTreeMap::from([("branvil".into(), "aiko".into())]),
         }];
+        let project = json!({"services":{"ticket_service":{"workspace":"acme"},"code_hosting_service":{"workspace":"acme"}}});
         let mut peers = Peers {
-            code_workspace: "acme",
-            ticket_workspace: "acme",
-            config: &config,
-            secrets: &secrets,
+            project: &project,
             branvil: native.branvil.clone(),
             roster: &roster,
             eligible: Default::default(),
@@ -5021,7 +4975,7 @@ pub(crate) mod tests {
             "body",
         )
         .await;
-        let url = ticket["target"]["url"].as_str().unwrap();
+        let url = ticket["url"].as_str().unwrap();
         native.invocation = Some(gb_environment::broker::Invocation {
             repair: false,
             chat_subject: None,
@@ -5230,7 +5184,7 @@ pub(crate) mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, value.to_string()).unwrap();
     }
-    fn git(path: &Path, args: &[&str]) -> String {
+    pub(crate) fn git(path: &Path, args: &[&str]) -> String {
         let output = std::process::Command::new("git")
             .args(args)
             .current_dir(path)
@@ -5301,7 +5255,7 @@ pub(crate) mod tests {
             "entire\nbody\n",
         )
         .await;
-        let url = ticket["target"]["url"].as_str().unwrap();
+        let url = ticket["url"].as_str().unwrap();
         let updated = command(
             &native,
             &[
@@ -5406,7 +5360,7 @@ pub(crate) mod tests {
             "body\n",
         )
         .await;
-        let pr_url = pr["target"]["url"].as_str().unwrap();
+        let pr_url = pr["url"].as_str().unwrap();
         command(
             &native,
             &[
@@ -5722,7 +5676,7 @@ pub(crate) mod tests {
         let record: Value =
             serde_json::from_slice(&std::fs::read(entries[0].path()).unwrap()).unwrap();
         assert_eq!(record["status"], "failed");
-        assert_eq!(record["attributes"]["target.url"], first["target"]["url"]);
+        assert_eq!(record["attributes"]["target.url"], first["url"]);
         assert_eq!(record["attributes"]["target.title"], "First target");
         assert!(!record.to_string().contains("fixture-client"));
     }

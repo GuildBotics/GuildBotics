@@ -8,7 +8,7 @@ import pytest
 from guildbotics.commands.errors import CommandError
 from guildbotics.commands.metadata import load_command_metadata, parse_command_access
 from guildbotics.commands.python_command import _load_python_module
-from guildbotics.runtime.port import ServiceError, ServiceUnsupported
+from guildbotics.runtime.port import ServiceError
 from guildbotics.runtime.resources import ReadPage
 from guildbotics.utils.fileio import get_template_path
 from guildbotics.utils.i18n_tool import t
@@ -73,7 +73,7 @@ async def test_issue_joins_all_comments_and_deduplicates_linked_prs_by_url():
                     {
                         "title": "Ticket",
                         "labels": ["bug"],
-                        "assignees": ["aiko"],
+                        "assignee": {"name": "aiko", "assigned_at": "2026-11-18"},
                         "author": "yuki-service",
                     }
                 )
@@ -98,8 +98,7 @@ async def test_issue_joins_all_comments_and_deduplicates_linked_prs_by_url():
     assert result["author"] == "yuki-service"
     assert result["comments"] == [{"id": "1"}, {"id": "2"}]
     assert result["attachments"] == [{"id": "a1"}, {"id": "a2"}]
-    assert "attachments_unavailable" not in result
-    assert result["labels"] == ["bug"] and result["assignees"] == ["aiko"]
+    assert result["labels"] == ["bug"] and result["assignee"]["name"] == "aiko"
     assert result["linked_pull_request_candidates"] == [
         {**linked, "title": "Fix, read again"},
         other,
@@ -120,7 +119,7 @@ async def test_issue_joins_all_comments_and_deduplicates_linked_prs_by_url():
 
 
 @pytest.mark.asyncio
-async def test_pr_combines_all_feedback_and_nested_comment_pages_and_diff():
+async def test_pr_combines_all_feedback_and_comment_pages_and_diff():
     readiness = {
         "required_checks": "running",
     }
@@ -142,16 +141,21 @@ async def test_pr_combines_all_feedback_and_nested_comment_pages_and_diff():
                         "id": "thread1",
                         "resolved": True,
                         "outdated": True,
-                        "comments_complete": False,
-                        "comments": [],
+                        "comments": [
+                            {"id": "10", "reply_to_id": None},
+                            {"id": "11", "reply_to_id": "10"},
+                        ],
                     },
                     continuation="more",
                 ),
-                page(),
-            ],
-            "review_thread_comments": [
-                page({"id": "10", "reply_to_id": None}, continuation="more"),
-                page({"id": "11", "reply_to_id": "10"}),
+                page(
+                    {
+                        "id": "thread2",
+                        "resolved": False,
+                        "outdated": False,
+                        "comments": [],
+                    }
+                ),
             ],
             "pull_request_files": [
                 page(
@@ -162,13 +166,7 @@ async def test_pr_combines_all_feedback_and_nested_comment_pages_and_diff():
                     },
                     continuation="more",
                 ),
-                page(
-                    {
-                        "path": "binary",
-                        "patch_available": False,
-                        "patch_complete": False,
-                    }
-                ),
+                page({"path": "binary", "patch": None, "patch_complete": False}),
             ],
         }
     )
@@ -188,9 +186,10 @@ async def test_pr_combines_all_feedback_and_nested_comment_pages_and_diff():
         == len(result["files"])
         == 2
     )
-    thread = result["review_threads"][0]
+    thread, empty = result["review_threads"]
     assert thread["resolved"] and thread["outdated"] and thread["replyable"]
     assert thread["reply_target_id"] == "10" and len(thread["comments"]) == 2
+    assert not empty["replyable"] and empty["reply_target_id"] is None
     assert {(name, subject) for name, _, subject, _ in service.calls} == {
         ("code", PR_URL)
     }
@@ -198,11 +197,6 @@ async def test_pr_combines_all_feedback_and_nested_comment_pages_and_diff():
         c[3]["parameters"] == {"page_size": 5}
         for c in service.calls
         if c[1] == "pull_request_files"
-    )
-    assert all(
-        c[3]["parameters"] == {"node": "thread1"}
-        for c in service.calls
-        if c[1] == "review_thread_comments"
     )
 
 
@@ -230,7 +224,7 @@ async def test_checks_displays_host_result_verbatim(required_checks):
 
 
 @pytest.mark.asyncio
-async def test_checks_show_feedback_held_to_the_readiness_schema():
+async def test_checks_show_the_feedback_the_host_counted():
     remarks = {"count": 2, "latest": {"id": "r2", "at": "2026-11-17T11:00:00Z"}}
     feedback = {
         "reviews": remarks,
@@ -238,22 +232,17 @@ async def test_checks_show_feedback_held_to_the_readiness_schema():
         "thread_comments": remarks,
     }
     readiness = {
-        "target": {"kind": "pull_request", "url": PR_URL, "title": "T", "label": "#7"},
         "head_sha": "head",
         "checks": [],
         "required_checks": "running",
+        "required_names": [],
         "feedback": feedback,
     }
-    # The guest holds the host's answer to the schema the same way.
-    held = ReadPage.of("pull_request_readiness", [readiness]).model_dump()
-    service = Pages({"pull_request_readiness": [held]})
+    service = Pages({"pull_request_readiness": [page(readiness)]})
     shown = json.loads(
         await command("pr_checks").main(service.context(), PR_URL, "false")
     )
     assert shown["feedback"] == feedback
-    without = {k: v for k, v in readiness.items() if k != "feedback"}
-    with pytest.raises(ValueError):
-        ReadPage.of("pull_request_readiness", [without])
 
 
 @pytest.mark.asyncio
@@ -329,33 +318,22 @@ async def test_empty_issue_data_is_complete():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "failure",
-    [
-        [ServiceUnsupported("No attachments here")],
-        [page({"id": "a1"}, continuation="next"), ServiceError("No attachments here")],
-    ],
-)
-async def test_attachments_that_cannot_be_listed_leave_the_ticket_with_the_reason(
-    failure,
-):
-    """A service that keeps no attachments, or fails to list them, does not
-    hide the rest of the ticket; the inspection says the attachments are
-    not there and why, rather than that there are none."""
+async def test_attachments_that_cannot_be_listed_fail_the_inspection():
+    """A failed attachment page is not an empty list: the inspection fails
+    rather than return the ticket as if it had no attachments."""
     service = Pages(
         {
             "tickets": [page({"title": "Ticket"})],
             "ticket_comments": [page({"id": "1"})],
-            "ticket_attachments": failure,
+            "ticket_attachments": [
+                page({"id": "a1"}, continuation="next"),
+                ServiceError("Read denied"),
+            ],
             "ticket_pull_requests": [page()],
         }
     )
-    result = json.loads(
+    with pytest.raises(CommandError, match="Read denied"):
         await command("issue_inspect").main(service.context(), TICKET_URL)
-    )
-    assert result["comments"] == [{"id": "1"}]
-    assert result["attachments"] is None
-    assert result["attachments_unavailable"] == "No attachments here"
 
 
 @pytest.mark.parametrize("name", ["issue_inspect", "pr_inspect", "pr_checks"])

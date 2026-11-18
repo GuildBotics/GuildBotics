@@ -225,7 +225,8 @@ impl TicketAgent {
         Ok(out)
     }
     pub async fn refresh(&self, task: &Task) -> Result<Option<Task>, ServiceError> {
-        self.fault("refresh", task.url.as_deref().unwrap_or("")).await?;
+        self.fault("refresh", task.url.as_deref().unwrap_or(""))
+            .await?;
         self.select_card(
             &self
                 .ticket_card(task.url.as_deref().ok_or(ServiceError::NotFound)?)
@@ -242,7 +243,8 @@ impl TicketAgent {
             .is_some())
     }
     pub async fn move_ticket(&self, task: &Task, lane: MoveLane) -> Result<bool, ServiceError> {
-        self.fault("move_ticket", task.url.as_deref().unwrap_or("")).await?;
+        self.fault("move_ticket", task.url.as_deref().unwrap_or(""))
+            .await?;
         let (r, k) = self.item(
             task.url.as_deref().ok_or(ServiceError::NotFound)?,
             "tickets",
