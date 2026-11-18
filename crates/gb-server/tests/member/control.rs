@@ -1,11 +1,11 @@
 use crate::support;
+use branvil::agent::port::*;
 use gb_base::shared_writes::SharedWrites;
 use gb_member::{MemberError, WriteGuard, command};
 use gb_observability::{
     redaction::Redactor,
     runs::{RunRecord, RunStore},
 };
-use branvil::agent::port::*;
 use gb_server::member::{
     control::{Identity, Recipients, RunControl},
     repository::{Repository, RepositoryServices},
@@ -15,10 +15,10 @@ use serde_json::json;
 use std::collections::BTreeMap;
 struct Services(support::Probe);
 impl RepositoryServices for Services {
-    fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
+    fn code(&self) -> gb_member::Result<&CodeAgent> {
         Ok(&self.0)
     }
-    fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
+    fn tickets(&self) -> gb_member::Result<&TicketAgent> {
         Ok(&self.0)
     }
 }

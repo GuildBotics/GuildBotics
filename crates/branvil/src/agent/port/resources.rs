@@ -26,7 +26,7 @@ pub enum ReadSubject {
 }
 
 macro_rules! resources {
-    ($($variant:ident => ($name:literal, $model:ty, $subject:ident, $ticket:literal, $detail:literal)),+ $(,)?) => {
+    ($($variant:ident => ($name:literal, $subject:ident, $ticket:literal, $detail:literal)),+ $(,)?) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
         pub enum Resource {
             $(#[serde(rename = $name)] $variant),+
@@ -45,15 +45,6 @@ macro_rules! resources {
             pub fn is_detail(self) -> bool {
                 match self { $(Self::$variant => $detail),+ }
             }
-            fn normalize(self, item: Value) -> Result<Value, ServiceError> {
-                match self {
-                    $(Self::$variant => {
-                        let model: $model = serde_json::from_value(item)
-                            .map_err(|_| ServiceError::InvalidResult)?;
-                        serde_json::to_value(model).map_err(|_| ServiceError::InvalidResult)
-                    }),+
-                }
-            }
         }
         impl std::str::FromStr for Resource {
             type Err = ServiceError;
@@ -65,24 +56,23 @@ macro_rules! resources {
 }
 
 resources! {
-    TrackerTickets => ("tracker_tickets", TicketSummary, Ticket, true, false),
-    Tickets => ("tickets", Ticket, Ticket, true, true),
-    TicketComments => ("ticket_comments", Comment, Ticket, true, false),
-    TicketAttachments => ("ticket_attachments", Attachment, Ticket, true, false),
-    TicketPullRequests => ("ticket_pull_requests", TicketPullRequest, Ticket, false, false),
-    PullRequests => ("pull_requests", PullRequest, PullRequest, false, true),
-    PullRequestComments => ("pull_request_comments", Comment, PullRequest, false, false),
-    PullRequestReviews => ("pull_request_reviews", Review, PullRequest, false, false),
-    PullRequestFiles => ("pull_request_files", FileChange, PullRequest, false, false),
-    PullRequestThreads => ("pull_request_threads", ReviewThread, PullRequest, false, false),
-    ReviewThreadComments => ("review_thread_comments", ThreadComment, PullRequest, false, false),
-    PullRequestReadiness => ("pull_request_readiness", Readiness, PullRequest, false, true),
-    DependencyAlerts => ("dependency_alerts", DependencyAlert, Repository, false, false),
+    TrackerTickets => ("tracker_tickets", Ticket, true, false),
+    Tickets => ("tickets", Ticket, true, true),
+    TicketComments => ("ticket_comments", Ticket, true, false),
+    TicketAttachments => ("ticket_attachments", Ticket, true, false),
+    TicketPullRequests => ("ticket_pull_requests", Ticket, false, false),
+    PullRequests => ("pull_requests", PullRequest, false, true),
+    PullRequestComments => ("pull_request_comments", PullRequest, false, false),
+    PullRequestReviews => ("pull_request_reviews", PullRequest, false, false),
+    PullRequestFiles => ("pull_request_files", PullRequest, false, false),
+    PullRequestThreads => ("pull_request_threads", PullRequest, false, false),
+    PullRequestReadiness => ("pull_request_readiness", PullRequest, false, true),
+    DependencyAlerts => ("dependency_alerts", Repository, false, false),
 }
 
-/// A provider constructs pages only through `of`, which validates every item
-/// and applies precisely the defaults and omissions of its resource schema.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+/// One page of Branvil's views of a resource, with the ticket or pull request
+/// it was read of when that is one item.
+#[derive(Clone, Debug, Serialize)]
 pub struct ReadPage {
     items: Vec<Value>,
     continuation: Option<String>,
@@ -90,16 +80,15 @@ pub struct ReadPage {
 }
 
 impl ReadPage {
-    pub fn of(
-        resource: Resource,
-        items: impl IntoIterator<Item = Value>,
+    pub fn of<T: Serialize>(
+        items: impl IntoIterator<Item = T>,
         continuation: Option<String>,
         target: Option<WorkTarget>,
     ) -> Result<Self, ServiceError> {
         Ok(Self {
             items: items
                 .into_iter()
-                .map(|i| resource.normalize(i))
+                .map(|i| serde_json::to_value(i).map_err(|_| ServiceError::InvalidResult))
                 .collect::<Result<_, _>>()?,
             continuation,
             target,
@@ -139,7 +128,7 @@ pub fn read_conditions(
             json!({"failed_logs":false, "log_tail_bytes":MAX_LOG_TAIL_BYTES})
         }
         _ if resource.is_detail() => json!({}),
-        _ => json!({"page_size":30, "node":""}),
+        _ => json!({"page_size":30}),
     };
     if resource == Resource::TrackerTickets {
         result["lane"] = Value::Null;
@@ -172,15 +161,6 @@ pub fn read_conditions(
     if resource == Resource::DependencyAlerts
         && result["id"] != ""
         && (given.len() != 1 || !continuation.is_empty())
-    {
-        return Err(ServiceError::InvalidParameters);
-    }
-    if !resource.is_detail()
-        && !matches!(
-            resource,
-            Resource::TrackerTickets | Resource::DependencyAlerts
-        )
-        && (result["node"] != "") != (resource == Resource::ReviewThreadComments)
     {
         return Err(ServiceError::InvalidParameters);
     }

@@ -1,7 +1,7 @@
 //! The member's chat output, independent of the configured provider.
-use gb_member::{MemberError, Result, WriteGuard};
 use branvil::agent::port::*;
 use gb_integrations::chat::*;
+use gb_member::{MemberError, Result, WriteGuard};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 

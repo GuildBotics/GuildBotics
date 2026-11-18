@@ -1,47 +1,12 @@
-//! The only provider selection boundary; provider modules stay private.
-pub use ::branvil::agent::GIT_TOKEN_LABEL;
-pub use ::branvil::agent::error as branvil_error;
+//! The only chat provider selection boundary; provider modules stay private.
 mod local;
 mod slack;
-use gb_config::secrets::SecretStore;
-use gb_base::service::*;
 use crate::chat::*;
-use ::branvil::agent::port::{CodeHostingService, TicketService};
+use gb_base::service::*;
+use gb_config::secrets::SecretStore;
 use sha2::{Digest, Sha256};
 pub use slack::{IntegrationEvent, IntegrationObserver};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
-
-/// Issue through the provider serving the origin; the server validates and locks the device.
-pub async fn human_git_credential(
-    origin: &str,
-    data: &::branvil::api::DataApi,
-    device_id: &str,
-    display_name: &str,
-) -> anyhow::Result<Option<GitCredential>> {
-    ::branvil::agent::owner_git::credential(origin, data, device_id, display_name).await
-}
-
-/// Resolve a public commit link without loading a member's credentials.
-/// URL rules remain those of the configured provider.
-pub fn commit_url_from_remote(
-    provider: &str,
-    remote: &str,
-    sha: &str,
-    embedded: Option<&::branvil::api::DataApi>,
-) -> Option<String> {
-    match provider.to_lowercase().as_str() {
-        "branvil" => {
-            let api = embedded?;
-            let repository = ::branvil::agent::CodeAgent::repository_for_remote(api, remote)?;
-            Some(::branvil::agent::CodeAgent::commit_url_for(
-                api,
-                &repository,
-                sha,
-            ))
-        }
-        _ => None,
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct IntegrationConfig {
@@ -50,8 +15,6 @@ pub struct IntegrationConfig {
     pub person_id: String,
     pub display_name: String,
     pub accounts: BTreeMap<String, ActorName>,
-    /// Branvil logins and display names of the workspace team.
-    pub branvil_members: BTreeMap<String, String>,
     pub chat_provider: String,
     pub slack_base_url: String,
 }
@@ -74,14 +37,12 @@ impl ChatProvider {
 pub struct ServiceIntegrationFactory<'a> {
     config: IntegrationConfig,
     secrets: &'a SecretStore<'a>,
-    branvil: Option<::branvil::api::DataApi>,
     observer: IntegrationObserver,
 }
 impl<'a> ServiceIntegrationFactory<'a> {
     pub fn new(
         config: IntegrationConfig,
         secrets: &'a SecretStore<'a>,
-        branvil: Option<::branvil::api::DataApi>,
         observer: IntegrationObserver,
     ) -> Result<Self, ServiceError> {
         if !secrets.is_identity() || !gb_config::team::valid_person_id(&config.person_id) {
@@ -90,7 +51,6 @@ impl<'a> ServiceIntegrationFactory<'a> {
         Ok(Self {
             config,
             secrets,
-            branvil,
             observer,
         })
     }
@@ -134,15 +94,6 @@ impl<'a> ServiceIntegrationFactory<'a> {
             Ok(value)
         }
     }
-    fn branvil(&self, scope: &str) -> Result<::branvil::agent::CodeAgent, ServiceError> {
-        Ok(::branvil::agent::CodeAgent::new(
-            self.branvil.clone().ok_or(ServiceError::Unavailable)?,
-            scope.into(),
-            self.config.person_id.clone(),
-            self.config.display_name.clone(),
-        )
-        .with_members(&self.config.branvil_members))
-    }
     fn unsupported_provider(service: &str, name: &str) -> ServiceError {
         ServiceError::Diagnostic {
             class: ServiceErrorClass::Unsupported,
@@ -153,32 +104,6 @@ impl<'a> ServiceIntegrationFactory<'a> {
             ]
             .into(),
         }
-    }
-    pub fn create_ticket_service(
-        &self,
-        workspace: &str,
-    ) -> Result<Arc<dyn TicketService>, ServiceError> {
-        if workspace.is_empty() {
-            return Err(ServiceError::Unsupported);
-        }
-        Ok(Arc::new(
-            ::branvil::agent::TicketAgent::new(
-                self.branvil.clone().ok_or(ServiceError::Unavailable)?,
-                workspace.into(),
-                self.config.person_id.clone(),
-                self.config.display_name.clone(),
-            )
-            .with_members(&self.config.branvil_members),
-        ))
-    }
-    pub fn create_code_hosting_service(
-        &self,
-        workspace: &str,
-    ) -> Result<Arc<dyn CodeHostingService>, ServiceError> {
-        if workspace.is_empty() {
-            return Err(ServiceError::Unsupported);
-        }
-        Ok(Arc::new(self.branvil(workspace)?))
     }
     pub fn create_chat_service(&self) -> Result<Arc<dyn ChatService>, ServiceError> {
         match ChatProvider::parse(&self.config.chat_provider) {

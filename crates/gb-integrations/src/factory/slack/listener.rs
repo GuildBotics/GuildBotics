@@ -2,8 +2,8 @@ use super::{
     Form, IntegrationEvent, IntegrationObserver, SlackFailure, SlackFuture, SlackTransport, answer,
     events::{event, text},
 };
-use futures_util::{SinkExt, StreamExt};
 use crate::chat::{ChatEvent, EventListener};
+use futures_util::{SinkExt, StreamExt};
 use gb_base::service::ServiceFuture;
 use serde_json::{Value, json};
 use std::{

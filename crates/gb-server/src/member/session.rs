@@ -5,13 +5,13 @@ use super::{
     git::Workspace,
     repository::Repository,
 };
+use branvil::agent::port::*;
+use gb_integrations::chat::*;
 use gb_member::{
     MemberError,
     command::{self, Parsed},
     memory::{Edit, Memory, Scope},
 };
-use branvil::agent::port::*;
-use gb_integrations::chat::*;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
@@ -171,7 +171,6 @@ impl Session<'_> {
                         title: title(p.text("title"))?,
                         body: text.into(),
                         labels: p.list("label"),
-                        add_to_board: p.flag("add-to-board"),
                         interactive: p.flag("interactive"),
                         assignee: None,
                         lane: p.optional("lane").map(|v| decoded(&v)).transpose()?,

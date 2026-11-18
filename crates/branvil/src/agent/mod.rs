@@ -5,20 +5,11 @@ mod patrol;
 pub mod port;
 pub mod scope;
 mod selection;
+use crate::agent::port::*;
 use crate::api::tickets;
+use crate::api::{AppError, DataApi, MemberApi};
 use scope::WriteScope;
 use selection::*;
-fn lane(s: &str) -> Result<Lane, ServiceError> {
-    match s {
-        "new" => Ok(Lane::New),
-        "ready" => Ok(Lane::Ready),
-        "in_progress" => Ok(Lane::InProgress),
-        "done" => Ok(Lane::Done),
-        _ => Err(ServiceError::InvalidResult),
-    }
-}
-use crate::api::{AppError, DataApi, MemberApi};
-use crate::agent::port::*;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -100,7 +91,8 @@ impl TicketAgent {
             .ok_or_else(invalid)?;
         let (repo, tail) = path.split_once("/-/").ok_or_else(invalid)?;
         let (found, key) = tail.split_once('/').ok_or_else(invalid)?;
-        if !crate::agent::port::valid_repository_path(repo) || found != kind || number(key).is_err() {
+        if !crate::agent::port::valid_repository_path(repo) || found != kind || number(key).is_err()
+        {
             return Err(invalid());
         }
         Ok((repo.into(), key.into()))
@@ -137,51 +129,13 @@ impl TicketAgent {
             url: t.url.clone(),
             title: t.title.clone(),
             label: format!("#{}", t.key),
+            closed: false,
         }
     }
     fn on_board(&self, t: &tickets::TicketView) -> bool {
         t.repository
             .rsplit_once('/')
             .is_some_and(|(w, _)| w.eq_ignore_ascii_case(&self.workspace))
-    }
-    fn ticket_value(&self, t: &tickets::TicketView) -> Ticket {
-        let relative = |v: &tickets::TicketRef| TicketRelative {
-            kind: WorkKind::Ticket,
-            url: v.url.clone(),
-            title: v.title.clone(),
-            label: format!("#{}", v.key),
-            state: v.state.clone(),
-        };
-        Ticket {
-            repair: t.repair,
-            kind: WorkKind::Ticket,
-            url: t.url.clone(),
-            title: t.title.clone(),
-            label: format!("#{}", t.key),
-            key: t.key.clone(),
-            tracker: t.repository.clone(),
-            repository: Some(t.repository.clone()),
-            body: t.body.clone(),
-            state: t.state.clone(),
-            assignees: t
-                .assignee
-                .iter()
-                .map(|a| ActorName(a.name.clone()))
-                .collect(),
-            author: ActorName(t.author.clone()),
-            labels: t.labels.clone(),
-            lane: self
-                .on_board(t)
-                .then(|| lane(&t.lane))
-                .transpose()
-                .expect("domain lane"),
-            parent: t.parent.as_ref().map(relative),
-            children: t.children.iter().map(relative).collect(),
-            blocked_by: t.blocked_by.iter().map(relative).collect(),
-            blocks: t.blocks.iter().map(relative).collect(),
-            interactive: t.interactive,
-            interactive_ancestor: t.interactive_ancestor.as_ref().map(|t| t.url.clone()),
-        }
     }
     pub fn comment_body(
         &self,
@@ -281,8 +235,7 @@ pub fn diagnostic<const N: usize>(key: &'static str, args: [(&str, String); N]) 
         | "integrations.branvil.api.not_path" => ServiceErrorClass::NotFound,
         "integrations.branvil.api.unsupported"
         | "integrations.branvil.api.foreign_ticket"
-        | "integrations.branvil.api.closes_foreign"
-        | "integrations.branvil.api.every_on_board" => ServiceErrorClass::Unsupported,
+        | "integrations.branvil.api.closes_foreign" => ServiceErrorClass::Unsupported,
         "integrations.branvil.api.stopped" => ServiceErrorClass::Unavailable,
         _ => ServiceErrorClass::Failure,
     };
@@ -432,20 +385,19 @@ impl CodeAgent {
             } else {
                 key.into()
             },
+            closed: false,
         }
     }
-    fn comment_value(&self, v: Value) -> Value {
-        json!({"id":v["id"],"body":v["body"],"author":v["author"],"author_type":self.author_type(text(&v,"author")),"created_at":v["created_at"],"url":v["url"]})
+    pub async fn pull_view(&self, url: &str) -> Result<crate::api::pulls::PullView, ServiceError> {
+        let (r, k) = self.item(url, "pulls")?;
+        self.member()
+            .await?
+            .pulls_get(&r, number(&k)?)
+            .await
+            .map_err(|e| error(e, "pulls_get"))
     }
     async fn pull(&self, url: &str) -> Result<Value, ServiceError> {
-        let (r, k) = self.item(url, "pulls")?;
-        value(
-            self.member()
-                .await?
-                .pulls_get(&r, number(&k)?)
-                .await
-                .map_err(|e| error(e, "pulls_get"))?,
-        )
+        value(self.pull_view(url).await?)
     }
 }
 

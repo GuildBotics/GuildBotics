@@ -1,8 +1,8 @@
 //! History crosses the host/guest boundary as bundles, never as a repository.
 pub use crate::member_protocol::{MAX_BUNDLE, object};
-use gb_member::{MemberError, Result, WriteGuard};
-use branvil::agent::port::CodeHostingService;
+use branvil::agent::CodeAgent;
 use gb_base::service::GitCredential;
+use gb_member::{MemberError, Result, WriteGuard};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -726,7 +726,7 @@ impl Workspace<'_> {
         })
         .map_err(|_| failure("path"))
     }
-    fn code(&self) -> Result<&dyn CodeHostingService> {
+    fn code(&self) -> Result<&CodeAgent> {
         self.services.code()
     }
     /// Interactive clients exchange only history and identity metadata. The
@@ -930,35 +930,15 @@ impl Workspace<'_> {
         kind: branvil::agent::port::WorkKind,
         url: &str,
     ) -> Result<(branvil::agent::port::WorkKind, bool)> {
-        use branvil::agent::port::{Lane, Resource, WorkKind};
-        let page = match kind {
-            WorkKind::Ticket => {
-                self.services
-                    .tickets()?
-                    .read(Resource::Tickets, url, None, "")
-                    .await?
-            }
-            WorkKind::PullRequest => {
-                self.code()?
-                    .read(Resource::PullRequests, url, None, "")
-                    .await?
-            }
-        };
-        let value = page
-            .items()
-            .first()
-            .ok_or(gb_base::service::ServiceError::InvalidResult)?
-            .clone();
+        use branvil::agent::port::WorkKind;
         Ok(match kind {
             WorkKind::Ticket => {
-                let t: branvil::agent::port::Ticket = serde_json::from_value(value)
-                    .map_err(|_| gb_base::service::ServiceError::InvalidResult)?;
-                (t.kind, t.state == "open" && t.lane != Some(Lane::Done))
+                let t = self.services.tickets()?.ticket_view(url).await?;
+                (kind, t.state == "open" && t.lane != "done")
             }
             WorkKind::PullRequest => {
-                let p: branvil::agent::port::PullRequest = serde_json::from_value(value)
-                    .map_err(|_| gb_base::service::ServiceError::InvalidResult)?;
-                (p.kind, p.state == "open" && !p.merged)
+                let p = self.code()?.pull_view(url).await?;
+                (kind, p.state == "open" && !p.merged)
             }
         })
     }
@@ -1607,7 +1587,7 @@ impl Workspace<'_> {
 
 pub async fn show(
     root: &Path,
-    code: &dyn CodeHostingService,
+    code: &CodeAgent,
     repository: &str,
     paths: &[String],
     deadline: Instant,
@@ -1623,7 +1603,7 @@ pub async fn show(
 }
 async fn show_default(
     root: &Path,
-    code: &dyn CodeHostingService,
+    code: &CodeAgent,
     repository: &str,
     paths: &[String],
     deadline: Instant,

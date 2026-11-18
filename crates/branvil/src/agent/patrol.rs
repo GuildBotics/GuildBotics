@@ -186,12 +186,12 @@ impl TicketAgent {
             Utc::now(),
         );
         if decision.finish {
-            self.ticket_move(&task, MoveLane::Done).await?;
+            self.move_ticket(&task, MoveLane::Done).await?;
         }
         task.trigger_reason = decision.reason.map(str::to_owned);
         Ok(decision.reason.map(|_| task))
     }
-    pub(super) async fn ticket_candidates(&self) -> Result<Vec<Task>, ServiceError> {
+    pub async fn candidates(&self) -> Result<Vec<Task>, ServiceError> {
         let mut unique = BTreeMap::new();
         for card in self
             .board_cards(false)
@@ -223,7 +223,7 @@ impl TicketAgent {
         }
         Ok(out)
     }
-    pub(super) async fn ticket_refresh(&self, task: &Task) -> Result<Option<Task>, ServiceError> {
+    pub async fn refresh(&self, task: &Task) -> Result<Option<Task>, ServiceError> {
         self.select_card(
             &self
                 .ticket_card(task.url.as_deref().ok_or(ServiceError::NotFound)?)
@@ -232,17 +232,13 @@ impl TicketAgent {
         )
         .await
     }
-    pub(super) async fn ticket_can_receive(&self, url: &str) -> Result<bool, ServiceError> {
+    pub async fn can_receive_work(&self, url: &str) -> Result<bool, ServiceError> {
         Ok(self
             .select_card(&self.ticket_card(url).await?, false)
             .await?
             .is_some())
     }
-    pub(super) async fn ticket_move(
-        &self,
-        task: &Task,
-        lane: MoveLane,
-    ) -> Result<bool, ServiceError> {
+    pub async fn move_ticket(&self, task: &Task, lane: MoveLane) -> Result<bool, ServiceError> {
         let (r, k) = self.item(
             task.url.as_deref().ok_or(ServiceError::NotFound)?,
             "tickets",
@@ -268,7 +264,7 @@ impl TicketAgent {
             .map_err(|e| error(e, "tickets_put_on_board"))?;
         Ok(true)
     }
-    pub(super) async fn ticket_closed(
+    pub async fn closed_since(
         &self,
         start: DateTime<Utc>,
         end: DateTime<Utc>,

@@ -1,6 +1,6 @@
 //! Frozen reused-CI and behind-head landing cases from test_smoke.py.
 use super::*;
-async fn open(c: &dyn CodeHostingService, repo: &str, branch: &str) -> PullRequestCreated {
+async fn open(c: &CodeAgent, repo: &str, branch: &str) -> PullRequestCreated {
     c.create_pull_request(CreatePullRequest {
         repository: repo.into(),
         head: branch.into(),
@@ -17,7 +17,7 @@ async fn open(c: &dyn CodeHostingService, repo: &str, branch: &str) -> PullReque
 pub(super) async fn reused_and_gates(
     root: &Path,
     owner: &::branvil::api::MemberApi,
-    c: &dyn CodeHostingService,
+    c: &CodeAgent,
     base: &str,
     owner_token: &str,
     runner: &str,

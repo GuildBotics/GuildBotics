@@ -1,7 +1,7 @@
-use branvil::{agent::CodeAgent, test_support::Fixture};
 use branvil::agent::port::*;
+use branvil::{agent::CodeAgent, test_support::Fixture};
 use serde_json::json;
-pub async fn member_show_contract(service: &dyn CodeHostingService, repository: &str) {
+pub async fn member_show_contract(service: &CodeAgent, repository: &str) {
     let temp = tempfile::tempdir().unwrap();
     let branch = service.default_branch(repository).await.unwrap();
     let result = gb_server::member::git::show(
@@ -44,11 +44,10 @@ async fn author_ticket_requires_exactly_one_open_assigned_link() {
     f.repository("acme/demo").await;
     let base = f.commit("acme/demo", "main", None, "a", "base");
     f.commit("acme/demo", "feature", Some(&base), "a", "feature");
-    let code = &CodeAgent::new(f.data(), "acme".into(), "aiko".into(), "Aiko".into())
-        as &dyn CodeHostingService;
+    let code = &CodeAgent::new(f.data(), "acme".into(), "aiko".into(), "Aiko".into()) as &CodeAgent;
     let tickets =
         &branvil::agent::TicketAgent::new(f.data(), "acme".into(), "aiko".into(), "Aiko".into())
-            as &dyn TicketService;
+            as &TicketAgent;
     let tracker = "acme/demo";
     let pr = code
         .create_pull_request(CreatePullRequest {
@@ -133,4 +132,58 @@ fn ticket_request(tracker: &str, title: &str) -> CreateTicket {
         parent: None,
         blocked_by: vec![],
     }
+}
+
+#[tokio::test]
+async fn agents_supply_roster_names_to_task_comments() {
+    let fixture = Fixture::new("owner1").await;
+    let owner = &fixture.owner;
+    owner
+        .repos_create_workspace(serde_json::from_value(json!({"name":"acme"})).unwrap())
+        .await
+        .unwrap();
+    owner
+        .repos_create(serde_json::from_value(json!({"path":"acme/repo"})).unwrap())
+        .await
+        .unwrap();
+    fixture.member("aiko").await;
+    let ticket = owner
+        .tickets_create_ticket(
+            "acme/repo",
+            serde_json::from_value(
+                json!({"title":"task","body":"please","lane":"ready","assignee":"aiko"}),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    owner
+        .tickets_add_comment(
+            "acme/repo",
+            &ticket.key,
+            serde_json::from_value(json!({"body":"please"})).unwrap(),
+        )
+        .await
+        .unwrap();
+    let member = |person_id: &str, name: &str, account: &str| {
+        serde_json::from_value::<gb_member::context::PublicMember>(json!({
+            "person_id":person_id,"name":name,"person_type":"agent","is_active":true,
+            "roles":{},"profile":{},"speaking_style":"","accounts":{"branvil":account}
+        }))
+        .unwrap()
+    };
+    let aiko = member("aiko", "Aiko", "aiko");
+    // Deliberately vary case and include account whitespace as in saved identities.
+    let roster = [aiko.clone(), member("ototadana", "Otota", " OWNER1 ")];
+    let project = json!({"services":{"ticket_service":{"workspace":"acme"}}});
+    let tasks = gb_server::member::Agents::new(Some(&fixture.data()), &project, &aiko, &roster)
+        .tickets()
+        .unwrap()
+        .candidates()
+        .await
+        .unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].comments[0].author, "Otota");
+    assert_eq!(tasks[0].comments[0].author_type, "User");
+    fixture.stop().await;
 }

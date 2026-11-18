@@ -12,20 +12,9 @@ impl CodeAgent {
         let repo = path.strip_suffix(".git").unwrap_or(path);
         crate::agent::port::valid_repository_path(repo).then(|| repo.into())
     }
-
-    fn pull_value(&self, v: Value) -> Value {
-        let t = self.target(&v, WorkKind::PullRequest);
-        json!({"kind":"pull_request","url":t.url,"title":t.title,"label":t.label,"repository":v["repository"],"body":v["body"],"state":v["state"],"assignees":[],"author":v["author"],"author_type":self.author_type(text(&v,"author")),"requested_reviewers":v["reviewers"],"labels":v["labels"],"head":v["head"],"head_repository":v["head_repository"],"head_sha":v["head_sha"],"base":v["base"],"merged":v["merged"],"draft":v["draft"],"changed_files":v["changed_files"]})
-    }
-    fn thread_comment(&self, v: Value) -> Value {
-        let reply = v["reply_to_id"].clone();
-        let mut v = self.comment_value(v);
-        v["reply_to_id"] = reply;
-        v
-    }
 }
-impl CodeHostingService for CodeAgent {
-    fn retry_job<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, String> {
+impl CodeAgent {
+    pub fn retry_job<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, String> {
         Box::pin(async move {
             let path = url
                 .strip_prefix(self.data().base_url())
@@ -53,7 +42,7 @@ impl CodeHostingService for CodeAgent {
         })
     }
 
-    fn yield_pull_request_checks<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, usize> {
+    pub fn yield_pull_request_checks<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, usize> {
         Box::pin(async move {
             let (repo, key) = self.item(url, "pulls")?;
             let result = self
@@ -66,7 +55,7 @@ impl CodeHostingService for CodeAgent {
         })
     }
 
-    fn linked_tickets<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, Vec<TicketLink>> {
+    pub fn linked_tickets<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, Vec<TicketLink>> {
         Box::pin(async move {
             let (repo, key) = self.item(url, "pulls")?;
             let p = self
@@ -85,7 +74,7 @@ impl CodeHostingService for CodeAgent {
         })
     }
 
-    fn read<'a>(
+    pub fn read<'a>(
         &'a self,
         resource: Resource,
         subject: &'a str,
@@ -105,7 +94,7 @@ impl CodeHostingService for CodeAgent {
                         .upstream_dependency_alert(subject, id)
                         .await
                         .map_err(|e| error(e, "upstream_dependency_alert"))?;
-                    return ReadPage::of(resource, [value(alert)?], None, None);
+                    return ReadPage::of([alert], None, None);
                 }
                 use crate::api::AlertState;
                 let state = match text(&c, "state") {
@@ -121,18 +110,10 @@ impl CodeHostingService for CodeAgent {
                     )
                     .await
                     .map_err(|e| error(e, "upstream_dependency_alerts"))?;
-                return ReadPage::of(
-                    resource,
-                    p.items
-                        .into_iter()
-                        .map(value)
-                        .collect::<Result<Vec<_>, _>>()?,
-                    p.next_cursor,
-                    None,
-                );
+                return ReadPage::of(p.items, p.next_cursor, None);
             }
             if resource == Resource::PullRequestReadiness {
-                let r = CodeHostingService::readiness(
+                let r = CodeAgent::readiness(
                     self,
                     subject,
                     c["failed_logs"] == true,
@@ -140,7 +121,7 @@ impl CodeHostingService for CodeAgent {
                 )
                 .await?;
                 let target = r.target.clone();
-                return ReadPage::of(resource, [value(r)?], None, Some(target));
+                return ReadPage::of([r], None, Some(target));
             }
             let m = self.member().await?;
             if resource == Resource::TicketPullRequests {
@@ -159,93 +140,65 @@ impl CodeHostingService for CodeAgent {
                     )
                     .await
                     .map_err(|e| error(e, "tickets_ticket_pulls"))?;
-                return ReadPage::of(resource,p.items.into_iter().map(|v|json!({"url":v.url,"title":v.title,"label":v.label,"state":v.state,"merged":v.merged})),p.next_cursor,None);
+                return ReadPage::of(p.items, p.next_cursor, None);
             }
             let (repo, key) = self.item(subject, "pulls")?;
             let n = number(&key)?;
             if resource == Resource::PullRequests {
-                let v = value(
-                    m.pulls_get(&repo, n)
-                        .await
-                        .map_err(|e| error(e, "pulls_get"))?,
-                )?;
-                let t = self.target(&v, WorkKind::PullRequest);
-                return ReadPage::of(resource, [self.pull_value(v)], None, Some(t));
+                let v = m
+                    .pulls_get(&repo, n)
+                    .await
+                    .map_err(|e| error(e, "pulls_get"))?;
+                let t = self.target(&value(&v)?, WorkKind::PullRequest);
+                return ReadPage::of([v], None, Some(t));
             }
             let page = self.page(&m, resource, subject, &c, continuation)?;
-            let (items, next) = match resource {
+            match resource {
                 Resource::PullRequestComments => {
                     let p = m
                         .pulls_list_comments(&repo, n, page)
                         .await
                         .map_err(|e| error(e, "pulls_list_comments"))?;
-                    (
-                        p.items
-                            .into_iter()
-                            .map(|v| value(v).map(|v| self.comment_value(v)))
-                            .collect::<Result<Vec<_>, _>>()?,
-                        p.next_cursor,
-                    )
+                    ReadPage::of(p.items, p.next_cursor, None)
                 }
                 Resource::PullRequestReviews => {
                     let p = m
                         .pulls_list_reviews(&repo, n, page)
                         .await
                         .map_err(|e| error(e, "pulls_list_reviews"))?;
-                    (p.items.into_iter().map(|v|json!({"id":v.id,"body":v.body,"author":v.author,"author_type":self.author_type(&v.author),"verdict":v.verdict,"commit":v.commit,"submitted_at":v.submitted_at,"url":v.url})).collect(),p.next_cursor)
+                    ReadPage::of(p.items, p.next_cursor, None)
                 }
                 Resource::PullRequestThreads => {
                     let p = m
                         .pulls_list_threads(&repo, n, page)
                         .await
                         .map_err(|e| error(e, "pulls_list_threads"))?;
-                    (p.items.into_iter().map(|v|Ok(json!({"id":v.id,"resolved":v.resolved,"outdated":v.outdated,"comments":v.comments.into_iter().map(|c|value(c).map(|v|self.thread_comment(v))).collect::<Result<Vec<_>,_>>()?,"comments_complete":true}))).collect::<Result<Vec<_>,ServiceError>>()?,p.next_cursor)
-                }
-                Resource::ReviewThreadComments => {
-                    let p = m
-                        .pulls_thread_comments(&repo, n, text(&c, "node"), page)
-                        .await
-                        .map_err(|e| error(e, "pulls_thread_comments"))?;
-                    (
-                        p.items
-                            .into_iter()
-                            .map(|v| value(v).map(|v| self.thread_comment(v)))
-                            .collect::<Result<Vec<_>, _>>()?,
-                        p.next_cursor,
-                    )
+                    ReadPage::of(p.items, p.next_cursor, None)
                 }
                 Resource::PullRequestFiles => {
                     let p = m
                         .pulls_files(&repo, n, page)
                         .await
                         .map_err(|e| error(e, "pulls_files"))?;
-                    (
+                    ReadPage::of(
                         p.items
                             .into_iter()
-                            .map(|v| {
-                                super::pr_diff_lines::file_change(
-                                    &v.path,
-                                    v.status,
-                                    v.patch,
-                                    v.additions as i64,
-                                    v.deletions as i64,
-                                )
-                            })
+                            .map(super::pr_diff_lines::with_commentable_lines)
                             .collect::<Result<Vec<_>, _>>()?,
                         p.next_cursor,
+                        None,
                     )
                 }
-                _ => return Err(ServiceError::InvalidResource),
-            };
-            ReadPage::of(resource, items, next, None)
+                _ => Err(ServiceError::InvalidResource),
+            }
         })
     }
-    fn comment<'a>(
+    pub fn comment<'a>(
         &'a self,
         url: &'a str,
         body: &'a str,
         status: Option<&'a WorkflowStatus>,
-    ) -> ServiceFuture<'a, CommentWritten> {
+    ) -> ServiceFuture<'a, Written<crate::domain::CommentView>> {
         Box::pin(async move {
             let (r, k) = self.item(url, "pulls")?;
             self.writable(&r)?;
@@ -266,66 +219,62 @@ impl CodeHostingService for CodeAgent {
                 )
                 .await
                 .map_err(|e| error(e, "pulls_add_comment"))?;
-            let v = value(c)?;
-            Ok(CommentWritten {
-                id: text(&v, "id").into(),
-                url: v["url"].as_str().map(Into::into),
-                author: text(&v, "author").into(),
-                created_at: v["created_at"].as_str().map(Into::into),
+            Ok(Written {
+                view: c,
                 target: self.target(&t, WorkKind::PullRequest),
             })
         })
     }
-    fn create_pull_request(&self, r: CreatePullRequest) -> ServiceFuture<'_, PullRequestCreated> {
+    pub fn create_pull_request(
+        &self,
+        r: CreatePullRequest,
+    ) -> ServiceFuture<'_, PullRequestCreated> {
         Box::pin(async move {
             self.repository(&r.repository)?;
             let links = r.tickets;
             self.writable(&r.repository)?;
             let p=self.member().await?.pulls_create(&r.repository,decode(json!({"head":r.head,"base":r.base,"title":r.title,"body":r.body,"draft":r.draft,"tickets":links}))?).await.map_err(|e| error(e, "pulls_create"))?;
-            let created = p.created;
-            let v = value(p.pull)?;
             Ok(PullRequestCreated {
-                created,
-                draft: v["draft"] == true,
-                head: text(&v, "head").into(),
-                base: text(&v, "base").into(),
-                target: self.target(&v, WorkKind::PullRequest),
+                created: p.created,
+                written: Written {
+                    target: self.target(&value(&p.pull)?, WorkKind::PullRequest),
+                    view: p.pull,
+                },
             })
         })
     }
-    fn update_pull_request<'a>(
+    pub fn update_pull_request<'a>(
         &'a self,
         url: &'a str,
         r: UpdatePullRequest,
-    ) -> ServiceFuture<'a, PullRequestUpdated> {
+    ) -> ServiceFuture<'a, Written<pulls::PullView>> {
         Box::pin(async move {
             let (repo, key) = self.item(url, "pulls")?;
             self.writable(&repo)?;
             let links = r.tickets;
-            let v = value(
-                self.member()
-                    .await?
-                    .pulls_update(
-                        &repo,
-                        number(&key)?,
-                        decode(json!({"title":r.title,"body":r.body,"tickets":links}))?,
-                    )
-                    .await
-                    .map_err(|e| error(e, "pulls_update"))?,
-            )?;
-            Ok(PullRequestUpdated {
-                body: text(&v, "body").into(),
-                target: self.target(&v, WorkKind::PullRequest),
+            let v = self
+                .member()
+                .await?
+                .pulls_update(
+                    &repo,
+                    number(&key)?,
+                    decode(json!({"title":r.title,"body":r.body,"tickets":links}))?,
+                )
+                .await
+                .map_err(|e| error(e, "pulls_update"))?;
+            Ok(Written {
+                target: self.target(&value(&v)?, WorkKind::PullRequest),
+                view: v,
             })
         })
     }
-    fn review<'a>(
+    pub fn review<'a>(
         &'a self,
         url: &'a str,
         body: &'a str,
         verdict: ReviewVerdict,
         head: &'a str,
-    ) -> ServiceFuture<'a, crate::agent::port::ReviewSubmitted> {
+    ) -> ServiceFuture<'a, Written<pulls::ReviewSubmitted>> {
         Box::pin(async move {
             let (r, k) = self.item(url, "pulls")?;
             self.writable(&r)?;
@@ -343,19 +292,17 @@ impl CodeHostingService for CodeAgent {
                 )
                 .await
                 .map_err(|e| error(e, "pulls_review"))?;
-            Ok(crate::agent::port::ReviewSubmitted {
-                verdict,
-                commit: v.commit,
-                url: Some(v.url),
+            Ok(Written {
+                view: v,
                 target: self.target(&t, WorkKind::PullRequest),
             })
         })
     }
-    fn review_comment<'a>(
+    pub fn review_comment<'a>(
         &'a self,
         url: &'a str,
         r: ReviewComment,
-    ) -> ServiceFuture<'a, ReviewCommentWritten> {
+    ) -> ServiceFuture<'a, Written<Value>> {
         Box::pin(async move {
             let (repo, key) = self.item(url, "pulls")?;
             self.writable(&repo)?;
@@ -366,23 +313,18 @@ impl CodeHostingService for CodeAgent {
                     .map_err(|e| error(e, "pulls_get"))?,
             )?;
             let c=value(m.pulls_inline_comment(&repo,number(&key)?,decode(json!({"body":r.body.trim_end(),"commit":r.head,"path":r.path,"line":r.line,"side":r.side,"start_line":r.start_line.filter(|_|r.start_side.is_some()),"start_side":r.start_side.as_ref().filter(|_|r.start_line.is_some())}))?).await.map_err(|e| error(e, "pulls_inline_comment"))?)?;
-            Ok(ReviewCommentWritten {
-                id: text(&c, "id").into(),
-                url: c["url"].as_str().map(Into::into),
-                created_at: c["created_at"].as_str().map(Into::into),
-                path: r.path,
-                line: r.line,
-                side: r.side,
+            Ok(Written {
+                view: c,
                 target: self.target(&t, WorkKind::PullRequest),
             })
         })
     }
-    fn reply<'a>(
+    pub fn reply<'a>(
         &'a self,
         url: &'a str,
         id: &'a str,
         body: &'a str,
-    ) -> ServiceFuture<'a, ReplyWritten> {
+    ) -> ServiceFuture<'a, Written<Value>> {
         Box::pin(async move {
             let (r, k) = self.item(url, "pulls")?;
             self.writable(&r)?;
@@ -404,15 +346,13 @@ impl CodeHostingService for CodeAgent {
                 .await
                 .map_err(|e| error(e, "pulls_reply"))?,
             )?;
-            Ok(ReplyWritten {
-                id: text(&c, "id").into(),
-                url: c["url"].as_str().map(Into::into),
-                created_at: c["created_at"].as_str().map(Into::into),
+            Ok(Written {
+                view: c,
                 target: self.target(&t, WorkKind::PullRequest),
             })
         })
     }
-    fn add_reaction<'a>(
+    pub fn add_reaction<'a>(
         &'a self,
         url: &'a str,
         id: &'a str,
@@ -440,7 +380,7 @@ impl CodeHostingService for CodeAgent {
             })
         })
     }
-    fn readiness<'a>(
+    pub fn readiness<'a>(
         &'a self,
         url: &'a str,
         logs: bool,
@@ -448,7 +388,7 @@ impl CodeHostingService for CodeAgent {
     ) -> ServiceFuture<'a, Readiness> {
         Box::pin(self.pull_readiness(url, logs, tail))
     }
-    fn open_pull_requests<'a>(
+    pub fn open_pull_requests<'a>(
         &'a self,
         repo: &'a str,
         branch: &'a str,
@@ -480,7 +420,7 @@ impl CodeHostingService for CodeAgent {
             }
         })
     }
-    fn artifact<'a>(
+    pub fn artifact<'a>(
         &'a self,
         url: &'a str,
         name: &'a str,
@@ -488,13 +428,13 @@ impl CodeHostingService for CodeAgent {
     ) -> ServiceFuture<'a, Download<ArtifactRef>> {
         Box::pin(self.pull_artifact(url, name, limit))
     }
-    fn clone_url<'a>(&'a self, repo: &'a str) -> ServiceFuture<'a, String> {
+    pub fn clone_url<'a>(&'a self, repo: &'a str) -> ServiceFuture<'a, String> {
         Box::pin(async move {
             self.repository(repo)?;
             Ok(format!("{}/git/{repo}.git", self.data().base_url()))
         })
     }
-    fn default_branch<'a>(&'a self, repo: &'a str) -> ServiceFuture<'a, String> {
+    pub fn default_branch<'a>(&'a self, repo: &'a str) -> ServiceFuture<'a, String> {
         Box::pin(async move {
             self.repository(repo)?;
             Ok(self
@@ -506,7 +446,7 @@ impl CodeHostingService for CodeAgent {
                 .default_branch)
         })
     }
-    fn pull_request_head<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, PullRequestHead> {
+    pub fn pull_request_head<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, PullRequestHead> {
         Box::pin(async move {
             let v = self.pull(url).await?;
             Ok(PullRequestHead {
@@ -515,7 +455,7 @@ impl CodeHostingService for CodeAgent {
             })
         })
     }
-    fn git_credential(&self) -> ServiceFuture<'_, Option<GitCredential>> {
+    pub fn git_credential(&self) -> ServiceFuture<'_, Option<GitCredential>> {
         Box::pin(async move {
             let mut lent = self.git_token.lock().await;
             if lent.is_none() {
@@ -541,16 +481,16 @@ impl CodeHostingService for CodeAgent {
             }))
         })
     }
-    fn check_push(&self, repo: &str) -> Result<(), ServiceError> {
+    pub fn check_push(&self, repo: &str) -> Result<(), ServiceError> {
         self.writable(repo)
     }
-    fn commit_url(&self, repo: &str, sha: &str) -> String {
+    pub fn commit_url(&self, repo: &str, sha: &str) -> String {
         Self::commit_url_for(self.data(), repo, sha)
     }
-    fn repository_from_remote(&self, url: &str) -> Option<String> {
+    pub fn repository_from_remote(&self, url: &str) -> Option<String> {
         Self::repository_for_remote(self.data(), url)
     }
-    fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>> {
+    pub fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>> {
         Box::pin(async {
             let _open = self.data().guard().map_err(|e| error(e, "authored_open"))?;
             let me = fold(self.person_id());
@@ -593,22 +533,10 @@ impl CodeHostingService for CodeAgent {
                 .map_err(|e| error(e, "authored_open"))
         })
     }
-    fn pull_request_candidates(&self) -> ServiceFuture<'_, Vec<Task>> {
-        Box::pin(self.pull_candidates())
-    }
-    fn refresh_pull_request<'a>(&'a self, t: &'a Task) -> ServiceFuture<'a, Option<Task>> {
-        Box::pin(self.pull_refresh(t))
-    }
-    fn convert_pull_request_to_draft<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, bool> {
-        Box::pin(self.pull_draft(url))
-    }
-    fn can_receive_work<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, bool> {
-        Box::pin(self.pull_can_receive(url))
-    }
     /// Revokes the token lent for this run's git transfers. A token this
     /// cannot revoke is revoked when the server next starts, so the run's
     /// outcome stands.
-    fn aclose(&self) -> ServiceFuture<'_, ()> {
+    pub fn aclose(&self) -> ServiceFuture<'_, ()> {
         Box::pin(async {
             if let Some(issued) = self.git_token.lock().await.take()
                 && let Err(e) = self
@@ -773,23 +701,9 @@ impl CodeAgent {
                 "created_at",
             ),
         );
-        let checks = report
-            .checks
-            .iter()
-            .map(|c| Check {
-                required: report.required_names.contains(&c.name),
-                name: c.name.clone(),
-                status: c.status.clone(),
-                conclusion: c.conclusion.clone(),
-                details_url: c.details_url.clone().unwrap_or_default(),
-                details: Some(c.details.clone().unwrap_or_default()),
-            })
-            .collect::<Vec<_>>();
         let mut result = Readiness {
             target: self.target(&current, WorkKind::PullRequest),
-            head_sha: report.head_sha,
-            checks,
-            required_checks: report.required_checks,
+            report,
             feedback,
             failed_logs: failed,
         };

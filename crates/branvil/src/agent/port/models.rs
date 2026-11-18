@@ -1,127 +1,43 @@
-//! Provider-independent result shapes, matching the frozen Python host.
-use super::{ActorName, SemanticReaction};
+//! What the agent's operations return besides Branvil's own views.
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// The ticket or pull request an operation worked on, which the member's
+/// trace and run evidence record. The member's output leaves it out.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct WorkTarget {
     pub kind: WorkKind,
     pub url: String,
     pub title: String,
     pub label: String,
+    /// The write closed the ticket, rather than finding it closed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TicketRelative {
-    pub kind: WorkKind,
-    pub url: String,
-    pub title: String,
-    pub label: String,
-    pub state: String,
+/// A write's result: Branvil's view of what it wrote, and its work target.
+#[derive(Clone, Debug, Serialize)]
+pub struct Written<T> {
+    #[serde(flatten)]
+    pub view: T,
+    pub target: WorkTarget,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TicketSummary {
-    pub assignees: Vec<ActorName>,
-    pub kind: WorkKind,
-    pub url: String,
-    pub title: String,
-    pub label: String,
-    pub key: String,
-    pub state: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub lane: Option<Lane>,
-    pub labels: Vec<String>,
-    pub updated_at: String,
+/// A created pull request, or the open one that already had its branches.
+#[derive(Clone, Debug, Serialize)]
+pub struct PullRequestCreated {
+    #[serde(flatten)]
+    pub written: Written<crate::api::pulls::PullView>,
+    pub created: bool,
 }
 
+/// The reaction a member added, and what it reacted to by the id its read gave it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Ticket {
-    /// Created by the code host after default-branch verification failed, or linked to that ticket. Performed before other work.
-    pub repair: bool,
-    pub kind: WorkKind,
-    pub url: String,
-    pub title: String,
-    pub label: String,
-    pub key: String,
-    pub tracker: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub repository: Option<String>,
-    pub body: String,
-    pub state: String,
-    pub assignees: Vec<ActorName>,
-    pub author: ActorName,
-    pub labels: Vec<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub lane: Option<Lane>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub parent: Option<TicketRelative>,
-    pub children: Vec<TicketRelative>,
-    pub blocked_by: Vec<TicketRelative>,
-    pub blocks: Vec<TicketRelative>,
-    pub interactive: bool,
-    #[serde(deserialize_with = "required_nullable")]
-    pub interactive_ancestor: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PullRequest {
-    pub kind: WorkKind,
-    pub url: String,
-    pub title: String,
-    pub label: String,
-    pub repository: String,
-    pub body: String,
-    pub state: String,
-    pub assignees: Vec<ActorName>,
-    pub author: ActorName,
-    pub requested_reviewers: Vec<ActorName>,
-    pub labels: Vec<String>,
-    pub author_type: String,
-    pub head: String,
-    pub head_repository: String,
-    pub head_sha: String,
-    pub base: String,
-    pub merged: bool,
-    pub draft: bool,
-    #[serde(deserialize_with = "required_nullable")]
-    pub changed_files: Option<i64>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Comment {
+pub struct ReactionAdded {
+    pub reaction: gb_base::service::SemanticReaction,
     pub id: String,
-    pub body: String,
-    pub author: ActorName,
-    pub author_type: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub created_at: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub url: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ThreadComment {
-    pub id: String,
-    pub body: String,
-    pub author: ActorName,
-    pub author_type: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub created_at: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub url: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub reply_to_id: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Attachment {
     pub id: String,
     pub name: String,
@@ -131,84 +47,6 @@ pub struct Attachment {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TicketPullRequest {
-    pub url: String,
-    pub label: String,
-    pub title: String,
-    pub state: String,
-    pub merged: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Review {
-    pub id: String,
-    pub body: String,
-    pub author: ActorName,
-    pub author_type: String,
-    pub verdict: ReviewState,
-    #[serde(deserialize_with = "required_nullable")]
-    pub commit: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub submitted_at: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub url: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CommentableLine {
-    pub line: i64,
-    pub side: CommentableLineSide,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub left_line: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub right_line: Option<i64>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FileChange {
-    pub path: String,
-    pub status: String,
-    pub additions: i64,
-    pub deletions: i64,
-    pub changes: i64,
-    #[serde(deserialize_with = "required_nullable")]
-    pub patch: Option<String>,
-    pub patch_available: bool,
-    pub patch_complete: bool,
-    pub commentable_lines: Vec<CommentableLine>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReviewThread {
-    pub id: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub resolved: Option<bool>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub outdated: Option<bool>,
-    pub comments: Vec<ThreadComment>,
-    pub comments_complete: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Check {
-    pub required: bool,
-    pub name: String,
-    pub status: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub conclusion: Option<String>,
-    pub details_url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub details: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct FailedLog {
     pub job_id: String,
     pub name: String,
@@ -223,7 +61,6 @@ pub struct FailedLog {
 
 /// One remark on a pull request, by its opaque id and when it was made.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Remark {
     pub id: String,
     pub at: String,
@@ -231,10 +68,8 @@ pub struct Remark {
 
 /// How many remarks of one kind were made, and the latest of them.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Remarks {
     pub count: i64,
-    #[serde(deserialize_with = "required_nullable")]
     pub latest: Option<Remark>,
 }
 
@@ -242,107 +77,26 @@ pub struct Remarks {
 /// out workflow status notices. A reader that compares two reads sees any
 /// change as new feedback.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Feedback {
     pub reviews: Remarks,
     pub comments: Remarks,
     pub thread_comments: Remarks,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// Branvil's checks of a pull request's head, with the feedback on it and,
+/// when asked, the tails of its failed jobs' logs.
+#[derive(Clone, Debug, Serialize)]
 pub struct Readiness {
+    #[serde(skip)]
     pub target: WorkTarget,
-    pub head_sha: String,
-    pub checks: Vec<Check>,
-    pub required_checks: RequiredChecks,
+    #[serde(flatten)]
+    pub report: crate::api::pulls::ChecksView,
     pub feedback: Feedback,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub failed_logs: Option<Vec<FailedLog>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AdvisoryIdentifier {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub value: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DependencyAlert {
-    pub id: String,
-    pub state: DependencyAlertState,
-    #[serde(default)]
-    pub url: Option<String>,
-    #[serde(default)]
-    pub package: Option<String>,
-    #[serde(default)]
-    pub ecosystem: Option<String>,
-    #[serde(default)]
-    pub manifest_path: Option<String>,
-    #[serde(default)]
-    pub severity: Option<String>,
-    #[serde(default)]
-    pub identifiers: Vec<AdvisoryIdentifier>,
-    #[serde(default)]
-    pub summary: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub affected_versions: Option<String>,
-    #[serde(default)]
-    pub patched_version: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CommentWritten {
-    pub id: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub url: Option<String>,
-    pub author: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub created_at: Option<String>,
-    pub target: WorkTarget,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReactionAdded {
-    pub reaction: SemanticReaction,
-    pub id: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TicketCreated {
-    pub labels: Vec<String>,
-    pub target: WorkTarget,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TicketUpdated {
-    pub assignees: Vec<ActorName>,
-    pub lane: Option<Lane>,
-    pub body: String,
-    pub state: String,
-    pub state_changed: bool,
-    pub labels: Vec<String>,
-    pub target: WorkTarget,
-    pub interactive: bool,
-    #[serde(deserialize_with = "required_nullable")]
-    pub interactive_ancestor: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ClosedItem {
     pub kind: WorkKind,
     pub url: String,
@@ -353,97 +107,24 @@ pub struct ClosedItem {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PullRequestHead {
     pub repository: String,
     pub branch: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PullRequestCreated {
-    pub created: bool,
-    pub draft: bool,
-    pub head: String,
-    pub base: String,
-    pub target: WorkTarget,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PullRequestUpdated {
-    pub body: String,
-    pub target: WorkTarget,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReviewSubmitted {
-    pub verdict: ReviewVerdict,
-    pub commit: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub url: Option<String>,
-    pub target: WorkTarget,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReviewCommentWritten {
-    pub id: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub url: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub created_at: Option<String>,
-    pub path: String,
-    pub line: i64,
-    pub side: String,
-    pub target: WorkTarget,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReplyWritten {
-    pub id: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub url: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub created_at: Option<String>,
-    pub target: WorkTarget,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ArtifactRef {
     pub name: String,
     pub id: String,
 }
 
-fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::deserialize(deserializer)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkKind {
+    #[default]
     #[serde(rename = "ticket")]
     Ticket,
     #[serde(rename = "pull_request")]
     PullRequest,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Lane {
-    #[serde(rename = "new")]
-    New,
-    #[serde(rename = "ready")]
-    Ready,
-    #[serde(rename = "in_progress")]
-    InProgress,
-    #[serde(rename = "done")]
-    Done,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -458,35 +139,8 @@ pub enum ReviewVerdict {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ReviewState {
-    Approve,
-    RequestChanges,
-    Comment,
-    Dismissed,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CommentableLineSide {
-    #[serde(rename = "LEFT")]
-    Left,
-    #[serde(rename = "RIGHT")]
-    Right,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum RequiredChecks {
     Passed,
     Running,
     Failed,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DependencyAlertState {
-    #[serde(rename = "open")]
-    Open,
-    #[serde(rename = "resolved")]
-    Resolved,
-    #[serde(rename = "dismissed")]
-    Dismissed,
 }

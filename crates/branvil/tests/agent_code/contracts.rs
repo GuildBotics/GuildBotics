@@ -1,4 +1,5 @@
 use branvil::agent::port::*;
+use branvil::agent::{CodeAgent, TicketAgent};
 use serde_json::json;
 pub fn ticket_request(tracker: &str, title: &str) -> CreateTicket {
     CreateTicket {
@@ -16,8 +17,8 @@ pub fn ticket_request(tracker: &str, title: &str) -> CreateTicket {
 }
 use branvil::test_support::ticket_items as tracker_items;
 pub async fn ticket_search_decoy_contract(
-    t: &dyn TicketService,
-    c: &dyn CodeHostingService,
+    t: &TicketAgent,
+    c: &CodeAgent,
     tracker: &str,
     repository: &str,
     head: &str,
@@ -44,12 +45,7 @@ pub async fn ticket_search_decoy_contract(
     );
 }
 
-pub async fn code_contract(
-    service: &dyn CodeHostingService,
-    repository: &str,
-    head_branch: &str,
-    base: &str,
-) {
+pub async fn code_contract(service: &CodeAgent, repository: &str, head_branch: &str, base: &str) {
     // Invalid semantic values stop at the typed port boundary before a provider call.
     assert!(serde_json::from_value::<SemanticReaction>(json!("eyes")).is_err());
     let request = |branch: &str| CreatePullRequest {
@@ -391,7 +387,7 @@ pub async fn code_contract(
 }
 
 /// Run after a fixture advances the same PR's branch, preserving its old SHA.
-pub async fn code_stale_head_contract(service: &dyn CodeHostingService, url: &str, old_head: &str) {
+pub async fn code_stale_head_contract(service: &CodeAgent, url: &str, old_head: &str) {
     let before = service
         .read(Resource::PullRequests, url, None, "")
         .await
@@ -455,7 +451,7 @@ pub async fn code_stale_head_contract(service: &dyn CodeHostingService, url: &st
     );
 }
 /// Run after a fixture removes the PR's base and adds `<base>/next`.
-pub async fn code_missing_base_contract(service: &dyn CodeHostingService, url: &str) {
+pub async fn code_missing_base_contract(service: &CodeAgent, url: &str) {
     assert!(
         service
             .readiness(url, false, MAX_LOG_TAIL_BYTES)
@@ -470,7 +466,7 @@ pub async fn code_missing_base_contract(service: &dyn CodeHostingService, url: &
     );
 }
 /// Run after the fixture merges or closes a PR.
-pub async fn code_closed_contract(service: &dyn CodeHostingService, url: &str) {
+pub async fn code_closed_contract(service: &CodeAgent, url: &str) {
     let p = service
         .read(Resource::PullRequests, url, None, "")
         .await
@@ -489,11 +485,7 @@ pub async fn code_closed_contract(service: &dyn CodeHostingService, url: &str) {
 }
 /// Run as a different member from the PR author. Both restored providers support these verdicts.
 /// `author` opened the PR at `url`; `service` acts as another actor on it.
-pub async fn code_other_actor_contract(
-    author: &dyn CodeHostingService,
-    service: &dyn CodeHostingService,
-    url: &str,
-) {
+pub async fn code_other_actor_contract(author: &CodeAgent, service: &CodeAgent, url: &str) {
     let p = service
         .read(Resource::PullRequests, url, None, "")
         .await
@@ -582,12 +574,7 @@ pub async fn code_other_actor_contract(
     assert_eq!(feedback().await, after, "the author's own reply");
 }
 /// The fixture installs the same ZIP bytes on the PR's current head.
-pub async fn code_artifact_contract(
-    service: &dyn CodeHostingService,
-    url: &str,
-    head: &str,
-    bytes: &[u8],
-) {
+pub async fn code_artifact_contract(service: &CodeAgent, url: &str, head: &str, bytes: &[u8]) {
     let artifact = service
         .artifact(url, "report", bytes.len() + 1)
         .await
@@ -598,19 +585,14 @@ pub async fn code_artifact_contract(
     assert!(service.artifact(url, "report", 1).await.is_err());
 }
 /// Run after advancing the head, leaving the old head's `report` artifact in place.
-pub async fn code_old_artifact_contract(service: &dyn CodeHostingService, url: &str) {
+pub async fn code_old_artifact_contract(service: &CodeAgent, url: &str) {
     assert!(matches!(
         service.artifact(url, "report", 1024 * 1024).await,
         Err(ref error) if error.is_not_found()
     ));
 }
 /// The fixture includes a changed UTF-8 filename and UTF-8 patch text.
-pub async fn code_utf8_files_contract(
-    service: &dyn CodeHostingService,
-    url: &str,
-    path: &str,
-    text: &str,
-) {
+pub async fn code_utf8_files_contract(service: &CodeAgent, url: &str, path: &str, text: &str) {
     let p = service
         .read(Resource::PullRequestFiles, url, None, "")
         .await
@@ -627,8 +609,8 @@ pub async fn code_utf8_files_contract(
 
 /// Wrong item kinds never cross the code-host boundary or cause writes.
 pub async fn code_kind_boundary_contract(
-    code: &dyn CodeHostingService,
-    tickets: &dyn TicketService,
+    code: &CodeAgent,
+    tickets: &TicketAgent,
     tracker: &str,
     pr_url: &str,
 ) {
@@ -762,14 +744,14 @@ pub struct CodeLinkCase {
 /// Fixtures prepare aliases `<head>-links-0` through `<head>-links-7`, then
 /// merge each returned PR and pass it to `code_link_case_finished`.
 pub async fn code_link_population(
-    code: &dyn CodeHostingService,
-    tickets: &dyn TicketService,
+    code: &CodeAgent,
+    tickets: &TicketAgent,
     repository: &str,
     tracker: &str,
     head: &str,
     base: &str,
 ) -> Vec<CodeLinkCase> {
-    async fn ticket(t: &dyn TicketService, tracker: &str, title: &str) -> String {
+    async fn ticket(t: &TicketAgent, tracker: &str, title: &str) -> String {
         t.create_ticket(CreateTicket {
             tracker: tracker.into(),
             title: title.into(),
@@ -1064,7 +1046,7 @@ pub async fn code_link_population(
     }
     cases
 }
-pub async fn code_link_case_finished(tickets: &dyn TicketService, case: &CodeLinkCase) {
+pub async fn code_link_case_finished(tickets: &TicketAgent, case: &CodeLinkCase) {
     for (url, state) in &case.states {
         assert_eq!(
             tickets
@@ -1080,11 +1062,7 @@ pub async fn code_link_case_finished(tickets: &dyn TicketService, case: &CodeLin
 
 /// A same-service ticket of another repository can be referenced, but cannot
 /// be closed by this PR. Failed replacement changes neither title nor body.
-pub async fn code_cross_repo_link_contract(
-    code: &dyn CodeHostingService,
-    url: &str,
-    other_ticket: &str,
-) {
+pub async fn code_cross_repo_link_contract(code: &CodeAgent, url: &str, other_ticket: &str) {
     let before = code
         .read(Resource::PullRequests, url, None, "")
         .await
@@ -1145,7 +1123,7 @@ pub async fn code_cross_repo_link_contract(
 /// Branvil lists newest first across signed pages; Local preserves its frozen
 /// ascending store order. Both traverse more than one provider page fully.
 pub async fn code_open_order_contract(
-    code: &dyn CodeHostingService,
+    code: &CodeAgent,
     repository: &str,
     head: &str,
     bases: &[String],

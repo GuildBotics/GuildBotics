@@ -1,4 +1,5 @@
 use crate::support;
+use branvil::agent::port::*;
 use gb_base::shared_writes::SharedWrites;
 use gb_member::{
     MemberError, WriteGuard,
@@ -6,7 +7,6 @@ use gb_member::{
     memory::{Memory, Scope},
 };
 use gb_observability::redaction::Redactor;
-use branvil::agent::port::*;
 use gb_server::member::{
     repository::{Repository, RepositoryServices},
     session::{Control, Session},
@@ -15,10 +15,10 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path, sync::Mutex};
 struct Services(support::Probe);
 impl RepositoryServices for Services {
-    fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
+    fn code(&self) -> gb_member::Result<&CodeAgent> {
         Ok(&self.0)
     }
-    fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
+    fn tickets(&self) -> gb_member::Result<&TicketAgent> {
         Ok(&self.0)
     }
 }
@@ -297,10 +297,10 @@ async fn run_commands_dispatch_only_through_the_bound_control_and_reject_caller_
 async fn context_credential_check_never_consults_the_code_host() {
     struct Absent;
     impl RepositoryServices for Absent {
-        fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
+        fn code(&self) -> gb_member::Result<&CodeAgent> {
             panic!("absent code host must not be consulted")
         }
-        fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
+        fn tickets(&self) -> gb_member::Result<&TicketAgent> {
             panic!("no ticket access")
         }
     }

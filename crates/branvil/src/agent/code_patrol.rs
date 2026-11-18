@@ -135,7 +135,7 @@ impl CodeAgent {
         }
         Ok(task)
     }
-    pub(super) async fn pull_candidates(&self) -> Result<Vec<Task>, ServiceError> {
+    pub async fn pull_request_candidates(&self) -> Result<Vec<Task>, ServiceError> {
         let m = self.member().await?;
         let mut out = vec![];
         let mut cursor = None;
@@ -167,7 +167,7 @@ impl CodeAgent {
         }
         Ok(out)
     }
-    pub(super) async fn pull_refresh(&self, task: &Task) -> Result<Option<Task>, ServiceError> {
+    pub async fn refresh_pull_request(&self, task: &Task) -> Result<Option<Task>, ServiceError> {
         let url = task
             .pull_request_url
             .as_deref()
@@ -185,7 +185,7 @@ impl CodeAgent {
         )
         .await
     }
-    pub(super) async fn pull_can_receive(&self, url: &str) -> Result<bool, ServiceError> {
+    pub async fn can_receive_work(&self, url: &str) -> Result<bool, ServiceError> {
         let (r, k) = self.item(url, "pulls")?;
         if self.write_scope().authorize(&r).is_err() {
             return Ok(false);
@@ -209,7 +209,7 @@ impl CodeAgent {
             Some("pull_request_feedback" | "pull_request_review")
         ))
     }
-    pub(super) async fn pull_draft(&self, url: &str) -> Result<bool, ServiceError> {
+    pub async fn convert_pull_request_to_draft(&self, url: &str) -> Result<bool, ServiceError> {
         let (r, k) = self.item(url, "pulls")?;
         self.writable(&r)?;
         draft_transition(

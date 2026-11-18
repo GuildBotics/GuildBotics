@@ -61,7 +61,7 @@ async fn member_identity_scope_and_resource_boundaries() {
     );
     let foreign = "https://tracker.invalid/T-1";
     assert_eq!(
-        CodeHostingService::read(&service, Resource::TicketPullRequests, foreign, None, "")
+        CodeAgent::read(&service, Resource::TicketPullRequests, foreign, None, "")
             .await
             .unwrap_err(),
         diagnostic(
@@ -103,24 +103,24 @@ async fn member_identity_scope_and_resource_boundaries() {
     assert!(label_error.translation_args()["message"].contains("undefined"));
     let t = tickets.create_ticket(request()).await.unwrap();
     assert_eq!(t.target.label, "#1");
-    let read = TicketService::read(&tickets, Resource::Tickets, &t.target.url, None, "")
+    let read = TicketAgent::read(&tickets, Resource::Tickets, &t.target.url, None, "")
         .await
         .unwrap();
     assert_eq!(read.items()[0]["tracker"], "test/repo");
     assert_eq!(read.items()[0]["assignees"], json!([]));
-    let c = TicketService::comment(&tickets, &t.target.url, "comment \n", None)
+    let c = TicketAgent::comment(&tickets, &t.target.url, "comment \n", None)
         .await
         .unwrap();
-    let read = TicketService::read(&tickets, Resource::TicketComments, &t.target.url, None, "")
+    let read = TicketAgent::read(&tickets, Resource::TicketComments, &t.target.url, None, "")
         .await
         .unwrap();
     assert_eq!(read.items()[0]["body"], "comment");
     assert_eq!(read.items()[0]["author_type"], "Assistant");
-    TicketService::add_reaction(&tickets, &t.target.url, &c.id, SemanticReaction::Ack)
+    TicketAgent::add_reaction(&tickets, &t.target.url, &c.id, SemanticReaction::Ack)
         .await
         .unwrap();
     assert!(
-        TicketService::read(
+        TicketAgent::read(
             &tickets,
             Resource::Tickets,
             &t.target.url.replace("/tickets/", "/pulls/"),
@@ -131,7 +131,7 @@ async fn member_identity_scope_and_resource_boundaries() {
         .is_err()
     );
     assert!(
-        TicketService::read(&tickets, Resource::PullRequests, &t.target.url, None, "")
+        TicketAgent::read(&tickets, Resource::PullRequests, &t.target.url, None, "")
             .await
             .is_err()
     );
@@ -166,12 +166,12 @@ async fn member_identity_scope_and_resource_boundaries() {
         "agent1".into(),
         "Agent One".into(),
     );
-    let outside_read = TicketService::read(&outside, Resource::Tickets, &t.target.url, None, "")
+    let outside_read = TicketAgent::read(&outside, Resource::Tickets, &t.target.url, None, "")
         .await
         .unwrap();
     assert_eq!(outside_read.items()[0]["lane"], Value::Null);
     tickets.create_ticket(request()).await.unwrap();
-    let first = TicketService::read(
+    let first = TicketAgent::read(
         &tickets,
         Resource::TrackerTickets,
         "test/repo",
@@ -181,7 +181,7 @@ async fn member_identity_scope_and_resource_boundaries() {
     .await
     .unwrap();
     let cursor = first.continuation().unwrap();
-    let second = TicketService::read(
+    let second = TicketAgent::read(
         &tickets,
         Resource::TrackerTickets,
         "test/repo",
@@ -192,7 +192,7 @@ async fn member_identity_scope_and_resource_boundaries() {
     .unwrap();
     assert_ne!(first.items()[0]["key"], second.items()[0]["key"]);
     assert!(
-        TicketService::read(
+        TicketAgent::read(
             &tickets,
             Resource::TrackerTickets,
             "test/repo",
@@ -357,16 +357,16 @@ async fn git_credential_lends_one_agent_token_until_the_service_is_closed() {
     };
     assert!(git(&lent.password).await.unwrap().status().is_success());
     assert_eq!(git("wrong").await.unwrap().status().as_u16(), 401);
-    CodeHostingService::aclose(&service).await.unwrap();
+    CodeAgent::aclose(&service).await.unwrap();
     assert!(token_labels(&owner, "aiko").await.is_empty());
     assert_eq!(member().await, None);
     // A second close, after the token is gone, still succeeds.
-    CodeHostingService::aclose(&service).await.unwrap();
+    CodeAgent::aclose(&service).await.unwrap();
     // A service used again after its close lends a new token, not the revoked one.
     let renewed = service.git_credential().await.unwrap().unwrap();
     assert_ne!(renewed.password, lent.password);
     assert!(git(&renewed.password).await.unwrap().status().is_success());
-    CodeHostingService::aclose(&service).await.unwrap();
+    CodeAgent::aclose(&service).await.unwrap();
     assert!(token_labels(&owner, "aiko").await.is_empty());
     // A close that cannot revoke keeps the run's outcome; the token is left
     // to the revocation at the next start.
@@ -374,6 +374,6 @@ async fn git_credential_lends_one_agent_token_until_the_service_is_closed() {
     assert_eq!(data.revoke_labelled("unrelated").await.unwrap(), 0);
     let left = data.clone();
     running.stop().await.unwrap();
-    CodeHostingService::aclose(&service).await.unwrap();
+    CodeAgent::aclose(&service).await.unwrap();
     assert!(left.revoke_labelled(super::GIT_TOKEN_LABEL).await.is_err());
 }

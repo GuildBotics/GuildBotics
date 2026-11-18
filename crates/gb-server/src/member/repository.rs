@@ -1,14 +1,15 @@
 //! Provider-independent ticket, PR and repository operations.
-use gb_member::{MemberError, Result, WriteGuard};
 use branvil::agent::port::*;
+use branvil::agent::{CodeAgent, TicketAgent};
+use gb_member::{MemberError, Result, WriteGuard};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// Lazy access preserves approval and chat validation before provider creation.
 pub trait RepositoryServices: Send + Sync {
-    fn tickets(&self) -> Result<&dyn TicketService>;
-    fn code(&self) -> Result<&dyn CodeHostingService>;
+    fn tickets(&self) -> Result<&TicketAgent>;
+    fn code(&self) -> Result<&CodeAgent>;
 }
 pub struct Repository<'a> {
     pub services: &'a dyn RepositoryServices,
@@ -310,7 +311,7 @@ fn push_url(urls: &mut Vec<String>, value: &Value) {
     }
 }
 pub async fn work_pull_request_urls(
-    code: &dyn CodeHostingService,
+    code: &CodeAgent,
     ticket: Option<&str>,
     evidence: &[Value],
 ) -> Result<Vec<String>> {
@@ -351,7 +352,7 @@ pub async fn work_pull_request_urls(
 }
 
 pub async fn answered(
-    code: &dyn CodeHostingService,
+    code: &CodeAgent,
     ticket: Option<&str>,
     evidence: &[Value],
 ) -> Result<Vec<(Value, Readiness)>> {
@@ -360,7 +361,9 @@ pub async fn answered(
     for url in urls {
         let page = code.read(Resource::PullRequests, &url, None, "").await?;
         let pr = page.items().first().ok_or(ServiceError::InvalidResult)?;
-        if pr["state"] != "open" || pr["author_type"] != "Assistant" {
+        if pr["state"] != "open"
+            || code.author_type(pr["author"].as_str().unwrap_or("")) != "Assistant"
+        {
             continue;
         }
         let checks = code.readiness(&url, false, MAX_LOG_TAIL_BYTES).await?;
@@ -371,10 +374,10 @@ pub async fn answered(
 pub fn ensure_ready(results: &[(Value, Readiness)]) -> Result<()> {
     if results
         .iter()
-        .any(|(_, r)| r.required_checks != RequiredChecks::Passed)
+        .any(|(_, r)| r.report.required_checks != RequiredChecks::Passed)
     {
         Err(MemberError::CapabilityArgs {
-            key: "cli.member.required_checks_incomplete",
+            key: "cli.member.report.required_checks_incomplete",
             args: [("blockers".into(), required_summary(results))].into(),
         })
     } else {
@@ -384,12 +387,12 @@ pub fn ensure_ready(results: &[(Value, Readiness)]) -> Result<()> {
 fn required_summary(results: &[(Value, Readiness)]) -> String {
     results
         .iter()
-        .filter(|(_, r)| r.required_checks != RequiredChecks::Passed)
+        .filter(|(_, r)| r.report.required_checks != RequiredChecks::Passed)
         .map(|(_, r)| {
             format!(
                 "{}: {}",
                 r.target.url,
-                serde_json::json!(r.required_checks)
+                serde_json::json!(r.report.required_checks)
                     .as_str()
                     .expect("check state is a string")
             )
@@ -400,14 +403,14 @@ fn required_summary(results: &[(Value, Readiness)]) -> String {
 pub fn ensure_awaitable(results: &[(Value, Readiness)]) -> Result<Vec<&Readiness>> {
     let awaited: Vec<_> = results
         .iter()
-        .filter(|(_, r)| r.required_checks != RequiredChecks::Passed)
+        .filter(|(_, r)| r.report.required_checks != RequiredChecks::Passed)
         .collect();
     if awaited.is_empty() {
         return Err(MemberError::Capability("cli.member.checks_none"));
     }
     if awaited
         .iter()
-        .any(|(_, r)| r.required_checks == RequiredChecks::Failed)
+        .any(|(_, r)| r.report.required_checks == RequiredChecks::Failed)
     {
         return Err(MemberError::CapabilityArgs {
             key: "cli.member.checks_not_awaitable",
@@ -418,7 +421,7 @@ pub fn ensure_awaitable(results: &[(Value, Readiness)]) -> Result<Vec<&Readiness
 }
 
 pub async fn open_pull_request_readiness(
-    code: &dyn CodeHostingService,
+    code: &CodeAgent,
     repository: &str,
     branch: &str,
 ) -> Result<Vec<Value>> {
@@ -426,7 +429,7 @@ pub async fn open_pull_request_readiness(
     for url in code.open_pull_requests(repository, branch).await? {
         let checks = code.readiness(&url, false, MAX_LOG_TAIL_BYTES).await?;
         results.push(
-            serde_json::json!({"url":checks.target.url,"required_checks":checks.required_checks}),
+            serde_json::json!({"url":checks.target.url,"required_checks":checks.report.required_checks}),
         );
     }
     Ok(results)
@@ -466,7 +469,7 @@ impl Repository<'_> {
         let mut notices = Vec::new();
         for readiness in awaited {
             let status:WorkflowStatus=serde_json::from_value(serde_json::json!({"reason":"awaiting_checks","person_id":work.person_id,
-                "run_id":work.run_id,"work_kind":work.work_kind,"work_identity":work.work_identity,"subject":work.subject,"head":readiness.head_sha}))
+                "run_id":work.run_id,"work_kind":work.work_kind,"work_identity":work.work_identity,"subject":work.subject,"head":readiness.report.head_sha}))
                 .map_err(|_|ServiceError::InvalidParameters)?;
             let notice = self
                 .services
@@ -483,29 +486,15 @@ impl Repository<'_> {
 
 /// Author feedback shares a ticket conversation only when ownership is unambiguous.
 pub async fn author_ticket(
-    code: &dyn CodeHostingService,
-    tickets: &dyn TicketService,
+    code: &CodeAgent,
+    tickets: &TicketAgent,
     url: &str,
 ) -> std::result::Result<Option<String>, ServiceError> {
-    let page = code.read(Resource::PullRequests, url, None, "").await?;
-    let pr: PullRequest = serde_json::from_value(
-        page.items()
-            .first()
-            .ok_or(ServiceError::InvalidResult)?
-            .clone(),
-    )
-    .map_err(|_| ServiceError::InvalidResult)?;
+    let pr = code.pull_view(url).await?;
     let mut owned = std::collections::BTreeSet::new();
     for link in code.linked_tickets(url).await? {
-        let page = tickets.read(Resource::Tickets, &link.url, None, "").await?;
-        let ticket: Ticket = serde_json::from_value(
-            page.items()
-                .first()
-                .ok_or(ServiceError::InvalidResult)?
-                .clone(),
-        )
-        .map_err(|_| ServiceError::InvalidResult)?;
-        if ticket.state == "open" && ticket.assignees.contains(&pr.author) {
+        let ticket = tickets.ticket_view(&link.url).await?;
+        if ticket.state == "open" && ticket.assignee.is_some_and(|a| a.name == pr.author) {
             owned.insert(ticket.url);
         }
     }

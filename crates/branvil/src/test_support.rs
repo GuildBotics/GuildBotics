@@ -448,7 +448,7 @@ mod tests;
 
 /// Collect every wire page while asserting that its continuation advances.
 pub async fn ticket_items(
-    t: &dyn crate::agent::port::TicketService,
+    t: &crate::agent::TicketAgent,
     tracker: &str,
     parameters: &Value,
 ) -> Vec<Value> {

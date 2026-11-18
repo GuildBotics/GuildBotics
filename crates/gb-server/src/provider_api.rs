@@ -70,7 +70,7 @@ pub(crate) async fn create_workspace(
     Body(input): Body<NewWorkspace>,
 ) -> Response {
     if input.name.contains('/')
-        || !gb_integrations::valid_repository_path(&format!("{}/name", input.name))
+        || !branvil::agent::port::valid_repository_path(&format!("{}/name", input.name))
     {
         return error(
             gb_setup::InvalidInput("workspace must be one name, such as acme".into()),

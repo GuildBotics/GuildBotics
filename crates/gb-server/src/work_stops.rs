@@ -1,9 +1,9 @@
 //! A stopped ticket's notice, separate from the execution that stopped.
-use gb_member::context::PublicMember;
-use gb_observability::runs::{Completion, RunRecord, RunState};
-use gb_integrations::chat::ChatService;
 use branvil::agent::port::Task;
 use gb_base::service::WorkflowStatus;
+use gb_integrations::chat::ChatService;
+use gb_member::context::PublicMember;
+use gb_observability::runs::{Completion, RunRecord, RunState};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 

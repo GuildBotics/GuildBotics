@@ -35,8 +35,7 @@ pub fn pr_created(result: &Value) -> Option<Value> {
     (result["created"] == true).then(|| target(&result["target"], "opened", Some(false)))
 }
 pub fn ticket_closed(result: &Value) -> Option<Value> {
-    (result["state"] == "closed" && result["state_changed"] == true)
-        .then(|| target(&result["target"], "closed", None))
+    (result["target"]["closed"] == true).then(|| target(&result["target"], "closed", None))
 }
 pub fn ticket_commented(result: &Value) -> Value {
     let (entry, mut attributes) = target_record(&result["target"]);
@@ -168,7 +167,7 @@ pub fn record(
 pub async fn refresh(
     workspace: &Path,
     writes: &gb_base::shared_writes::SharedWrites,
-    service: Option<&dyn branvil::agent::port::TicketService>,
+    service: Option<&branvil::agent::TicketAgent>,
     provider: &str,
     start: chrono::DateTime<chrono::Utc>,
     end: chrono::DateTime<chrono::Utc>,
@@ -177,10 +176,7 @@ pub async fn refresh(
     let Some(service) = service else {
         return Ok(0);
     };
-    let closed = service.closed_since(start, end).await;
-    let cleanup = service.aclose().await;
-    let closed = closed?;
-    cleanup?;
+    let closed = service.closed_since(start, end).await?;
     writes.transaction(|writer| {
         let store=ActivityEvents::open(workspace);
         let mut existing:std::collections::BTreeSet<_>=store.list_between(start,end)?.iter()

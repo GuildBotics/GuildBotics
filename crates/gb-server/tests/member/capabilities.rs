@@ -1,16 +1,16 @@
 use crate::support;
-use gb_member::{MemberError, WriteGuard};
 use branvil::agent::port::*;
+use gb_member::{MemberError, WriteGuard};
 use gb_server::member::repository::*;
 use serde_json::json;
 use std::collections::BTreeMap;
 struct Stale;
 struct Forbidden;
 impl RepositoryServices for Forbidden {
-    fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
+    fn tickets(&self) -> gb_member::Result<&TicketAgent> {
         panic!("provider must not be created")
     }
-    fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
+    fn code(&self) -> gb_member::Result<&CodeAgent> {
         panic!("provider must not be created")
     }
 }
@@ -701,10 +701,10 @@ fn blockers_keep_diagnostics_and_omit_ready_targets() {
 async fn completion_preserves_factory_failure_and_orders_owned_references() {
     struct Missing;
     impl RepositoryServices for Missing {
-        fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
+        fn tickets(&self) -> gb_member::Result<&TicketAgent> {
             unreachable!()
         }
-        fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
+        fn code(&self) -> gb_member::Result<&CodeAgent> {
             Err(ServiceError::Diagnostic {
                 class: ServiceErrorClass::Failure,
                 key: "integrations.resources.unsupported",

@@ -1,12 +1,12 @@
 //! Queue-only refresh and source-thread publication checks. Reading updates
 //! neither consumes the queue nor advances the processed-event cursor.
 use gb_base::{files, shared_writes::SharedWrites};
+use gb_integrations::chat::ChatEvent;
 use gb_member::{MemberError, Result, WriteGuard};
 use gb_observability::{
     redaction::Redactor,
     runs::{RunRecord, RunStore},
 };
-use gb_integrations::chat::ChatEvent;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

@@ -1,4 +1,4 @@
-use gb_integrations::*;
+use branvil::agent::{pr_readiness::failed_conclusion, scope::*};
 use gb_base::service::ServiceError;
 
 #[test]

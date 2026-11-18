@@ -17,7 +17,6 @@ serde = { version = "1", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 gb-config = { path = "../gb-config" }
 gb-base = { path = "../gb-base" }
-branvil = { path = "../branvil" }
 regex = "1"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
@@ -29,13 +28,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 webpki-roots = "1"
 sha2 = "0.10"
 anyhow = "1"
-tracing = "0.1"
 
 [dev-dependencies]
-branvil = { path = "../branvil", features = ["test-support"] }
-axum = { version = "0.8.9", features = ["json"] }
-serde-saphyr = "2.0.0"
-syn = { version = "2", features = ["full", "visit"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 

@@ -553,23 +553,6 @@ impl MemberApi {
         let page = self.bound_page(page, &caller, "pulls_list_threads", (&repo_path, &number))?;
         pulls::list_threads(&self.api.app, &caller, repo_path, number, page).await
     }
-    pub async fn pulls_thread_comments(
-        &self,
-        repo_path: &str,
-        number: u64,
-        id: &str,
-        page: PageReq,
-    ) -> AppResult<Page<pulls::ThreadCommentView>> {
-        let _open = self.api.guard()?;
-        let caller = self.caller().await?;
-        let page = self.bound_page(
-            page,
-            &caller,
-            "pulls_thread_comments",
-            (&repo_path, &number, &id),
-        )?;
-        pulls::thread_comments(&self.api.app, &caller, repo_path, number, id, page).await
-    }
     pub async fn pulls_reply(
         &self,
         repo_path: &str,
@@ -1033,7 +1016,6 @@ mod tests {
         rejects!(agent.pulls_list_comments("test/repo", 1, next()));
         rejects!(agent.pulls_list_reviews("test/repo", 1, next()));
         rejects!(agent.pulls_list_threads("test/repo", 1, next()));
-        rejects!(agent.pulls_thread_comments("test/repo", 1, "thread", next()));
         rejects!(agent.pulls_files("test/repo", 1, next()));
         rejects!(agent.pulls_commits("test/repo", 1, next()));
         rejects!(agent.repos_list(next()));

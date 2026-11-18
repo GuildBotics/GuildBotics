@@ -1,6 +1,6 @@
 use crate::support;
-use gb_member::WriteGuard;
 use branvil::agent::port::*;
+use gb_member::WriteGuard;
 use gb_server::member::git::{Guest, Output, Pending, Workspace};
 use serde_json::json;
 use std::{

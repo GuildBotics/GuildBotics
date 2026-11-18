@@ -52,7 +52,7 @@ pub(crate) async fn issue(
     let _held = held
         .map_err(|_| unavailable(&headers))?
         .map_err(|_| unavailable(&headers))?;
-    let credential = gb_integrations::factory::human_git_credential(
+    let credential = branvil::agent::owner_git::credential(
         &request.origin,
         data,
         &request.device_id,

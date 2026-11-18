@@ -61,7 +61,7 @@ impl Fixture {
             .url
     }
     async fn read(&self, url: &str) -> Value {
-        TicketService::read(&self.service, Resource::Tickets, url, None, "")
+        TicketAgent::read(&self.service, Resource::Tickets, url, None, "")
             .await
             .unwrap()
             .items()[0]
@@ -111,7 +111,7 @@ async fn waiting_eligibility_and_comment_changes_are_reread() {
             .await
             .unwrap();
         assert_eq!(
-            TicketService::can_receive_work(&f.service, &url)
+            TicketAgent::can_receive_work(&f.service, &url)
                 .await
                 .unwrap(),
             !interactive
@@ -132,11 +132,11 @@ async fn waiting_eligibility_and_comment_changes_are_reread() {
         )
         .await
         .unwrap();
-    TicketService::comment(&f.service, &url, "Answered", None)
+    TicketAgent::comment(&f.service, &url, "Answered", None)
         .await
         .unwrap();
     assert!(
-        !TicketService::can_receive_work(&f.service, &url)
+        !TicketAgent::can_receive_work(&f.service, &url)
             .await
             .unwrap()
     );
@@ -396,13 +396,13 @@ async fn creation_assignees_labels_status_and_parent_preserve_contract() {
         .url;
     let status: WorkflowStatus =
         decode(json!({"reason":"failed","person_id":"aiko","run_id":"r","subject":url})).unwrap();
-    TicketService::comment(&f.service, &authored, "It failed", Some(&status))
+    TicketAgent::comment(&f.service, &authored, "It failed", Some(&status))
         .await
         .unwrap();
-    TicketService::comment(&f.service, &authored, "Plain", None)
+    TicketAgent::comment(&f.service, &authored, "Plain", None)
         .await
         .unwrap();
-    let comments = TicketService::read(&f.service, Resource::TicketComments, &authored, None, "")
+    let comments = TicketAgent::read(&f.service, Resource::TicketComments, &authored, None, "")
         .await
         .unwrap();
     assert_eq!(comments.items()[0]["body"], "@owner1\n\nIt failed");
@@ -569,7 +569,7 @@ async fn edited_and_deleted_comments_are_reread_before_dispatch() {
         .tickets_change_comment("test/repo", key, &original.id, Some("Edited".into()))
         .await
         .unwrap();
-    let page = TicketService::read(&f.service, Resource::TicketComments, &url, None, "")
+    let page = TicketAgent::read(&f.service, Resource::TicketComments, &url, None, "")
         .await
         .unwrap();
     assert_eq!(page.items()[0]["id"], original.id);
@@ -581,7 +581,7 @@ async fn edited_and_deleted_comments_are_reread_before_dispatch() {
     );
     let held: WorkflowStatus =
         decode(json!({"reason":"failed","person_id":"aiko","run_id":"r"})).unwrap();
-    let failed = TicketService::comment(&f.service, &url, "Failed", Some(&held))
+    let failed = TicketAgent::comment(&f.service, &url, "Failed", Some(&held))
         .await
         .unwrap();
     assert!(f.service.refresh(&task).await.unwrap().is_none());
@@ -598,7 +598,7 @@ async fn edited_and_deleted_comments_are_reread_before_dispatch() {
         .await
         .unwrap();
     assert!(
-        TicketService::read(&f.service, Resource::TicketComments, &url, None, "")
+        TicketAgent::read(&f.service, Resource::TicketComments, &url, None, "")
             .await
             .unwrap()
             .items()
@@ -645,7 +645,7 @@ async fn other_assignee_mentions_preserve_human_assignment_and_lane() {
         assert_eq!(tasks[0].trigger_reason.as_deref(), Some("issue_mention"));
     }
     let task = f.service.candidates().await.unwrap().remove(0);
-    TicketService::comment(&f.service, &url, "Context provided", None)
+    TicketAgent::comment(&f.service, &url, "Context provided", None)
         .await
         .unwrap();
     f.owner
@@ -706,7 +706,7 @@ async fn interactive_ancestors_block_candidates_and_refresh_for_every_trigger() 
                 .unwrap();
             for (author, text) in &comments {
                 if *author == "agent1" {
-                    TicketService::comment(&f.service, &url, text, None)
+                    TicketAgent::comment(&f.service, &url, text, None)
                         .await
                         .unwrap();
                 } else {
@@ -821,7 +821,7 @@ async fn canonical_ticket_addresses_fail_without_mutation() {
         format!("{base}/test/-/tickets/1"),
     ] {
         assert_eq!(
-            TicketService::comment(&f.service, &address, "Hi", None)
+            TicketAgent::comment(&f.service, &address, "Hi", None)
                 .await
                 .unwrap_err(),
             diagnostic(
@@ -831,7 +831,7 @@ async fn canonical_ticket_addresses_fail_without_mutation() {
         );
     }
     assert!(
-        TicketService::read(&f.service, Resource::TicketComments, &url, None, "")
+        TicketAgent::read(&f.service, Resource::TicketComments, &url, None, "")
             .await
             .unwrap()
             .items()
@@ -905,7 +905,7 @@ async fn linked_pulls_yield_to_conversations_and_finish_only_after_answer() {
                     .await
                     .unwrap();
             } else {
-                TicketService::comment(&f.service, &url, "Question", None)
+                TicketAgent::comment(&f.service, &url, "Question", None)
                     .await
                     .unwrap();
                 f.owner
@@ -930,7 +930,7 @@ async fn linked_pulls_yield_to_conversations_and_finish_only_after_answer() {
                 })
             );
             assert_eq!(f.read(&url).await["lane"], "in_progress");
-            TicketService::comment(&f.service, &url, "Done", None)
+            TicketAgent::comment(&f.service, &url, "Done", None)
                 .await
                 .unwrap();
             assert!(f.service.refresh(&task).await.unwrap().is_none());

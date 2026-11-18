@@ -16,7 +16,8 @@ host supplies the workspace roster. Git credentials are temporary tokens,
 revoked when the agent closes. The module shares the domain's transactional
 link validation and interactive-ticket ancestry. PR readiness retains the
 existing port decisions until their separate removal; landing remains owned
-by the domain. `gb-integrations` constructs agents but has no code-host provider.
+by the domain. `gb-server` constructs the agents (`gb-server/src/member.rs`) and calls
+their methods directly; their reads and writes return the domain's views.
 
 "Errors" below lists what the provider raises; every API failure maps as:
 `404 → ServiceNotFound`, `422 unsupported → ServiceUnsupported`, any other

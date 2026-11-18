@@ -1849,7 +1849,7 @@ pub async fn commits(
     Ok(Page { items, next_cursor })
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct ChecksView {
     pub head_sha: String,
     pub base_sha: String,

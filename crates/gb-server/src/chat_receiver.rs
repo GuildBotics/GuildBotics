@@ -3,8 +3,8 @@
 use crate::member::chat_updates::{Heartbeat, Subject};
 use crate::{chat_state::Store, work_stops::Subscription};
 use chrono::{DateTime, Duration, Utc};
-use gb_integrations::chat::{ChannelEventsQuery, ChatEvent, ChatService, EventListener};
 use gb_base::service::ServiceError;
+use gb_integrations::chat::{ChannelEventsQuery, ChatEvent, ChatService, EventListener};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{

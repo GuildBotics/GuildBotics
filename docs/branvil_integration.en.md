@@ -54,7 +54,7 @@ The GuildBotics server calls the service directly, in its own process. While the
 service is not running, for example while the server stops, every ticket and pull request
 operation fails, and **Setup → Verification** reports that the workspace cannot be read.
 
-The provider then raises the port's `ServiceUnavailable` type. Autonomous patrols and
+Such a failure is recorded as `ServiceUnavailable`. Autonomous patrols and
 scheduled commands defer that work: they leave no failed workflow comment, record a started
 run as `deferred` (shown as information in Activity), and preserve the worker's
 consecutive-error count. Other work, including chat, keeps running. A later patrol checks
@@ -259,7 +259,7 @@ The ticket workflow and pull request patrol read the Branvil board and conversat
 - A ticket has at most one assignee: the agent that works on it. Assigning another
   member replaces the assignee, so two members never take up the same ticket.
 - Every ticket is in a lane of its workspace's board: a ticket a member creates goes to
-  **New**, and `member ticket create --no-add-to-board` is refused.
+  **New**.
 - A ticket assigned to the member in the **Ready** lane of the workspace's board is
   taken up and moved to **In progress**; one in **In progress** is taken up again when
   someone else has spoken since the member last did, or an unanswered mention remains.

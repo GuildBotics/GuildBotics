@@ -1,4 +1,5 @@
 //! Shared behavioral contracts, run against real hermetic provider fixtures.
+use crate::agent::TicketAgent;
 use crate::agent::port::*;
 use serde_json::{Value, json};
 
@@ -16,12 +17,12 @@ pub fn ticket_request(tracker: &str, title: &str) -> CreateTicket {
         blocked_by: vec![],
     }
 }
-async fn ticket_detail(t: &dyn TicketService, url: &str) -> Value {
+async fn ticket_detail(t: &TicketAgent, url: &str) -> Value {
     let p = t.read(Resource::Tickets, url, None, "").await.unwrap();
     assert_eq!(p.items().len(), 1);
     p.items()[0].clone()
 }
-async fn ticket_create(t: &dyn TicketService, tracker: &str, title: &str) -> String {
+async fn ticket_create(t: &TicketAgent, tracker: &str, title: &str) -> String {
     t.create_ticket(ticket_request(tracker, title))
         .await
         .unwrap()
@@ -29,14 +30,14 @@ async fn ticket_create(t: &dyn TicketService, tracker: &str, title: &str) -> Str
         .url
 }
 use crate::test_support::ticket_items as tracker_items;
-async fn task_for(t: &dyn TicketService, url: &str) -> Option<Task> {
+async fn task_for(t: &TicketAgent, url: &str) -> Option<Task> {
     t.candidates()
         .await
         .unwrap()
         .into_iter()
         .find(|task| task.url.as_deref() == Some(url))
 }
-async fn finish_task(t: &dyn TicketService, url: &str) {
+async fn finish_task(t: &TicketAgent, url: &str) {
     let task = Task {
         url: Some(url.into()),
         ..Default::default()
@@ -44,7 +45,7 @@ async fn finish_task(t: &dyn TicketService, url: &str) {
     assert!(t.move_ticket(&task, MoveLane::Done).await.unwrap());
 }
 
-pub async fn ticket_contract(t: &dyn TicketService, tracker: &str, label: &str, author: &str) {
+pub async fn ticket_contract(t: &TicketAgent, tracker: &str, label: &str, author: &str) {
     // Read/write result shapes, label set semantics, comment IDs, and close idempotence.
     let mut request = ticket_request(tracker, "Fix login");
     request.body = "It fails.".into();
@@ -369,7 +370,7 @@ pub trait TicketContractDriver: Send + Sync {
     fn merge_reference<'a>(&'a self, ticket_url: &'a str) -> ServiceFuture<'a, ()>;
 }
 pub async fn ticket_board_order_contract(
-    t: &dyn TicketService,
+    t: &TicketAgent,
     _driver: &dyn TicketContractDriver,
     tracker: &str,
     actor: &ActorName,
@@ -385,7 +386,7 @@ pub async fn ticket_board_order_contract(
         }
         urls.push(t.create_ticket(q).await.unwrap().target.url);
     }
-    async fn order(t: &dyn TicketService, urls: &[String]) -> Vec<String> {
+    async fn order(t: &TicketAgent, urls: &[String]) -> Vec<String> {
         t.candidates()
             .await
             .unwrap()
@@ -394,7 +395,7 @@ pub async fn ticket_board_order_contract(
             .collect()
     }
     assert_eq!(order(t, &urls).await, urls);
-    async fn read_order(t: &dyn TicketService, tracker: &str, urls: &[String]) -> Vec<String> {
+    async fn read_order(t: &TicketAgent, tracker: &str, urls: &[String]) -> Vec<String> {
         tracker_items(t, tracker, &json!({"lane":"ready","page_size":1}))
             .await
             .into_iter()
@@ -593,7 +594,7 @@ pub async fn ticket_board_order_contract(
     t.comment(&urls[2], "Confirmed", None).await.unwrap();
 }
 pub async fn ticket_patrol_contract(
-    t: &dyn TicketService,
+    t: &TicketAgent,
     driver: &dyn TicketContractDriver,
     tracker: &str,
     label: &str,
@@ -1113,7 +1114,7 @@ pub async fn ticket_patrol_contract(
 }
 
 pub async fn ticket_scope_contract(
-    t: &dyn TicketService,
+    t: &TicketAgent,
     tracker: &str,
     their_tracker: &str,
     theirs: &str,
@@ -1268,11 +1269,7 @@ pub async fn ticket_scope_contract(
     );
     ticket_create(t, tracker, "Allowed write after refusals").await;
 }
-pub async fn ticket_wrong_subject_contract(
-    t: &dyn TicketService,
-    pull_url: &str,
-    pull_comment: &str,
-) {
+pub async fn ticket_wrong_subject_contract(t: &TicketAgent, pull_url: &str, pull_comment: &str) {
     assert!((t.comment(pull_url, "Hi", None).await.unwrap_err()).is_not_found());
     assert!(
         (t.add_reaction(pull_url, pull_comment, SemanticReaction::Ack)
@@ -1305,7 +1302,7 @@ pub struct TicketAttachmentFixture {
     pub unused_id: String,
 }
 pub async fn ticket_attachment_contract(
-    t: &dyn TicketService,
+    t: &TicketAgent,
     tracker: &str,
     f: TicketAttachmentFixture,
 ) {
@@ -1396,7 +1393,7 @@ pub async fn ticket_attachment_contract(
     }
 }
 
-pub async fn ticket_placement_tracker_contract(t: &dyn TicketService, tracker: &str, other: &str) {
+pub async fn ticket_placement_tracker_contract(t: &TicketAgent, tracker: &str, other: &str) {
     let mut q = ticket_request(tracker, "Order source");
     q.lane = Some(CreateLane::Ready);
     let source = t.create_ticket(q).await.unwrap().target.url;

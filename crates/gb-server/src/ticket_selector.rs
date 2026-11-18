@@ -1,8 +1,9 @@
 //! Ticket selection and settlement, shared by patrol and one-off commands.
 use crate::{dispatcher::DispatchFailure, service::Pending, work_stops::WorkStop};
-use gb_observability::{Diagnostics, Trace, runs::RunRecord};
-use branvil::agent::port::{CodeHostingService, MoveLane, Task, TicketService};
+use branvil::agent::port::{MoveLane, Task};
+use branvil::agent::{CodeAgent, TicketAgent};
 use gb_base::service::{ServiceError, WorkflowStatus};
+use gb_observability::{Diagnostics, Trace, runs::RunRecord};
 use gb_wire::{CommandReply, WorkflowInvocation};
 use serde_json::{Value, json};
 
@@ -104,7 +105,7 @@ impl PullRequestQuota {
     pub fn snapshot(&self) -> Option<PullRequestLoad> {
         self.last.lock().unwrap().clone()
     }
-    async fn observe(&self, code: &dyn CodeHostingService) -> bool {
+    async fn observe(&self, code: &CodeAgent) -> bool {
         let count = match code.authored_open_pull_requests().await {
             Ok(pulls) => pulls.len(),
             Err(error) => {
@@ -132,8 +133,8 @@ pub struct Selector<'a> {
     pub roster: &'a [gb_member::context::PublicMember],
     pub source: &'a str,
     pub language: &'a str,
-    pub ticket: &'a dyn TicketService,
-    pub code: Option<&'a dyn CodeHostingService>,
+    pub ticket: &'a TicketAgent,
+    pub code: Option<&'a CodeAgent>,
     pub runner: &'a dyn Runner,
     pub quota: Option<&'a PullRequestQuota>,
 }
@@ -359,7 +360,7 @@ impl Selector<'_> {
         } else {
             self.ticket.comment(url, body, Some(status)).await?
         };
-        Ok(written.url.unwrap_or_default())
+        Ok(written.view.url)
     }
 
     async fn settle_failure(
@@ -522,7 +523,7 @@ impl Selector<'_> {
             )
             .await;
         let comment_failed = comment.is_err();
-        let comment_url = comment.ok().and_then(|c| c.url).unwrap_or_default();
+        let comment_url = comment.map(|c| c.view.url).unwrap_or_default();
         if reason == "review_limit" {
             settlement.drafted(
                 &comment_url,

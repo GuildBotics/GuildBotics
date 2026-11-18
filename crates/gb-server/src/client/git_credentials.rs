@@ -1,9 +1,9 @@
 //! The machine's owner token for Git. The member client never sees it.
 use std::{path::Path, time::Duration};
 
+use gb_base::service::GitCredential;
 use gb_base::{files, home};
 use gb_config::secrets;
-use gb_base::service::GitCredential;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 

@@ -42,7 +42,7 @@ async fn finish_claim(base: &str, runner: &str, attempt: &Value, conclusion: &st
 async fn fixture(
     root: &Path,
     owner: &::branvil::api::MemberApi,
-    code: &dyn CodeHostingService,
+    code: &CodeAgent,
     owner_token: &str,
     name: &str,
     jobs: &[&str],
@@ -103,7 +103,7 @@ async fn claim_head(base: &str, runner: &str, head: &str) -> Value {
 pub(super) async fn primary_failure_logs_and_cancelled_fallback(
     root: &Path,
     owner: &::branvil::api::MemberApi,
-    code: &dyn CodeHostingService,
+    code: &CodeAgent,
     base: &str,
     owner_token: &str,
     runner: &str,
@@ -186,7 +186,7 @@ pub(super) async fn primary_failure_logs_and_cancelled_fallback(
 pub(super) async fn ten_failed_logs_fit_one_page(
     root: &Path,
     owner: &::branvil::api::MemberApi,
-    code: &dyn CodeHostingService,
+    code: &CodeAgent,
     base: &str,
     owner_token: &str,
     runner: &str,
@@ -231,7 +231,7 @@ pub(super) async fn ten_failed_logs_fit_one_page(
 pub(super) async fn pending_closed_and_advanced_heads(
     root: &Path,
     owner: &::branvil::api::MemberApi,
-    code: &dyn CodeHostingService,
+    code: &CodeAgent,
     base: &str,
     owner_token: &str,
     runner: &str,
@@ -282,7 +282,7 @@ pub(super) async fn pending_closed_and_advanced_heads(
 pub(super) async fn author_yields_running_checks(
     root: &Path,
     owner: &::branvil::api::MemberApi,
-    code: &dyn CodeHostingService,
+    code: &CodeAgent,
     base: &str,
     owner_token: &str,
     runner: &str,
@@ -337,8 +337,8 @@ pub(super) async fn author_yields_running_checks(
 pub(super) async fn retry_main_verification(
     root: &Path,
     owner: &::branvil::api::MemberApi,
-    code: &dyn CodeHostingService,
-    tickets: &dyn TicketService,
+    code: &CodeAgent,
+    tickets: &TicketAgent,
     base: &str,
     owner_token: &str,
     runner: &str,

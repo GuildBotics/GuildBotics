@@ -4,8 +4,8 @@ mod code_behavior;
 mod contracts;
 mod extra;
 mod readiness;
-use branvil::agent::{CodeAgent, TicketAgent};
 use branvil::agent::port::*;
+use branvil::agent::{CodeAgent, TicketAgent};
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
@@ -193,7 +193,7 @@ async fn finish_artifact(
     }
     panic!("fixture job was never claimed")
 }
-async fn create(t: &dyn TicketService, title: &str) -> String {
+async fn create(t: &TicketAgent, title: &str) -> String {
     t.create_ticket(CreateTicket {
         tracker: REPO.into(),
         title: title.into(),
@@ -244,7 +244,7 @@ async fn merge_checked(
     .await
     .expect("fixture merge did not become ready");
 }
-async fn ticket_relations_contract(t: &dyn TicketService) {
+async fn ticket_relations_contract(t: &TicketAgent) {
     let parent = create(t, "Parent").await;
     let blocker = create(t, "Blocker").await;
     let child = create(t, "Child").await;
@@ -290,9 +290,9 @@ struct Context {
     owner_token: String,
     base: String,
     runner: String,
-    t: Arc<dyn TicketService>,
-    c: Arc<dyn CodeHostingService>,
-    other_code: Arc<dyn CodeHostingService>,
+    t: Arc<TicketAgent>,
+    c: Arc<CodeAgent>,
+    other_code: Arc<CodeAgent>,
 }
 impl Context {
     async fn new() -> Self {
@@ -335,19 +335,19 @@ impl Context {
             .members_issue_token("runner1".into(), input(json!({"label":"fixture"})))
             .await
             .unwrap();
-        let t: Arc<dyn TicketService> = Arc::new(TicketAgent::new(
+        let t: Arc<TicketAgent> = Arc::new(TicketAgent::new(
             running.data.clone(),
             "acme".into(),
             "aiko".into(),
             "Aiko".into(),
         ));
-        let c: Arc<dyn CodeHostingService> = Arc::new(CodeAgent::new(
+        let c: Arc<CodeAgent> = Arc::new(CodeAgent::new(
             running.data.clone(),
             "acme".into(),
             "aiko".into(),
             "Aiko".into(),
         ));
-        let other_code: Arc<dyn CodeHostingService> = Arc::new(CodeAgent::new(
+        let other_code: Arc<CodeAgent> = Arc::new(CodeAgent::new(
             running.data.clone(),
             "acme".into(),
             "kenji".into(),
@@ -405,7 +405,6 @@ impl Context {
     }
     async fn stop(self) {
         self.c.aclose().await.unwrap();
-        self.t.aclose().await.unwrap();
         self.other_code.aclose().await.unwrap();
         drop(self.c);
         drop(self.t);

@@ -1,5 +1,5 @@
-use chrono::{DateTime, Utc};
 use branvil::agent::port::*;
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::BTreeMap;
 pub struct Probe {
@@ -328,10 +328,10 @@ impl CodeHostingService for Probe {
 }
 
 impl gb_server::member::repository::RepositoryServices for Probe {
-    fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
+    fn tickets(&self) -> gb_member::Result<&TicketAgent> {
         Ok(self)
     }
-    fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
+    fn code(&self) -> gb_member::Result<&CodeAgent> {
         Ok(self)
     }
 }

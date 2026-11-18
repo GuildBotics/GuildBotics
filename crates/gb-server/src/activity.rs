@@ -392,13 +392,6 @@ async fn sync(
         .collect::<anyhow::Result<Vec<_>>>()?;
     let mut tickets = None;
     for person in &roster {
-        let config = crate::member::native::integration(
-            workspace,
-            &api.identity_root,
-            &project,
-            person,
-            &roster,
-        );
         if person.person_type != "agent"
             || !person.is_active
             || crate::member::native::service_workspace(&project, "ticket_service").is_empty()
@@ -406,26 +399,14 @@ async fn sync(
             continue;
         }
         tickets = Some(
-            gb_integrations::ServiceIntegrationFactory::new(
-                config,
-                &secrets,
-                api.branvil.get().cloned(),
-                Arc::new(|_| {}),
-            )?
-            .create_ticket_service(crate::member::native::service_workspace(
-                &project,
-                "ticket_service",
-            ))?,
+            crate::member::Agents::new(api.branvil.get(), &project, person, &roster).tickets()?,
         );
         break;
     }
     let Some(tickets) = tickets else {
         return Ok(());
     };
-    let result = tickets.closed_since(start, end).await;
-    let closed = tickets.aclose().await;
-    let items = result?;
-    closed?;
+    let items = tickets.closed_since(start, end).await?;
     let events = ActivityEvents::open(workspace);
     let workspace_secrets = SecretStore::new(
         &writes,

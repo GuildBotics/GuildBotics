@@ -4,10 +4,10 @@ use crate::{
     service::Pending as Future,
 };
 use chrono::{DateTime, Duration, Utc};
+use gb_base::service::WorkflowStatus;
+use gb_integrations::chat::{ChatEvent, ChatMessage, ChatService};
 use gb_member::context::PublicMember;
 use gb_observability::runs::RunRecord;
-use gb_integrations::chat::{ChatEvent, ChatMessage, ChatService};
-use gb_base::service::WorkflowStatus;
 use gb_wire::WorkflowInvocation;
 use serde_json::{Value, json};
 use std::{
@@ -366,7 +366,8 @@ impl Dispatcher {
                     .filter(|id| !id.trim().is_empty())
                     .map(|id| {
                         (
-                            self.chat.self_user_id(&gb_base::service::ActorName(id.clone())),
+                            self.chat
+                                .self_user_id(&gb_base::service::ActorName(id.clone())),
                             p.person_id.clone(),
                         )
                     })
@@ -844,10 +845,10 @@ mod tests {
             );
             history(&dispatcher, "C2", &[pending("C2", "T3")]);
             if stage == "selection" || stage == "selection_failure" {
-                chat.errors
-                    .lock()
-                    .unwrap()
-                    .insert("thread:T1".into(), gb_base::service::ServiceError::Unavailable);
+                chat.errors.lock().unwrap().insert(
+                    "thread:T1".into(),
+                    gb_base::service::ServiceError::Unavailable,
+                );
             }
             assert_eq!(dispatcher.process(Utc::now()).await.unwrap(), 0);
             assert_eq!(
@@ -992,10 +993,10 @@ mod tests {
             .receive("local", "aiko", p.event.clone(), "social")
             .unwrap();
         let record: RunRecord = serde_json::from_value(json!({"run_id":"run","work_kind":"chat","execution_mode":"autonomous","member_id":"aiko","device_id":"device","started_at":"2026-11-05T00:00:00Z","finished_at":"2026-11-05T00:01:00Z","result":{"subject_type":"chat","subject_id":"T1","status":"done"},"provider_evidence":[{"type":"chat_reply","payload":{"text":"@yuki hello","message_id":"reply","thread_id":"T1","occurred_at":"2026-11-05T00:01:00Z"}}]})).unwrap();
-        chat.errors
-            .lock()
-            .unwrap()
-            .insert("identity:".into(), gb_base::service::ServiceError::Unavailable);
+        chat.errors.lock().unwrap().insert(
+            "identity:".into(),
+            gb_base::service::ServiceError::Unavailable,
+        );
         for _ in 0..3 {
             assert!(dispatcher.settle(&p, &record, true).await.is_err());
         }

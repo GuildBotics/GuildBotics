@@ -163,7 +163,7 @@ _ALLOWED = {
     "gb-workspace": {"gb-base"},
     "gb-observability": {"gb-base"},
     "gb-wire": set(),
-    "gb-integrations": {"gb-base", "gb-config", "branvil"},
+    "gb-integrations": {"gb-base", "gb-config"},
     "gb-member": {"gb-base", "gb-workspace", "gb-observability"},
     "gb-config": {"gb-base", "gb-wire"},
     "gb-setup": {"gb-base", "gb-config"},

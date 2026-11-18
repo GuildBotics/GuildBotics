@@ -15,7 +15,6 @@ pub struct GitCredential {
     pub password: String,
 }
 
-
 /// A service's public account name, resolved through the member roster.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -260,8 +259,7 @@ impl WorkflowStatus {
         match self.0.reason {
             WorkflowStatusReason::Failed => true,
             WorkflowStatusReason::RateLimited => {
-                parse_retry_timestamp(&self.0.retry_after_at)
-                    .is_none_or(|retry| retry > now)
+                parse_retry_timestamp(&self.0.retry_after_at).is_none_or(|retry| retry > now)
             }
             _ => false,
         }

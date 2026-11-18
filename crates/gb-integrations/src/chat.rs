@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 
 use gb_base::service::{ActorName, SemanticReaction, ServiceError, ServiceFuture, WorkflowStatus};
 
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatIdentity {
     pub user_id: String,

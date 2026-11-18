@@ -29,8 +29,8 @@ fn read_only_observations_allow_landing_progress_but_detect_pull_writes() {
 const REPOSITORY: &str = "acme/code-behavior";
 struct Fixture<'a> {
     owner: &'a ::branvil::api::MemberApi,
-    code: &'a dyn CodeHostingService,
-    tickets: &'a dyn TicketService,
+    code: &'a CodeAgent,
+    tickets: &'a TicketAgent,
     git: Git,
     remote: String,
     base: String,

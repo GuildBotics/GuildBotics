@@ -67,7 +67,7 @@ impl ProviderModels for Registry {
         if name == "branvil" {
             let workspace = form["workspace"].as_str().unwrap_or("").trim();
             if workspace.contains('/')
-                || !gb_integrations::valid_repository_path(&format!("{workspace}/name"))
+                || !branvil::agent::port::valid_repository_path(&format!("{workspace}/name"))
             {
                 return Err(InvalidInput("workspace must be one name, such as acme".into()).into());
             }
@@ -195,7 +195,7 @@ pub(crate) fn message_for(e: branvil::api::AppError, operation: &str, lang: &str
 }
 /// Branvil's refusal as a setup error with the shared diagnostic key.
 pub(crate) fn refused_for(e: branvil::api::AppError, operation: &str) -> SetupError {
-    let error = gb_integrations::factory::branvil_error(e, operation);
+    let error = branvil::agent::error(e, operation);
     let mut result = SetupError::new("branvil", error.translation_key());
     if error.is_unavailable() {
         result.status = 503;

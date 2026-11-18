@@ -315,8 +315,8 @@ fn task_trace_attributes_distinguish_ticket_and_pull_request_without_changing_th
     }
 }
 
-use gb_config::secrets::{DeviceKey, Keychain, Scope, SecretStore};
 use branvil::agent::port::*;
+use gb_config::secrets::{DeviceKey, Keychain, Scope, SecretStore};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -410,8 +410,8 @@ impl Runner for FakeRunner {
 struct Fixture {
     root: tempfile::TempDir,
     embedded: branvil::test_support::Fixture,
-    ticket: Arc<dyn TicketService>,
-    code: Arc<dyn CodeHostingService>,
+    ticket: Arc<TicketAgent>,
+    code: Arc<CodeAgent>,
     runner: FakeRunner,
     diagnostics: Diagnostics,
 }
@@ -1077,7 +1077,7 @@ struct CodeFaults {
     candidates: Option<Vec<Task>>,
     refresh_limit: bool,
     block: Option<(&'static str, tokio_util::sync::CancellationToken)>,
-    inner: Arc<dyn CodeHostingService>,
+    inner: Arc<CodeAgent>,
     draft: Option<ServiceError>,
     fail_comment: bool,
     fail_links: bool,
@@ -1085,7 +1085,7 @@ struct CodeFaults {
     quota_error: Option<ServiceError>,
 }
 impl CodeFaults {
-    fn new(inner: Arc<dyn CodeHostingService>) -> Self {
+    fn new(inner: Arc<CodeAgent>) -> Self {
         Self {
             inner,
             yield_result: None,

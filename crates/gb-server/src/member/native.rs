@@ -5,19 +5,20 @@ use super::{
     repository::{Repository, RepositoryServices},
     session::Session,
 };
+use branvil::agent::port::*;
+use branvil::agent::{CodeAgent, TicketAgent};
 use gb_base::shared_writes::SharedWrites;
 use gb_config::{
     commands::CommandRoots,
     secrets::{DeviceKey, Keychain, Scope, SecretStore, SystemKeychain},
 };
+use gb_integrations::chat::*;
 use gb_integrations::{IntegrationConfig, ServiceIntegrationFactory};
 use gb_member::{MemberError, command, context::PublicMember};
 use gb_observability::{
     redaction::Redactor,
     runs::{RunRecord, RunStore},
 };
-use branvil::agent::port::*;
-use gb_integrations::chat::*;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -182,21 +183,14 @@ impl Native {
             &self.identity_root,
             &project,
             &public_person,
-            &roster,
         );
-        let factory = ServiceIntegrationFactory::new(
-            config.clone(),
-            &secrets,
-            self.branvil.clone(),
-            Arc::new(|_| {}),
-        )?;
+        let factory = ServiceIntegrationFactory::new(config.clone(), &secrets, Arc::new(|_| {}))?;
         let services = Services {
+            agents: super::Agents::new(self.branvil.as_ref(), &project, &public_person, &roster),
             factory,
             code: OnceLock::new(),
             tickets: OnceLock::new(),
             chat: OnceLock::new(),
-            code_workspace: service_workspace(&project, "code_hosting_service"),
-            ticket_workspace: service_workspace(&project, "ticket_service"),
         };
         let lifecycle = if self.invocation.is_none()
             && (request.phase.is_none()
@@ -218,10 +212,7 @@ impl Native {
         let target_attributes = std::sync::Mutex::new(BTreeMap::new());
         let result: anyhow::Result<Reply> = async {
         let peer = Peers {
-            config: &config,
-            code_workspace: service_workspace(&project, "code_hosting_service"),
-            ticket_workspace: service_workspace(&project, "ticket_service"),
-            secrets: &secrets,
+            project: &project,
             branvil: self.branvil.clone(),
             roster: &roster,
             eligible: team.members.iter().filter(|m| gb_config::resolved_guest::member(&roots,&self.identity_root,&m.person_id).ok().is_some_and(|v|v["routine_commands"].as_array().is_some_and(|a|a.iter().any(|x|x=="workflows/ticket_driven_workflow")))).map(|m|m.person_id.clone()).collect(),
@@ -468,7 +459,11 @@ impl Native {
             git_root: &git_root,
         };
         let executed = session.execute(&request.arguments, &request.stdin).await;
-        let answer = executed?;
+        let mut answer = executed?;
+        // The work target is the trace's and the run evidence's, not the output's.
+        if let Some(payload) = answer.payload.as_object_mut() {
+            payload.remove("target");
+        }
         let stdout = answer.text.unwrap_or_else(|| {
             if answer.format == "markdown" {
                 markdown(&answer.payload,&team.language)
@@ -880,7 +875,6 @@ pub(crate) fn integration(
     identity: &Path,
     project: &Value,
     person: &PublicMember,
-    roster: &[PublicMember],
 ) -> IntegrationConfig {
     let services = &project["services"];
     let name = |kind: &str| services[kind]["name"].as_str().unwrap_or("").to_lowercase();
@@ -894,15 +888,6 @@ pub(crate) fn integration(
             .iter()
             .map(|(k, v)| (k.clone(), ActorName(v.clone())))
             .collect(),
-        branvil_members: roster
-            .iter()
-            .filter_map(|v| {
-                v.accounts
-                    .get("branvil")
-                    .map(|a| (a.clone(), v.name.clone()))
-            })
-            .collect(),
-
         chat_provider: name("chat_service"),
 
         slack_base_url: services["chat_service"]["base_url"]
@@ -912,27 +897,23 @@ pub(crate) fn integration(
     }
 }
 struct Services<'a> {
-    code_workspace: &'a str,
-    ticket_workspace: &'a str,
+    agents: super::Agents,
     factory: ServiceIntegrationFactory<'a>,
-    code: OnceLock<std::result::Result<Arc<dyn CodeHostingService>, ServiceError>>,
-    tickets: OnceLock<std::result::Result<Arc<dyn TicketService>, ServiceError>>,
+    code: OnceLock<std::result::Result<Arc<CodeAgent>, ServiceError>>,
+    tickets: OnceLock<std::result::Result<Arc<TicketAgent>, ServiceError>>,
     chat: OnceLock<std::result::Result<Arc<dyn ChatService>, ServiceError>>,
 }
 impl RepositoryServices for Services<'_> {
-    fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
+    fn code(&self) -> gb_member::Result<&CodeAgent> {
         self.code
-            .get_or_init(|| {
-                self.factory
-                    .create_code_hosting_service(self.code_workspace)
-            })
+            .get_or_init(|| self.agents.code())
             .as_ref()
             .map(|v| v.as_ref())
             .map_err(|e| e.clone().into())
     }
-    fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
+    fn tickets(&self) -> gb_member::Result<&TicketAgent> {
         self.tickets
-            .get_or_init(|| self.factory.create_ticket_service(self.ticket_workspace))
+            .get_or_init(|| self.agents.tickets())
             .as_ref()
             .map(|v| v.as_ref())
             .map_err(|e| e.clone().into())
@@ -945,11 +926,6 @@ impl Services<'_> {
             && let Err(e) = code.aclose().await
         {
             error = Some(e);
-        }
-        if let Some(Ok(tickets)) = self.tickets.get()
-            && let Err(e) = tickets.aclose().await
-        {
-            error.get_or_insert(e);
         }
         match error {
             Some(error) => Err(error.into()),
@@ -1017,10 +993,7 @@ impl crate::member::git::Guest for Guest<'_> {
     }
 }
 struct Peers<'a> {
-    code_workspace: &'a str,
-    ticket_workspace: &'a str,
-    config: &'a IntegrationConfig,
-    secrets: &'a SecretStore<'a>,
+    project: &'a Value,
     branvil: Option<branvil::api::DataApi>,
     roster: &'a [PublicMember],
     eligible: std::collections::BTreeSet<String>,
@@ -1040,34 +1013,21 @@ impl Recipients for Peers<'_> {
                 .iter()
                 .find(|v| v.person_id == person)
                 .ok_or(ServiceError::InvalidParameters)?;
-            let mut config = self.config.clone();
-            config.person_id = person.person_id.clone();
-            config.display_name = person.name.clone();
-            config.accounts = person
-                .accounts
-                .iter()
-                .map(|(k, v)| (k.clone(), ActorName(v.clone())))
-                .collect();
-            let factory = ServiceIntegrationFactory::new(
-                config,
-                self.secrets,
-                self.branvil.clone(),
-                Arc::new(|_| {}),
-            )?;
-            let result = if self.code_workspace.is_empty() {
-                Err(ServiceError::NotFound)
-            } else {
-                let code = factory.create_code_hosting_service(self.code_workspace)?;
-                let result = code.can_receive_work(subject).await;
-                code.aclose().await?;
-                result
+            let agents =
+                super::Agents::new(self.branvil.as_ref(), self.project, person, self.roster);
+            let result = match agents.code() {
+                Ok(code) => {
+                    let result = code.can_receive_work(subject).await;
+                    code.aclose().await?;
+                    result
+                }
+                Err(ServiceError::Unsupported) => Err(ServiceError::NotFound),
+                Err(error) => Err(error),
             };
             match result {
                 Ok(value) => Ok(value),
                 Err(error) if error.is_not_found() => {
-                    let tickets = factory.create_ticket_service(self.ticket_workspace)?;
-                    let result = tickets.can_receive_work(subject).await;
-                    tickets.aclose().await?;
+                    let result = agents.tickets()?.can_receive_work(subject).await;
                     match result {
                         Err(error) if error.is_not_found() => Ok(false),
                         result => Ok(result?),

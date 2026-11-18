@@ -1,6 +1,6 @@
-use gb_member::WriteGuard;
 use branvil::agent::port::*;
 use gb_integrations::chat::*;
+use gb_member::WriteGuard;
 use gb_server::member::chat::{Chat, Reference};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Mutex};
@@ -325,10 +325,10 @@ async fn channel_inspection_parses_naive_times_from_cli_arguments_before_the_pro
     };
     struct Forbidden;
     impl RepositoryServices for Forbidden {
-        fn code(&self) -> gb_member::Result<&dyn CodeHostingService> {
+        fn code(&self) -> gb_member::Result<&CodeAgent> {
             panic!("no code access")
         }
-        fn tickets(&self) -> gb_member::Result<&dyn TicketService> {
+        fn tickets(&self) -> gb_member::Result<&TicketAgent> {
             panic!("no ticket access")
         }
     }

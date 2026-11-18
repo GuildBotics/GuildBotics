@@ -69,12 +69,7 @@ async def _read(
         ],
         failure=ServiceError,
     )
-    page = ReadPage.model_validate(result)
-    # What the host answered is held to the resource's schema here too: a
-    # command reads each item in its full shape, defaults included.
-    return ReadPage.of(
-        resource, page.items, continuation=page.continuation, target=page.target
-    )
+    return ReadPage.model_validate(result)
 
 
 class WindowCodeHostingService(CodeHostingService):

@@ -3,13 +3,13 @@ use branvil::agent::port::*;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 pub struct Faults {
-    pub inner: Arc<dyn TicketService>,
+    pub inner: Arc<TicketAgent>,
     pub errors: Mutex<std::collections::BTreeMap<&'static str, ServiceError>>,
     pub omit_comment_url: bool,
     pub candidates: Mutex<Option<Vec<Task>>>,
 }
 impl Faults {
-    pub fn new(inner: Arc<dyn TicketService>) -> Self {
+    pub fn new(inner: Arc<TicketAgent>) -> Self {
         Self {
             inner,
             errors: Default::default(),

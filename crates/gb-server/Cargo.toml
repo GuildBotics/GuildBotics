@@ -58,6 +58,7 @@ url = "2.5.8"
 libc = "0.2"
 
 [dev-dependencies]
+syn = { version = "2", features = ["full", "visit"] }
 branvil = { path = "../branvil", features = ["test-support"] }
 tokio-tungstenite = "0.29"
 tokio = { version = "1.53.3", features = ["test-util"] }
