@@ -136,6 +136,7 @@ impl CodeAgent {
         Ok(task)
     }
     pub async fn pull_request_candidates(&self) -> Result<Vec<Task>, ServiceError> {
+        self.fault("pull_request_candidates", "").await?;
         let m = self.member().await?;
         let mut out = vec![];
         let mut cursor = None;
@@ -168,6 +169,7 @@ impl CodeAgent {
         Ok(out)
     }
     pub async fn refresh_pull_request(&self, task: &Task) -> Result<Option<Task>, ServiceError> {
+        self.fault("refresh_pull_request", task.url.as_deref().unwrap_or("")).await?;
         let url = task
             .pull_request_url
             .as_deref()
@@ -186,6 +188,7 @@ impl CodeAgent {
         .await
     }
     pub async fn can_receive_work(&self, url: &str) -> Result<bool, ServiceError> {
+        self.fault("can_receive_work", url).await?;
         let (r, k) = self.item(url, "pulls")?;
         if self.write_scope().authorize(&r).is_err() {
             return Ok(false);
@@ -210,6 +213,7 @@ impl CodeAgent {
         ))
     }
     pub async fn convert_pull_request_to_draft(&self, url: &str) -> Result<bool, ServiceError> {
+        self.fault("convert_pull_request_to_draft", url).await?;
         let (r, k) = self.item(url, "pulls")?;
         self.writable(&r)?;
         draft_transition(

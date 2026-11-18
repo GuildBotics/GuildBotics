@@ -16,6 +16,7 @@ impl CodeAgent {
 impl CodeAgent {
     pub fn retry_job<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, String> {
         Box::pin(async move {
+            self.fault("retry_job", url).await?;
             let path = url
                 .strip_prefix(self.data().base_url())
                 .and_then(|p| p.strip_prefix('/'))
@@ -44,6 +45,7 @@ impl CodeAgent {
 
     pub fn yield_pull_request_checks<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, usize> {
         Box::pin(async move {
+            self.fault("yield_pull_request_checks", url).await?;
             let (repo, key) = self.item(url, "pulls")?;
             let result = self
                 .member()
@@ -57,6 +59,7 @@ impl CodeAgent {
 
     pub fn linked_tickets<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, Vec<TicketLink>> {
         Box::pin(async move {
+            self.fault("linked_tickets", url).await?;
             let (repo, key) = self.item(url, "pulls")?;
             let p = self
                 .member()
@@ -82,6 +85,7 @@ impl CodeAgent {
         continuation: &'a str,
     ) -> ServiceFuture<'a, ReadPage> {
         Box::pin(async move {
+            self.fault("read", subject).await?;
             let c = read_conditions(resource, parameters, continuation)?;
             if resource.is_ticket_service() {
                 return Err(ServiceError::InvalidResource);
@@ -200,6 +204,7 @@ impl CodeAgent {
         status: Option<&'a WorkflowStatus>,
     ) -> ServiceFuture<'a, Written<crate::domain::CommentView>> {
         Box::pin(async move {
+            self.fault("comment", url).await?;
             let (r, k) = self.item(url, "pulls")?;
             self.writable(&r)?;
             let m = self.member().await?;
@@ -230,6 +235,7 @@ impl CodeAgent {
         r: CreatePullRequest,
     ) -> ServiceFuture<'_, PullRequestCreated> {
         Box::pin(async move {
+            self.fault("create_pull_request", &r.repository).await?;
             self.repository(&r.repository)?;
             let links = r.tickets;
             self.writable(&r.repository)?;
@@ -249,6 +255,7 @@ impl CodeAgent {
         r: UpdatePullRequest,
     ) -> ServiceFuture<'a, Written<pulls::PullView>> {
         Box::pin(async move {
+            self.fault("update_pull_request", url).await?;
             let (repo, key) = self.item(url, "pulls")?;
             self.writable(&repo)?;
             let links = r.tickets;
@@ -276,6 +283,7 @@ impl CodeAgent {
         head: &'a str,
     ) -> ServiceFuture<'a, Written<pulls::ReviewSubmitted>> {
         Box::pin(async move {
+            self.fault("review", url).await?;
             let (r, k) = self.item(url, "pulls")?;
             self.writable(&r)?;
             let m = self.member().await?;
@@ -304,6 +312,7 @@ impl CodeAgent {
         r: ReviewComment,
     ) -> ServiceFuture<'a, Written<Value>> {
         Box::pin(async move {
+            self.fault("review_comment", url).await?;
             let (repo, key) = self.item(url, "pulls")?;
             self.writable(&repo)?;
             let m = self.member().await?;
@@ -326,6 +335,7 @@ impl CodeAgent {
         body: &'a str,
     ) -> ServiceFuture<'a, Written<Value>> {
         Box::pin(async move {
+            self.fault("reply", url).await?;
             let (r, k) = self.item(url, "pulls")?;
             self.writable(&r)?;
             let m = self.member().await?;
@@ -359,6 +369,7 @@ impl CodeAgent {
         r: SemanticReaction,
     ) -> ServiceFuture<'a, ReactionAdded> {
         Box::pin(async move {
+            self.fault("add_reaction", url).await?;
             let (repo, key) = self.item(url, "pulls")?;
             self.writable(&repo)?;
             self.member()
@@ -386,7 +397,10 @@ impl CodeAgent {
         logs: bool,
         tail: usize,
     ) -> ServiceFuture<'a, Readiness> {
-        Box::pin(self.pull_readiness(url, logs, tail))
+        Box::pin(async move {
+            self.fault("readiness", url).await?;
+            self.pull_readiness(url, logs, tail).await
+        })
     }
     pub fn open_pull_requests<'a>(
         &'a self,
@@ -394,6 +408,7 @@ impl CodeAgent {
         branch: &'a str,
     ) -> ServiceFuture<'a, Vec<String>> {
         Box::pin(async move {
+            self.fault("open_pull_requests", repo).await?;
             self.repository(repo)?;
             let m = self.member().await?;
             let mut out = vec![];
@@ -426,16 +441,21 @@ impl CodeAgent {
         name: &'a str,
         limit: usize,
     ) -> ServiceFuture<'a, Download<ArtifactRef>> {
-        Box::pin(self.pull_artifact(url, name, limit))
+        Box::pin(async move {
+            self.fault("artifact", url).await?;
+            self.pull_artifact(url, name, limit).await
+        })
     }
     pub fn clone_url<'a>(&'a self, repo: &'a str) -> ServiceFuture<'a, String> {
         Box::pin(async move {
+            self.fault("clone_url", repo).await?;
             self.repository(repo)?;
             Ok(format!("{}/git/{repo}.git", self.data().base_url()))
         })
     }
     pub fn default_branch<'a>(&'a self, repo: &'a str) -> ServiceFuture<'a, String> {
         Box::pin(async move {
+            self.fault("default_branch", repo).await?;
             self.repository(repo)?;
             Ok(self
                 .member()
@@ -448,6 +468,7 @@ impl CodeAgent {
     }
     pub fn pull_request_head<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, PullRequestHead> {
         Box::pin(async move {
+            self.fault("pull_request_head", url).await?;
             let v = self.pull(url).await?;
             Ok(PullRequestHead {
                 repository: text(&v, "head_repository").into(),
@@ -457,6 +478,7 @@ impl CodeAgent {
     }
     pub fn git_credential(&self) -> ServiceFuture<'_, Option<GitCredential>> {
         Box::pin(async move {
+            self.fault("git_credential", "").await?;
             let mut lent = self.git_token.lock().await;
             if lent.is_none() {
                 self.member().await?;
@@ -492,6 +514,7 @@ impl CodeAgent {
     }
     pub fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>> {
         Box::pin(async {
+            self.fault("authored_open_pull_requests", "").await?;
             let _open = self.data().guard().map_err(|e| error(e, "authored_open"))?;
             let me = fold(self.person_id());
             self.member().await?;

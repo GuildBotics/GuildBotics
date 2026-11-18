@@ -192,6 +192,7 @@ impl TicketAgent {
         Ok(decision.reason.map(|_| task))
     }
     pub async fn candidates(&self) -> Result<Vec<Task>, ServiceError> {
+        self.fault("candidates", "").await?;
         let mut unique = BTreeMap::new();
         for card in self
             .board_cards(false)
@@ -224,6 +225,7 @@ impl TicketAgent {
         Ok(out)
     }
     pub async fn refresh(&self, task: &Task) -> Result<Option<Task>, ServiceError> {
+        self.fault("refresh", task.url.as_deref().unwrap_or("")).await?;
         self.select_card(
             &self
                 .ticket_card(task.url.as_deref().ok_or(ServiceError::NotFound)?)
@@ -233,12 +235,14 @@ impl TicketAgent {
         .await
     }
     pub async fn can_receive_work(&self, url: &str) -> Result<bool, ServiceError> {
+        self.fault("can_receive_work", url).await?;
         Ok(self
             .select_card(&self.ticket_card(url).await?, false)
             .await?
             .is_some())
     }
     pub async fn move_ticket(&self, task: &Task, lane: MoveLane) -> Result<bool, ServiceError> {
+        self.fault("move_ticket", task.url.as_deref().unwrap_or("")).await?;
         let (r, k) = self.item(
             task.url.as_deref().ok_or(ServiceError::NotFound)?,
             "tickets",
@@ -269,6 +273,7 @@ impl TicketAgent {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<ClosedItem>, ServiceError> {
+        self.fault("closed_since", "").await?;
         let _open = self.api.guard().map_err(|e| error(e, "closed"))?;
         let caller = self
             .member()

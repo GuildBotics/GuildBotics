@@ -9,6 +9,7 @@ impl TicketAgent {
         continuation: &'a str,
     ) -> ServiceFuture<'a, ReadPage> {
         Box::pin(async move {
+            self.fault("read", subject).await?;
             let c = read_conditions(resource, parameters, continuation)?;
             if !resource.is_ticket_service() {
                 return Err(ServiceError::InvalidResource);
@@ -89,6 +90,7 @@ impl TicketAgent {
         limit: usize,
     ) -> ServiceFuture<'a, Download<Attachment>> {
         Box::pin(async move {
+            self.fault("attachment", url).await?;
             let (r, k) = self.item(url, "tickets")?;
             let m = self.member().await?;
             let _open = self.api.guard().map_err(|e| error(e, "attachments"))?;
@@ -145,6 +147,7 @@ impl TicketAgent {
         status: Option<&'a WorkflowStatus>,
     ) -> ServiceFuture<'a, Written<crate::domain::CommentView>> {
         Box::pin(async move {
+            self.fault("comment", url).await?;
             let (r, k) = self.item(url, "tickets")?;
             self.writable(&r)?;
             let m = self.member().await?;
@@ -174,6 +177,7 @@ impl TicketAgent {
         r: CreateTicket,
     ) -> ServiceFuture<'_, Written<tickets::TicketView>> {
         Box::pin(async move {
+            self.fault("create_ticket", &r.tracker).await?;
             self.repository(&r.tracker)?;
             self.writable(&r.tracker)?;
             self.related(r.parent.iter().chain(&r.blocked_by).cloned())?;
@@ -209,6 +213,7 @@ impl TicketAgent {
         r: UpdateTicket,
     ) -> ServiceFuture<'a, Written<tickets::TicketView>> {
         Box::pin(async move {
+            self.fault("update_ticket", url).await?;
             let (repo, key) = self.item(url, "tickets")?;
             self.writable(&repo)?;
             self.related(
@@ -306,6 +311,7 @@ impl TicketAgent {
         r: SemanticReaction,
     ) -> ServiceFuture<'a, ReactionAdded> {
         Box::pin(async move {
+            self.fault("add_reaction", url).await?;
             let (repo, key) = self.item(url, "tickets")?;
             self.writable(&repo)?;
             self.member()

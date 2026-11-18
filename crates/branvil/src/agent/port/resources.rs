@@ -72,7 +72,7 @@ resources! {
 
 /// One page of Branvil's views of a resource, with the ticket or pull request
 /// it was read of when that is one item.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ReadPage {
     items: Vec<Value>,
     continuation: Option<String>,

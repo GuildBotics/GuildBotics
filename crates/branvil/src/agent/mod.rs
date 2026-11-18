@@ -23,6 +23,68 @@ pub struct TicketAgent {
     workspace: String,
     pub(crate) scope: WriteScope,
     pub(crate) members: std::collections::BTreeMap<String, String>,
+    /// What a test makes this agent's operations do instead of their work.
+    #[cfg(feature = "test-support")]
+    pub faults: std::sync::Arc<Faults>,
+}
+/// The failures a test sets for single operations of an agent, by the names
+/// of the agent's methods: an operation fails, never reaches the service
+/// (`ServiceError::Unavailable`), or is refused as out of scope
+/// (`ServiceError::OutOfScope`) before it does anything.
+#[cfg(feature = "test-support")]
+#[derive(Default)]
+pub struct Faults {
+    errors: std::sync::Mutex<std::collections::BTreeMap<&'static str, ServiceError>>,
+    blocks: std::sync::Mutex<
+        std::collections::BTreeMap<&'static str, std::sync::Arc<tokio::sync::Notify>>,
+    >,
+    calls: std::sync::Mutex<Vec<(&'static str, String)>>,
+}
+#[cfg(feature = "test-support")]
+impl Faults {
+    pub fn fail(&self, operation: &'static str, error: ServiceError) {
+        self.errors.lock().unwrap().insert(operation, error);
+    }
+    pub fn clear(&self) {
+        self.errors.lock().unwrap().clear();
+    }
+    /// The operation waits forever once it has notified its arrival, so only
+    /// its caller's cancellation ends it.
+    pub fn block(&self, operation: &'static str) -> std::sync::Arc<tokio::sync::Notify> {
+        let arrived = std::sync::Arc::new(tokio::sync::Notify::new());
+        self.blocks
+            .lock()
+            .unwrap()
+            .insert(operation, arrived.clone());
+        arrived
+    }
+    /// The operations called, with the item or repository each was called for.
+    pub fn calls(&self) -> Vec<(&'static str, String)> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+impl TicketAgent {
+    async fn fault(&self, operation: &'static str, subject: &str) -> Result<(), ServiceError> {
+        #[cfg(feature = "test-support")]
+        {
+            let faults = &self.faults;
+            faults
+                .calls
+                .lock()
+                .unwrap()
+                .push((operation, subject.to_owned()));
+            let blocked = faults.blocks.lock().unwrap().get(operation).cloned();
+            if let Some(arrived) = blocked {
+                arrived.notify_one();
+                std::future::pending::<()>().await;
+            }
+            if let Some(error) = faults.errors.lock().unwrap().get(operation) {
+                return Err(error.clone());
+            }
+        }
+        let _ = (operation, subject);
+        Ok(())
+    }
 }
 impl TicketAgent {
     pub fn new(api: DataApi, workspace: String, person_id: String, display_name: String) -> Self {
@@ -34,6 +96,8 @@ impl TicketAgent {
             scope: WriteScope::new(&workspace),
             workspace,
             members: Default::default(),
+            #[cfg(feature = "test-support")]
+            faults: Default::default(),
         }
     }
     /// Shared in-process API, without mutable access to the write boundary.
