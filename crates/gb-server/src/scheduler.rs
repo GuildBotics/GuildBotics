@@ -46,8 +46,13 @@ struct Member {
 pub struct Wakes(std::sync::Mutex<BTreeMap<String, bool>>);
 impl Wakes {
     pub fn all(&self) {
-        for pending in self.0.lock().unwrap().values_mut() {
-            *pending = true;
+        self.except(None);
+    }
+    pub fn except(&self, person: Option<&str>) {
+        for (member, pending) in self.0.lock().unwrap().iter_mut() {
+            if Some(member.as_str()) != person {
+                *pending = true;
+            }
         }
     }
     fn take(&self, person: &str) -> bool {
@@ -500,7 +505,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finishing_execution_wakes_every_member_after_all_terminal_states() {
+    async fn finishing_execution_wakes_other_members_without_self_notification() {
         use gb_observability::runs::RunState;
         let root = tempfile::tempdir().unwrap();
         let cleanup = tokio_util::task::TaskTracker::new();
@@ -521,6 +526,8 @@ mod tests {
             RunState::Failed,
             RunState::Cancelled,
             RunState::Deferred,
+            RunState::Interrupted,
+            RunState::ResultUnknown,
         ]
         .into_iter()
         .enumerate()
@@ -540,11 +547,70 @@ mod tests {
             assert!(!scheduler.wakes.take("aiko"));
             run.finish(state).await.unwrap();
             for person in ["aiko", "yuki"] {
-                assert_eq!(scheduler.wakes.take(person), state != RunState::Deferred);
+                assert_eq!(
+                    scheduler.wakes.take(person),
+                    person != "aiko" && state != RunState::Deferred
+                );
             }
         }
         cleanup.close();
         cleanup.wait().await;
+    }
+
+    #[tokio::test]
+    async fn self_completion_preserves_interval_for_every_outcome_and_batch_state() {
+        for outcome in [Outcome::Succeeded, Outcome::Failed, Outcome::Deferred] {
+            for exhausted in [true, false] {
+                let engine = Fake::new();
+                engine
+                    .patrol
+                    .lock()
+                    .unwrap()
+                    .extend([(outcome, exhausted); 20]);
+                let mut scheduler = Scheduler::default();
+                scheduler.add(
+                    "aiko".into(),
+                    engine.clone(),
+                    vec![],
+                    vec![crate::ticket_selector::COMMAND.into()],
+                );
+                let settings = Settings {
+                    event_queue: false,
+                    ..Default::default()
+                };
+                for seconds in [0, 5, 10, 15, 20, 25, 60] {
+                    scheduler
+                        .tick("aiko", &settings, at(0) + Duration::seconds(seconds))
+                        .await;
+                    scheduler.wakes.except(Some("aiko"));
+                }
+                assert_eq!(
+                    engine.calls.lock().unwrap().len(),
+                    if exhausted { 1 } else { 2 },
+                    "{outcome:?} {exhausted}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn excluding_sender_preserves_external_pending_and_coalesces_other_members() {
+        let wakes = Wakes::default();
+        wakes
+            .0
+            .lock()
+            .unwrap()
+            .extend([("aiko".into(), false), ("yuki".into(), false)]);
+        wakes.all();
+        wakes.except(Some("aiko"));
+        assert!(wakes.take("aiko"));
+        assert!(wakes.take("yuki"));
+        for _ in 0..3 {
+            wakes.except(Some("aiko"));
+        }
+        assert!(!wakes.take("aiko"));
+        assert!(wakes.take("yuki"));
+        assert!(!wakes.take("yuki"));
     }
 
     #[tokio::test]

@@ -505,7 +505,7 @@ async fn hook_callbacks_need_the_per_process_secret() {
             "pre-receive",
             json!({"repo": "x", "member": "aiko", "updates": []}),
         ),
-        ("post-receive", json!({"repo": "x"})),
+        ("post-receive", json!({"repo": "x", "member": "aiko"})),
     ] {
         for secret in [None, Some("guess")] {
             let mut req = s.http.post(format!("{}/-/hooks/{hook}", s.url)).json(&body);

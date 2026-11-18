@@ -287,7 +287,7 @@ fn settle(admission: Admission, lease: Option<FileLock>, state: RunState) -> any
     if state != RunState::Deferred
         && let Some(generation) = generation
     {
-        generation.wakes.all();
+        generation.wakes.except(Some(&admission.record.member_id));
     }
     if manual && result.is_err() {
         tracing::warn!("cannot record manual command completion");
