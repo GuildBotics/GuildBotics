@@ -22,15 +22,15 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 pub struct TicketAgent {
-    api: DataApi,
+    pub api: DataApi,
     /// The agent acted as: the member's person_id, also its Branvil name.
-    person_id: String,
-    display_name: String,
+    pub person_id: String,
+    pub display_name: String,
     /// Set once the roster's members all exist, so any of them can be named.
     roster_ready: tokio::sync::OnceCell<()>,
     workspace: String,
-    scope: WriteScope,
-    members: std::collections::BTreeMap<String, String>,
+    pub scope: WriteScope,
+    pub members: std::collections::BTreeMap<String, String>,
 }
 impl TicketAgent {
     pub fn new(api: DataApi, workspace: String, person_id: String, display_name: String) -> Self {
@@ -52,7 +52,7 @@ impl TicketAgent {
             .collect();
         self
     }
-    async fn member(&self) -> Result<MemberApi, ServiceError> {
+    pub async fn member(&self) -> Result<MemberApi, ServiceError> {
         // A roster member that has not acted yet can still be assigned or
         // asked to review: every missing one is created before any operation.
         self.roster_ready
@@ -71,7 +71,7 @@ impl TicketAgent {
             .await
             .map_err(|e| error(e, "agent"))
     }
-    fn item(&self, url: &str, kind: &str) -> Result<(String, String), ServiceError> {
+    pub fn item(&self, url: &str, kind: &str) -> Result<(String, String), ServiceError> {
         let invalid = || {
             diagnostic(
                 if kind == "tickets" {
@@ -93,7 +93,7 @@ impl TicketAgent {
         }
         Ok((repo.into(), key.into()))
     }
-    fn repository(&self, path: &str) -> Result<(), ServiceError> {
+    pub fn repository(&self, path: &str) -> Result<(), ServiceError> {
         if gb_ports::valid_repository_path(path) {
             Ok(())
         } else {
@@ -103,7 +103,7 @@ impl TicketAgent {
             ))
         }
     }
-    fn writable(&self, repo: &str) -> Result<(), ServiceError> {
+    pub fn writable(&self, repo: &str) -> Result<(), ServiceError> {
         self.scope.authorize(repo).map(|_| ()).inspect_err(|error| {
             tracing::warn!(
                 provider = "branvil",
@@ -171,7 +171,12 @@ impl TicketAgent {
             interactive_ancestor: t.interactive_ancestor.as_ref().map(|t| t.url.clone()),
         }
     }
-    fn comment_body(&self, body: &str, status: Option<&WorkflowStatus>, author: &str) -> String {
+    pub fn comment_body(
+        &self,
+        body: &str,
+        status: Option<&WorkflowStatus>,
+        author: &str,
+    ) -> String {
         let body = body.trim_end();
         let addressed = mentions(body, author);
         if status.is_some() && self.author_type(author) == "User" && !addressed {
@@ -180,7 +185,7 @@ impl TicketAgent {
             body.into()
         }
     }
-    fn author_type(&self, author: &str) -> &'static str {
+    pub fn author_type(&self, author: &str) -> &'static str {
         if author.is_empty() {
             ""
         } else if patrol::fold(author) == patrol::fold(&self.person_id) {
@@ -189,7 +194,7 @@ impl TicketAgent {
             "User"
         }
     }
-    fn page(
+    pub fn page(
         &self,
         m: &MemberApi,
         resource: Resource,
@@ -213,7 +218,7 @@ impl TicketAgent {
             .map_err(|e| error(e, "tickets_get_ticket"))
     }
 }
-fn mentions(body: &str, name: &str) -> bool {
+pub fn mentions(body: &str, name: &str) -> bool {
     if name.is_empty() {
         return false;
     }
@@ -248,7 +253,7 @@ fn value(v: impl Serialize) -> Result<Value, ServiceError> {
 fn decode<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, ServiceError> {
     serde_json::from_value(v).map_err(|_| diagnostic("integrations.branvil.api.invalid", []))
 }
-fn number(key: &str) -> Result<u64, ServiceError> {
+pub fn number(key: &str) -> Result<u64, ServiceError> {
     if key.is_empty()
         || key.len() > 10
         || key.starts_with('0')
@@ -258,7 +263,7 @@ fn number(key: &str) -> Result<u64, ServiceError> {
     }
     key.parse().map_err(|_| ServiceError::NotFound)
 }
-fn diagnostic<const N: usize>(key: &'static str, args: [(&str, String); N]) -> ServiceError {
+pub fn diagnostic<const N: usize>(key: &'static str, args: [(&str, String); N]) -> ServiceError {
     let class = match key {
         "integrations.branvil.api.not_found"
         | "integrations.branvil.api.not_ticket"

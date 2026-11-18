@@ -1,5 +1,5 @@
 use gb_ports::*;
-use serde_json::{Value, json};
+use serde_json::json;
 pub fn ticket_request(tracker: &str, title: &str) -> CreateTicket {
     CreateTicket {
         tracker: tracker.into(),
@@ -14,26 +14,7 @@ pub fn ticket_request(tracker: &str, title: &str) -> CreateTicket {
         blocked_by: vec![],
     }
 }
-async fn tracker_items(t: &dyn TicketService, tracker: &str, parameters: &Value) -> Vec<Value> {
-    let mut items = vec![];
-    let mut cursor = String::new();
-    loop {
-        let p = t
-            .read(Resource::TrackerTickets, tracker, Some(parameters), &cursor)
-            .await
-            .unwrap();
-        assert!(p.target().is_none());
-        items.extend_from_slice(p.items());
-        match p.continuation() {
-            Some(next) => {
-                assert_ne!(next, cursor);
-                cursor = next.into()
-            }
-            None => break,
-        }
-    }
-    items
-}
+use branvil::test_support::ticket_items as tracker_items;
 pub async fn ticket_search_decoy_contract(
     t: &dyn TicketService,
     c: &dyn CodeHostingService,

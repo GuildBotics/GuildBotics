@@ -28,26 +28,7 @@ async fn ticket_create(t: &dyn TicketService, tracker: &str, title: &str) -> Str
         .target
         .url
 }
-async fn tracker_items(t: &dyn TicketService, tracker: &str, parameters: &Value) -> Vec<Value> {
-    let mut items = vec![];
-    let mut cursor = String::new();
-    loop {
-        let p = t
-            .read(Resource::TrackerTickets, tracker, Some(parameters), &cursor)
-            .await
-            .unwrap();
-        assert!(p.target().is_none());
-        items.extend_from_slice(p.items());
-        match p.continuation() {
-            Some(next) => {
-                assert_ne!(next, cursor);
-                cursor = next.into()
-            }
-            None => break,
-        }
-    }
-    items
-}
+use crate::test_support::ticket_items as tracker_items;
 async fn task_for(t: &dyn TicketService, url: &str) -> Option<Task> {
     t.candidates()
         .await

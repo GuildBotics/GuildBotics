@@ -1,5 +1,6 @@
 use super::*;
-use branvil::api::{Running, initialize};
+use branvil::agent::mentions;
+use branvil::api::{MemberApi, Running, initialize};
 #[tokio::test]
 async fn member_identity_scope_and_resource_boundaries() {
     let temp = tempfile::tempdir().unwrap();
