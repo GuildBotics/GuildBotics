@@ -1,14 +1,14 @@
+use super::mentions;
 use super::*;
-use branvil::agent::mentions;
-use branvil::api::MemberApi;
-use branvil::test_support::{Running, initialize};
+use crate::api::MemberApi;
+use crate::test_support::{Running, initialize};
 #[tokio::test]
 async fn member_identity_scope_and_resource_boundaries() {
     let temp = tempfile::tempdir().unwrap();
     initialize(temp.path(), "owner1").unwrap();
     let running = Running::start(
         temp.path(),
-        std::sync::Arc::new(::branvil::vault::Memory::default()),
+        std::sync::Arc::new(crate::vault::Memory::default()),
     )
     .await
     .unwrap();
@@ -19,7 +19,7 @@ async fn member_identity_scope_and_resource_boundaries() {
     m.repos_create(decode(json!({"path":"test/repo","labels":["bug"]})).unwrap())
         .await
         .unwrap();
-    let service = BranvilService::new(
+    let service = CodeAgent::new(
         running.data.clone(),
         "test".into(),
         "agent1".into(),
@@ -69,7 +69,7 @@ async fn member_identity_scope_and_resource_boundaries() {
             [("url", foreign.into())]
         )
     );
-    let tickets = ::branvil::agent::TicketAgent::new(
+    let tickets = crate::agent::TicketAgent::new(
         running.data.clone(),
         "test".into(),
         "agent1".into(),
@@ -136,7 +136,7 @@ async fn member_identity_scope_and_resource_boundaries() {
             .is_err()
     );
     // The owner is not an agent, so a member named like it cannot act.
-    let owner_named = ::branvil::agent::TicketAgent::new(
+    let owner_named = crate::agent::TicketAgent::new(
         running.data.clone(),
         "test".into(),
         "owner1".into(),
@@ -150,7 +150,7 @@ async fn member_identity_scope_and_resource_boundaries() {
             .translation_key(),
         "integrations.branvil.api.refused"
     );
-    let outside = ::branvil::agent::TicketAgent::new(
+    let outside = crate::agent::TicketAgent::new(
         running.data.clone(),
         "other".into(),
         "agent1".into(),
@@ -160,7 +160,7 @@ async fn member_identity_scope_and_resource_boundaries() {
         outside.create_ticket(request()).await.unwrap_err(),
         ServiceError::OutOfScope
     );
-    let outside = ::branvil::agent::TicketAgent::new(
+    let outside = crate::agent::TicketAgent::new(
         running.data.clone(),
         "other".into(),
         "agent1".into(),
@@ -230,15 +230,9 @@ fn mentions_match_the_frozen_ascii_name_boundaries() {
 
 #[tokio::test]
 async fn interactive_links_are_read_only_after_pull_patrol_selects_work() {
-    let temp = tempfile::tempdir().unwrap();
-    initialize(temp.path(), "owner1").unwrap();
-    let running = Running::start(
-        temp.path(),
-        std::sync::Arc::new(::branvil::vault::Memory::default()),
-    )
-    .await
-    .unwrap();
-    let service = BranvilService::new(
+    let fixture = crate::test_support::Fixture::new("owner1").await;
+    let running = &fixture.running;
+    let service = CodeAgent::new(
         running.data.clone(),
         "test".into(),
         "aiko".into(),
@@ -296,9 +290,12 @@ async fn interactive_links_are_read_only_after_pull_patrol_selects_work() {
         )
         .await
         .unwrap();
-    pull["tickets"] = json!([{"url":ticket.url}]);
+    let base = fixture.commit("test/repo", "main", None, "a", "base");
+    fixture.commit("test/repo", "feature", Some(&base), "a", "head");
+    let url = fixture.pull(&owner, "test/repo", json!({"head":"feature","base":"main","title":"Work","body":"","tickets":[{"url":ticket.url,"closes":false}]})).await;
+    pull["url"] = json!(url);
     assert!(service.pull_work(&pull, &activity).await.unwrap().is_none());
-    running.stop().await.unwrap();
+    fixture.stop().await;
 }
 
 #[test]
@@ -323,7 +320,7 @@ async fn git_credential_lends_one_agent_token_until_the_service_is_closed() {
     initialize(temp.path(), "owner1").unwrap();
     let running = Running::start(
         temp.path(),
-        std::sync::Arc::new(::branvil::vault::Memory::default()),
+        std::sync::Arc::new(crate::vault::Memory::default()),
     )
     .await
     .unwrap();
@@ -337,14 +334,14 @@ async fn git_credential_lends_one_agent_token_until_the_service_is_closed() {
         .repos_create(decode(json!({"path":"test/repo"})).unwrap())
         .await
         .unwrap();
-    let service = BranvilService::new(data.clone(), "test".into(), "aiko".into(), "Aiko".into());
+    let service = CodeAgent::new(data.clone(), "test".into(), "aiko".into(), "Aiko".into());
     let lent = service.git_credential().await.unwrap().unwrap();
     let again = service.git_credential().await.unwrap().unwrap();
     assert_eq!(lent.username, "aiko");
     assert_eq!(again.password, lent.password);
     assert_eq!(token_labels(&owner, "aiko").await, ["guildbotics-git"]);
     // The token authenticates the agent over HTTP and over Git.
-    let member = || ::branvil::test_support::token_member(data, &lent.password);
+    let member = || crate::test_support::token_member(data, &lent.password);
     assert_eq!(member().await.as_deref(), Some("aiko"));
     let refs = format!(
         "{}/git/test/repo.git/info/refs?service=git-upload-pack",
@@ -377,9 +374,5 @@ async fn git_credential_lends_one_agent_token_until_the_service_is_closed() {
     let left = data.clone();
     running.stop().await.unwrap();
     CodeHostingService::aclose(&service).await.unwrap();
-    assert!(
-        left.revoke_labelled(crate::factory::GIT_TOKEN_LABEL)
-            .await
-            .is_err()
-    );
+    assert!(left.revoke_labelled(super::GIT_TOKEN_LABEL).await.is_err());
 }

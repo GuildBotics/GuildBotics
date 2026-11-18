@@ -182,12 +182,12 @@ From the repository root, run the integration check against a disposable
 Branvil service:
 
 ```sh
-cargo nextest run --locked -p gb-integrations --test main -E 'test(/^branvil::/)'
+cargo nextest run --locked -p branvil --features test-support -E 'test(/^agent/)'
 ```
 
 The check covers tickets and dependencies, Git push and the pull request that
 closes a ticket, and CI readiness when a job completes or the head moves. It
-uses the Rust provider and the public Branvil data API. It needs no existing
+uses the agent module and the public Branvil data API. It needs no existing
 service, real credentials, browser, or microVM. The same check runs in CI.
 
 ## Documents

@@ -116,7 +116,7 @@ workflow (orchestration)
   the common code-hosting service. The existing member broker carries each read;
   the host selects the matching provider operation, validates continuations,
   and records observed work targets. The code host's `readiness()` (judged by
-  `gb-integrations/src/readiness.rs` from what the provider reads) is the one readiness, shared by the
+  `branvil/src/agent/pr_readiness.rs` from what the provider reads) is the one readiness, shared by the
   inspection, push, and completion paths. An agent already
   inside a command calls `/opt/guildbotics/venv/bin/python -m guildbotics.guest.entry <name> <args>`
   to run a child in that environment under the main command's access contract.
@@ -239,22 +239,22 @@ Shared contracts live in `gb-ports`:
   write goes only to a repository or tracker directly in it (`check_path`), a push only
   to the code host's.
 - **Selection rules are GuildBotics' own.** The shared patrol code decides which pull
-  request asks something of a member (`gb-integrations/src/patrol.rs`), whether a
-  head may be reported complete (`gb-integrations/src/readiness.rs`), and whether an assigned
-  ticket is a member's work now (`gb-integrations/src/selection.rs`) by applying these
-  shared rules to snapshots read by the providers. The services keep their own data, and
-  the reference provider `local` goes through the same rules.
+  request asks something of a member (`branvil/src/agent/pr_patrol.rs`), whether a
+  head may be reported complete (`branvil/src/agent/pr_readiness.rs`), and whether an assigned
+  ticket is a member's work now (`branvil/src/agent/selection.rs`) by applying these
+  shared rules to observations of the embedded service. Chat retains the reference
+  provider `local`; tickets and pull requests use the agent module.
 
-`branvil` (`gb-integrations/src/factory/branvil/`) is a code host and tickets of a
+`branvil` (`branvil/src/agent/`) is a code host and tickets of a
 [Branvil](branvil_integration.en.md) service that every machine reaches at the same
 base URL. Its API answers raw data (comments with an opaque `meta` carrying a workflow
-status, reviews, threads, checks); the provider applies the rules above to it. The
-provider calls the embedded service in the server's process, without a token:
+status, reviews, threads, checks); the agent module applies the rules above to it. The
+agent calls the embedded service in the server's process, without a token:
 `DataApi::owner()` acts as the owner and `DataApi::agent(person_id, display_name)` as an
 AI member, whose member there is named by its person_id. Every agent of the team is
 created there when the server starts, when a workspace is selected, when a member is saved,
 and before any member operation, so others can name it before it acts. For
-member git, the provider issues a token labelled `guildbotics-git` for the run, hands it
+member git, the agent issues a token labelled `guildbotics-git` for the run, hands it
 to git with the person_id, and revokes it when the run releases the service.
 
 ## 4. Workflow Invocation

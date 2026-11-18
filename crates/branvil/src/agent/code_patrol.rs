@@ -1,6 +1,6 @@
+use super::pr_patrol::*;
 use super::*;
-use crate::{PatrolComment, PatrolPullRequest, PatrolReview, PatrolThread};
-use ::branvil::api::pulls;
+use crate::api::pulls;
 use chrono::Utc;
 use std::collections::BTreeSet;
 pub(super) fn array<'a>(v: &'a Value, k: &str) -> &'a [Value] {
@@ -19,7 +19,7 @@ fn reactors(v: &Value) -> BTreeSet<String> {
 pub(super) fn status(v: &Value) -> Option<WorkflowStatus> {
     WorkflowStatus::from_payload(&v["meta"])
 }
-impl BranvilService {
+impl CodeAgent {
     fn snapshot(&self, p: &Value, a: &Value) -> PatrolPullRequest {
         let mut reviews: Vec<_> = array(a, "reviews")
             .iter()
@@ -90,17 +90,23 @@ impl BranvilService {
         }
     }
     pub(super) async fn pull_interactive(&self, p: &Value) -> Result<bool, ServiceError> {
-        for link in array(p, "tickets") {
-            let url = text(link, "url");
-            if self.item(url, "tickets").is_ok() {
-                let t = self.ticket(url).await?;
-                if t["interactive"].as_bool() == Some(true) || !t["interactive_ancestor"].is_null()
-                {
-                    return Ok(true);
-                }
-            }
-        }
-        Ok(false)
+        let (r, k) = self.item(text(p, "url"), "pulls")?;
+        let _open = self.data().guard().map_err(|e| error(e, "interactive"))?;
+        let caller = self
+            .member()
+            .await?
+            .caller()
+            .await
+            .map_err(|e| error(e, "caller"))?;
+        let (_, pull) = crate::domain::pulls::visible(&self.data().app, &caller, &r, number(&k)?)
+            .await
+            .map_err(|e| error(e, "pull"))?;
+        self.data()
+            .app
+            .store
+            .read(move |rd| crate::domain::pulls::interactive(rd, &pull))
+            .await
+            .map_err(|e| error(e, "interactive"))
     }
     pub(super) async fn pull_work(
         &self,
@@ -113,7 +119,7 @@ impl BranvilService {
             return Ok(None);
         }
         let me = fold(self.person_id());
-        let task = crate::patrol(
+        let task = super::pr_patrol::patrol(
             self,
             &self.snapshot(p, a),
             &me,
@@ -197,7 +203,7 @@ impl BranvilService {
                 .map_err(|e| error(e, "pulls_activity"))?,
         )?;
         Ok(matches!(
-            crate::pull_request_work(&self.snapshot(&p, &a), &me, Utc::now()),
+            super::pr_patrol::pull_request_work(&self.snapshot(&p, &a), &me, Utc::now()),
             Some("pull_request_feedback" | "pull_request_review")
         ))
     }

@@ -179,7 +179,8 @@ repository, and upstream events, including changes in another repository.
 | 413 | `too_large` | Body, log, artifact, or image above its limit. |
 | 421 | `misdirected` | Wrong `Host`. |
 | 500 | `internal` | An unexpected failure; the detail is in the service log only. |
-| 422 | `unsupported` | The operation is not offered (for example, a merge into a ticket of another service). |
+| 422 | `unsupported` | The operation is not offered. |
+| 422 | `closes_foreign` | A closing ticket link names another repository or another service. Use a reference link instead. Nothing was written. |
 | 503 | `unavailable` | Temporarily unable (storage busy, CI queue full). Safe to retry reads. |
 
 Messages never contain tokens.
@@ -740,7 +741,7 @@ or last departure, or `null` before it first joins (see "Landing").
   `reviewers` (see "Members and tokens") to review it; changing them later leaves
   pull requests already open as they are. The head branch must exist (`404 not_found`). A ticket of
   this Branvil must exist (`404 not_found`); `closes: true` is accepted only for a
-  ticket of this repository (`422 unsupported` otherwise): a ticket of another
+  ticket of this repository (`422 closes_foreign` otherwise): a ticket of another
   repository, like a URL of another service, is kept as a reference and cannot
   close.
   Concurrent creates of the same head and base produce one pull request.

@@ -1,7 +1,7 @@
 //! Normalize independent check and current-pull observations at the provider boundary.
 use super::*;
-use branvil::api::pulls;
-use branvil::test_support::{Running, initialize};
+use crate::api::pulls;
+use crate::test_support::{Running, initialize};
 
 fn report() -> pulls::ChecksView {
     let mut report = pulls::ChecksView {
@@ -28,11 +28,11 @@ async fn readiness_keeps_report_and_current_heads_distinct() {
     initialize(temp.path(), "owner1").unwrap();
     let running = Running::start(
         temp.path(),
-        std::sync::Arc::new(::branvil::vault::Memory::default()),
+        std::sync::Arc::new(crate::vault::Memory::default()),
     )
     .await
     .unwrap();
-    let service = BranvilService::new(
+    let service = CodeAgent::new(
         running.data.clone(),
         "test".into(),
         "owner1".into(),

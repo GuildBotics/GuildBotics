@@ -1,36 +1,19 @@
 //! Behavior contracts through the embedded Branvil service.
 mod alerts;
-#[path = "../support/chat.rs"]
-mod chat_contracts;
 mod code_behavior;
-#[path = "../support/contracts.rs"]
 mod contracts;
 mod extra;
 mod readiness;
-use gb_base::shared_writes::SharedWrites;
-use gb_config::secrets::{DeviceKey, Keychain, Scope, SecretStore};
-use gb_integrations::factory::*;
+use branvil::agent::{CodeAgent, TicketAgent};
 use gb_ports::*;
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
     process::Command,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 const REPO: &str = "acme/demo";
 const PIPELINE: &str = "[[jobs]]\nname = \"test\"\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\nartifacts = [{name = \"report\", paths = [\"report.txt\"]}]\n";
-struct MemoryKey(Mutex<Option<String>>);
-impl Keychain for MemoryKey {
-    fn read(&self) -> anyhow::Result<Option<String>> {
-        Ok(self.0.lock().unwrap().clone())
-    }
-    fn create(&self, key: &str) -> anyhow::Result<()> {
-        let mut slot = self.0.lock().unwrap();
-        assert!(slot.is_none());
-        *slot = Some(key.into());
-        Ok(())
-    }
-}
 fn input<T: serde::de::DeserializeOwned>(v: Value) -> T {
     serde_json::from_value(v).unwrap()
 }
@@ -309,7 +292,6 @@ struct Context {
     runner: String,
     t: Arc<dyn TicketService>,
     c: Arc<dyn CodeHostingService>,
-    chat: Arc<dyn ChatService>,
     other_code: Arc<dyn CodeHostingService>,
 }
 impl Context {
@@ -317,7 +299,7 @@ impl Context {
         let temp = tempfile::tempdir().unwrap();
         let (fixture, alert_host) =
             ::branvil::test_support::Fixture::configured("owner", alerts::Host::configure).await;
-        fixture.install_test_hooks("branvil::hook");
+        fixture.install_test_hooks("agent_code::hook");
         let owner_token = fixture.owner_token.clone();
         let running = &fixture.running;
         let base = running.data.base_url().to_owned();
@@ -342,51 +324,24 @@ impl Context {
             .members_issue_token("runner1".into(), input(json!({"label":"fixture"})))
             .await
             .unwrap();
-        let identity = temp.path().join("identity");
-        let workspace = temp.path().join("workspace");
-        std::fs::create_dir_all(identity.join(".guildbotics/config/team/members/aiko")).unwrap();
-        let writes = SharedWrites::new(identity.clone(), Some(workspace.clone()));
-        let key = MemoryKey(Mutex::new(None));
-        let secrets = SecretStore::new(
-            &writes,
-            Scope::Identity,
-            DeviceKey {
-                machine_root: temp.path().join("machine"),
-                keychain: &key,
-            },
-        )
-        .unwrap();
-        let config = IntegrationConfig {
-            local_root: workspace.join(".guildbotics/local/services"),
-            identity_root: identity,
-            person_id: "aiko".into(),
-            display_name: "Aiko".into(),
-            accounts: Default::default(),
-            branvil_members: Default::default(),
-            chat_provider: "local".into(),
-            slack_base_url: String::new(),
-        };
-        let factory = ServiceIntegrationFactory::new(
-            config.clone(),
-            &secrets,
-            Some(running.data.clone()),
-            Arc::new(|_| {}),
-        )
-        .unwrap();
-        let t = factory.create_ticket_service("acme").unwrap();
-        let c = factory.create_code_hosting_service("acme").unwrap();
-
-        let chat = factory.create_chat_service().unwrap();
-        let mut other_config = config;
-        other_config.person_id = "kenji".into();
-        let other_factory = ServiceIntegrationFactory::new(
-            other_config,
-            &secrets,
-            Some(running.data.clone()),
-            Arc::new(|_| {}),
-        )
-        .unwrap();
-        let other_code = other_factory.create_code_hosting_service("acme").unwrap();
+        let t: Arc<dyn TicketService> = Arc::new(TicketAgent::new(
+            running.data.clone(),
+            "acme".into(),
+            "aiko".into(),
+            "Aiko".into(),
+        ));
+        let c: Arc<dyn CodeHostingService> = Arc::new(CodeAgent::new(
+            running.data.clone(),
+            "acme".into(),
+            "aiko".into(),
+            "Aiko".into(),
+        ));
+        let other_code: Arc<dyn CodeHostingService> = Arc::new(CodeAgent::new(
+            running.data.clone(),
+            "acme".into(),
+            "kenji".into(),
+            "Kenji".into(),
+        ));
         Self {
             temp,
             fixture,
@@ -397,7 +352,6 @@ impl Context {
             runner: runner.token,
             t,
             c,
-            chat,
             other_code,
         }
     }
@@ -460,14 +414,6 @@ async fn ticket_relations() {
     ticket_relations_contract(t.as_ref()).await;
     f.stop().await;
 }
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn chat() {
-    let f = Context::new().await;
-
-    chat_contracts::chat_contract(f.chat.as_ref(), "contract").await;
-    f.stop().await;
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn code_patrol() {
     let f = Context::new().await;
@@ -892,7 +838,6 @@ async fn member_show_and_missing_base() {
         "owner",
         owner_token.trim(),
     );
-    contracts::member_show_contract(c.as_ref(), REPO).await;
     contracts::code_missing_base_contract(c.as_ref(), &next.target.url).await;
 
     f.stop().await;

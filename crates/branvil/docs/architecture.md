@@ -13,7 +13,7 @@ its router, `DataApi`, and shutdown methods. It never binds. The host installs a
 503 fallback until Git locking, hook installation and ref recovery finish,
 then mounts that router behind its own routes on one listener (7878 by default).
 The origin is used for public links, hook callbacks and runner supervision.
-`api::Running` remains a standalone test host using the configured `listen`.
+`test_support::Running` is the tests' server, with a host of its own (`TestHost`) on a free loopback port.
 The host shares the process, so it acts without a token: `DataApi::owner()`
 acts as the owner, and `DataApi::agent(name, display_name)` as the agent
 `name`, which it creates with that display name when missing (GuildBotics

@@ -1,5 +1,31 @@
 //! Code-host behavior through the public Branvil provider.
 use super::*;
+// Landing is refreshed by a background worker, independently of the operation.
+// Keep every other field so revisions, reviews and draft changes remain visible.
+fn pull_state(pull: impl serde::Serialize) -> Value {
+    let mut state = serde_json::to_value(pull).unwrap();
+    state.as_object_mut().unwrap().remove("landing");
+    state
+}
+
+#[test]
+fn read_only_observations_allow_landing_progress_but_detect_pull_writes() {
+    let before = json!({"draft":false,"revision":1,"title":"Work","body":"","landing":{"head_sha":"old","blockers":[{"code":"checking"}]}});
+    let mut after = before.clone();
+    after["landing"] = json!({"head_sha":"new","blockers":[]});
+    assert_eq!(pull_state(&before), pull_state(&after));
+    for (field, changed) in [
+        ("draft", json!(true)),
+        ("revision", json!(2)),
+        ("title", json!("Changed")),
+        ("body", json!("Changed")),
+    ] {
+        let mut written = after.clone();
+        written[field] = changed;
+        assert_ne!(pull_state(&before), pull_state(&written), "{field}");
+    }
+}
+
 const REPOSITORY: &str = "acme/code-behavior";
 struct Fixture<'a> {
     owner: &'a ::branvil::api::MemberApi,
@@ -192,22 +218,7 @@ async fn author_feedback_reactions_and_holds(f: &mut Fixture<'_>) {
 async fn requested_and_inline_reviews_follow_heads(f: &mut Fixture<'_>) {
     for inline in [false, true] {
         let mut p = f.open(false, vec![]).await;
-        // Wait for the asynchronous landing pair check before asserting that
-        // the stale operation itself changed nothing.
-        let before = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-            loop {
-                let before = f.owner.pulls_get(REPOSITORY, p.number).await.unwrap();
-                let v = serde_json::to_value(&before).unwrap();
-                if v["landing"]["head_sha"] == v["head_sha"]
-                    && v["landing"]["base_sha"] == v["base_sha"]
-                {
-                    break before;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("landing pair checked before stale-operation snapshot");
+        let before = pull_state(f.owner.pulls_get(REPOSITORY, p.number).await.unwrap());
         let stale = if inline {
             f.code
                 .review_comment(
@@ -237,8 +248,8 @@ async fn requested_and_inline_reviews_follow_heads(f: &mut Fixture<'_>) {
         );
         assert!(failure.translation_args().is_empty());
         assert_eq!(
-            serde_json::to_value(f.owner.pulls_get(REPOSITORY, p.number).await.unwrap()).unwrap(),
-            serde_json::to_value(before).unwrap()
+            pull_state(f.owner.pulls_get(REPOSITORY, p.number).await.unwrap()),
+            before
         );
         let page = f
             .code
@@ -565,8 +576,7 @@ async fn review_limit_is_read_only_and_requests_override_it(f: &mut Fixture<'_>)
             .unwrap();
         f.advance(&mut p).await;
     }
-    let before =
-        serde_json::to_value(f.owner.pulls_get(REPOSITORY, p.number).await.unwrap()).unwrap();
+    let before = pull_state(f.owner.pulls_get(REPOSITORY, p.number).await.unwrap());
     let comments = f
         .code
         .read(Resource::PullRequestComments, &p.url, None, "")
@@ -575,7 +585,7 @@ async fn review_limit_is_read_only_and_requests_override_it(f: &mut Fixture<'_>)
     f.expected(&p, Some("pull_request_review_limit"), false)
         .await;
     assert_eq!(
-        serde_json::to_value(f.owner.pulls_get(REPOSITORY, p.number).await.unwrap()).unwrap(),
+        pull_state(f.owner.pulls_get(REPOSITORY, p.number).await.unwrap()),
         before
     );
     assert_eq!(
@@ -587,11 +597,10 @@ async fn review_limit_is_read_only_and_requests_override_it(f: &mut Fixture<'_>)
     );
     assert_eq!(before["draft"], false);
     f.request(&p).await;
-    let before =
-        serde_json::to_value(f.owner.pulls_get(REPOSITORY, p.number).await.unwrap()).unwrap();
+    let before = pull_state(f.owner.pulls_get(REPOSITORY, p.number).await.unwrap());
     f.expected(&p, Some("pull_request_review"), true).await;
     assert_eq!(
-        serde_json::to_value(f.owner.pulls_get(REPOSITORY, p.number).await.unwrap()).unwrap(),
+        pull_state(f.owner.pulls_get(REPOSITORY, p.number).await.unwrap()),
         before
     );
     f.close(&p).await;
@@ -692,37 +701,56 @@ async fn body_updates_preserve_or_drop_links_before_validation(f: &mut Fixture<'
             .read(Resource::PullRequests, &p.url, None, "")
             .await
             .unwrap();
-        assert_eq!(
-            f.code
-                .update_pull_request(
-                    &p.url,
-                    UpdatePullRequest {
-                        title: Some("Changed".into()),
-                        body: Some("Changed".into()),
-                        tickets: Some(vec![
-                            TicketLink {
-                                url: ticket.clone(),
-                                closes: true
-                            },
-                            TicketLink {
-                                url: foreign.clone(),
-                                closes: true
-                            }
-                        ])
-                    }
-                )
-                .await
-                .unwrap_err(),
-            ServiceError::Diagnostic {
-                class: ServiceErrorClass::Unsupported,
-                key: "integrations.branvil.api.closes_foreign",
-                args: [
-                    ("repository".into(), REPOSITORY.into()),
-                    ("url".into(), foreign)
-                ]
-                .into()
-            }
-        );
+        let error = f
+            .code
+            .update_pull_request(
+                &p.url,
+                UpdatePullRequest {
+                    title: Some("Changed".into()),
+                    body: Some("Changed".into()),
+                    tickets: Some(vec![
+                        TicketLink {
+                            url: ticket.clone(),
+                            closes: true,
+                        },
+                        TicketLink {
+                            url: foreign.clone(),
+                            closes: true,
+                        },
+                    ]),
+                },
+            )
+            .await
+            .unwrap_err();
+        let expected = ServiceError::Diagnostic {
+            class: ServiceErrorClass::Unsupported,
+            key: "integrations.branvil.api.closes_foreign",
+            args: [
+                ("repository".into(), REPOSITORY.into()),
+                ("url".into(), foreign.clone()),
+            ]
+            .into(),
+        };
+        assert_eq!(error, expected);
+        f.git
+            .push(&f.remote, &p.head, "foreign-close", "owner", f.owner_token);
+        let error = f
+            .code
+            .create_pull_request(CreatePullRequest {
+                repository: REPOSITORY.into(),
+                head: "foreign-close".into(),
+                base: "main".into(),
+                title: "Refused".into(),
+                body: String::new(),
+                draft: false,
+                tickets: vec![TicketLink {
+                    url: foreign,
+                    closes: true,
+                }],
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error, expected);
         assert_eq!(
             f.code
                 .read(Resource::PullRequests, &p.url, None, "")
@@ -795,8 +823,7 @@ async fn outside_scope_pull_requests_are_not_patrolled(f: &mut Fixture<'_>) {
         branch: "feature".into(),
     };
     f.expected(&p, None, false).await;
-    let before =
-        serde_json::to_value(f.owner.pulls_get("outside/repo", p.number).await.unwrap()).unwrap();
+    let before = pull_state(f.owner.pulls_get("outside/repo", p.number).await.unwrap());
     assert_eq!(
         f.code
             .convert_pull_request_to_draft(&p.url)
@@ -805,7 +832,7 @@ async fn outside_scope_pull_requests_are_not_patrolled(f: &mut Fixture<'_>) {
         ServiceError::OutOfScope
     );
     assert_eq!(
-        serde_json::to_value(f.owner.pulls_get("outside/repo", p.number).await.unwrap()).unwrap(),
+        pull_state(f.owner.pulls_get("outside/repo", p.number).await.unwrap()),
         before
     );
     assert!(

@@ -46,7 +46,7 @@ scripts/dev.sh --data-dir /absolute/path/to/dev-data
 ### メンバー・provider・実行
 
 - `gb-ports` の契約でコードホスト、チケット、チャットを扱う。チケットとPRはURL、コメント・レビュー・ジョブなどは項目のURLと組で意味を持つ不透明なID。任意機能に対応しないときはunsupportedを返す。空の成功は実際に0件の場合だけに使う。
-- providerの選択は `gb-integrations/src/factory.rs` に置く。書き込みは対象サービスの設定が指す範囲を検査し、member gitはpushの資格情報を渡す前に同じ境界を通す。member gitにはユーザーのcredential helperを継承しない。判定は共通の巡回・readiness・選択処理に置き、providerは読み取った状態を渡す。チャットの契約テストではprovider間で同じ操作を確かめる。チャットの参照providerの `local` は実サービス固有のIDや名前空間をまねない。
+- チケットとコードホストの操作は `branvil/src/agent/`、チャットのprovider選択は `gb-integrations/src/factory.rs` に置く。書き込みは対象サービスの設定が指す範囲を検査し、member gitはpushの資格情報を渡す前に同じ境界を通す。member gitにはユーザーのcredential helperを継承しない。判定は共通の巡回・readiness・選択処理に置き、providerは読み取った状態を渡す。チャットの契約テストではprovider間で同じ操作を確かめる。チャットの参照providerの `local` は実サービス固有のIDや名前空間をまねない。
 - チケットの候補選択と実行前後の処理はticket selectorを通す。チャットは発生時刻を時間窓、`position` を順序に使う。返信や外部書き込みの前に依頼元スレッドの新着を確認する。実行が止まったときは作業の出どころに記録する。接続できないサービスで見送った予定は消化せず、連続失敗に数えない。
 - 実行の記録とメンバー単位の排他は共通の実行境界に置く。手動・定期・巡回・イベントで別の完了判定を作らない。PRの完了判定は現在のheadのreadinessを使う。
 - メンバーの手順の正本は [参照カタログ](guildbotics/templates/member/reference.md)。workflowの封筒、起動元ごとの情報、手順の本文を分ける。複数のプロンプトが同じ規則を使うときは共通の層に置く。
@@ -70,7 +70,7 @@ GuildBotics の共有記録を古い版で読めない形へ変えるときは `
 
 - `branvil` が使う GuildBotics の crate は `gb-ports` だけ。テストが読むファイルとビルドする crate は CI の `rust-test-branvil` の paths に含める。`loopback-auth` は GuildBotics の crate に依存しない。データの入口は同じサービスの公開API（`api::DataApi` と、その `owner()`・`agent()` が返す `MemberApi`）。HTTP APIはその上にある内部のAPIで、画面・ランナー・Gitのhookが使う。ownerの認証は埋め込み先（`host::Host`）が行い、データディレクトリはサーバーの起動時に作る。組み込みproviderは別のstoreを開かない。停止中に直接データを扱うのは `guildbotics server hub-data check|reindex|upgrade|restore`。
 - 保存形式を変える場合は互換コードを追加しない規則の例外として、`crates/branvil/src/store.rs` の `SCHEMA_VERSION` を上げ、`upgrade.rs` に直前の1版からの変換を置く。`server hub-data upgrade` と `restore` が使う。古い版を通常の読み取りで扱わない。秘密は起動するプロセスが渡す `vault::Vault` 越しにidentityのstoreへ保存し、平文のファイルへ逃がさない。カーソルの署名鍵はプロセスごとにメモリで作る。実データやtokenの中身を参照しない。
-- 内部のHTTP APIを変えたら [API文書](crates/branvil/docs/api.md) と画面を合わせる。組み込みproviderとの結合は `cargo nextest run --locked -p gb-integrations --test main -E 'test(/^branvil::/)'` で確認する。上流サービス固有の処理は `upstream::Host` の実装に置く。自然言語の意味判定はGuildBoticsが扱う。
+- 内部のHTTP APIを変えたら [API文書](crates/branvil/docs/api.md) と画面とagentモジュールを合わせ、`cargo nextest run --locked -p branvil --features test-support -E 'test(/^agent/)'` で結合を確認する。上流サービス固有の処理は `upstream::Host` の実装に置く。自然言語の意味判定はGuildBoticsが扱う。
 - loopbackだけで待ち受ける。リモート接続はOSが管理するOpenSSHの転送を使う。HubはmacOS、CIはLinux。サービスのGitは `src/git.rs` を通し、システム・ユーザーのGit設定や `GIT_*` を継承しない。テストでは `tests/common/mod.rs` の `git` / `git_as` を使う。自前で起動する場合は `GIT_CONFIG_NOSYSTEM=1`、空の `GIT_CONFIG_GLOBAL`、`GIT_TERMINAL_PROMPT=0`、`-c credential.helper=` を指定し、トークンは `GIT_ASKPASS` と環境変数で渡す。URLや引数に含めず、テストのメンバー名は架空のものにする。
 - 画面のテーマ・トークン・Mantineの版はGuildBotics Desktopとそろえる。共通部品は `packages/ui/` に置く。詳細は [Branvilの構成](crates/branvil/docs/architecture.md) と [文書一覧](crates/branvil/README.md#documents) を参照する。
 

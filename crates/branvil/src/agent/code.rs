@@ -1,63 +1,18 @@
-use super::patrol::{array, fold};
+use super::code_patrol::{array, fold};
 use super::*;
-use branvil::api::{pulls, tickets};
-impl BranvilService {
-    pub(in crate::factory) fn commit_url_for(
-        api: &::branvil::api::DataApi,
-        repo: &str,
-        sha: &str,
-    ) -> String {
+use crate::api::{pulls, tickets};
+impl CodeAgent {
+    pub fn commit_url_for(api: &crate::api::DataApi, repo: &str, sha: &str) -> String {
         format!("{}/{repo}/-/commits/{sha}", api.base_url())
     }
-    pub(in crate::factory) fn repository_for_remote(
-        api: &::branvil::api::DataApi,
-        url: &str,
-    ) -> Option<String> {
+    pub fn repository_for_remote(api: &crate::api::DataApi, url: &str) -> Option<String> {
         let path = url
             .trim()
             .strip_prefix(&format!("{}/git/", api.base_url()))?;
         let repo = path.strip_suffix(".git").unwrap_or(path);
-        crate::valid_repository_path(repo).then(|| repo.into())
+        gb_ports::valid_repository_path(repo).then(|| repo.into())
     }
 
-    async fn validate_ticket_links(
-        &self,
-        repository: &str,
-        links: &[TicketLink],
-    ) -> Result<Vec<TicketLink>, ServiceError> {
-        let mut result = Vec::with_capacity(links.len());
-        for link in links {
-            let own = link
-                .url
-                .starts_with(&format!("{}/", self.data().base_url()));
-            let item = if own {
-                Some(self.ticket(&link.url).await?)
-            } else {
-                None
-            };
-            if link.closes
-                && item
-                    .as_ref()
-                    .is_none_or(|v| !text(v, "repository").eq_ignore_ascii_case(repository))
-            {
-                return Err(diagnostic(
-                    "integrations.branvil.api.closes_foreign",
-                    [
-                        ("repository", repository.to_owned()),
-                        ("url", link.url.clone()),
-                    ],
-                ));
-            }
-            result.push(TicketLink {
-                url: item
-                    .as_ref()
-                    .map(|v| text(v, "url").to_owned())
-                    .unwrap_or_else(|| link.url.clone()),
-                closes: link.closes,
-            });
-        }
-        Ok(result)
-    }
     fn pull_value(&self, v: Value) -> Value {
         let t = self.target(&v, WorkKind::PullRequest);
         json!({"kind":"pull_request","url":t.url,"title":t.title,"label":t.label,"repository":v["repository"],"body":v["body"],"state":v["state"],"assignees":[],"author":v["author"],"author_type":self.author_type(text(&v,"author")),"requested_reviewers":v["reviewers"],"labels":v["labels"],"head":v["head"],"head_repository":v["head_repository"],"head_sha":v["head_sha"],"base":v["base"],"merged":v["merged"],"draft":v["draft"],"changed_files":v["changed_files"]})
@@ -69,7 +24,7 @@ impl BranvilService {
         v
     }
 }
-impl CodeHostingService for BranvilService {
+impl CodeHostingService for CodeAgent {
     fn retry_job<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, String> {
         Box::pin(async move {
             let path = url
@@ -77,7 +32,7 @@ impl CodeHostingService for BranvilService {
                 .and_then(|p| p.strip_prefix('/'))
                 .ok_or(ServiceError::NotFound)?;
             let (repo, id) = path.split_once("/-/jobs/").ok_or(ServiceError::NotFound)?;
-            if !crate::valid_repository_path(repo)
+            if !gb_ports::valid_repository_path(repo)
                 || id.is_empty()
                 || id.contains(['/', '?', '#', '%'])
             {
@@ -152,7 +107,7 @@ impl CodeHostingService for BranvilService {
                         .map_err(|e| error(e, "upstream_dependency_alert"))?;
                     return ReadPage::of(resource, [value(alert)?], None, None);
                 }
-                use branvil::api::AlertState;
+                use crate::api::AlertState;
                 let state = match text(&c, "state") {
                     "resolved" => AlertState::Resolved,
                     "dismissed" => AlertState::Dismissed,
@@ -268,7 +223,7 @@ impl CodeHostingService for BranvilService {
                         p.items
                             .into_iter()
                             .map(|v| {
-                                crate::file_change(
+                                super::pr_diff_lines::file_change(
                                     &v.path,
                                     v.status,
                                     v.patch,
@@ -324,9 +279,7 @@ impl CodeHostingService for BranvilService {
     fn create_pull_request(&self, r: CreatePullRequest) -> ServiceFuture<'_, PullRequestCreated> {
         Box::pin(async move {
             self.repository(&r.repository)?;
-            let links = self
-                .validate_ticket_links(&r.repository, &r.tickets)
-                .await?;
+            let links = r.tickets;
             self.writable(&r.repository)?;
             let p=self.member().await?.pulls_create(&r.repository,decode(json!({"head":r.head,"base":r.base,"title":r.title,"body":r.body,"draft":r.draft,"tickets":links}))?).await.map_err(|e| error(e, "pulls_create"))?;
             let created = p.created;
@@ -348,10 +301,7 @@ impl CodeHostingService for BranvilService {
         Box::pin(async move {
             let (repo, key) = self.item(url, "pulls")?;
             self.writable(&repo)?;
-            let links = match &r.tickets {
-                Some(links) => Some(self.validate_ticket_links(&repo, links).await?),
-                None => None,
-            };
+            let links = r.tickets;
             let v = value(
                 self.member()
                     .await?
@@ -575,7 +525,7 @@ impl CodeHostingService for BranvilService {
                         .owner()
                         .members_issue_token(
                             self.person_id().to_owned(),
-                            branvil::api::members::NewToken {
+                            crate::api::members::NewToken {
                                 label: super::GIT_TOKEN_LABEL.into(),
                                 replace: false,
                             },
@@ -602,42 +552,45 @@ impl CodeHostingService for BranvilService {
     }
     fn authored_open_pull_requests(&self) -> ServiceFuture<'_, Vec<String>> {
         Box::pin(async {
-            let member = self.member().await?;
-            let mut out = Vec::new();
-            let mut cursor = None;
-            loop {
-                let page = member
-                    .page("gb:authored_open".into(), Some(100), cursor.as_deref())
-                    .map_err(|e| error(e, "page"))?;
-                let page = member
-                    .pulls_patrol(
-                        pulls::PatrolQuery {
-                            involves: Some("me".into()),
-                            state: Some("open".into()),
-                            draft: None,
-                        },
-                        page,
-                    )
-                    .await
-                    .map_err(|e| error(e, "pulls_patrol"))?;
-                for pull in page.items {
-                    let pull = value(pull)?;
-                    if fold(text(&pull, "author")) == fold(self.person_id())
-                        && self
-                            .write_scope()
-                            .authorize(text(&pull, "repository"))
-                            .is_ok()
-                        && !self.pull_interactive(&pull).await?
-                    {
-                        out.push(text(&pull, "url").into());
+            let _open = self.data().guard().map_err(|e| error(e, "authored_open"))?;
+            let me = fold(self.person_id());
+            self.member().await?;
+            let base = self.data().base_url().to_owned();
+            let scope = self.write_scope().clone();
+            self.data()
+                .app
+                .store
+                .read(move |rd| {
+                    use crate::{
+                        model::Pull,
+                        store::{self, Rd},
+                    };
+                    let mut out = Vec::new();
+                    for (key, n) in rd.prefix_raw(store::IX_OPEN_PULLS, &[], None, usize::MAX)? {
+                        let parts = store::decode_key(&key, "sss")
+                            .ok_or_else(|| crate::api::AppError::internal("bad open pull index"))?;
+                        let repo = crate::domain::repo_by_id(rd, parts[0].s())?;
+                        if scope.authorize(&repo.path).is_err() {
+                            continue;
+                        }
+                        let number = String::from_utf8_lossy(&n)
+                            .parse()
+                            .map_err(crate::api::AppError::internal)?;
+                        if let Some(pull) =
+                            rd.get::<Pull>(store::PULLS, &Pull::key(&repo.id, number))?
+                            && pull.state == "open"
+                            && fold(&pull.author) == me
+                            && !crate::domain::pulls::interactive(rd, &pull)?
+                        {
+                            out.push(format!("{}/{}/-/pulls/{}", base, repo.path, pull.number));
+                        }
                     }
-                }
-                cursor = page.next_cursor;
-                if cursor.is_none() {
-                    break;
-                }
-            }
-            Ok(out)
+                    out.sort();
+                    out.dedup();
+                    Ok(out)
+                })
+                .await
+                .map_err(|e| error(e, "authored_open"))
         })
     }
     fn pull_request_candidates(&self) -> ServiceFuture<'_, Vec<Task>> {
@@ -675,7 +628,7 @@ impl CodeHostingService for BranvilService {
         })
     }
 }
-impl BranvilService {
+impl CodeAgent {
     async fn pull_artifact(
         &self,
         url: &str,
@@ -733,7 +686,7 @@ impl BranvilService {
                     c.attempt_id.is_some()
                         && c.conclusion
                             .as_deref()
-                            .is_some_and(crate::failed_conclusion)
+                            .is_some_and(super::pr_readiness::failed_conclusion)
                 })
                 .collect::<Vec<_>>();
             let primary = failed_checks
@@ -752,7 +705,7 @@ impl BranvilService {
                 primary
             };
             if !selected.is_empty() {
-                let bytes = crate::effective_tail_bytes(tail, selected.len())?;
+                let bytes = super::pr_readiness::effective_tail_bytes(tail, selected.len())?;
                 for c in selected {
                     let id = c.attempt_id.as_deref().ok_or(ServiceError::InvalidResult)?;
                     let v = m
@@ -800,15 +753,15 @@ impl BranvilService {
         let said = |items: Vec<&Value>, at: &str| {
             items
                 .into_iter()
-                .map(|c| crate::Said {
+                .map(|c| super::pr_readiness::Said {
                     author: fold(text(c, "author")),
                     id: text(c, "id").into(),
                     at: text(c, at).into(),
-                    notice: super::patrol::status(c).is_some(),
+                    notice: super::code_patrol::status(c).is_some(),
                 })
                 .collect()
         };
-        let feedback = crate::feedback_of(
+        let feedback = super::pr_readiness::feedback_of(
             &fold(text(&current, "author")),
             said(array(activity, "reviews").iter().collect(), "submitted_at"),
             said(array(activity, "comments").iter().collect(), "created_at"),
@@ -847,7 +800,7 @@ impl BranvilService {
                     [("url", text(&current, "url").to_owned())],
                 ));
             }
-            Some(crate::Freshness {
+            Some(super::pr_readiness::Freshness {
                 base_sha: report.base_sha.clone(),
                 behind_by: report.behind_by.ok_or(ServiceError::InvalidResult)? as i64,
                 current_base_sha: text(&current, "base_sha").into(),
@@ -860,7 +813,7 @@ impl BranvilService {
         } else {
             None
         };
-        crate::readiness_of(
+        super::pr_readiness::readiness_of(
             self.target(&current, WorkKind::PullRequest),
             report.head_sha,
             text(&current, "head_sha").into(),

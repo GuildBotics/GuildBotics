@@ -1,8 +1,8 @@
-//! Server-side issuance through the provider that owns the requested origin.
-use branvil::api::{DataApi, members};
+//! Server-side issuance for the embedded host of the requested origin.
+use crate::api::{DataApi, members};
 use gb_ports::GitCredential;
 
-pub(in crate::factory) async fn credential(
+pub async fn credential(
     origin: &str,
     data: &DataApi,
     device_id: &str,
@@ -64,17 +64,17 @@ pub(in crate::factory) async fn credential(
     }))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 mod tests {
     use super::*;
     #[tokio::test]
     async fn issuing_for_two_devices_preserves_the_other_devices_token() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("branvil");
-        branvil::test_support::initialize(&root, "owner").unwrap();
-        let running = branvil::test_support::Running::start(
+        crate::test_support::initialize(&root, "owner").unwrap();
+        let running = crate::test_support::Running::start(
             &root,
-            std::sync::Arc::new(branvil::vault::Memory::default()),
+            std::sync::Arc::new(crate::vault::Memory::default()),
         )
         .await
         .unwrap();
@@ -94,7 +94,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let member = |token| branvil::test_support::token_member(&running.data, token);
+        let member = |token| crate::test_support::token_member(&running.data, token);
         assert_eq!(a.username, "owner");
         assert_eq!(member(&a.password).await, None);
         assert_eq!(member(&b.password).await.as_deref(), Some("owner"));
