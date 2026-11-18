@@ -59,9 +59,7 @@ def test_handle_ticket_prompt_keeps_only_trigger_specific_contract():
     assert "side" in body
     assert "reply_target_id" in body
     assert "repository/pr_checks" in body
-    assert "`readiness` is `ready`" in body
-    assert "`completion_blockers`" in body
-    assert "checked head SHA must still be current" in body
+    assert "required_checks=passed" in body
     # Envelope and shared-procedure content lives in the injected contract and
     # the member capability reference only.
     assert "--workspace-mode" not in body
@@ -114,8 +112,7 @@ def test_guildbotics_skill_keeps_only_interactive_envelope():
     assert "Do not run `member git prepare`" in body
     assert "Definition of Done" in body
     assert "standard work procedure" in body
-    assert "`readiness` is `ready`" in body
-    assert "checked head SHA must still be current" in body
+    assert "required_checks=passed" in body
     assert "guildbotics_execution_mode=workflow" in body
     # Shared procedure, memory contracts, and command details live in the member
     # capability reference; the skill no longer restates per-domain flows.

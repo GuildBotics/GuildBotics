@@ -315,6 +315,14 @@ impl Context {
             .repos_create(input(json!({"path":repository,"labels":["bug"]})))
             .await
             .unwrap();
+        let revision = owner.repos_get(REPO).await.unwrap().revision;
+        owner
+            .repos_update(
+                REPO,
+                input(json!({"revision":revision,"required_checks":["test"]})),
+            )
+            .await
+            .unwrap();
         owner
             .members_create(input(json!({"name":"aiko","kind":"agent"})))
             .await
@@ -459,13 +467,13 @@ async fn merge_closes_ticket() {
         .await
         .unwrap();
     assert_eq!(pending.head_sha, head);
-    assert_eq!(pending.rollup, ReadinessRollup::Pending);
+    assert_eq!(pending.required_checks, RequiredChecks::Running);
     finish(base, runner, &head, "success").await;
     let ready = c
         .readiness(&pr.target.url, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
-    assert_eq!(ready.readiness, ReadinessReadiness::Ready);
+    assert_eq!(ready.required_checks, RequiredChecks::Passed);
     let number = pr.target.url.rsplit('/').next().unwrap().parse().unwrap();
     owner
         .pulls_review(
@@ -562,7 +570,7 @@ async fn artifacts_and_stale_head() {
         .await
         .unwrap();
     assert_eq!(again.head_sha, moved);
-    assert_eq!(again.rollup, ReadinessRollup::Pending);
+    assert_eq!(again.required_checks, RequiredChecks::Running);
     let artifact = b"PK\x03\x04synthetic test artifact";
     finish_artifact(base, runner, &moved, "success", Some(artifact)).await;
     let too_large = c.artifact(&next.target.url, "report", 1).await.unwrap_err();
@@ -583,8 +591,8 @@ async fn artifacts_and_stale_head() {
         c.readiness(&next.target.url, false, MAX_LOG_TAIL_BYTES)
             .await
             .unwrap()
-            .readiness,
-        ReadinessReadiness::Ready
+            .required_checks,
+        RequiredChecks::Passed
     );
     let advanced = git.commit(&moved, "advance.txt", "advanced\n");
     git.push(
@@ -599,7 +607,7 @@ async fn artifacts_and_stale_head() {
         .await
         .unwrap();
     assert_eq!(changed.head_sha, advanced);
-    assert_eq!(changed.rollup, ReadinessRollup::Pending);
+    assert_eq!(changed.required_checks, RequiredChecks::Running);
     contracts::code_stale_head_contract(c.as_ref(), &next.target.url, &moved).await;
     contracts::code_old_artifact_contract(c.as_ref(), &next.target.url).await;
     finish(base, runner, &advanced, "failure").await;
@@ -607,8 +615,8 @@ async fn artifacts_and_stale_head() {
         c.readiness(&next.target.url, false, MAX_LOG_TAIL_BYTES)
             .await
             .unwrap()
-            .rollup,
-        ReadinessRollup::Failure
+            .required_checks,
+        RequiredChecks::Failed
     );
 
     f.stop().await;
@@ -764,8 +772,8 @@ async fn code_links() {
         if c.readiness(&case.url, false, MAX_LOG_TAIL_BYTES)
             .await
             .unwrap()
-            .rollup
-            == ReadinessRollup::Pending
+            .required_checks
+            == RequiredChecks::Running
         {
             finish(base, runner, &current_head, "success").await;
         }

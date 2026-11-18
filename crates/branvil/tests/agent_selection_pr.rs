@@ -15,11 +15,13 @@ fn patrol_reviews_statements_individually_and_limits_only_new_heads() {
         submitted_at: "2".into(),
         ..Default::default()
     });
+    pr.unanswered = true;
     assert_eq!(
         pull_request_work(&pr, "aiko", Utc::now()),
         Some("pull_request_feedback")
     );
     pr.reviews[0].reactors.insert("aiko".into());
+    pr.unanswered = false;
     assert_eq!(pull_request_work(&pr, "aiko", Utc::now()), None);
     pr.author = "owner".into();
     pr.reviews.clear();

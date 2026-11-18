@@ -198,6 +198,7 @@ pub struct ReviewThread {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Check {
+    pub required: bool,
     pub name: String,
     pub status: String,
     #[serde(deserialize_with = "required_nullable")]
@@ -205,14 +206,6 @@ pub struct Check {
     pub details_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CompletionBlocker {
-    pub code: String,
-    pub message: String,
-    pub next_action: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -261,21 +254,9 @@ pub struct Feedback {
 #[serde(deny_unknown_fields)]
 pub struct Readiness {
     pub target: WorkTarget,
-    #[serde(deserialize_with = "required_nullable")]
-    pub base_sha: Option<String>,
     pub head_sha: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub behind_by: Option<i64>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub out_of_date: Option<bool>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub current_base_sha: Option<String>,
-    pub current_head_sha: String,
-    pub rollup: ReadinessRollup,
     pub checks: Vec<Check>,
-    pub checks_expected: bool,
-    pub readiness: ReadinessReadiness,
-    pub completion_blockers: Vec<CompletionBlocker>,
+    pub required_checks: RequiredChecks,
     pub feedback: Feedback,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_logs: Option<Vec<FailedLog>>,
@@ -494,25 +475,11 @@ pub enum CommentableLineSide {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ReadinessRollup {
-    #[serde(rename = "success")]
-    Success,
-    #[serde(rename = "failure")]
-    Failure,
-    #[serde(rename = "pending")]
-    Pending,
-    #[serde(rename = "no_checks")]
-    NoChecks,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ReadinessReadiness {
-    #[serde(rename = "ready")]
-    Ready,
-    #[serde(rename = "blocked")]
-    Blocked,
-    #[serde(rename = "not_applicable")]
-    NotApplicable,
+#[serde(rename_all = "snake_case")]
+pub enum RequiredChecks {
+    Passed,
+    Running,
+    Failed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

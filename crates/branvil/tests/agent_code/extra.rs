@@ -91,8 +91,8 @@ pub(super) async fn reused_and_gates(
                 c.readiness(&pr.target.url, false, MAX_LOG_TAIL_BYTES)
                     .await
                     .unwrap()
-                    .readiness,
-                ReadinessReadiness::Ready
+                    .required_checks,
+                RequiredChecks::Passed
             );
         }
         let file = if conclusion == "conflict" {
@@ -139,12 +139,7 @@ pub(super) async fn reused_and_gates(
                 .readiness(&feature.target.url, false, MAX_LOG_TAIL_BYTES)
                 .await
                 .unwrap();
-            assert!(
-                before_review
-                    .completion_blockers
-                    .iter()
-                    .any(|b| b.code == "base_conflict" && b.message.contains("a.py"))
-            );
+            assert_eq!(before_review.required_checks, RequiredChecks::Passed);
             assert!(before_review.checks.iter().all(|c| c.name != "gate"));
         }
         owner
@@ -160,23 +155,8 @@ pub(super) async fn reused_and_gates(
             .await
             .unwrap();
         assert_eq!(result.head_sha, head);
-        assert_eq!(result.behind_by, Some(1));
-        assert_eq!(result.out_of_date, Some(true));
         if conclusion == "conflict" {
-            assert_eq!(result.readiness, ReadinessReadiness::Blocked);
-            assert!(result.checks.iter().all(|c| c.name != "gate"));
-            assert!(
-                result
-                    .completion_blockers
-                    .iter()
-                    .any(|b| b.code == "base_conflict" && b.message.contains("a.py"))
-            );
-            assert!(
-                !result
-                    .completion_blockers
-                    .iter()
-                    .any(|b| b.code == "checks_failed")
-            );
+            assert_eq!(result.required_checks, RequiredChecks::Passed);
             let page = c
                 .read(
                     Resource::PullRequestReadiness,
@@ -189,7 +169,7 @@ pub(super) async fn reused_and_gates(
             assert_eq!(page.items()[0]["failed_logs"], json!([]));
         } else {
             assert!(result.checks.iter().all(|c| !c.name.starts_with("gate/")));
-            assert_eq!(result.readiness, ReadinessReadiness::Ready);
+            assert_eq!(result.required_checks, RequiredChecks::Passed);
         }
     }
 }

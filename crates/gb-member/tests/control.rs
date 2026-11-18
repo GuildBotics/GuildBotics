@@ -624,7 +624,7 @@ async fn awaiting_checks_returns_pending_and_ready_prs_and_retains_the_chat_gate
     let mut provider = support::Probe::new(None);
     for (url, blocked) in [("pending", true), ("ready", false)] {
         provider.pages.insert(format!("pull_requests|{url}|"),Ok(ReadPage::of(Resource::PullRequests,[json!({"kind":"pull_request","url":url,"title":"T","label":"!1","repository":"repo","body":"","state":"open","assignees":[],"author":"local-aiko","requested_reviewers":[],"labels":[],"author_type":"Assistant","head":"feature","head_repository":"repo","head_sha":"head","base":"main","merged":false,"draft":false,"changed_files":null})],None,None).unwrap()));
-        let readiness=serde_json::from_value(json!({"target":{"kind":"pull_request","url":url,"title":"T","label":"!1"},"base_sha":"base","head_sha":"head","behind_by":0,"out_of_date":false,"current_base_sha":"base","current_head_sha":"head","rollup":if blocked{"pending"}else{"success"},"checks":[],"checks_expected":true,"readiness":if blocked{"blocked"}else{"ready"},"feedback":gb_ports::Feedback::default(),"completion_blockers":if blocked{vec![json!({"code":"checks_pending","message":"wait","next_action":"wait"})]}else{vec![]}})).unwrap();
+        let readiness=serde_json::from_value(json!({"target":{"kind":"pull_request","url":url,"title":"T","label":"!1"},"head_sha":"head","checks":[],"required_checks":if blocked{"running"}else{"passed"},"feedback":gb_ports::Feedback::default()})).unwrap();
         provider.checks.insert(url.into(), readiness);
     }
     let services = Services(provider);

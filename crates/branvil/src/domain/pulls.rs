@@ -1858,6 +1858,8 @@ pub struct ChecksView {
     /// Sorted conflict paths, or None for closed pulls or missing branches.
     pub conflicts: Option<Vec<String>>,
     pub checks: Vec<Check>,
+    pub required_checks: gb_ports::RequiredChecks,
+    pub required_names: Vec<String>,
     pub checks_expected: bool,
     pub base_checks: usize,
 }
@@ -1902,6 +1904,8 @@ pub async fn checks(
             .filter(|c| c.recorded())
             .count()
     };
+    let (required_checks, _, required_names) =
+        crate::landing::pull_head_check_details(app, &repo, &p, &head_sha).await?;
     let mut checks = head.checks;
     app.ci.estimate(&repo, &head_sha, &mut checks).await;
     app.ci.order_checks(&mut checks).await?;
@@ -1911,6 +1915,8 @@ pub async fn checks(
         behind_by,
         conflicts,
         checks,
+        required_checks,
+        required_names,
         checks_expected: head.checks_expected,
         base_checks,
     })

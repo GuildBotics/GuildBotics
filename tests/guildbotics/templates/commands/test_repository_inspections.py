@@ -122,8 +122,7 @@ async def test_issue_joins_all_comments_and_deduplicates_linked_prs_by_url():
 @pytest.mark.asyncio
 async def test_pr_combines_all_feedback_and_nested_comment_pages_and_diff():
     readiness = {
-        "readiness": "blocked",
-        "completion_blockers": [{"code": "base_changed"}],
+        "required_checks": "running",
     }
     service = Pages(
         {
@@ -208,12 +207,10 @@ async def test_pr_combines_all_feedback_and_nested_comment_pages_and_diff():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("readiness", ["ready", "blocked", "not_applicable"])
-async def test_checks_displays_host_result_verbatim(readiness):
+@pytest.mark.parametrize("required_checks", ["passed", "running", "failed"])
+async def test_checks_displays_host_result_verbatim(required_checks):
     result = {
-        "readiness": readiness,
-        "checks_expected": True,
-        "rollup": "no_checks",
+        "required_checks": required_checks,
         "head_sha": "head",
         "checks": [{"name": "gate", "details": "Conflicts: src/one.py"}],
         "failed_logs": [{"log": "failure", "truncated": True}],
@@ -242,17 +239,9 @@ async def test_checks_show_feedback_held_to_the_readiness_schema():
     }
     readiness = {
         "target": {"kind": "pull_request", "url": PR_URL, "title": "T", "label": "#7"},
-        "base_sha": "base",
         "head_sha": "head",
-        "behind_by": 0,
-        "out_of_date": False,
-        "current_base_sha": "base",
-        "current_head_sha": "head",
-        "rollup": "pending",
         "checks": [],
-        "checks_expected": True,
-        "readiness": "blocked",
-        "completion_blockers": [],
+        "required_checks": "running",
         "feedback": feedback,
     }
     # The guest holds the host's answer to the schema the same way.

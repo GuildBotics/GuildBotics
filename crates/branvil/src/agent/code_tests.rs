@@ -259,6 +259,7 @@ async fn interactive_links_are_read_only_after_pull_patrol_selects_work() {
                 .is_none()
         );
     }
+    pull["unanswered"] = json!([{"kind":"comment","id":"c"}]);
     let activity = json!({"comments":[{"author":"human","created_at":"2026-01-01T00:00:00Z"}]});
     assert!(matches!(
         service.pull_work(&pull, &activity).await,

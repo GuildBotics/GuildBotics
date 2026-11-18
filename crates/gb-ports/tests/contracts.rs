@@ -32,6 +32,20 @@ fn normalize<T: DeserializeOwned + Serialize>(value: Value) -> Result<Value, ser
     serde_json::to_value(serde_json::from_value::<T>(value)?)
 }
 
+#[test]
+fn head_check_report_requires_explicit_required_flags_and_state() {
+    for state in ["passed", "running", "failed"] {
+        let report = json!({"target":{"kind":"pull_request","url":"pr","title":"T","label":"!1"},"head_sha":"head","checks":[{"required":false,"name":"optional","status":"completed","conclusion":"failure","details_url":""}],"required_checks":state,"feedback":Feedback::default()});
+        assert_eq!(normalize::<Readiness>(report.clone()).unwrap(), report);
+        let mut missing = report;
+        missing["checks"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("required");
+        assert!(normalize::<Readiness>(missing).is_err());
+    }
+}
+
 fn model(name: &str, value: Value) -> Result<Value, serde_json::Error> {
     macro_rules! models {
         ($($ty:ident),+ $(,)?) => {
@@ -65,7 +79,6 @@ fn model(name: &str, value: Value) -> Result<Value, serde_json::Error> {
         TicketRelative,
         CommentableLine,
         Check,
-        CompletionBlocker,
         FailedLog,
         AdvisoryIdentifier,
         CommentWritten,

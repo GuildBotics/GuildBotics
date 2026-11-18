@@ -780,7 +780,7 @@ Usage: guildbotics member git [OPTIONS]
   commit  Commit already-staged changes with the member identity. Stage the files you want with plain git (e.g. ``git add``) first; this command commits only what is staged and applies the member name/email to that single commit without changing the repository's git config.
   prepare  Clone/checkout an isolated member workspace: a ticket branch `ticket/<key>` (--issue-url, with --repo for a ticket that belongs to no repository), a PR head (--pr-url, alone or together with --issue-url, which checks out the PR head), or an ad-hoc branch (--repo --branch). A repository is named by its path. Unfinished checkouts stay assigned to their work and requested branch; idle checkouts of the same repository are reused with their build caches. Call prepare every run and use the returned repo_path and branch: a path from an earlier run may now belong to another work. Unfinished Git state is kept, including an agent-created branch; an empty branch means detached HEAD. Member workspaces are worked on only inside a running GuildBotics command, whose isolated environment runs every git of them.
   publish  Commit already-staged changes with the member identity, then push. Stage the files you want with plain git (e.g. ``git add``) first; this commits only what is staged with the member name/email and pushes the branch using the member credential.
-  push  Push the current branch with the member credential and report readiness for matching open PRs.
+  push  Push the current branch with the member credential and report required checks for matching open PRs.
   show  Read literal paths on the code host's current default branch, without a checkout. Files return UTF-8 content; directories (including '.') return immediate entry names and kinds. Missing paths return kind missing; binary or oversized objects omit content with status binary or too_large. Results include default_branch and commit; output is bounded by the member result limit. Uses the member credential on the host, both interactively and inside a command, without a lease or approval.
   --help  Print help
 ```
@@ -833,7 +833,7 @@ Usage: guildbotics member git publish [OPTIONS]
 ### guildbotics member git push
 
 ```text
-Push the current branch with the member credential and report readiness for matching open PRs.
+Push the current branch with the member credential and report required checks for matching open PRs.
 
 Usage: guildbotics member git push [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
@@ -1216,7 +1216,7 @@ Usage: guildbotics member repo-info read [OPTIONS]
 Completion records of runs other than a chat event's.
 
 Usage: guildbotics member task [OPTIONS]
-  complete  Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. For asking/blocked, use the context roster: name the next member to act by person_id and address them on the item with their service mention spelling. The CLI validates whether their patrol receives any item you commented on. Human members are recorded and notified; omit only for people outside the team. Without a recipient, the CLI says the owner will be notified.
+  complete  Finish a run other than a chat event's with evidence, checking required head checks before accepting done. For asking/blocked, use the context roster: name the next member to act by person_id and address them on the item with their service mention spelling. The CLI validates whether their patrol receives any item you commented on. Human members are recorded and notified; omit only for people outside the team. Without a recipient, the CLI says the owner will be notified.
   status  Inspect the run's recorded evidence.
   --help  Print help
 ```
@@ -1224,7 +1224,7 @@ Usage: guildbotics member task [OPTIONS]
 ### guildbotics member task complete
 
 ```text
-Finish a run other than a chat event's with evidence, revalidating affected PR readiness before accepting done. For asking/blocked, use the context roster: name the next member to act by person_id and address them on the item with their service mention spelling. The CLI validates whether their patrol receives any item you commented on. Human members are recorded and notified; omit only for people outside the team. Without a recipient, the CLI says the owner will be notified.
+Finish a run other than a chat event's with evidence, checking required head checks before accepting done. For asking/blocked, use the context roster: name the next member to act by person_id and address them on the item with their service mention spelling. The CLI validates whether their patrol receives any item you commented on. Human members are recorded and notified; omit only for people outside the team. Without a recipient, the CLI says the owner will be notified.
 
 Usage: guildbotics member task complete [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]

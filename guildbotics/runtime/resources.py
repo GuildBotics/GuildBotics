@@ -236,17 +236,12 @@ class ReviewThread(ReadModel):
 
 
 class Check(ReadModel):
+    required: bool
     name: str
     status: str
     conclusion: str | None
     details_url: str
     details: str | None = Field(default=None, exclude_if=_absent)
-
-
-class CompletionBlocker(ReadModel):
-    code: str
-    message: str
-    next_action: str
 
 
 class FailedLog(ReadModel):
@@ -289,20 +284,12 @@ class Feedback(ReadModel):
 
 
 class Readiness(ReadModel):
-    """Whether a pull request's head may be reported complete."""
+    """Head checks and feedback for member run control."""
 
     target: WorkTarget
-    base_sha: str | None
     head_sha: str
-    behind_by: int | None
-    out_of_date: bool | None
-    current_base_sha: str | None
-    current_head_sha: str
-    rollup: Literal["success", "failure", "pending", "no_checks"]
     checks: list[Check]
-    checks_expected: bool
-    readiness: Literal["ready", "blocked", "not_applicable"]
-    completion_blockers: list[CompletionBlocker]
+    required_checks: Literal["passed", "running", "failed"]
     feedback: Feedback
     #: Present only when failed logs were asked for.
     failed_logs: list[FailedLog] | None = Field(default=None, exclude_if=_absent)

@@ -68,6 +68,7 @@ impl CodeAgent {
         comments.sort_by(|a, b| a.created_at.cmp(&b.created_at));
         PatrolPullRequest {
             repair: p["repair"] == true,
+            unanswered: !array(p, "unanswered").is_empty(),
             id: text(p, "url").into(),
             url: text(p, "url").into(),
             label: text(p, "label").into(),
@@ -119,9 +120,10 @@ impl CodeAgent {
             return Ok(None);
         }
         let me = fold(self.person_id());
+        let snapshot = self.snapshot(p, a);
         let task = super::pr_patrol::patrol(
             self,
-            &self.snapshot(p, a),
+            &snapshot,
             &me,
             "branvil",
             self.person_id(),

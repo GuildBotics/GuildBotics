@@ -244,28 +244,30 @@ fn evidence_includes_written_pushed_and_resumed_prs_once() {
         vec!["one", "two"]
     );
 }
-fn readiness(blockers: &[&str]) -> Readiness {
-    serde_json::from_value(json!({"target":{"kind":"pull_request","url":"url","title":"T","label":"!1"},"base_sha":"base","head_sha":"head",
-        "behind_by":0,"out_of_date":false,"current_base_sha":"base","current_head_sha":"head","rollup":"pending","checks":[],"checks_expected":true,
-        "readiness":if blockers.is_empty(){"ready"}else{"blocked"},"feedback":gb_ports::Feedback::default(),"completion_blockers":blockers.iter().map(|b|json!({"code":b,"message":b,"next_action":"fix"})).collect::<Vec<_>>()})).unwrap()
+fn readiness(states: &[&str]) -> Readiness {
+    serde_json::from_value(json!({"target":{"kind":"pull_request","url":"url","title":"T","label":"!1"},"head_sha":"head", "checks":[], "required_checks":states.first().copied().unwrap_or("passed"), "feedback":gb_ports::Feedback::default()})).unwrap()
 }
 #[test]
-fn only_pending_checks_of_nondraft_prs_can_be_awaited() {
+fn run_completion_uses_only_required_checks() {
     assert!(ensure_awaitable(&[]).is_err());
     assert!(ensure_ready(&[]).is_ok());
-    for (draft, blockers, allowed) in [
-        (false, vec!["checks_pending"], true),
-        (true, vec!["checks_pending"], false),
-        (false, vec!["checks_pending", "base_out_of_date"], false),
-        (false, vec!["checks_pending", "base_conflict"], false),
-        (false, vec!["base_conflict"], false),
-        (false, vec!["checks_failed"], false),
-        (false, vec![], false),
-    ] {
-        let results = vec![(json!({"draft":draft}), readiness(&blockers))];
-        assert_eq!(ensure_awaitable(&results).is_ok(), allowed);
-        assert_eq!(ensure_ready(&results).is_ok(), blockers.is_empty());
+    for draft in [false, true] {
+        for state in ["passed", "running", "failed"] {
+            let results = vec![(
+                json!({"draft":draft,"conflicts":["a"],"unanswered":["c"]}),
+                readiness(&[state]),
+            )];
+            assert_eq!(ensure_ready(&results).is_ok(), state == "passed");
+            assert_eq!(ensure_awaitable(&results).is_ok(), state == "running");
+        }
     }
+    assert!(
+        ensure_awaitable(&[
+            (json!({}), readiness(&["running"])),
+            (json!({}), readiness(&["failed"]))
+        ])
+        .is_err()
+    );
 }
 #[tokio::test]
 async fn service_failures_keep_the_original_category_and_safe_diagnosis() {
@@ -339,7 +341,7 @@ async fn completion_revalidates_only_owned_open_prs_and_preserves_read_failures(
     );
     provider
         .checks
-        .insert("url".into(), readiness(&["checks_pending"]));
+        .insert("url".into(), readiness(&["running"]));
     assert!(
         completion_readiness(&provider, Some("url"), &[])
             .await
@@ -382,7 +384,7 @@ async fn completion_revalidates_only_owned_open_prs_and_preserves_read_failures(
 async fn wait_notices_keep_the_work_identity_and_do_not_wait_for_ready_prs() {
     let mut provider = support::Probe::new(None);
     let roster = BTreeMap::new();
-    let pending = readiness(&["checks_pending"]);
+    let pending = readiness(&["running"]);
     provider.checks.insert("url".into(), pending.clone());
     let r = Repository {
         services: &provider,
@@ -414,15 +416,15 @@ async fn wait_notices_keep_the_work_identity_and_do_not_wait_for_ready_prs() {
     }
     assert!(
         r.await_checks(
-            &[(json!({"draft":true}), readiness(&["checks_pending"]))],
+            &[(json!({"draft":true}), readiness(&["running"]))],
             work(),
             |_| String::new(),
             |_| Ok(())
         )
         .await
-        .is_err()
+        .is_ok()
     );
-    assert_eq!(provider.notices.lock().unwrap().len(), 1);
+    assert_eq!(provider.notices.lock().unwrap().len(), 2);
 }
 #[tokio::test]
 async fn closed_board_imports_are_idempotent_and_keep_merge_identity() {
@@ -511,21 +513,6 @@ async fn closed_board_imports_are_idempotent_and_keep_merge_identity() {
     }
 }
 
-#[tokio::test]
-async fn open_readiness_skips_closed_results() {
-    let mut provider = support::Probe::new(None);
-    provider.open = vec!["url".into(), "closed".into()];
-    provider.checks.insert("url".into(), readiness(&[]));
-    let mut closed = readiness(&[]);
-    closed.readiness = ReadinessReadiness::NotApplicable;
-    provider.checks.insert("closed".into(), closed);
-    assert_eq!(
-        open_pull_request_readiness(&provider, "repo", "feature")
-            .await
-            .unwrap(),
-        vec![json!({"url":"url","readiness":"ready","completion_blockers":[]})]
-    );
-}
 #[tokio::test]
 async fn approval_diagnostics_are_localized_before_service_access() {
     let provider = Forbidden;
@@ -683,11 +670,11 @@ async fn roster_assignment_and_initial_ticket_state_reach_the_provider() {
 #[test]
 fn blockers_keep_diagnostics_and_omit_ready_targets() {
     let ready = (json!({}), readiness(&[]));
-    for code in ["checks_failed", "base_out_of_date", "base_conflict"] {
+    for code in ["failed", "running"] {
         let blocked = (json!({}), readiness(&[code]));
         for error in [
             ensure_ready(&[ready.clone(), blocked.clone()]).unwrap_err(),
-            ensure_awaitable(&[ready.clone(), blocked]).unwrap_err(),
+            ensure_ready(&[blocked, ready.clone()]).unwrap_err(),
         ] {
             match error {
                 MemberError::CapabilityArgs { args, .. } => {
@@ -696,6 +683,13 @@ fn blockers_keep_diagnostics_and_omit_ready_targets() {
                 other => panic!("{other}"),
             }
         }
+    }
+    if let MemberError::CapabilityArgs { args, .. } =
+        ensure_awaitable(&[(json!({}), readiness(&["failed"]))]).unwrap_err()
+    {
+        assert_eq!(args["blockers"], "url: failed");
+    } else {
+        panic!("expected diagnostic arguments");
     }
     assert_eq!(
         ensure_awaitable(&[]).unwrap_err().to_string(),
@@ -773,7 +767,7 @@ async fn waits_record_each_success_and_retain_all_work_status_fields() {
     let mut p = support::Probe::new(None);
     let roster = BTreeMap::new();
     for url in ["A", "B"] {
-        let mut check = readiness(&["checks_pending"]);
+        let mut check = readiness(&["running"]);
         check.target.url = url.into();
         p.checks.insert(url.into(), check);
     }

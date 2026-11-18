@@ -14,8 +14,6 @@ en:
   not_path: "'%{path}' is not a Branvil repository path."
   foreign_ticket: "Branvil knows the pull requests of its own tickets, not of %{url}."
   closes_foreign: "A merge into %{repository} closes only a ticket of this Branvil, not %{url}."
-  no_head: "%{url} has no head commit."
-  no_base: "The base branch of %{url} is gone."
   artifact_too_large: "Artifact '%{name}' is above the %{limit} byte limit. Ask a human to retrieve it."
   every_on_board: "Branvil keeps every ticket on its workspace's board: a ticket is not created off it."
   stopped: "The embedded Branvil service is stopped."

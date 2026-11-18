@@ -77,6 +77,7 @@ fn rounds(n: usize) -> Vec<PatrolReview> {
         .collect()
 }
 fn statement(pr: &mut PatrolPullRequest, kind: &str, at: &str, reactors: &[&str]) {
+    pr.unanswered = !reactors.contains(&ME);
     let reactors: BTreeSet<_> = reactors.iter().map(|v| v.to_string()).collect();
     match kind {
         "thread" => pr.threads.push(PatrolThread {
@@ -96,80 +97,14 @@ fn statement(pr: &mut PatrolPullRequest, kind: &str, at: &str, reactors: &[&str]
 }
 
 #[test]
-fn author_feedback_and_answers() {
-    let mut pr = own();
-    assert_eq!(work(&pr), None);
-    pr.threads.push(thread(&[OTHER], "02"));
-    assert_eq!(work(&pr), FEEDBACK);
-    for answered in 0..3 {
-        let mut p = pr.clone();
-        match answered {
-            0 => p.threads[0].resolved = true,
-            1 => p.threads[0].last_author = ME.into(),
-            _ => {
-                p.threads[0].last_reactors.insert(ME.into());
-            }
-        }
-        assert_eq!(work(&p), None);
-    }
+fn author_selection_uses_domain_unanswered() {
     let mut pr = own();
     pr.comments.push(comment(OTHER, "03"));
-    assert_eq!(work(&pr), FEEDBACK);
-    pr.comments.push(comment(ME, "04"));
     assert_eq!(work(&pr), None);
-    let mut pr = own();
-    pr.reviews.push(review(OTHER, "head-2", "03", "Fix"));
+    pr.unanswered = true;
     assert_eq!(work(&pr), FEEDBACK);
-    pr.reviews.push(review(ME, "head-2", "04", ""));
+    pr.unanswered = false;
     assert_eq!(work(&pr), None);
-    for body in ["", "   "] {
-        let mut p = own();
-        p.reviews.push(review(OTHER, "head-2", "03", body));
-        assert_eq!(work(&p), None);
-    }
-    let mut pr = own();
-    pr.reviews
-        .push(review(OTHER, "head-2", "03", "LGTM; maybe also"));
-    assert_eq!(work(&pr), FEEDBACK);
-    pr.comments.push(comment(ME, "04"));
-    assert_eq!(work(&pr), None);
-}
-#[test]
-fn each_statement_is_answered_individually_by_only_my_reaction() {
-    for kind in ["thread", "review", "comment"] {
-        for reactors in [vec![], vec!["someone-else"], vec![ME]] {
-            let mut p = own();
-            statement(&mut p, kind, "05", &reactors);
-            assert_eq!(
-                work(&p),
-                if reactors.contains(&ME) {
-                    None
-                } else {
-                    FEEDBACK
-                },
-                "{kind}/{reactors:?}"
-            );
-        }
-    }
-    let mut p = own();
-    statement(&mut p, "review", "03", &[ME]);
-    statement(&mut p, "comment", "04", &[]);
-    assert_eq!(work(&p), FEEDBACK);
-}
-#[test]
-fn notices_are_neither_statements_nor_answers() {
-    let mut p = own();
-    p.comments.push(comment(OTHER, "03"));
-    let mut limited = notice(ME, "04", "rate_limited");
-    limited.status = Some(status(
-        "rate_limited",
-        json!({"retry_after_at":"2000-01-01T00:00:00Z"}),
-    ));
-    p.comments.push(limited);
-    assert_eq!(work(&p), FEEDBACK);
-    let mut p = own();
-    p.comments.push(notice(OTHER, "03", "review_limit"));
-    assert_eq!(work(&p), None);
 }
 #[test]
 fn holds_lift_for_thread_review_comment_or_ready_but_not_other_notices() {
@@ -281,6 +216,7 @@ fn marking_ready_restarts_holds_and_rounds_in_both_handover_orders() {
                 p.reviews = rounds(3);
             }
             p.threads.push(thread(&["reviewer"], "04"));
+            p.unanswered = true;
             p.comments = if failed_first {
                 vec![
                     notice(ME, "05", "failed"),
@@ -376,6 +312,15 @@ impl AwaitedFixture {
         let fixture = Fixture::new("owner").await;
         fixture.workspace("acme").await;
         fixture.repository("acme/repo").await;
+        let revision = fixture.owner.repos_get("acme/repo").await.unwrap().revision;
+        fixture
+            .owner
+            .repos_update(
+                "acme/repo",
+                input(json!({"revision":revision,"required_checks":["test"]})),
+            )
+            .await
+            .unwrap();
         let actor = fixture.member(ME).await;
         let base = fixture.commit("acme/repo", "main", None, "a.txt", "base");
         let head = fixture.commit("acme/repo", "feature", Some(&base), "a.txt", "feature");
@@ -460,6 +405,67 @@ async fn no_work_while_checks_pending() {
     assert!(f.woken().await.is_empty());
 }
 #[tokio::test]
+async fn optional_failure_does_not_hold_a_waiting_run() {
+    let f = AwaitedFixture::new().await;
+    let revision = f
+        .fixture
+        .owner
+        .repos_get("acme/repo")
+        .await
+        .unwrap()
+        .revision;
+    f.fixture
+        .owner
+        .repos_update(
+            "acme/repo",
+            input(json!({"revision":revision,"required_checks":[]})),
+        )
+        .await
+        .unwrap();
+    f.conclude("failure").await;
+    let checks = f
+        .code
+        .readiness(&f.url, false, MAX_LOG_TAIL_BYTES)
+        .await
+        .unwrap();
+    assert_eq!(checks.required_checks, RequiredChecks::Passed);
+    assert!(
+        checks
+            .checks
+            .iter()
+            .any(|c| c.conclusion.as_deref() == Some("failure") && !c.required)
+    );
+    let tasks = f.woken().await;
+    assert_eq!(tasks.len(), 1);
+    f.assert_resumes(&tasks[0], "pull_request_checks");
+}
+
+#[tokio::test]
+async fn author_inline_answer_clears_domain_feedback_for_patrol() {
+    let f = AwaitedFixture::new().await;
+    f.feedback(&f.url).await;
+    assert_eq!(
+        f.woken().await[0].trigger_reason.as_deref(),
+        Some("pull_request_feedback")
+    );
+    f.code
+        .review_comment(
+            &f.url,
+            ReviewComment {
+                body: "Answered inline".into(),
+                head: f.head.clone(),
+                path: "a.txt".into(),
+                line: 1,
+                side: "RIGHT".into(),
+                start_line: None,
+                start_side: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(f.woken().await.is_empty());
+}
+#[tokio::test]
 async fn success_and_failure_checks_both_resume_the_member() {
     for conclusion in ["success", "failure"] {
         let f = AwaitedFixture::new().await;
@@ -479,20 +485,13 @@ async fn new_head_resumes_work_even_with_pending_checks() {
     f.assert_resumes(&tasks[0], "pull_request_checks");
 }
 #[tokio::test]
-async fn closed_merged_or_draft_prs_never_resume() {
-    for (state, merged, draft) in [
-        ("closed", true, false),
-        ("closed", false, false),
-        ("open", false, true),
-    ] {
+async fn closed_or_merged_prs_stop_check_resumption() {
+    for merged in [true, false] {
         let f = AwaitedFixture::new().await;
         f.conclude("success").await;
         if merged {
             branvil::test_support::merge(&f.fixture.owner, "acme/repo", 1, &f.head, &f.base).await;
-        } else if draft {
-            f.code.convert_pull_request_to_draft(&f.url).await.unwrap();
         } else {
-            assert_eq!(state, "closed");
             f.fixture
                 .owner
                 .pulls_set_open("acme/repo", 1, false)
@@ -500,6 +499,42 @@ async fn closed_merged_or_draft_prs_never_resume() {
                 .unwrap();
         }
         assert!(f.woken().await.is_empty());
+    }
+}
+#[tokio::test]
+async fn draft_pauses_check_resumption_until_ready() {
+    for event in ["success", "failure", "new_head"] {
+        let f = AwaitedFixture::new().await;
+        if event == "new_head" {
+            f.fixture
+                .commit("acme/repo", "feature", Some(&f.head), "a.txt", "new head");
+        } else {
+            f.conclude(event).await;
+        }
+        let before = f.woken().await;
+        assert_eq!(before.len(), 1);
+        f.code.convert_pull_request_to_draft(&f.url).await.unwrap();
+        assert!(f.woken().await.is_empty(), "{event}");
+        assert!(
+            f.code
+                .refresh_pull_request(&before[0])
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let draft = f.fixture.owner.pulls_get("acme/repo", 1).await.unwrap();
+        f.fixture
+            .owner
+            .pulls_update(
+                "acme/repo",
+                1,
+                input(json!({"draft":false,"revision":draft.revision})),
+            )
+            .await
+            .unwrap();
+        let tasks = f.woken().await;
+        assert_eq!(tasks.len(), 1, "{event}");
+        f.assert_resumes(&tasks[0], "pull_request_checks");
     }
 }
 #[tokio::test]
@@ -518,7 +553,7 @@ async fn someone_elses_wait_does_not_resume_my_work() {
     assert!(f.woken().await.is_empty());
 }
 #[tokio::test]
-async fn failed_readiness_read_does_not_hide_another_pr_feedback() {
+async fn missing_base_does_not_hide_another_pr_feedback() {
     let f = AwaitedFixture::new().await;
     f.fixture
         .git("acme/repo", &["update-ref", "refs/heads/feedback", &f.head]);
@@ -544,13 +579,15 @@ async fn failed_readiness_read_does_not_hide_another_pr_feedback() {
         f.code
             .readiness(&f.url, false, MAX_LOG_TAIL_BYTES)
             .await
-            .is_err()
+            .is_ok()
     );
     let tasks = f.woken().await;
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].url.as_deref(), Some(other.as_str()));
+    let feedback = tasks
+        .iter()
+        .find(|t| t.url.as_deref() == Some(other.as_str()))
+        .unwrap();
     assert_eq!(
-        tasks[0].trigger_reason.as_deref(),
+        feedback.trigger_reason.as_deref(),
         Some("pull_request_feedback")
     );
     f.fixture
@@ -665,6 +702,7 @@ fn repairs_resume_failed_feedback_and_have_unlimited_review_rounds() {
     for repair in [false, true] {
         let mut pr = own();
         pr.repair = repair;
+        pr.unanswered = true;
         pr.comments = vec![
             comment(OTHER, "2026-01-02T00:00:00Z"),
             PatrolComment {
@@ -680,6 +718,7 @@ fn repairs_resume_failed_feedback_and_have_unlimited_review_rounds() {
         assert_eq!(work(&pr), None);
         let mut pr = theirs();
         pr.repair = repair;
+        pr.unanswered = true;
         pr.reviews = (1..=3)
             .map(|n| {
                 review(
