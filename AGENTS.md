@@ -118,6 +118,7 @@ CLIを変更したら `cargo run --locked -p guildbotics -- generate-cli-referen
 
 エージェント作業時の品質確認:
 
+- Rust のテストは1本あたり120秒を上限とする（`.config/nextest.toml` の `slow-timeout`: 60秒ごとに警告、2回目で終了させて失敗）。#352 後の CI の最長56.843秒に対して、ランナーの変動に余裕を持たせた値。単独実行の overrides にも同じ上限が適用される。手元の一括実行で超えたら、対象テストを単独で再実行し、CI の所要時間と比較して並列実行時の競合とテスト自体の遅さを切り分けてから修正対象を判断する。超えたら待ち・ポーリングを条件成立や制御した時計で終える、独立した契約を状態を共有しないテストへ分ける、不要な準備を除く、の順で原因に合う修正を行い、検証する契約を弱めない。上限の延長やテスト個別の除外で回避しない。
 - 確認コマンドは、CI とこのファイルに明記された範囲、および変更内容に直接対応する関連テストに限定する。指定範囲より広い確認（例: CI で `ruff check` 対象外の `tests/` に対する `ruff check`、関連範囲を超える全量 E2E、LaunchAgent の実機での登録など）は、ユーザーが明示した場合、または事前に目的・追加コストを説明して承認を得た場合だけ実行する。「念のため」の広範囲チェックを無断で追加しない。
 - Python コードを変更したら、原則として `ruff format --check` と `ruff check` と `mypy` と `lint-imports` と関連 `pytest` を実行してから完了報告する（`ruff check` と `ruff format --check` は別物。`ruff format --check` の対象は `guildbotics` と `tests`、`ruff check` / `mypy` / `pylint` の対象は `guildbotics` のみ。整形漏れは CI の `test` ジョブで落ちるため、`ruff format --check` を必ず含める。整形が必要なら `uv run --no-sync ruff format guildbotics tests` を実行）
 - Rust のコードを変更したら、原則として `cargo fmt --all --check` と `cargo clippy --locked --workspace --all-targets -- -D warnings` と関連する `cargo nextest run` を実行してから完了報告する（複数ファイルの通常の結合テストは `tests/main.rs` のモジュールにまとめる。1 ファイルだけなら `cargo nextest run -p <crate> --test main -E 'test(/^<file>::/)'`。位置引数の `<file>::` は部分一致なので、名前が重なる別モジュールも選ばれる）。重複は `npx --yes jscpd@5.0.14 --config jscpd.rust.json` で確かめる。`crates/branvil/web` を変更したら、そこで `npm run lint`・`npm run typecheck`・関連する `npm run test` を実行する
