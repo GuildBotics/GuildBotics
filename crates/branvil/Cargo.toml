@@ -53,6 +53,8 @@ toml_edit = "0.25.17"
 
 
 [dev-dependencies]
+# The integration tests serve through the test host of `test_support`.
+branvil = { path = ".", features = ["test-support"] }
 ctor = { version = "0.6", default-features = false, features = ["proc_macro"] }
 tempfile = "3.27.0"
 

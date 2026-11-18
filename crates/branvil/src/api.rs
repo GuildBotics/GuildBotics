@@ -845,64 +845,10 @@ impl MemberApi {
     }
 }
 
-/// Owns the embedded service, including Smart HTTP for Git and hook callbacks.
-/// Data operations use `data` directly without any HTTP request.
-pub struct Running {
-    pub data: DataApi,
-    stop: Option<tokio::sync::oneshot::Sender<()>>,
-    task: Option<tokio::task::JoinHandle<anyhow::Result<u8>>>,
-}
-impl Running {
-    pub async fn start(
-        data_dir: &std::path::Path,
-        vault: std::sync::Arc<dyn crate::vault::Vault>,
-    ) -> anyhow::Result<Self> {
-        let config = crate::config::Config::load(None, Some(data_dir), None, None)?;
-        let (stop, stopped) = tokio::sync::oneshot::channel();
-        let (ready, started) = tokio::sync::oneshot::channel();
-        let mut task = tokio::spawn(crate::cli::serve_with_api(
-            config,
-            vault,
-            async {
-                let _ = stopped.await;
-            },
-            std::future::pending(),
-            false,
-            Some(ready),
-        ));
-        let data = tokio::select! {
-            result = started => result.map_err(|_| anyhow::anyhow!("integrations.branvil.api.start_failed"))?,
-            result = &mut task => { result??; anyhow::bail!("integrations.branvil.api.start_failed"); }
-        };
-        Ok(Self {
-            data,
-            stop: Some(stop),
-            task: Some(task),
-        })
-    }
-    pub async fn stop(mut self) -> anyhow::Result<u8> {
-        self.stop.take();
-        self.task.take().expect("running service task").await?
-    }
-}
-impl Drop for Running {
-    fn drop(&mut self) {
-        self.stop.take();
-    }
-}
-
-/// Initialize an empty data directory and return the owner's token. This is an
-/// administrative operation.
-pub fn initialize(data_dir: &std::path::Path, owner: &str) -> anyhow::Result<String> {
-    crate::cli::init(None, Some(data_dir), owner, None, "127.0.0.1:0", None)?;
-    Ok(std::fs::read_to_string(
-        crate::config::Layout::new(data_dir).owner_token(),
-    )?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{OWNER_TOKEN, Running, initialize};
     use serde_json::json;
     fn input<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> T {
         serde_json::from_value(v).unwrap()
@@ -953,7 +899,8 @@ mod tests {
     #[tokio::test]
     async fn in_process_members_act_with_their_permissions() {
         let temp = tempfile::tempdir().unwrap();
-        let token = initialize(temp.path(), "owner1").unwrap();
+        initialize(temp.path(), "owner1").unwrap();
+        let token = OWNER_TOKEN;
         let running = Running::start(
             temp.path(),
             std::sync::Arc::new(crate::vault::Memory::default()),
@@ -1139,7 +1086,7 @@ mod tests {
         let url = format!("{}/api/v1/repos/test%2Frepo/tickets/{key}", api.base_url());
         let observed: serde_json::Value = client
             .get(&url)
-            .bearer_auth(&token)
+            .bearer_auth(token)
             .send()
             .await
             .unwrap()
@@ -1151,7 +1098,7 @@ mod tests {
         assert_eq!(observed["title"], "Survives cancellation");
         let posted: serde_json::Value = client
             .post(format!("{url}/comments"))
-            .bearer_auth(&token)
+            .bearer_auth(token)
             .json(&json!({"body":"From HTTP"}))
             .send()
             .await

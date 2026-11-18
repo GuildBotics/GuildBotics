@@ -53,7 +53,7 @@ describe.each(["/acme/-/board", "/acme"])("ticket deletion on %s", (page) => {
     await waitFor(() => expect(screen.queryByText("Title of 1")).not.toBeInTheDocument());
     const calls = fake.calls("DELETE", "/api/v1/repos/acme/demo/tickets/1");
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.headers["X-Branvil-CSRF"]).toBe("csrf-123");
+    expect(calls[0]?.headers["X-GuildBotics-CSRF"]).toBe("csrf-123");
     confirm.mockRestore();
   });
 

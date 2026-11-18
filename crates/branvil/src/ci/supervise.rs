@@ -1,5 +1,5 @@
-//! `[ci] runner = "auto"`: `branvil serve` starts one `branvil runner` child
-//! (the same binary, a separate process) and restarts it when it exits. The
+//! `[ci] runner = "auto"`: the server starts one `guildbotics runner` child
+//! (the same executable, a separate process) and restarts it when it exits. The
 //! mode and the limits the child reads can change while the service runs
 //! (Settings → CI, `settings.rs`): the child reads the limits again before
 //! every claim, so only the mode stops it. The child authenticates as the runner
@@ -81,9 +81,9 @@ pub fn start(app: Shared, url: String) {
                 continue;
             }
             let exe = match mint_token(&app).await.map_err(|e| e.message).and_then(|t| {
-                crate::invocation::command(&["runner"])
+                std::env::current_exe()
                     .map(|exe| (t, exe))
-                    .map_err(|e| format!("cannot find the branvil binary: {e}"))
+                    .map_err(|e| format!("cannot find the running executable: {e}"))
             }) {
                 Ok(v) => v,
                 Err(e) => {
@@ -97,9 +97,9 @@ pub fn start(app: Shared, url: String) {
                     continue;
                 }
             };
-            let (token, (exe, words)) = exe;
+            let (token, exe) = exe;
             let mut cmd = tokio::process::Command::new(exe);
-            cmd.args(words)
+            cmd.arg("runner")
                 .arg("--url")
                 .arg(&url)
                 .arg("--data-dir")

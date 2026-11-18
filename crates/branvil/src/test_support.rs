@@ -1,5 +1,10 @@
 //! Embedded service fixtures for downstream tests. No external runner is needed.
-use crate::api::{DataApi, MemberApi, Running};
+mod service;
+pub use service::{
+    FileVault, OWNER_TOKEN, Running, SESSION_COOKIE, SESSION_CSRF, TestHost, initialize, serve,
+};
+
+use crate::api::{DataApi, MemberApi};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc};
@@ -127,6 +132,7 @@ pub fn input<T: DeserializeOwned>(value: Value) -> T {
 pub struct Fixture {
     pub running: Running,
     pub owner: MemberApi,
+    /// A Branvil token of the owner, for Git and the HTTP API.
     pub owner_token: String,
     root: tempfile::TempDir,
 }
@@ -154,8 +160,9 @@ impl Fixture {
 
     /// Configure upstream stubs before the service opens its configuration.
     pub async fn configured<T>(owner: &str, configure: impl FnOnce(&Path) -> T) -> (Self, T) {
+        let owner_name = owner.to_string();
         let root = tempfile::tempdir().unwrap();
-        let owner_token = crate::api::initialize(root.path(), owner).unwrap();
+        initialize(root.path(), owner).unwrap();
         LOCKS
             .lock()
             .unwrap()
@@ -165,6 +172,12 @@ impl Fixture {
             .await
             .unwrap();
         let owner = running.data.owner();
+        // A token of the owner's own, as Git over Smart HTTP takes it.
+        let owner_token = owner
+            .members_issue_token(owner_name.clone(), input(json!({"label": "fixture"})))
+            .await
+            .unwrap()
+            .token;
         (
             Self {
                 running,

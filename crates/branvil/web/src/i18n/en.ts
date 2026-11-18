@@ -54,7 +54,6 @@ export const en = {
   "nav.language": "Display language",
   "notFound.title": "Page not found",
 
-  "enter.expired": "This link has expired or was already used.",
   "guide.run": "On the Hub machine, print an entry link with:",
   "guide.why": "Paste the printed URL into the address bar of this same browser. The link works once, for 60 seconds; access applies only to that browser.",
 
@@ -520,7 +519,7 @@ export const en = {
   "alert.region": "Warnings",
   "alert.title": "Warning",
   "alert.dismiss": "Dismiss",
-  "alert.noRunner": "No CI runner is connected. Checks do not run; their jobs end as startup failures. Check the runner on the machine that runs branvil serve.",
+  "alert.noRunner": "No CI runner is connected. Checks do not run; their jobs end as startup failures. Check the runner on the Hub.",
   "alert.streamLost": "The connection to the server is lost, so what you see may be out of date. Reconnecting…",
   "alert.executorUnavailable": "The CI runner cannot run jobs: {detail}",
   "alert.stopping": "Branvil is stopping for an update or a restart once the running CI jobs finish. New jobs wait and start after it runs again.",

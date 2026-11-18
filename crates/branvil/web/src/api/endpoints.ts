@@ -54,8 +54,6 @@ export const markdown = (repo: string, source: string, signal?: AbortSignal) =>
 
 export const session = {
   get: () => get<Session>("/session"),
-  /** Exchanges the code of a `branvil open` link (once) for the session cookie. */
-  enter: (code: string) => request<Session>("POST", "/session", { body: { code } }),
 };
 
 // Members (owner) -----------------------------------------------------------

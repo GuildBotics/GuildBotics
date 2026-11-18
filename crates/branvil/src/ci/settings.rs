@@ -5,7 +5,7 @@
 //! without restarting the service; the supervised runner reads the limits
 //! from the same file before every claim (`supervise.rs`). The image cache is the one of the
 //! supervised runner, on this machine (`[ci.microsandbox] home`); a runner
-//! started by hand elsewhere keeps its own, managed with `branvil runner pull`.
+//! started by hand elsewhere keeps its own, managed with `guildbotics runner pull`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -323,7 +323,7 @@ mod tests {
         let file = dir.path().join("branvil.toml");
         std::fs::write(
             &file,
-            "# Branvil\nlisten = \"127.0.0.1:7878\"\n\n[ci]\n# who runs jobs\nrunner = \"off\"\nqueue_max = 9\n",
+            "# Branvil\n[storage]\ncache_size_mib = 16\n\n[ci]\n# who runs jobs\nrunner = \"off\"\nqueue_max = 9\n",
         )
         .unwrap();
         let control = Control::new(file.clone(), &CiConfig::default());
@@ -338,7 +338,7 @@ mod tests {
         let parsed: crate::config::ConfigFile = toml::from_str(&text).unwrap();
         assert_eq!(parsed.ci.runner, RunnerMode::Auto);
         assert_eq!(parsed.ci.queue_max, 9);
-        assert_eq!(parsed.listen.as_deref(), Some("127.0.0.1:7878"));
+        assert_eq!(parsed.storage.cache_size_mib, 16);
         assert_eq!(parsed.ci.executor.max_cpus, 8);
         assert_eq!(parsed.ci.executor.max_memory_mib, 8192);
         assert_eq!(parsed.ci.executor.work_quota_mib, 32768);

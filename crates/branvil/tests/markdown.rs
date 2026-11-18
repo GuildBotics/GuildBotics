@@ -81,7 +81,7 @@ async fn resolved_markdown_matches_the_shared_gui_examples_and_tracks_state() {
     git_as_ok(
         &w.work,
         "alice",
-        &w.owner,
+        &w.owner_git,
         &["push", "-q", &s.remote(other), "HEAD:refs/heads/main"],
     );
     w.push_change("other-change", "other.txt", "other\n");

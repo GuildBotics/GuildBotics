@@ -16,7 +16,8 @@ use crate::store::{self, Rd, Store};
 pub struct App {
     pub active_agents: std::sync::OnceLock<crate::agent::ActiveAgents>,
     pub hub_status: std::sync::OnceLock<crate::api::HubStatus>,
-    pub browser_session: std::sync::OnceLock<Arc<dyn crate::browser_session::BrowserSession>>,
+    /// The embedding host, which authenticates the owner.
+    pub host: std::sync::OnceLock<Arc<dyn crate::host::Host>>,
     pub config: Config,
     /// In-process requests drain before repository operations close.
     pub api_requests: Arc<tokio::sync::RwLock<bool>>,
@@ -67,8 +68,6 @@ pub struct App {
     /// When a token's `last_used_at` was last written (to write it at most
     /// once a minute).
     pub token_touched: Mutex<HashMap<String, std::time::Instant>>,
-    /// Unused entry-link codes, in memory only: a restart invalidates them.
-    pub entry_codes: Mutex<loopback_auth::Codes<String>>,
     /// (repo dir, base, head) → changed file count.
     pub changed_files: Mutex<HashMap<(String, String, String), u64>>,
     /// Test-only crash point (`BRANVIL_FAILPOINT`).
@@ -157,7 +156,7 @@ impl App {
             config.file.clone(),
         );
         Arc::new_cyclic(|me| Self {
-            browser_session: Default::default(),
+            host: Default::default(),
             active_agents: Default::default(),
             hub_status: Default::default(),
             api_requests: Arc::new(tokio::sync::RwLock::new(true)),
@@ -183,7 +182,6 @@ impl App {
             idempotency: KeyedLocks::default(),
             accounts: KeyedLocks::default(),
             token_touched: Mutex::new(HashMap::new()),
-            entry_codes: Mutex::default(),
             changed_files: Mutex::new(HashMap::new()),
             failpoint: std::env::var("BRANVIL_FAILPOINT")
                 .ok()
@@ -330,7 +328,7 @@ mod tests {
     use tokio::sync::oneshot;
 
     fn app(dir: &std::path::Path) -> Shared {
-        let config = Config::load(None, Some(dir), None, None).unwrap();
+        let config = Config::load(None, dir).unwrap();
         config.layout().create().unwrap();
         let store = Store::open(&config.layout().db(), 1 << 20, 1).unwrap();
         App::new(

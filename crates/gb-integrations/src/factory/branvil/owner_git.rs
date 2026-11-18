@@ -71,8 +71,8 @@ mod tests {
     async fn issuing_for_two_devices_preserves_the_other_devices_token() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("branvil");
-        branvil::api::initialize(&root, "owner").unwrap();
-        let running = branvil::api::Running::start(
+        branvil::test_support::initialize(&root, "owner").unwrap();
+        let running = branvil::test_support::Running::start(
             &root,
             std::sync::Arc::new(branvil::vault::Memory::default()),
         )

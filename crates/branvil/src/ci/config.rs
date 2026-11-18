@@ -1,5 +1,5 @@
 //! The `[ci]` section of `branvil.toml`: service-side limits, the supervised
-//! runner, and the runner's executor settings (read by `branvil runner` when it
+//! runner, and the runner's executor settings (read by `guildbotics runner` when it
 //! runs with the same configuration).
 
 use std::path::PathBuf;
@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RunnerMode {
-    /// No runner is started by the service (run `branvil runner` yourself).
+    /// No runner is started by the service (run `guildbotics runner` yourself).
     #[default]
     Off,
-    /// `branvil serve` starts one `branvil runner` child and restarts it when
+    /// The server starts one `guildbotics runner` child and restarts it when
     /// it exits.
     Auto,
 }

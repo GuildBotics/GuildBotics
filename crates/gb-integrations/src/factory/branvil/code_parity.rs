@@ -1,7 +1,7 @@
 //! Frozen URL and member-credential failures without the removed HTTP client.
 use super::*;
 use branvil::api::AppError;
-use branvil::api::{Running, initialize};
+use branvil::test_support::{Running, initialize};
 
 #[test]
 fn frozen_error_classifications_preserve_branvil_guidance_and_arguments() {

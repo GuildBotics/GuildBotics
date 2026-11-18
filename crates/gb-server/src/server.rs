@@ -293,8 +293,8 @@ impl Server {
         self.api.auth.base_url().to_string()
     }
 
-    /// Share browser authentication without retaining the server or its data API.
-    pub fn browser_session(&self) -> Arc<dyn branvil::browser_session::BrowserSession> {
+    /// Share the owner's authentication without retaining the server or its data API.
+    pub fn host(&self) -> Arc<dyn branvil::host::Host> {
         self.api.auth.clone()
     }
 

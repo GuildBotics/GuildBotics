@@ -1206,7 +1206,7 @@ async fn embedded_recovery_installs_roster_before_the_first_repair_sweep() {
     let store = app.store.clone();
     let config = app.config.clone();
     drop(app);
-    let embedded = crate::cli::recover(
+    let embedded = crate::service::recover(
         config,
         std::sync::Arc::new(crate::vault::Memory::default()),
         "http://127.0.0.1:7878".into(),

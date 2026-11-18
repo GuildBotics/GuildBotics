@@ -2288,7 +2288,7 @@ mod tests {
 
     async fn fixture() -> (tempfile::TempDir, crate::app::Shared, Caller, Repo, Pull) {
         let temp = tempfile::tempdir().unwrap();
-        let config = Config::load(None, Some(temp.path()), None, None).unwrap();
+        let config = Config::load(None, temp.path()).unwrap();
         let layout = config.layout();
         layout.create().unwrap();
         let store = store::Store::open(&layout.db(), 1 << 20, 2).unwrap();

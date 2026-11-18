@@ -21,20 +21,12 @@ impl gb_config::secrets::Keychain for Vault {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
-    if arguments.first().is_some_and(|a| a == "branvil") {
-        let result = tokio::task::spawn_blocking(move || {
-            branvil::main(
-                branvil::Invocation::under(&["branvil"]),
-                Arc::new(branvil::vault::Memory::default()),
-                arguments.into_iter().map(std::ffi::OsString::from),
-            )
-        })
-        .await?;
-        std::process::exit(if result == std::process::ExitCode::SUCCESS {
-            0
-        } else {
-            1
-        });
+    // Git runs the hooks the embedded code host writes as this executable's.
+    if let [server, hook, name] = arguments.as_slice()
+        && server == "server"
+        && hook == "git-hook"
+    {
+        std::process::exit(i32::from(branvil::git_hook(name).await));
     }
     if !arguments.is_empty() {
         anyhow::ensure!(
@@ -49,27 +41,14 @@ async fn main() -> anyhow::Result<()> {
     }
     let server = gb_server::Server::start_with_keychain(Arc::new(Vault::default())).await?;
     let embedded = if std::env::var_os("GUILDBOTICS_BROWSER_TEST_BRANVIL").is_some() {
-        let invocation = branvil::Invocation::under(&["branvil"]);
         let vault: Arc<dyn branvil::vault::Vault> = Arc::new(branvil::vault::Memory::default());
-        let init_vault = vault.clone();
-        let initialized = tokio::task::spawn_blocking(move || {
-            branvil::main(
-                invocation,
-                init_vault,
-                ["branvil", "init"].map(std::ffi::OsString::from),
-            )
-        })
-        .await?;
-        anyhow::ensure!(
-            initialized == std::process::ExitCode::SUCCESS,
-            "test Branvil init failed"
-        );
+        let data_dir = gb_server::endpoint::code_host_data()?;
         let base = server.base_url();
-        let session = server.browser_session();
+        let host = server.host();
         let active_agents = server.active_agents();
         Some(async move {
             let embedded =
-                branvil::prepare_embedded(invocation, vault, &base, session, active_agents).await?;
+                branvil::prepare_embedded(&data_dir, vault, &base, host, active_agents).await?;
             if std::env::var_os("GUILDBOTICS_BLACKBOX_CONTROL").is_some() {
                 let data = embedded.data_api();
                 tokio::spawn(async move { controls(data).await.expect("test controls") });

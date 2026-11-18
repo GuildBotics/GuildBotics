@@ -82,7 +82,7 @@ async fn other_repo(w: &World, path: &'static str, auto_land: bool) -> Other {
     git_as_ok(
         &dir,
         "alice",
-        &w.owner,
+        &w.owner_git,
         &["push", "-q", &remote, "HEAD:refs/heads/main"],
     );
     Other { path, dir }
@@ -405,7 +405,7 @@ async fn a_head_behind_its_base_lands_through_a_gate_without_changing_its_head()
     assert_eq!(p["head_sha"], head);
     assert_ne!(p["merge_sha"], head);
     assert_ne!(p["landing"]["gate"], p["merge_sha"]);
-    git_as_ok(&w.work, "alice", &w.owner, &["fetch", "-q", "origin"]);
+    git_as_ok(&w.work, "alice", &w.owner_git, &["fetch", "-q", "origin"]);
     assert_eq!(
         git_ok(&w.work, &["rev-parse", "origin/main^1"]).trim(),
         base
@@ -792,8 +792,8 @@ async fn the_webhook_url_is_a_secret_shown_only_by_its_host() {
     assert_eq!(s.ok("/admin/webhook", &w.owner).await, set);
     // Kept sealed in the vault, never in the data directory.
     assert_eq!(s.kept(|n| n.webhook()).as_deref(), Some(url.as_str()));
-    assert!(!s.vault_shows(secret));
-    assert_eq!(s.secret_files(), ["owner.token"]);
+    assert!(!s.data_shows(secret));
+    assert!(!s.data.join("secrets").exists());
     let (st, v) = s.delete("/admin/webhook", &w.owner).await;
     assert_eq!((st, &v), (StatusCode::OK, &unset));
     assert_eq!(s.kept(|n| n.webhook()), None);

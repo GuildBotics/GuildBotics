@@ -667,6 +667,21 @@ pub async fn entry_link() -> Result<String, String> {
     entry_link_for("/-/guildbotics/").await
 }
 
+/// The server of this machine and its owner's token, read from disk, once the
+/// listener has proven it holds the token's digest.
+pub async fn local_owner() -> anyhow::Result<(String, String)> {
+    let port = crate::endpoint::port()?;
+    let data = gb_base::home::data()?;
+    let language = language().await;
+    let owner = OwnerClient::connect(&data, port, language)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.server.unreachable", &[])))?;
+    Ok((
+        format!("http://127.0.0.1:{port}"),
+        owner.token.trim().to_owned(),
+    ))
+}
+
 pub async fn entry_link_for(next: &str) -> Result<String, String> {
     let port = crate::endpoint::port().map_err(|e| e.to_string())?;
     let data = gb_base::home::data().map_err(|e| format!("{e:#}"))?;

@@ -73,7 +73,12 @@ async fn protected_branches_and_internal_refs_refuse_pushes() {
     git_ok(work, &["add", "direct.txt"]);
     git_ok(work, &["commit", "-qm", "direct"]);
     // Direct push to the default branch, even by the owner.
-    let out = git_as(work, "alice", &w.owner, &["push", "origin", "HEAD:main"]);
+    let out = git_as(
+        work,
+        "alice",
+        &w.owner_git,
+        &["push", "origin", "HEAD:main"],
+    );
     assert!(!out.status.success());
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("protected"),
@@ -82,7 +87,7 @@ async fn protected_branches_and_internal_refs_refuse_pushes() {
     );
     // Deletion and force push of main.
     assert!(
-        !git_as(work, "alice", &w.owner, &["push", "origin", ":main"])
+        !git_as(work, "alice", &w.owner_git, &["push", "origin", ":main"])
             .status
             .success()
     );
@@ -90,7 +95,7 @@ async fn protected_branches_and_internal_refs_refuse_pushes() {
         !git_as(
             work,
             "alice",
-            &w.owner,
+            &w.owner_git,
             &["push", "-f", "origin", "HEAD:main"]
         )
         .status
@@ -104,7 +109,7 @@ async fn protected_branches_and_internal_refs_refuse_pushes() {
         !git_as(
             work,
             "alice",
-            &w.owner,
+            &w.owner_git,
             &[
                 "push",
                 "origin",
@@ -237,7 +242,7 @@ async fn a_push_completes_with_one_git_slot_of_each_kind() {
     git_as_ok(
         &work,
         "alice",
-        &owner,
+        &s.git_token("alice").await,
         &["push", "-q", &remote, "HEAD:refs/heads/feature"],
     );
     assert!(started.elapsed() < std::time::Duration::from_secs(10));

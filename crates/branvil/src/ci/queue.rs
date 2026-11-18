@@ -342,7 +342,7 @@ pub fn attempt_index(a: &Attempt) -> Vec<IxEntry> {
     out
 }
 
-/// Every CI index entry the records imply (for `branvil admin check`).
+/// Every CI index entry the records imply (for `server hub-data check`).
 pub fn expected_index(r: &impl Rd) -> AppResult<Vec<IxEntry>> {
     let mut out = Vec::new();
     for run in r.prefix_all::<Run>(store::CI_RUNS, &[])? {
@@ -1190,7 +1190,7 @@ pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Opt
     claim_selected(w, runner, lease_secs, now, a, reuse).map(Some)
 }
 
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn claim_fixture(w: &Wtx, target: (&str, &str), now: &str) -> AppResult<Claimed> {
     let (a, reuse) = scheduled(w, false)?
         .into_iter()

@@ -645,7 +645,12 @@ async fn the_owner_is_involved_in_every_open_pull_request() {
         .await;
     assert_eq!(st, 201, "{v}");
     let other = s.remote("acme/other");
-    git_as_ok(&w.work, "alice", &w.owner, &["push", "-q", &other, "main"]);
+    git_as_ok(
+        &w.work,
+        "alice",
+        &w.owner_git,
+        &["push", "-q", &other, "main"],
+    );
     w.push_change("elsewhere", "e.txt", "e\n");
     git_as_ok(
         &w.work,
@@ -1473,7 +1478,7 @@ async fn checks_report_conflicts_for_unrelated_histories_without_losing_ci() {
         git_as_ok(
             &w.work,
             "alice",
-            &w.owner,
+            &w.owner_git,
             &["push", "-q", "origin", "+orphan:refs/heads/feature"],
         );
         let head = git_ok(&w.work, &["rev-parse", "HEAD"]);

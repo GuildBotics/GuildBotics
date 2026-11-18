@@ -11,7 +11,7 @@ it("keeps the two apps' session tokens and headers isolated, including multipart
   const fetch = vi.fn().mockImplementation(async () => new Response("{}"));
   vi.stubGlobal("fetch", fetch);
   const desktop = client("/api", "X-GuildBotics-CSRF");
-  const branvil = client("/api/v1", "X-Branvil-CSRF");
+  const branvil = client("/api/v1", "X-GuildBotics-CSRF");
   desktop.setCsrf("desktop-fixture");
   branvil.setCsrf("branvil-fixture");
   const body = new FormData();
@@ -27,7 +27,7 @@ it("keeps the two apps' session tokens and headers isolated, including multipart
       headers: { "X-GuildBotics-CSRF": "desktop-fixture" },
     },
   ]);
-  expect(fetch.mock.calls[1][1].headers).toEqual({ "X-Branvil-CSRF": "branvil-fixture" });
+  expect(fetch.mock.calls[1][1].headers).toEqual({ "X-GuildBotics-CSRF": "branvil-fixture" });
 });
 
 it("replays a CSRF-refused write once with the same body and idempotency key", async () => {

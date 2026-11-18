@@ -79,11 +79,7 @@ fn render() -> String {
 fn collect(command: Command, path: &str, index: &mut String, sections: &mut String) {
     writeln!(index, "- [`{path}`](#{})", path.replace(' ', "-")).unwrap();
     writeln!(sections, "\n## {path}\n").unwrap();
-    let mut command = if path == "guildbotics branvil" {
-        branvil::cli_command()
-    } else {
-        command
-    };
+    let mut command = command;
     let env_args = command
         .get_arguments()
         .filter(|arg| arg.get_env().is_some())

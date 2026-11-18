@@ -193,7 +193,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_35_upgrade_preserves_records() {
+async fn schema_36_upgrade_preserves_records() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -259,13 +259,17 @@ async fn schema_35_upgrade_preserves_records() {
     let repos = records(&db, "repos");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let prior_runs = records(&db, "ci_runs");
-    as_schema_35(&db);
+    as_schema_36(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
-    assert!(admin("check").1.contains("branvil admin upgrade"));
+    assert!(
+        admin("check")
+            .1
+            .contains("guildbotics server hub-data upgrade")
+    );
     let (code, output) = admin("upgrade");
-    assert_eq!(code, 3, "{output}");
-    assert!(output.contains("from schema version 35 to 36"), "{output}");
+    assert_eq!(code, 0, "{output}");
+    assert!(output.contains("from schema version 36 to 37"), "{output}");
     assert_eq!(
         tables(&db).get("ix_repair_unnotified"),
         before.get("ix_repair_unnotified")
@@ -296,7 +300,7 @@ async fn schema_35_upgrade_preserves_records() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-35-")
+                .starts_with("branvil-schema-36-")
         })
         .unwrap();
     assert_eq!(tables(&backup), before);
@@ -1034,8 +1038,8 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
             .iter()
             .any(|a| a["cache_refresh"] == refresh_id)
     );
-    as_schema_35(&db);
-    for (command, expected) in [("upgrade", 3), ("check", 0)] {
+    as_schema_36(&db);
+    for (command, expected) in [("upgrade", 0), ("check", 0)] {
         let out = branvil_command()
             .args(["admin", command, "--data-dir"])
             .arg(&w.server.data)
@@ -1206,7 +1210,7 @@ impl Runner {
 
 /// Brings the work clone's main to the service's main.
 pub(crate) fn sync_main(w: &World) {
-    git_as_ok(&w.work, "alice", &w.owner, &["fetch", "-q", "origin"]);
+    git_as_ok(&w.work, "alice", &w.owner_git, &["fetch", "-q", "origin"]);
     git_ok(&w.work, &["checkout", "-q", "-B", "main", "origin/main"]);
 }
 
@@ -2913,7 +2917,7 @@ async fn verification_api_auth_first_parent_and_cursor_pages() {
     git_as_ok(
         &work,
         "alice",
-        &w.owner,
+        &w.owner_git,
         &["push", "-q", &w.server.remote(path), "main"],
     );
     let running = w.server.ok(&url, &w.owner).await;
@@ -3026,7 +3030,7 @@ async fn verification_api_auth_first_parent_and_cursor_pages() {
     git_as_ok(
         &work,
         "alice",
-        &w.owner,
+        &w.owner_git,
         &["push", "-q", &w.server.remote(path), "probe-head"],
     );
     let pulls = format!("/repos/{}/pulls", encode(path));
