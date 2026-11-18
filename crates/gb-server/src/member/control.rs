@@ -300,6 +300,13 @@ impl RunControl<'_> {
                 _ => return Err(MemberError::Capability("cli.member.option_choice")),
             }
         };
+        let ticket_work = self.identity.work_kind == "ticket";
+        let remains = p.flag("work-remains");
+        if remains && (!ticket_work || status != Completion::Done) {
+            return Err(MemberError::Capability(
+                "capabilities.task_runs.work_remains_status",
+            ));
+        }
         if p.command == "checks await" {
             self.repository.guard.ensure_current()?;
         }
@@ -403,6 +410,45 @@ impl RunControl<'_> {
             snapshot = self.snapshot()?;
         }
         self.check_evidence(&snapshot, status, summary)?;
+        if remains
+            && !repository::has_open_linked_pull(
+                self.repository.services.code()?,
+                self.identity.work_identity,
+            )
+            .await?
+        {
+            return Err(MemberError::Capability(
+                "capabilities.task_runs.work_remains_open_pr",
+            ));
+        }
+        if ticket_work {
+            self.repository.guard.ensure_current()?;
+            let reason = match status {
+                Completion::Done if remains => "work_remaining",
+                Completion::Done => "completed",
+                Completion::Asking => "asking",
+                Completion::Blocked => "blocked",
+                Completion::AwaitingChecks => "awaiting_checks",
+            };
+            let marker: gb_base::service::WorkflowStatus = serde_json::from_value(json!({
+                "reason": reason, "person_id": self.identity.person_id,
+                "run_id": self.identity.run_id, "work_kind": "ticket",
+                "work_identity": self.identity.work_identity,
+            }))
+            .map_err(|_| MemberError::Capability("capabilities.task_runs.store_failed"))?;
+            let body = (self.render_notice)(&format!("capabilities.task_runs.ticket_{reason}"));
+            let written = self
+                .repository
+                .services
+                .tickets()?
+                .comment(self.identity.work_identity, &body, Some(&marker))
+                .await?;
+            self.append(
+                "ticket_work",
+                &json!({"url": written.view.url, "status": marker.payload()}),
+            )?;
+            snapshot = self.snapshot()?;
+        }
         let store = RunStore::open(self.workspace);
         let completed = self
             .writes

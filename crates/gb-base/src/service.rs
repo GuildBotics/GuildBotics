@@ -164,6 +164,8 @@ impl std::error::Error for ServiceError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowStatusReason {
+    Completed,
+    WorkRemaining,
     Failed,
     RateLimited,
     ReviewLimit,
