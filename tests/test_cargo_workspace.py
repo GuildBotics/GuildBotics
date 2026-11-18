@@ -158,7 +158,7 @@ def _built_from(tested: set[str]) -> set[str]:
 #: identity and record stores, without depending on a provider or the server.
 _ALLOWED = {
     "loopback-auth": set(),
-    "branvil": {"loopback-auth", "gb-base", "gb-config"},
+    "branvil": {"loopback-auth", "gb-ports"},
     "gb-base": set(),
     "gb-workspace": {"gb-base"},
     "gb-observability": {"gb-base"},

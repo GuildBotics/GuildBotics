@@ -56,6 +56,7 @@ async fn failure_fixture() -> (
                 avatar: None,
             };
             w.put(store::MEMBERS, &Member::key("owner"), &m)?;
+            crate::domain::members::insert_member(w,&crate::domain::members::NewMember{name:"agent".into(),display_name:Some("Agent".into()),kind:MemberKind::Agent})?;
         let peer: Ticket = serde_json::from_value(json!({
             "repo":r2.id, "workspace":r2.workspace, "number":2, "title":"Existing ready card", "body":"", "mentions":[],
             "state":"open", "author":"owner", "labels":[], "interactive":false, "lane":"ready", "rank":"0|a",
@@ -80,6 +81,12 @@ async fn failure_fixture() -> (
             );
             Ok(())
         })
+        .await
+        .unwrap();
+    // The manually inserted peer must reserve its number just like ordinary creation.
+    let counter = Key::new().s(&format!("ticket:{}", repo.id)).bytes();
+    app.store
+        .write(move |w| w.put(store::COUNTERS, &counter, &2_u64))
         .await
         .unwrap();
     (temp, app, repo, work, base)
@@ -270,6 +277,14 @@ async fn repeated_failures_and_repair_head_selection() {
                 avatar: None,
             };
             w.put(store::MEMBERS, &Member::key("owner"), &m)?;
+            crate::domain::members::insert_member(
+                w,
+                &crate::domain::members::NewMember {
+                    name: "agent".into(),
+                    display_name: Some("Agent".into()),
+                    kind: MemberKind::Agent,
+                },
+            )?;
             let p = super::tests::open_pull(&r2.id, 1, "fix", "main");
             model::put_indexed(
                 w,
@@ -732,6 +747,8 @@ async fn assignments_evidence_and_lifecycle() {
                 let mut broken=r2.clone(); broken.id="aaa-write".into();
                 w.put(store::REPOS,&Repo::key(&broken.id),&broken)?;
                 p.repo=broken.id.clone();p.author="missing-member".into();p.merge_sha=Some(sh.clone());
+                // Missing authors are valid: a corrupt counter independently fails the write.
+                w.put(store::COUNTERS,&Key::new().s("ticket:aaa-write").bytes(),&"not-a-counter")?;
                 model::put_indexed(w,store::PULLS,&Pull::key(&p.repo,p.number),None,&p,model::pull_index(&p))?;
                 repair::failed(w,&broken.id,&sh,&[])?;
             }
@@ -1054,4 +1071,178 @@ async fn repair_body_reports_paths_reuse_but_accepts_tree_reuse_and_execution() 
             ["paths", "one_runs"].contains(&mode)
         );
     }
+}
+
+#[tokio::test]
+async fn empty_roster_remains_visible_and_refresh_registers_only_valid_agents() {
+    let (_temp, app, repo, _work, base) = failure_fixture().await;
+    let roster = std::sync::Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::<
+        String,
+        String,
+    >::new()));
+    let copy = roster.clone();
+    app.active_agents
+        .set(std::sync::Arc::new(move || {
+            Ok(copy.lock().unwrap().clone())
+        }))
+        .ok()
+        .unwrap();
+    let (id, sha) = (repo.id.clone(), base.clone());
+    app.store
+        .write(move |w| {
+            repair::passed(w, &id, &sha)?;
+            let v = Verification {
+                sha: sha.clone(),
+                base: None,
+                state: "failed".into(),
+                started_at: "0".into(),
+                finished_at: Some("1".into()),
+                failed_jobs: vec![test_failure()],
+                failing_since: Some(sha.clone()),
+                last_verified: None,
+            };
+            w.put(store::CI_VERIFICATIONS, &Key::new().s(&id).bytes(), &v)?;
+            repair::failed(w, &id, &sha, &[test_failure()])
+        })
+        .await
+        .unwrap();
+    repair::sweep(&app).await.unwrap();
+    // This is the exact view returned by the verification HTTP API and CI screen.
+    let state = super::verify::main_state(&app, &repo).await.unwrap();
+    assert_eq!(state.state, "failing");
+    assert_eq!(state.current.unwrap().state, "failed");
+    assert_eq!(state.failing_since.as_deref(), Some(base.as_str()));
+    assert!(state.repair.is_none());
+    assert_eq!(
+        app.store
+            .read(|r| Ok(r.prefix_keys(store::REPAIR_PENDING, &[])?.len()))
+            .await
+            .unwrap(),
+        1
+    );
+    roster.lock().unwrap().extend([
+        ("invalid name".into(), "Invalid".into()),
+        ("branvil".into(), "Reserved".into()),
+        ("worker".into(), "Worker Display".into()),
+    ]);
+    repair::sweep(&app).await.unwrap();
+    let id = repo.id.clone();
+    app.store
+        .read(move |r| {
+            assert_eq!(repair::open_ticket(r, &id)?.unwrap().number, 3);
+            assert_eq!(
+                r.get::<Ticket>(store::TICKETS, &Ticket::key(&id, 2))?
+                    .unwrap()
+                    .title,
+                "Existing ready card"
+            );
+            assert_eq!(
+                repair::open_ticket(r, &id)?.unwrap().assignee.unwrap().name,
+                "worker"
+            );
+            assert!(r.prefix_keys(store::REPAIR_PENDING, &[])?.is_empty());
+            assert_eq!(
+                r.get::<Member>(store::MEMBERS, &Member::key("worker"))?
+                    .unwrap()
+                    .display_name,
+                "Worker Display"
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    // Once assigned, a broken roster cannot suppress subsequent failure evidence.
+    let (_temp, app, repo, _work, base) = failure_fixture().await;
+    app.active_agents
+        .set(std::sync::Arc::new(|| Err("roster unavailable".into())))
+        .ok()
+        .unwrap();
+    let id = repo.id.clone();
+    app.store
+        .write(move |w| {
+            repair::failed(
+                w,
+                &id,
+                &base,
+                &[FailedJob {
+                    name: "new-job".into(),
+                    attempt_id: None,
+                    details: None,
+                }],
+            )
+        })
+        .await
+        .unwrap();
+    repair::sweep(&app).await.unwrap();
+    let id = repo.id.clone();
+    app.store
+        .read(move |r| {
+            assert!(
+                repair::open_ticket(r, &id)?
+                    .unwrap()
+                    .repair
+                    .unwrap()
+                    .jobs
+                    .contains(&"new-job".into())
+            );
+            assert!(r.prefix_keys(store::REPAIR_PENDING, &[])?.is_empty());
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn embedded_recovery_installs_roster_before_the_first_repair_sweep() {
+    let (_temp, app, repo, _work, base) = failure_fixture().await;
+    let (id, sha) = (repo.id.clone(), base.clone());
+    app.store
+        .write(move |w| {
+            repair::passed(w, &id, &sha)?;
+            repair::failed(w, &id, &sha, &[test_failure()])
+        })
+        .await
+        .unwrap();
+    let store = app.store.clone();
+    let config = app.config.clone();
+    drop(app);
+    let embedded = crate::cli::recover(
+        config,
+        std::sync::Arc::new(crate::vault::Memory::default()),
+        "http://127.0.0.1:7878".into(),
+        "http://127.0.0.1:7878".into(),
+        store,
+        Some(std::sync::Arc::new(|| {
+            Ok([("worker".into(), "Worker".into())].into())
+        })),
+    )
+    .await
+    .unwrap();
+    let id = repo.id.clone();
+    let repair = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let id = id.clone();
+            if let Some(t) = embedded
+                .app
+                .store
+                .read(move |r| repair::open_ticket(r, &id))
+                .await
+                .unwrap()
+            {
+                break t;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(repair.number, 3);
+    assert_eq!(
+        repair.assignee.unwrap().name,
+        "worker",
+        "a stored inactive agent must never win the startup race"
+    );
+    embedded.close_events();
+    embedded.drain().await.unwrap();
+    embedded.close().await;
 }

@@ -66,8 +66,10 @@ async fn main() -> anyhow::Result<()> {
         );
         let base = server.base_url();
         let session = server.browser_session();
+        let active_agents = server.active_agents();
         Some(async move {
-            let embedded = branvil::prepare_embedded(invocation, vault, &base, session).await?;
+            let embedded =
+                branvil::prepare_embedded(invocation, vault, &base, session, active_agents).await?;
             if std::env::var_os("GUILDBOTICS_BLACKBOX_CONTROL").is_some() {
                 let data = embedded.data_api();
                 tokio::spawn(async move { controls(data).await.expect("test controls") });

@@ -14,6 +14,7 @@ use crate::model::Repo;
 use crate::store::{self, Rd, Store};
 
 pub struct App {
+    pub active_agents: std::sync::OnceLock<crate::agent::ActiveAgents>,
     pub hub_status: std::sync::OnceLock<crate::api::HubStatus>,
     pub browser_session: std::sync::OnceLock<Arc<dyn crate::browser_session::BrowserSession>>,
     pub config: Config,
@@ -157,6 +158,7 @@ impl App {
         );
         Arc::new_cyclic(|me| Self {
             browser_session: Default::default(),
+            active_agents: Default::default(),
             hub_status: Default::default(),
             api_requests: Arc::new(tokio::sync::RwLock::new(true)),
             base_url,

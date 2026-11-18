@@ -33,6 +33,16 @@ pub struct PageReq {
 }
 
 impl PageReq {
+    /// Internal collection reads have no wire cursor or page size limit.
+    pub(crate) fn all() -> Self {
+        Self {
+            limit: usize::MAX,
+            after: None,
+            binding: String::new(),
+            key: vec![],
+        }
+    }
+
     /// `binding` names the collection and every condition of the request; a
     /// cursor from any other collection or condition does not verify.
     pub fn new(

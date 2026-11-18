@@ -53,15 +53,15 @@ describe("settings", () => {
     const user = userEvent.setup();
     renderApp("/-/settings/repos/acme/demo");
     const selector = await screen.findByRole("combobox", { name: "Default responder" }, { timeout: 5000 });
-    await waitFor(() => expect(selector).toHaveValue(chosen ? "ken" : "Automatic (currently aiko)"));
+    await waitFor(() => expect(selector).toHaveValue(chosen ? "ken" : "Automatic"));
     await user.click(screen.getByRole("combobox", { name: "Default responder" }));
-    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Automatic (currently aiko)", "aiko", "ken"]);
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Automatic", "aiko", "ken"]);
     await user.click(screen.getByRole("option", { name: /^ken$/ }));
     await user.click(screen.getAllByRole("button", { name: "Save" })[0]!);
     await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")).toHaveLength(1));
     expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({ revision: 4, responder: "ken" });
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Default responder" })).toHaveValue("ken"));
-    await choose(user, "Default responder", "Automatic (currently aiko)");
+    await choose(user, "Default responder", "Automatic");
     await user.click(screen.getAllByRole("button", { name: "Save" })[0]!);
     await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")).toHaveLength(2));
     expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[1]?.body).toMatchObject({ revision: 5, responder: null });

@@ -47,18 +47,20 @@ pub struct Responder {
     pub automatic: String,
 }
 
-/// Resolve the effective and automatic choices together.
+/// Resolve assignment from the host's active agents, never from a human fallback.
 pub fn responder(r: &impl Rd, repo: &Repo) -> AppResult<Responder> {
-    let automatic = automatic(r, repo)?;
-    Ok(Responder {
-        member: repo.responder.clone().unwrap_or_else(|| automatic.clone()),
-        chosen: repo.responder.is_some(),
-        automatic,
-    })
+    responder_for(r, repo, None)
 }
-
-fn automatic(r: &impl Rd, repo: &Repo) -> AppResult<String> {
-    let members: Vec<Member> = r.prefix_all(store::MEMBERS, &[])?;
+pub fn responder_for(r: &impl Rd, repo: &Repo, active: Option<&[String]>) -> AppResult<Responder> {
+    let mut members: Vec<Member> = r.prefix_all(store::MEMBERS, &[])?;
+    members.retain(|m| {
+        m.kind == MemberKind::Agent
+            && active.is_none_or(|a| {
+                a.iter()
+                    .any(|n| crate::util::fold(n) == crate::util::fold(&m.name))
+            })
+    });
+    members.sort_by_key(|m| crate::util::fold(&m.name));
     let pulls: Vec<Pull> = r.prefix_all(store::PULLS, &store::Key::new().s(&repo.id).bytes())?;
     let latest = pulls
         .iter()
@@ -66,24 +68,33 @@ fn automatic(r: &impl Rd, repo: &Repo) -> AppResult<String> {
         .filter_map(|p| {
             members
                 .iter()
-                .find(|m| {
-                    m.kind == MemberKind::Agent
-                        && crate::util::fold(&m.name) == crate::util::fold(&p.author)
-                })
+                .find(|m| crate::util::fold(&m.name) == crate::util::fold(&p.author))
                 .map(|m| (p, m))
         })
         .max_by(|(a, _), (b, _)| (&a.merged_at, a.number).cmp(&(&b.merged_at, b.number)))
         .map(|(_, m)| m);
-    let picked = latest
-        .or_else(|| {
-            members
-                .iter()
-                .filter(|m| m.kind == MemberKind::Agent)
-                .min_by(|a, b| (&a.created_at, &a.name).cmp(&(&b.created_at, &b.name)))
-        })
-        .or_else(|| members.iter().find(|m| m.kind == MemberKind::Owner))
-        .ok_or_else(|| AppError::invalid("No owner exists."))?;
-    Ok(picked.name.clone())
+    let automatic = latest
+        .or(members.first())
+        .map(|m| m.name.clone())
+        .unwrap_or_default();
+    let explicit = repo.responder.as_ref().filter(|n| {
+        members
+            .iter()
+            .any(|m| crate::util::fold(&m.name) == crate::util::fold(n))
+    });
+    Ok(Responder {
+        member: explicit.cloned().unwrap_or_else(|| automatic.clone()),
+        chosen: explicit.is_some(),
+        automatic,
+    })
+}
+pub fn active_agents(
+    app: &crate::app::App,
+) -> AppResult<Option<std::collections::BTreeMap<String, String>>> {
+    app.active_agents
+        .get()
+        .map(|roster| roster().map_err(AppError::unavailable))
+        .transpose()
 }
 
 #[cfg(test)]
@@ -122,10 +133,10 @@ mod tests {
         }
         member(&s, "owner", MemberKind::Owner, "0").await;
         member(&s, "runner", MemberKind::Runner, "0").await;
-        check(&s, &repo, "owner", false, "owner").await;
+        check(&s, &repo, "", false, "").await;
         member(&s, "new", MemberKind::Agent, "2").await;
         member(&s, "old", MemberKind::Agent, "1").await;
-        check(&s, &repo, "old", false, "old").await;
+        check(&s, &repo, "new", false, "new").await;
         s.write(|w| {
             for (n,r,a,t,merged) in [(1,"repo","new","3",true),(2,"repo","old","2",true),(3,"repo","owner","4",true),(4,"other","old","5",true),(5,"repo","old","6",false)] {
                 let p: Pull = serde_json::from_value(json!({"repo":r,"number":n,"title":"test","body":"","state":"closed","merged":merged,"draft":false,"author":a,"head":"feature","base":"main","reviewers":[],"tickets":[],"labels":[],"reviewed_by":[],"ready_at":null,"created_at":"0","updated_at":"0","closed_at":null,"merged_at":t,"merge_sha":null,"merged_head":null,"merged_base":null,"upstream":null,"revision":1})).unwrap();
@@ -136,5 +147,16 @@ mod tests {
         check(&s, &repo, "new", false, "new").await;
         repo.responder = Some("old".into());
         check(&s, &repo, "old", true, "new").await;
+        member(&s, "Alpha", MemberKind::Agent, "0").await;
+        member(&s, "aaron", MemberKind::Agent, "1").await;
+        repo.responder = None;
+        let chosen = s
+            .read(move |r| responder_for(r, &repo, Some(&["alpha".into(), "aaron".into()])))
+            .await
+            .unwrap();
+        assert_eq!(
+            chosen.member, "aaron",
+            "fallback ordering follows person_id rather than stored display case"
+        );
     }
 }

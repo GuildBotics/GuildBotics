@@ -431,3 +431,34 @@ pub fn hook() {
 
 #[cfg(test)]
 mod tests;
+
+/// Collect every wire page while asserting that its continuation advances.
+pub async fn ticket_items(
+    t: &dyn gb_ports::TicketService,
+    tracker: &str,
+    parameters: &Value,
+) -> Vec<Value> {
+    let mut items = vec![];
+    let mut cursor = String::new();
+    loop {
+        let p = t
+            .read(
+                gb_ports::Resource::TrackerTickets,
+                tracker,
+                Some(parameters),
+                &cursor,
+            )
+            .await
+            .unwrap();
+        assert!(p.target().is_none());
+        items.extend_from_slice(p.items());
+        match p.continuation() {
+            Some(next) => {
+                assert_ne!(next, cursor);
+                cursor = next.into()
+            }
+            None => break,
+        }
+    }
+    items
+}

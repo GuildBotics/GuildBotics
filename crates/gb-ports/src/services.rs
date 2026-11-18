@@ -185,17 +185,6 @@ pub struct ReviewComment {
 }
 
 pub trait TicketService: Send + Sync {
-    /// A neutral assignment fact, excluded from the assignee's work conversation.
-    fn comment_takeover<'a>(&'a self, url: &'a str, body: &'a str) -> ServiceFuture<'a, ()> {
-        Box::pin(async move { self.comment(url, body, None).await.map(|_| ()) })
-    }
-    fn repair_tickets(&self) -> ServiceFuture<'_, Vec<Ticket>> {
-        Box::pin(async { Ok(vec![]) })
-    }
-    fn assign_to_me<'a>(&'a self, _url: &'a str) -> ServiceFuture<'a, ()> {
-        Box::pin(async { Err(ServiceError::Unsupported) })
-    }
-
     fn read<'a>(
         &'a self,
         resource: Resource,

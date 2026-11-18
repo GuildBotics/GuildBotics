@@ -225,9 +225,18 @@ pub(crate) async fn prepare(
     vault: Arc<dyn crate::vault::Vault>,
     base_url: String,
     hook_url: String,
+    active_agents: crate::agent::ActiveAgents,
 ) -> anyhow::Result<Embedded> {
     let store = open_service(&config).await?;
-    recover(config, vault, base_url, hook_url, store).await
+    recover(
+        config,
+        vault,
+        base_url,
+        hook_url,
+        store,
+        Some(active_agents),
+    )
+    .await
 }
 
 async fn open_service(config: &Config) -> anyhow::Result<Store> {
@@ -250,15 +259,19 @@ async fn open_service(config: &Config) -> anyhow::Result<Store> {
     Ok(store)
 }
 
-async fn recover(
+pub(crate) async fn recover(
     config: Config,
     vault: Arc<dyn crate::vault::Vault>,
     base_url: String,
     hook_url: String,
     store: Store,
+    active_agents: Option<crate::agent::ActiveAgents>,
 ) -> anyhow::Result<Embedded> {
     let hook_base = hook_url.clone();
     let app = App::new(config, base_url, store, vault, hook_url);
+    if let Some(roster) = active_agents {
+        let _ = app.active_agents.set(roster);
+    }
     app.git
         .version()
         .await
@@ -321,6 +334,7 @@ pub(crate) async fn serve_with_api(
         base_url.clone(),
         format!("http://{bound}"),
         store,
+        None,
     )
     .await?;
     let app = prepared.app.clone();

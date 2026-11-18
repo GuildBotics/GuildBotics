@@ -13,7 +13,7 @@
 #
 # The Rust jobs check the whole Cargo workspace, its tests in two jobs:
 # rust-test-branvil tests Branvil and loopback-auth; rust-test tests the rest.
-# Branvil may use lower GuildBotics crates, so both jobs cover crate changes.
+# Branvil builds gb-ports and loopback-auth; its job covers those dependencies.
 # Each crate is tested by one of them, and each job's paths include every workspace crate
 # its tested crates build from (tests/test_cargo_workspace.py).
 #
@@ -165,11 +165,9 @@ cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-tool
 [[jobs]]
 name = "rust-test-branvil"
 paths = [
-  "crates/*/src/**",
-  "crates/*/tests/**",
-  "crates/*/examples/**",
-  "crates/*/Cargo.toml",
-  "crates/*/build.rs",
+  "crates/branvil/**",
+  "crates/loopback-auth/**",
+  "crates/gb-ports/**",
   "Cargo.toml",
   "Cargo.lock",
   "rust-toolchain*",

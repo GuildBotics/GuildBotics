@@ -1798,17 +1798,6 @@ async fn failed_repairs_keep_the_failure_comment_without_a_work_stop() {
     }
 }
 
-#[test]
-fn repair_takeover_chooses_one_eligible_member_and_preserves_active_assignees() {
-    let active = [("b", "B"), ("a", "A")];
-    for absent in ["inactive-c", "outside"] {
-        assert_eq!(repair_owner(&active, &[absent]), Some("a"));
-    }
-    assert_eq!(repair_owner(&active, &["b"]), None);
-    assert_eq!(repair_owner(&active, &[]), Some("a"));
-    assert_eq!(repair_owner(&[], &["c"]), None);
-}
-
 #[tokio::test]
 async fn ready_repairs_bypass_the_quota_during_refresh_and_run() {
     let f = Fixture::new().await;
@@ -1830,31 +1819,4 @@ async fn ready_repairs_bypass_the_quota_during_refresh_and_run() {
     assert_eq!(f.runner.calls.lock().unwrap().len(), 1);
     task.repair = false;
     assert!(selector.defer_ready(&task).await);
-}
-
-#[test]
-fn repair_roster_excludes_humans_inactive_and_missing_accounts() {
-    let member = |id: &str, kind: &str, active, account: &str| gb_member::context::PublicMember {
-        person_id: id.into(),
-        name: id.into(),
-        person_type: kind.into(),
-        is_active: active,
-        roles: json!({}),
-        profile: json!({}),
-        speaking_style: String::new(),
-        accounts: std::collections::BTreeMap::from([("branvil".into(), account.into())]),
-    };
-    let roster = [
-        member("alice", "human", true, "Alice"),
-        member("bob", "agent", true, "Bob"),
-        member("carol", "agent", true, "Carol"),
-        member("aaron", "agent", false, "Aaron"),
-        member("a", "agent", true, ""),
-    ];
-    let eligible = repair_members(&roster, "branvil");
-    assert_eq!(eligible, [("bob", "Bob"), ("carol", "Carol")]);
-    for assignee in ["Alice", "Aaron", "outside"] {
-        assert_eq!(repair_owner(&eligible, &[assignee]), Some("bob"));
-    }
-    assert_eq!(repair_owner(&eligible, &["Carol"]), None);
 }

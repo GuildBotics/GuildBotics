@@ -9,9 +9,7 @@ pub use diff_lines::*;
 mod patrol;
 mod readiness;
 mod scope;
-mod selection;
 
 pub use patrol::*;
 pub use readiness::*;
 pub use scope::*;
-pub use selection::*;

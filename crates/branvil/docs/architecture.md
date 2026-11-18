@@ -675,9 +675,12 @@ and on verification events. Outside write transactions it resolves the last
 verified ancestor, first-parent commits, merged PRs, current head CI and 8 KiB log
 tails. Inside a write transaction it rechecks the pending record and open-repair
 index, creates at most one open ticket per repository, then consumes the record.
-The first PR in oldest-first commit order supplies its agent author; an owner's PR
-or no matching PR uses the repository responder (explicit choice, latest merged
-agent author, first agent, then owner). The ticket explains the choice without
+The first PR in oldest-first commit order supplies its active agent author; otherwise
+creation uses an eligible explicit responder, the latest merged active agent author,
+or the first active person_id. The host supplies names and display names before embedded
+workers start. Only new repairs require a fresh roster; existing repairs still receive
+failure evidence if roster reads fail. With no eligible agent, the pending record stays
+and the verification view still exposes the failing commit and jobs. The ticket explains the choice without
 mentioning members. A successful verification atomically clears all pending
 failures and closes all open repair tickets with a system comment naming any
 linked merged PRs. Closing links alone leave repair tickets open until verification
