@@ -2,11 +2,6 @@
 
 mod diagnostic_inventory;
 mod factory;
-mod patrol_cases;
-mod readiness;
 mod scope;
 
-#[path = "branvil/main.rs"]
-mod branvil;
-
-mod selection_pr;
+mod member_code;

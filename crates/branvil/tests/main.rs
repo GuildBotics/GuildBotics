@@ -25,3 +25,11 @@ mod tickets;
 mod upstream;
 
 mod responder;
+
+#[cfg(feature = "test-support")]
+#[path = "agent_code/main.rs"]
+mod agent_code;
+#[cfg(feature = "test-support")]
+mod agent_patrol;
+mod agent_readiness;
+mod agent_selection_pr;

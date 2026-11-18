@@ -44,39 +44,12 @@ pub async fn ticket_search_decoy_contract(
     );
 }
 
-pub async fn member_show_contract(service: &dyn CodeHostingService, repository: &str) {
-    let temp = tempfile::tempdir().unwrap();
-    let branch = service.default_branch(repository).await.unwrap();
-    let result = gb_member::git::show(
-        temp.path(),
-        service,
-        repository,
-        &[".".into(), "does-not-exist.fixture".into()],
-        std::time::Instant::now() + std::time::Duration::from_secs(30),
-    )
-    .await
-    .unwrap();
-    assert_eq!(result["default_branch"], branch);
-    assert_eq!(result["items"][0]["kind"], "directory");
-    assert!(
-        result["items"][0]["entries"]
-            .as_array()
-            .is_some_and(|v| !v.is_empty())
-    );
-    assert_eq!(
-        result["items"][1],
-        json!({"path":"does-not-exist.fixture","kind":"missing"})
-    );
-    assert!(!temp.path().join("clones").exists());
-}
-/// Frozen code-host operation population; every assertion runs for both providers.
 pub async fn code_contract(
     service: &dyn CodeHostingService,
     repository: &str,
     head_branch: &str,
     base: &str,
 ) {
-    member_show_contract(service, repository).await;
     // Invalid semantic values stop at the typed port boundary before a provider call.
     assert!(serde_json::from_value::<SemanticReaction>(json!("eyes")).is_err());
     let request = |branch: &str| CreatePullRequest {
@@ -857,74 +830,6 @@ pub async fn code_link_population(
             .await
             .unwrap();
         assert_eq!(code.linked_tickets(&pr.target.url).await.unwrap(), initial);
-        if i == 0 {
-            let original = code
-                .read(Resource::PullRequests, &pr.target.url, None, "")
-                .await
-                .unwrap();
-            let author: ActorName =
-                serde_json::from_value(original.items()[0]["author"].clone()).unwrap();
-            let mut request = ticket_request(tracker, "owned work");
-            request.assignee = Some(author.clone());
-            let one = tickets.create_ticket(request).await.unwrap().target.url;
-            let mut request = ticket_request(tracker, "second owned work");
-            request.assignee = Some(author);
-            let two = tickets.create_ticket(request).await.unwrap().target.url;
-            for links in [vec![], vec![one.clone()], vec![one.clone(), two.clone()]] {
-                code.update_pull_request(
-                    &pr.target.url,
-                    UpdatePullRequest {
-                        tickets: Some(
-                            links
-                                .iter()
-                                .map(|u| TicketLink {
-                                    url: u.clone(),
-                                    closes: false,
-                                })
-                                .collect(),
-                        ),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .unwrap();
-                assert_eq!(
-                    gb_member::repository::author_ticket(code, tickets, &pr.target.url)
-                        .await
-                        .unwrap(),
-                    if links.len() == 1 {
-                        Some(one.clone())
-                    } else {
-                        None
-                    }
-                );
-            }
-            tickets
-                .update_ticket(
-                    &two,
-                    UpdateTicket {
-                        state: Some("closed".into()),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .unwrap();
-            assert_eq!(
-                gb_member::repository::author_ticket(code, tickets, &pr.target.url)
-                    .await
-                    .unwrap(),
-                Some(one)
-            );
-            code.update_pull_request(
-                &pr.target.url,
-                UpdatePullRequest {
-                    tickets: Some(initial.clone()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-        }
         assert!(
             code.authored_open_pull_requests()
                 .await

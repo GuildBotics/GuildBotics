@@ -253,14 +253,12 @@ pub fn mentions(body: &str, name: &str) -> bool {
         })
     })
 }
-#[cfg(test)]
 fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
 }
 fn value(v: impl Serialize) -> Result<Value, ServiceError> {
     serde_json::to_value(v).map_err(|_| diagnostic("integrations.branvil.api.invalid", []))
 }
-#[cfg(test)]
 fn decode<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, ServiceError> {
     serde_json::from_value(v).map_err(|_| diagnostic("integrations.branvil.api.invalid", []))
 }
@@ -305,6 +303,15 @@ pub fn error(e: AppError, operation: &str) -> ServiceError {
     // AppError's contract guarantees secret-free messages; never substitute a raw transport body.
     if e.code == "unavailable" && e.message == "integrations.branvil.api.stopped" {
         return diagnostic("integrations.branvil.api.stopped", []);
+    }
+    if e.code == "closes_foreign" {
+        return match e.closing_link {
+            Some((repository, url)) => diagnostic(
+                "integrations.branvil.api.closes_foreign",
+                [("repository", repository), ("url", url)],
+            ),
+            None => ServiceError::InvalidResult,
+        };
     }
     let message = e.message.chars().take(500).collect();
     match e.status.as_u16() {
@@ -378,3 +385,72 @@ fn create_lane(l: CreateLane) -> String {
     }
     .into()
 }
+
+mod code;
+mod code_patrol;
+pub mod owner_git;
+pub mod pr_diff_lines;
+pub mod pr_patrol;
+pub mod pr_readiness;
+/// The label of the tokens lent to runs for their git transfers.
+pub const GIT_TOKEN_LABEL: &str = "guildbotics-git";
+
+pub struct CodeAgent {
+    agent: TicketAgent,
+    git_token: tokio::sync::Mutex<Option<crate::api::members::IssuedToken>>,
+}
+impl std::ops::Deref for CodeAgent {
+    type Target = TicketAgent;
+    fn deref(&self) -> &Self::Target {
+        &self.agent
+    }
+}
+impl CodeAgent {
+    pub fn new(api: DataApi, workspace: String, person_id: String, display_name: String) -> Self {
+        Self {
+            agent: TicketAgent::new(api, workspace, person_id, display_name),
+            git_token: Default::default(),
+        }
+    }
+    pub fn with_members(mut self, members: &std::collections::BTreeMap<String, String>) -> Self {
+        self.agent = self.agent.with_members(members);
+        self
+    }
+    fn target(&self, v: &Value, kind: WorkKind) -> WorkTarget {
+        let key = if kind == WorkKind::Ticket {
+            text(v, "key")
+        } else {
+            text(v, "label")
+        };
+        WorkTarget {
+            kind,
+            url: text(v, "url").into(),
+            title: text(v, "title").into(),
+            label: if kind == WorkKind::Ticket {
+                format!("#{key}")
+            } else {
+                key.into()
+            },
+        }
+    }
+    fn comment_value(&self, v: Value) -> Value {
+        json!({"id":v["id"],"body":v["body"],"author":v["author"],"author_type":self.author_type(text(&v,"author")),"created_at":v["created_at"],"url":v["url"]})
+    }
+    async fn pull(&self, url: &str) -> Result<Value, ServiceError> {
+        let (r, k) = self.item(url, "pulls")?;
+        value(
+            self.member()
+                .await?
+                .pulls_get(&r, number(&k)?)
+                .await
+                .map_err(|e| error(e, "pulls_get"))?,
+        )
+    }
+}
+
+#[cfg(test)]
+mod code_parity;
+#[cfg(all(test, feature = "test-support"))]
+mod code_tests;
+#[cfg(test)]
+mod readiness_parity;

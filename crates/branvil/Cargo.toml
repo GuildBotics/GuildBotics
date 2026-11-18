@@ -14,6 +14,7 @@ autotests = false
 test-support = ["dep:tempfile"]
 
 [dependencies]
+regex = "1"
 gb-ports = { path = "../gb-ports" }
 unicode-casefold = "0.2"
 tempfile = { version = "3.27.0", optional = true }
@@ -53,6 +54,7 @@ toml_edit = "0.25.17"
 
 
 [dev-dependencies]
+url = "2"
 ctor = { version = "0.6", default-features = false, features = ["proc_macro"] }
 tempfile = "3.27.0"
 

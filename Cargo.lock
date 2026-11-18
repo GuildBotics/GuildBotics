@@ -821,6 +821,7 @@ dependencies = [
  "percent-encoding",
  "pulldown-cmark",
  "redb",
+ "regex",
  "reqwest",
  "rust-embed",
  "serde",
@@ -838,6 +839,7 @@ dependencies = [
  "tracing-subscriber",
  "ulid",
  "unicode-casefold",
+ "url",
 ]
 
 [[package]]
@@ -2144,7 +2146,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.29.0",
  "tracing",
- "unicode-casefold",
  "url",
  "uuid",
  "webpki-roots 1.0.11",

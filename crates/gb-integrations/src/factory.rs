@@ -1,7 +1,6 @@
 //! The only provider selection boundary; provider modules stay private.
-mod branvil;
+pub use ::branvil::agent::GIT_TOKEN_LABEL;
 pub use ::branvil::agent::error as branvil_error;
-pub use branvil::GIT_TOKEN_LABEL;
 mod local;
 mod slack;
 use gb_config::secrets::SecretStore;
@@ -17,7 +16,7 @@ pub async fn human_git_credential(
     device_id: &str,
     display_name: &str,
 ) -> anyhow::Result<Option<GitCredential>> {
-    branvil::owner_git::credential(origin, data, device_id, display_name).await
+    ::branvil::agent::owner_git::credential(origin, data, device_id, display_name).await
 }
 
 /// Resolve a public commit link without loading a member's credentials.
@@ -31,8 +30,8 @@ pub fn commit_url_from_remote(
     match provider.to_lowercase().as_str() {
         "branvil" => {
             let api = embedded?;
-            let repository = branvil::BranvilService::repository_for_remote(api, remote)?;
-            Some(branvil::BranvilService::commit_url_for(
+            let repository = ::branvil::agent::CodeAgent::repository_for_remote(api, remote)?;
+            Some(::branvil::agent::CodeAgent::commit_url_for(
                 api,
                 &repository,
                 sha,
@@ -133,8 +132,8 @@ impl<'a> ServiceIntegrationFactory<'a> {
             Ok(value)
         }
     }
-    fn branvil(&self, scope: &str) -> Result<branvil::BranvilService, ServiceError> {
-        Ok(branvil::BranvilService::new(
+    fn branvil(&self, scope: &str) -> Result<::branvil::agent::CodeAgent, ServiceError> {
+        Ok(::branvil::agent::CodeAgent::new(
             self.branvil.clone().ok_or(ServiceError::Unavailable)?,
             scope.into(),
             self.config.person_id.clone(),

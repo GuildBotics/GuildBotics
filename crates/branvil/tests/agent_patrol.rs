@@ -1,13 +1,10 @@
 //! Frozen shared patrol decisions; GitHub GraphQL parsing/query tests belong to its adapter.
+use branvil::agent::pr_patrol::*;
 use branvil::test_support::{Fixture, input};
 use chrono::{DateTime, Utc};
-use gb_integrations::*;
 use gb_ports::*;
 use serde_json::{Value, json};
-use std::{
-    collections::BTreeSet,
-    sync::{Arc, Mutex},
-};
+use std::{collections::BTreeSet, sync::Arc};
 const ME: &str = "local-aiko";
 const OTHER: &str = "other";
 const FEEDBACK: Option<&str> = Some("pull_request_feedback");
@@ -364,17 +361,6 @@ fn reviewer_statements_use_full_history_and_ignore_empty_approvals() {
     assert_eq!(work(&p), REVIEW);
 }
 
-#[derive(Default)]
-struct Keys(Mutex<Option<String>>);
-impl gb_config::secrets::Keychain for Keys {
-    fn read(&self) -> anyhow::Result<Option<String>> {
-        Ok(self.0.lock().unwrap().clone())
-    }
-    fn create(&self, key: &str) -> anyhow::Result<()> {
-        *self.0.lock().unwrap() = Some(key.into());
-        Ok(())
-    }
-}
 struct AwaitedFixture {
     code: Arc<dyn CodeHostingService>,
     fixture: Fixture,
@@ -393,35 +379,12 @@ impl AwaitedFixture {
         let actor = fixture.member(ME).await;
         let base = fixture.commit("acme/repo", "main", None, "a.txt", "base");
         let head = fixture.commit("acme/repo", "feature", Some(&base), "a.txt", "feature");
-        let root = fixture.root();
-        let writes = gb_base::shared_writes::SharedWrites::new(root.join("identity"), None);
-        let keys = Keys::default();
-        let secrets = gb_config::secrets::SecretStore::new(
-            &writes,
-            gb_config::secrets::Scope::Identity,
-            gb_config::secrets::DeviceKey {
-                machine_root: root.join("machine"),
-                keychain: &keys,
-            },
-        )
-        .unwrap();
-        let factory = ServiceIntegrationFactory::new(
-            IntegrationConfig {
-                local_root: root.join("services"),
-                identity_root: root.join("identity"),
-                person_id: ME.into(),
-                display_name: "Aiko".into(),
-                accounts: Default::default(),
-                branvil_members: Default::default(),
-                chat_provider: "local".into(),
-                slack_base_url: String::new(),
-            },
-            &secrets,
-            Some(fixture.data()),
-            Arc::new(|_| {}),
-        )
-        .unwrap();
-        let code = factory.create_code_hosting_service("acme").unwrap();
+        let code: Arc<dyn CodeHostingService> = Arc::new(branvil::agent::CodeAgent::new(
+            fixture.data(),
+            "acme".into(),
+            ME.into(),
+            "Aiko".into(),
+        ));
         let url = fixture
             .pull(
                 if other { &fixture.owner } else { &actor },

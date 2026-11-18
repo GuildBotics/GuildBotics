@@ -1,4 +1,4 @@
-use gb_integrations::*;
+use branvil::agent::pr_readiness::*;
 use gb_ports::*;
 use serde_json::{Value, json};
 
