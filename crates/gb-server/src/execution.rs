@@ -284,7 +284,9 @@ fn settle(admission: Admission, lease: Option<FileLock>, state: RunState) -> any
         Ok(())
     });
     drop(lease);
-    if let Some(generation) = generation {
+    if state != RunState::Deferred
+        && let Some(generation) = generation
+    {
         generation.wakes.all();
     }
     if manual && result.is_err() {

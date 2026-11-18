@@ -35,6 +35,8 @@ struct Member {
     next_check: Option<NaiveDateTime>,
     pending: VecDeque<(usize, NaiveDateTime)>,
     patrol: bool,
+    wake_patrol: bool,
+    patrol_retry: Option<NaiveDateTime>,
     last_source: &'static str,
     error_limit: u8,
 }
@@ -101,6 +103,8 @@ impl Scheduler {
                 next_check: None,
                 pending: VecDeque::new(),
                 patrol: false,
+                wake_patrol: false,
+                patrol_retry: None,
                 last_source: "",
                 error_limit: 3,
             }),
@@ -119,8 +123,7 @@ impl Scheduler {
             return Outcome::Deferred;
         }
         if self.wakes.take(person) {
-            state.next_routine = Some(now);
-            state.next_routine_check = Some(now);
+            state.wake_patrol = true;
         }
         if state.next_check.is_none_or(|next| now >= next) && state.pending.is_empty() {
             state.next_check = Some(now + Duration::minutes(1));
@@ -150,22 +153,36 @@ impl Scheduler {
             }
             return outcome;
         }
-        if settings.routine
-            && state.next_routine_check.is_none_or(|next| now >= next)
-            && (state.patrol || state.next_routine.is_none_or(|next| now >= next))
-        {
-            let line = if state.patrol {
+        let routine_due = state.next_routine_check.is_none_or(|next| now >= next)
+            && (state.patrol || state.next_routine.is_none_or(|next| now >= next));
+        let woken = !routine_due
+            && state.wake_patrol
+            && state
+                .routines
+                .iter()
+                .any(|line| line == crate::ticket_selector::COMMAND);
+        if settings.routine && (routine_due || woken) {
+            let line = if woken || state.patrol {
                 crate::ticket_selector::COMMAND.to_owned()
             } else if state.routines.is_empty() {
                 String::new()
             } else {
-                let line = state.routines[state.routine_index % state.routines.len()].clone();
-                state.routine_index += 1;
-                line
+                state.routines[state.routine_index % state.routines.len()].clone()
             };
-            if !line.is_empty() {
+            let is_patrol = line == crate::ticket_selector::COMMAND;
+            let retry_ready = !is_patrol || state.patrol_retry.is_none_or(|next| now >= next);
+            if !line.is_empty() && retry_ready {
+                if !woken && !state.patrol && !state.routines.is_empty() {
+                    state.routine_index += 1;
+                }
+                if is_patrol {
+                    state.wake_patrol = false;
+                }
+
                 state.last_source = "routine";
-                state.next_routine_check = Some(now + Duration::minutes(1));
+                if !woken {
+                    state.next_routine_check = Some(now + Duration::minutes(1));
+                }
                 let (outcome, exhausted) = if line == crate::ticket_selector::COMMAND {
                     state
                         .engine
@@ -180,8 +197,16 @@ impl Scheduler {
                         true,
                     )
                 };
-                state.patrol = !exhausted;
-                if exhausted {
+                if is_patrol {
+                    state.patrol_retry = (outcome == Outcome::Deferred || !exhausted)
+                        .then_some(now + Duration::minutes(1));
+                }
+                if woken {
+                    state.wake_patrol = !exhausted;
+                } else {
+                    state.patrol = !exhausted;
+                }
+                if exhausted && !woken {
                     let completed = now + Duration::from_std(started.elapsed()).unwrap_or_default();
                     let next =
                         completed + Duration::minutes(i64::from(settings.routine_interval_minutes));
@@ -439,7 +464,12 @@ mod tests {
         let engine = Fake::new();
         engine.delay.store(120, Ordering::SeqCst);
         let mut scheduler = Scheduler::default();
-        scheduler.add("aiko".into(), engine.clone(), vec![], vec!["work".into()]);
+        scheduler.add(
+            "aiko".into(),
+            engine.clone(),
+            vec![],
+            vec!["work".into(), crate::ticket_selector::COMMAND.into()],
+        );
         let scheduler = Arc::new(scheduler);
         let running = tokio::spawn({
             let scheduler = scheduler.clone();
@@ -510,12 +540,121 @@ mod tests {
             assert!(!scheduler.wakes.take("aiko"));
             run.finish(state).await.unwrap();
             for person in ["aiko", "yuki"] {
-                scheduler.tick(person, &Settings::default(), at(0)).await;
+                assert_eq!(scheduler.wakes.take(person), state != RunState::Deferred);
             }
-            assert_eq!(engine.calls.lock().unwrap().len(), 2 + 2 * (i + 1));
         }
         cleanup.close();
         cleanup.wait().await;
+    }
+
+    #[tokio::test]
+    async fn wakes_preserve_custom_rotation_and_do_not_starve_due_commands() {
+        for mixed in [false, true] {
+            let engine = Fake::new();
+            let mut scheduler = Scheduler::default();
+            let mut routines = vec!["custom".into()];
+            if mixed {
+                routines.push(crate::ticket_selector::COMMAND.into());
+            }
+            scheduler.add("aiko".into(), engine.clone(), vec![], routines);
+            let settings = Settings {
+                event_queue: false,
+                ..Default::default()
+            };
+            scheduler.tick("aiko", &settings, at(0)).await;
+            for seconds in [5, 10, 15, 20, 25, 601, 1202] {
+                scheduler.wakes.all();
+                scheduler
+                    .tick("aiko", &settings, at(0) + Duration::seconds(seconds))
+                    .await;
+            }
+            let calls = engine.calls.lock().unwrap();
+            assert_eq!(
+                calls.iter().filter(|c| c.0 == "custom").count(),
+                if mixed { 2 } else { 3 }
+            );
+            if mixed {
+                assert_eq!(calls.last().unwrap().0, "custom");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn wakes_cannot_bypass_patrol_retry_or_incomplete_batch_interval() {
+        for result in [
+            (Outcome::Deferred, false),
+            (Outcome::Deferred, true),
+            (Outcome::Succeeded, false),
+        ] {
+            let engine = Fake::new();
+            engine.patrol.lock().unwrap().extend([result; 20]);
+            let mut scheduler = Scheduler::default();
+            scheduler.add(
+                "aiko".into(),
+                engine.clone(),
+                vec![],
+                vec![crate::ticket_selector::COMMAND.into()],
+            );
+            let settings = Settings {
+                event_queue: false,
+                ..Default::default()
+            };
+            for seconds in [0, 5, 10, 15, 20, 25, 60] {
+                scheduler.wakes.all();
+                scheduler
+                    .tick("aiko", &settings, at(0) + Duration::seconds(seconds))
+                    .await;
+            }
+            assert_eq!(engine.calls.lock().unwrap().len(), 2, "{result:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn extra_patrol_batch_preserves_custom_deadline_and_scheduled_priority() {
+        let engine = Fake::new();
+        let mut scheduler = Scheduler::default();
+        scheduler.add(
+            "aiko".into(),
+            engine.clone(),
+            vec![ScheduledCommand::new("scheduled".into(), "1 12 * * *".into(), at(-1)).unwrap()],
+            vec!["custom".into(), crate::ticket_selector::COMMAND.into()],
+        );
+        let settings = Settings {
+            event_queue: false,
+            ..Default::default()
+        };
+        scheduler.tick("aiko", &settings, at(0)).await;
+        engine
+            .patrol
+            .lock()
+            .unwrap()
+            .extend([(Outcome::Succeeded, false), (Outcome::Succeeded, true)]);
+        scheduler.wakes.all();
+        scheduler.tick("aiko", &settings, at(1)).await;
+        scheduler.tick("aiko", &settings, at(1)).await;
+        scheduler
+            .tick("aiko", &settings, at(1) + Duration::seconds(5))
+            .await;
+        scheduler.tick("aiko", &settings, at(2)).await;
+        scheduler.tick("aiko", &settings, at(11)).await;
+        scheduler.tick("aiko", &settings, at(22)).await;
+        assert_eq!(
+            engine
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|c| c.0.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "custom",
+                "scheduled",
+                "patrol",
+                "patrol",
+                "patrol",
+                "custom"
+            ]
+        );
     }
 
     #[tokio::test]
