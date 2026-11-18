@@ -1265,7 +1265,7 @@ mod tests {
         assert_eq!(status.cycle_count, Some(6));
         assert_eq!(status.cycle_failure_count, Some(3));
         assert_eq!(status.max_consecutive_errors, Some(2));
-        assert_eq!(status.routine_interval_minutes, Some(10));
+        assert_eq!(status.routine_interval_minutes, Some(3));
         assert_eq!(status.scheduled_source_enabled, Some(true));
         assert_eq!(status.routine_source_enabled, Some(true));
         assert_eq!(status.event_queue_source_enabled, Some(true));

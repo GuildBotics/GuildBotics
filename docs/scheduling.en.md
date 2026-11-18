@@ -23,7 +23,7 @@ Per-member settings live under **Setup → Members → Patrol**.
 
 Service-wide settings live on the **Service** screen.
 
-- **Patrol interval (minutes)**: how often patrol commands run (default 10 minutes)
+- **Patrol interval (minutes)**: how often ticket patrol rechecks work (default 3 minutes); other patrol commands run at this interval
 - **Stop after consecutive failures**: stops that member's worker after this many consecutive failures (default 3)
 - **Include in service run**: enables patrol commands / scheduled commands / event triggers individually
 - **Start the services when the server starts**: the server starts the service by itself whenever it starts, for example at every login when it runs as an OS service (off by default: the server starts alone)
@@ -42,7 +42,8 @@ Patrol and scheduled ticket workflows defer only new ready-lane tickets while th
 
 **Characteristics**:
 
-- While the service is running, one command is executed per patrol interval (default 10 minutes)
+- The ticket-driven workflow wakes on changes and also rechecks work at the patrol interval (default 3 minutes). See the [README](../README.md#automate-recurring-work) for the triggers and work found by rechecks
+- Other commands run once per patrol interval while the service is running
 - When several commands are configured, they run one at a time in order
 - During initial setup, a new agent member is configured with `workflows/ticket_driven_workflow`. Members without `routine_commands` do not run patrol work
 
@@ -147,7 +148,7 @@ schedules:
 
 ## How Scheduling Works Internally
 
-How the scheduler behaves (from `crates/gb-server/src/native_scheduler.rs` and `crates/gb-server/src/schedule.rs`):
+How the scheduler behaves (from `crates/gb-server/src/scheduler.rs`, `crates/gb-server/src/service_runtime.rs`, and `crates/gb-server/src/schedule.rs`):
 
 **Architecture**:
 
@@ -155,7 +156,9 @@ How the scheduler behaves (from `crates/gb-server/src/native_scheduler.rs` and `
 2. **A per-minute check cycle**: every minute, each worker thread:
    - Checks all `task_schedules` of its member
    - Runs the commands whose schedule matches the current time
-   - Runs one `routine_command` in round-robin order, if the patrol interval (default 10 minutes) has elapsed
+   - Runs one `routine_command` in round-robin order, if the patrol interval (default 3 minutes) has elapsed
+
+The ticket-driven workflow also wakes on the changes described above and continues while candidates remain, without waiting for the patrol interval between candidates.
 
 When the patrol starts an author's PR feedback work for a head in a deferred Branvil class (see the [CI queue](../crates/branvil/docs/ci.md)), Branvil returns running CI for that head to its original queue position.
 

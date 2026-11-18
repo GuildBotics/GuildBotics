@@ -64,7 +64,7 @@ VMの鮮度確認・receipt/completion失敗後の再判定は
 
 ### tests/guildbotics/drivers/test_service_settings.py
 
-- `tests/guildbotics/drivers/test_service_settings.py::test_the_defaults_run_everything_every_ten_minutes` -> `crates/gb-server/src/service_settings.rs::defaults_run_every_source_every_ten_minutes_without_creating_a_file`
+- `tests/guildbotics/drivers/test_service_settings.py::test_the_defaults_run_everything_every_ten_minutes` -> `crates/gb-server/src/service_settings.rs::defaults_run_every_source_every_three_minutes_without_creating_a_file`
 
   条件: 全条件。数値2種の上限下限、全7種の破損ファイルを含む。
 

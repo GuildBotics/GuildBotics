@@ -181,7 +181,7 @@ Open the **Service** screen and press **Run**. A worker starts for each active m
 
 The screen has three execution sources, each toggled individually with **Include in service run**; at least one stays included. The choices, the patrol interval, and the failure limit are saved on this machine's server, so every start runs with them: from any screen, from `guildbotics service start`, or by the server as it starts. A change made while the service runs applies from its next start.
 
-- **Patrol commands**: runs each member's patrol commands after the **Patrol interval (minutes)** has passed with no remaining patrol work. The ticket-driven workflow continues through all candidates before the interval starts. When the project uses a ticket service, a new member gets the ticket-driven workflow as its default; otherwise it starts with no patrol commands, so pick them under **Setup → Members → Patrol**
+- **Patrol commands**: the ticket-driven workflow wakes on changes and works through all candidates. The **Patrol interval (minutes)** (default 3 minutes) is the interval for rechecking work that those changes do not cover. Other patrol commands run in round-robin order at this interval. When the project uses a ticket service, a new member gets the ticket-driven workflow as its default; otherwise it starts with no patrol commands, so pick them under **Setup → Members → Patrol**
 - **Scheduled commands**: runs the scheduled commands defined in member settings at the times you specify
 - **Event triggers**: receives events such as Slack messages and routes them to the chat workflow
 
@@ -260,8 +260,14 @@ For the manual Slack App setup steps (including the list of required scopes), sh
 
 Configure two kinds of automated execution per member under **Setup → Members → Patrol**. Both are run by the service you start on the **Service** screen.
 
-- **Patrol commands**: while the service is running, these run repeatedly in round-robin order (for example, patrolling the task board). The **Patrol interval (minutes)** is the wait after no patrol work remains; a ticket patrol continues through all candidates without waiting for that interval between them. Turn on "Configure patrol commands for this member" and choose the saved commands. Members with it turned off do not run patrol work
+- **Patrol commands**: turn on "Configure patrol commands for this member" and choose the saved commands. Members with it turned off do not run patrol work. The ticket-driven workflow (`workflows/ticket_driven_workflow`) wakes on changes and continues without waiting for the patrol interval while candidates remain. Other commands run one at a time in round-robin order at each interval. With the default shortened to 3 minutes, members configured with those other commands run them more often
 - **Scheduled commands**: use **Add schedule** to choose a command and its execution time (for example, periodic reports or cleanup). The time can be an Hourly / Daily / Weekly preset, or a **Detailed schedule** (five-field cron notation)
+
+Ticket patrol wakes when a member run finishes (including manual runs, excluding the member that just finished), on Branvil changes (writes by non-agents, CI checks, main verification, and upstream changes), and when events could not all be received (`Reset`). These triggers wake only the ticket-driven workflow.
+
+The interval recheck picks up member CLI writes from interactive sessions (comments, reviews, and pushes), and expired usage-limit waits. Interactive writes are agent writes, so they do not trigger a wake, and there is no run ending to trigger one either. If you subsequently run a command such as `guildbotics run repository/pr_checks`, that run's completion wakes other members' ticket patrols.
+
+A shorter interval responds sooner to work that only the recheck can find. A ticket patrol with no work only reads Branvil inside the server; it starts no run, isolated environment, or LLM. Environments with an interval already set in `.guildbotics/local/service.yml` keep that value.
 
 The patrol interval and the number of consecutive failures that stops a worker are set on the **Service** screen.
 
@@ -415,7 +421,7 @@ keep_awake: false             # keep the machine awake while the service waits
 scheduled: true               # scheduled commands
 routine: true                 # patrol commands
 event_queue: true             # event triggers (at least one of the three stays true)
-routine_interval_minutes: 10  # 1-1440
+routine_interval_minutes: 3   # 1-1440
 max_open_pull_requests: 2     # 1-20
 max_consecutive_errors: 3     # 1-20
 ```

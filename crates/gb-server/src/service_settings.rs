@@ -45,7 +45,7 @@ impl Default for Settings {
             scheduled: true,
             routine: true,
             event_queue: true,
-            routine_interval_minutes: 10,
+            routine_interval_minutes: 3,
             max_consecutive_errors: 3,
             max_open_pull_requests: 2,
         }
@@ -338,13 +338,13 @@ mod tests {
     }
 
     #[test]
-    fn defaults_run_every_source_every_ten_minutes_without_creating_a_file() {
+    fn defaults_run_every_source_every_three_minutes_without_creating_a_file() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
             serde_json::to_value(Settings::read(dir.path()).unwrap()).unwrap(),
             json!({
                 "start_with_server":false,"keep_awake":false,"scheduled":true,
-                "routine":true,"event_queue":true,"routine_interval_minutes":10,"max_consecutive_errors":3,"max_open_pull_requests":2
+                "routine":true,"event_queue":true,"routine_interval_minutes":3,"max_consecutive_errors":3,"max_open_pull_requests":2
             })
         );
         assert!(!Settings::path(dir.path()).exists());
@@ -357,7 +357,7 @@ mod tests {
             keep_awake: true,
             scheduled: false,
             event_queue: false,
-            routine_interval_minutes: 3,
+            routine_interval_minutes: 10,
             max_consecutive_errors: 7,
             ..Settings::default()
         };
@@ -372,6 +372,7 @@ mod tests {
             Settings::read(dir.path()).unwrap(),
             Settings {
                 keep_awake: true,
+                routine_interval_minutes: 3,
                 ..Settings::default()
             }
         );
