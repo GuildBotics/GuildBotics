@@ -314,10 +314,10 @@ impl Context {
             .repos_create(input(json!({"path":repository,"labels":["bug"]})))
             .await
             .unwrap();
-        let revision = owner.repos_get(REPO).await.unwrap().revision;
+        let revision = owner.repos_get(repository).await.unwrap().revision;
         owner
             .repos_update(
-                REPO,
+                repository,
                 input(json!({"revision":revision,"required_checks":["test"]})),
             )
             .await
