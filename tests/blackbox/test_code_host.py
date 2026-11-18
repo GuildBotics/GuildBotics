@@ -59,11 +59,9 @@ def readiness(stack, url):
     return result
 
 
-def assert_blocked(result, head, rollup, *codes):
+def assert_blocked(result, head, required_checks):
     assert result["head_sha"] == head
-    assert (
-        result["required_checks"] == {"pending": "running", "failure": "failed"}[rollup]
-    )
+    assert result["required_checks"] == required_checks
 
 
 def assert_ready(result, head):
@@ -164,16 +162,16 @@ def test_push_pr_and_human_merge(stack, checkout):
 
 def test_checks_follow_the_head_and_base(stack, checkout, repository):
     url = create_pr(stack)
-    assert_blocked(readiness(stack, url), repository, "pending", "checks_pending")
+    assert_blocked(readiness(stack, url), repository, "running")
     stack.provider.finish_checks(repository)
     assert_ready(readiness(stack, url), repository)
 
     head = checkout.commit("next.txt", "a second head\n")
     checkout.push(stack)
-    assert_blocked(readiness(stack, url), head, "pending", "checks_pending")
+    assert_blocked(readiness(stack, url), head, "running")
     stack.provider.finish_checks(head, "failure")
     failed = readiness(stack, url)
-    assert_blocked(failed, head, "failure", "checks_failed")
+    assert_blocked(failed, head, "failed")
     [logs] = read(stack, "pr", "pull_request_readiness", url, failed_logs=True)
     assert logs["failed_logs"]
     assert all(job["conclusion"] == "failure" for job in logs["failed_logs"])
@@ -181,7 +179,7 @@ def test_checks_follow_the_head_and_base(stack, checkout, repository):
     assert_ready(readiness(stack, url), head)
 
     checkout.git("switch", "-q", "main")
-    base = checkout.commit("base.txt", "new base\n")
+    checkout.commit("base.txt", "new base\n")
     stack.provider.advance_base(stack, checkout)
     stale = readiness(stack, url)
     assert_ready(stale, head)
@@ -190,6 +188,6 @@ def test_checks_follow_the_head_and_base(stack, checkout, repository):
     checkout.git("merge", "-q", "main")
     updated = checkout.git("rev-parse", "HEAD")
     checkout.push(stack)
-    assert_blocked(readiness(stack, url), updated, "pending", "checks_pending")
+    assert_blocked(readiness(stack, url), updated, "running")
     stack.provider.finish_checks(updated)
     assert_ready(readiness(stack, url), updated)

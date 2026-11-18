@@ -385,7 +385,15 @@ fn required_summary(results: &[(Value, Readiness)]) -> String {
     results
         .iter()
         .filter(|(_, r)| r.required_checks != RequiredChecks::Passed)
-        .map(|(_, r)| format!("{}: {:?}", r.target.url, r.required_checks))
+        .map(|(_, r)| {
+            format!(
+                "{}: {}",
+                r.target.url,
+                serde_json::json!(r.required_checks)
+                    .as_str()
+                    .expect("check state is a string")
+            )
+        })
         .collect::<Vec<_>>()
         .join("; ")
 }

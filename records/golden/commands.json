@@ -224,8 +224,8 @@
    },
    "templates/commands/repository/pr_checks.py": {
     "description": {
-     "en": "Check pull-request CI and readiness, with optional failed log tails.",
-     "ja": "PR の CI・完了可否と、必要に応じて失敗ログを確認します。"
+     "en": "Inspect pull-request head checks and feedback, with optional failed log tails.",
+     "ja": "PR の head チェック・新着発言と、必要に応じて失敗ログを確認します。"
     },
     "read_only": true
    },

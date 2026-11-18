@@ -670,19 +670,26 @@ async fn roster_assignment_and_initial_ticket_state_reach_the_provider() {
 #[test]
 fn blockers_keep_diagnostics_and_omit_ready_targets() {
     let ready = (json!({}), readiness(&[]));
-    for code in ["failed"] {
+    for code in ["failed", "running"] {
         let blocked = (json!({}), readiness(&[code]));
         for error in [
             ensure_ready(&[ready.clone(), blocked.clone()]).unwrap_err(),
-            ensure_awaitable(&[ready.clone(), blocked]).unwrap_err(),
+            ensure_ready(&[blocked, ready.clone()]).unwrap_err(),
         ] {
             match error {
                 MemberError::CapabilityArgs { args, .. } => {
-                    assert_eq!(args["blockers"], "url: Failed")
+                    assert_eq!(args["blockers"], format!("url: {code}"))
                 }
                 other => panic!("{other}"),
             }
         }
+    }
+    if let MemberError::CapabilityArgs { args, .. } =
+        ensure_awaitable(&[(json!({}), readiness(&["failed"]))]).unwrap_err()
+    {
+        assert_eq!(args["blockers"], "url: failed");
+    } else {
+        panic!("expected diagnostic arguments");
     }
     assert_eq!(
         ensure_awaitable(&[]).unwrap_err().to_string(),

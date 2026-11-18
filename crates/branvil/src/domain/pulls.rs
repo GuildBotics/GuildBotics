@@ -1884,24 +1884,8 @@ pub async fn checks(
             .filter(|c| c.recorded())
             .count()
     };
-    let repair = {
-        let p = p.clone();
-        app.store
-            .read(move |r| crate::repair::is_pull(r, &p))
-            .await?
-    };
-    let required_names = if repair {
-        app.ci
-            .head_checks(&repo, &head_sha)
-            .await?
-            .checks
-            .into_iter()
-            .map(|c| c.name)
-            .collect()
-    } else {
-        repo.required_checks.clone()
-    };
-    let required_checks = crate::landing::pull_head_checks(app, &repo, &p, &head_sha).await?;
+    let (required_checks, _, required_names) =
+        crate::landing::pull_head_check_details(app, &repo, &p, &head_sha).await?;
     let mut checks = head.checks;
     app.ci.estimate(&repo, &head_sha, &mut checks).await;
     app.ci.order_checks(&mut checks).await?;

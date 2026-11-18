@@ -227,8 +227,12 @@ pub async fn blockers(
             ));
         }
     }
-    let (check_state, jobs) = if head.is_empty() {
-        (HeadChecks::Running, repo.required_checks.clone())
+    let (check_state, jobs, _) = if head.is_empty() {
+        (
+            HeadChecks::Running,
+            repo.required_checks.clone(),
+            repo.required_checks.clone(),
+        )
     } else {
         pull_head_check_details(app, repo, p, head).await?
     };
@@ -406,12 +410,12 @@ pub(crate) async fn pull_head_checks(
     Ok(pull_head_check_details(app, repo, p, head).await?.0)
 }
 
-async fn pull_head_check_details(
+pub(crate) async fn pull_head_check_details(
     app: &App,
     repo: &Repo,
     p: &Pull,
     head: &str,
-) -> AppResult<(HeadChecks, Vec<String>)> {
+) -> AppResult<(HeadChecks, Vec<String>, Vec<String>)> {
     let p = p.clone();
     let repair = app
         .store
@@ -419,19 +423,17 @@ async fn pull_head_check_details(
         .await?;
     let checks = app.ci.head_checks(repo, head).await?;
     let mut required = repo.clone();
+    required.required_checks = required_names(repo, &checks.checks, repair);
     let mut waiting = repair && !checks.run_registered;
-    if repair {
-        required
-            .required_checks
-            .extend(checks.checks.iter().map(|c| c.name.clone()));
-        if checks.checks.iter().any(|c| {
+    if repair
+        && checks.checks.iter().any(|c| {
             c.path_skip.is_some()
                 || c.reused_from
                     .as_ref()
                     .is_some_and(|s| s.basis == crate::ci::queue::Basis::Paths)
-        }) {
-            waiting = true;
-        }
+        })
+    {
+        waiting = true;
     }
     let jobs = missing_head_checks(&required, &checks.checks, repair);
     Ok((
@@ -441,7 +443,16 @@ async fn pull_head_check_details(
             head_checks(&required, &checks.checks)
         },
         jobs,
+        required.required_checks,
     ))
+}
+
+fn required_names(repo: &Repo, checks: &[Check], repair: bool) -> Vec<String> {
+    let mut names = repo.required_checks.clone();
+    if repair {
+        names.extend(checks.iter().map(|c| c.name.clone()));
+    }
+    names
 }
 
 fn missing_head_checks(repo: &Repo, checks: &[Check], repair: bool) -> Vec<String> {
@@ -546,6 +557,22 @@ mod tests {
             "url":"https://host.test/pulls/2", "state":"open", "pushed":"head", "sent_title":"Feature", "sent_body":"",
             "sent_state":"open", "checks":[], "checks_registered_by":null, "checks_settled":true, "published_at":"now", "error":null, "stopped":null, "auto":true
         })).unwrap()
+    }
+
+    #[test]
+    fn required_names_keep_configured_jobs_and_add_all_head_jobs_only_for_repairs() {
+        let (mut repo, _, _) = fixture();
+        repo.required_checks = vec!["configured".into()];
+        let checks = vec![Check {
+            name: "optional".into(),
+            ..Check::default()
+        }];
+        assert_eq!(required_names(&repo, &checks, false), ["configured"]);
+        assert_eq!(
+            required_names(&repo, &checks, true),
+            ["configured", "optional"]
+        );
+        assert_eq!(required_names(&repo, &[], true), ["configured"]);
     }
 
     #[test]
