@@ -1,5 +1,16 @@
 use super::*;
 
+// Each generated test owns its service and runtime state; nextest can schedule
+// independent contracts separately instead of timing their whole product.
+macro_rules! async_cases {
+    ($module:ident, $helper:ident; $($case:ident($($arg:expr),*);)*) => {
+        mod $module {
+            $(#[tokio::test]
+            async fn $case() { super::$helper($($arg),*).await; })*
+        }
+    };
+}
+
 #[test]
 fn every_rate_limit_reset_hint_and_retry_guidance_renders_in_both_languages() {
     let tokyo = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
@@ -141,78 +152,85 @@ async fn default_and_clamped_budgets_reach_the_turn_without_moving_in_progress_w
     }
 }
 
-#[tokio::test]
-async fn listing_limited_pulls_uses_distinct_traces_and_refresh_limit_still_runs_the_next_ticket() {
-    for source in ["manual", "scheduled", "routine"] {
-        for at_refresh in [false, true] {
-            let f = Fixture::new().await;
-            let ticket = f.task().await;
-            for branch in ["one", "two"] {
-                f.reviewed_pull(branch).await;
-            }
-            let selector = f.selector(source);
-            let (selected, invocation) = if at_refresh {
-                // Listed for review, both reach the limit before their refresh.
-                let candidates = selector.candidates().await.unwrap();
-                assert_eq!(
-                    candidates
-                        .iter()
-                        .filter(|t| t.trigger_reason.as_deref() == Some("pull_request_review"))
-                        .count(),
-                    2
-                );
-                assert!(f.runner.activity.lock().unwrap().is_empty());
-                for branch in ["one", "two"] {
-                    f.push(branch);
-                }
-                let mut selected = None;
-                for candidate in candidates {
-                    if let Some(invocation) = selector.refresh(&candidate).await.unwrap() {
-                        selected = Some((candidate, invocation));
-                        break;
-                    }
-                }
-                selected.unwrap()
-            } else {
-                for branch in ["one", "two"] {
-                    f.push(branch);
-                }
-                selector.next().await.unwrap().unwrap()
-            };
-            assert_eq!(selected.url, ticket.url);
-            let outer = f.trace(source);
-            selector
-                .run(&selected, invocation, &outer, 5)
-                .await
-                .unwrap();
-            let activity = f.runner.activity.lock().unwrap().clone();
-            assert_eq!(activity.len(), 2);
-            assert_ne!(activity[0]["trace_id"], activity[1]["trace_id"]);
-            assert!(
-                activity.iter().all(
-                    |e| e["trace_id"] != outer.id() && e["type"] == "pull_request.review_limit"
-                )
-            );
-            assert_eq!(f.runner.stops.lock().unwrap().len(), 2);
-            let calls = f.runner.calls.lock().unwrap().clone();
-            assert_eq!(calls.len(), 1);
-            assert_eq!(
-                calls[0].payload["ticket_url"],
-                ticket.url.as_deref().unwrap()
-            );
-            for number in [1, 2] {
-                let stored = f.stored_pull(number).await;
-                assert_eq!(stored["draft"], true);
-                assert_eq!(stored["comments"].as_array().unwrap().len(), 2);
-            }
-            assert!(
-                gb_observability::runs::RunStore::open(f.root.path())
-                    .records()
-                    .unwrap()
-                    .is_empty()
-            );
-        }
+async_cases! { listing_limited_pulls_uses_distinct_traces_and_refresh_limit_still_runs_the_next_ticket_cases, listing_limited_pulls_uses_distinct_traces_and_refresh_limit_still_runs_the_next_ticket;
+    manual_listing("manual", false);
+    manual_refresh("manual", true);
+    scheduled_listing("scheduled", false);
+    scheduled_refresh("scheduled", true);
+    routine_listing("routine", false);
+    routine_refresh("routine", true);
+}
+
+async fn listing_limited_pulls_uses_distinct_traces_and_refresh_limit_still_runs_the_next_ticket(
+    source: &str,
+    at_refresh: bool,
+) {
+    let f = Fixture::new().await;
+    let ticket = f.task().await;
+    for branch in ["one", "two"] {
+        f.reviewed_pull(branch).await;
     }
+    let selector = f.selector(source);
+    let (selected, invocation) = if at_refresh {
+        // Listed for review, both reach the limit before their refresh.
+        let candidates = selector.candidates().await.unwrap();
+        assert_eq!(
+            candidates
+                .iter()
+                .filter(|t| t.trigger_reason.as_deref() == Some("pull_request_review"))
+                .count(),
+            2
+        );
+        assert!(f.runner.activity.lock().unwrap().is_empty());
+        for branch in ["one", "two"] {
+            f.push(branch);
+        }
+        let mut selected = None;
+        for candidate in candidates {
+            if let Some(invocation) = selector.refresh(&candidate).await.unwrap() {
+                selected = Some((candidate, invocation));
+                break;
+            }
+        }
+        selected.unwrap()
+    } else {
+        for branch in ["one", "two"] {
+            f.push(branch);
+        }
+        selector.next().await.unwrap().unwrap()
+    };
+    assert_eq!(selected.url, ticket.url);
+    let outer = f.trace(source);
+    selector
+        .run(&selected, invocation, &outer, 5)
+        .await
+        .unwrap();
+    let activity = f.runner.activity.lock().unwrap().clone();
+    assert_eq!(activity.len(), 2);
+    assert_ne!(activity[0]["trace_id"], activity[1]["trace_id"]);
+    assert!(
+        activity
+            .iter()
+            .all(|e| e["trace_id"] != outer.id() && e["type"] == "pull_request.review_limit")
+    );
+    assert_eq!(f.runner.stops.lock().unwrap().len(), 2);
+    let calls = f.runner.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].payload["ticket_url"],
+        ticket.url.as_deref().unwrap()
+    );
+    for number in [1, 2] {
+        let stored = f.stored_pull(number).await;
+        assert_eq!(stored["draft"], true);
+        assert_eq!(stored["comments"].as_array().unwrap().len(), 2);
+    }
+    assert!(
+        gb_observability::runs::RunStore::open(f.root.path())
+            .records()
+            .unwrap()
+            .is_empty()
+    );
 }
 #[tokio::test]
 async fn concurrent_reviewers_and_a_prior_human_draft_never_announce_a_second_conversion() {
@@ -638,27 +656,26 @@ impl Fixture {
     }
     /// A check of the PR's head that a runner has started, while the owner's
     /// requested changes defer its run, so its author can yield it.
-    async fn running_check(&self, url: &str) {
+    async fn running_check_branch(&self, url: &str, branch: &str) {
         let owner = &self.embedded.owner;
-        let number = url.rsplit('/').next().unwrap().parse().unwrap();
-        let head = self.head("feature");
+        let number: u64 = url.rsplit('/').next().unwrap().parse().unwrap();
+        let runner = format!("runner{number}");
+        let head = self.head(branch);
         owner
             .members_create(branvil::test_support::input(
-                json!({"name":"runner1","kind":"runner"}),
+                json!({"name":runner,"kind":"runner"}),
             ))
             .await
             .unwrap();
         let token = owner
             .members_issue_token(
-                "runner1".into(),
+                runner,
                 branvil::test_support::input(json!({"label":"fixture"})),
             )
             .await
             .unwrap()
             .token;
-        self.embedded
-            .check("acme/repo", "feature", &head, None)
-            .await;
+        self.embedded.check("acme/repo", branch, &head, None).await;
         let claim: Value = reqwest::Client::builder()
             .no_proxy()
             .timeout(std::time::Duration::from_secs(10))
@@ -847,74 +864,79 @@ async fn mention_preserves_lane_and_assignee_and_uses_a_distinct_conversation_ki
     }
 }
 
-#[tokio::test]
-async fn safe_failure_and_timeout_are_voiced_and_only_autonomous_failures_announce() {
-    for language in ["en", "ja"] {
-        for source in ["routine", "manual"] {
-            for category in ["unknown", "timeout"] {
-                for voice in [
-                    None,
-                    Some("Member's safe explanation".to_owned()),
-                    Some(String::new()),
-                ] {
-                    let f = Fixture::new().await;
-                    let task = f.task().await;
-                    *f.runner.failure.lock().unwrap() = Some(guest(category));
-                    *f.runner.voice.lock().unwrap() = voice.clone();
-                    let mut selector = f.selector(source);
-                    selector.language = language;
-                    let trace = f.trace(source);
-                    assert!(
-                        selector
-                            .run(&task, selector.invocation(&task).unwrap(), &trace, 5)
-                            .await
-                            .is_err()
-                    );
-                    let comments = f.comments(&task).await;
-                    assert_eq!(comments.len(), 1);
-                    let body = comments[0]["body"].as_str().unwrap();
-                    assert!(!body.contains("private path"));
-                    if let Some(voice) = voice.filter(|s| !s.is_empty()) {
-                        assert_eq!(body, voice);
-                    } else {
-                        assert_eq!(
-                            body,
-                            crate::i18n::t(
-                                language,
-                                if category == "timeout" {
-                                    "drivers.task_scheduler.turn_timeout"
-                                } else {
-                                    "drivers.task_scheduler.task_error"
-                                },
-                                &[("hours", "3")]
-                            )
-                        );
-                    }
-                    assert_eq!(f.runner.said.lock().unwrap().len(), 1);
-                    let stops = f.runner.stops.lock().unwrap().clone();
-                    assert_eq!(stops.len(), usize::from(source != "manual"));
-                    if let Some(stop) = stops.first() {
-                        assert_eq!(stop.reason, "failed");
-                        assert_eq!(stop.url, task.url.as_deref().unwrap());
-                    }
-                    assert_eq!(*f.runner.completed.lock().unwrap(), 0);
-                    if category == "timeout" && source == "routine" {
-                        assert!(selector.candidates().await.unwrap().is_empty());
-                        f.embedded
-                            .owner
-                            .tickets_add_comment(
-                                "acme/repo",
-                                "1",
-                                branvil::test_support::input(json!({"body":"Please continue."})),
-                            )
-                            .await
-                            .unwrap();
-                        let resumed = selector.refresh(&task).await.unwrap().unwrap();
-                        assert_eq!(resumed.work, selector.invocation(&task).unwrap().work);
-                        assert_eq!(f.comments(&task).await.len(), 2);
-                        assert_eq!(f.runner.stops.lock().unwrap().len(), 1);
-                    }
-                }
+async_cases! { safe_failure_and_timeout_are_voiced_and_only_autonomous_failures_announce_cases, safe_failure_and_timeout_are_voiced_and_only_autonomous_failures_announce;
+    en_routine("en", "routine");
+    en_manual("en", "manual");
+    ja_routine("ja", "routine");
+    ja_manual("ja", "manual");
+}
+
+async fn safe_failure_and_timeout_are_voiced_and_only_autonomous_failures_announce(
+    language: &str,
+    source: &str,
+) {
+    for category in ["unknown", "timeout"] {
+        for voice in [
+            None,
+            Some("Member's safe explanation".to_owned()),
+            Some(String::new()),
+        ] {
+            let f = Fixture::new().await;
+            let task = f.task().await;
+            *f.runner.failure.lock().unwrap() = Some(guest(category));
+            *f.runner.voice.lock().unwrap() = voice.clone();
+            let mut selector = f.selector(source);
+            selector.language = language;
+            let trace = f.trace(source);
+            assert!(
+                selector
+                    .run(&task, selector.invocation(&task).unwrap(), &trace, 5)
+                    .await
+                    .is_err()
+            );
+            let comments = f.comments(&task).await;
+            assert_eq!(comments.len(), 1);
+            let body = comments[0]["body"].as_str().unwrap();
+            assert!(!body.contains("private path"));
+            if let Some(voice) = voice.filter(|s| !s.is_empty()) {
+                assert_eq!(body, voice);
+            } else {
+                assert_eq!(
+                    body,
+                    crate::i18n::t(
+                        language,
+                        if category == "timeout" {
+                            "drivers.task_scheduler.turn_timeout"
+                        } else {
+                            "drivers.task_scheduler.task_error"
+                        },
+                        &[("hours", "3")]
+                    )
+                );
+            }
+            assert_eq!(f.runner.said.lock().unwrap().len(), 1);
+            let stops = f.runner.stops.lock().unwrap().clone();
+            assert_eq!(stops.len(), usize::from(source != "manual"));
+            if let Some(stop) = stops.first() {
+                assert_eq!(stop.reason, "failed");
+                assert_eq!(stop.url, task.url.as_deref().unwrap());
+            }
+            assert_eq!(*f.runner.completed.lock().unwrap(), 0);
+            if category == "timeout" && source == "routine" {
+                assert!(selector.candidates().await.unwrap().is_empty());
+                f.embedded
+                    .owner
+                    .tickets_add_comment(
+                        "acme/repo",
+                        "1",
+                        branvil::test_support::input(json!({"body":"Please continue."})),
+                    )
+                    .await
+                    .unwrap();
+                let resumed = selector.refresh(&task).await.unwrap().unwrap();
+                assert_eq!(resumed.work, selector.invocation(&task).unwrap().work);
+                assert_eq!(f.comments(&task).await.len(), 2);
+                assert_eq!(f.runner.stops.lock().unwrap().len(), 1);
             }
         }
     }
@@ -1535,101 +1557,123 @@ async fn open_pr_limit_is_rechecked_before_moving_ready_work_and_does_not_stop_o
     }
 }
 
-#[tokio::test]
-async fn quota_read_errors_defer_only_new_ready_work_and_clear_the_display() {
-    for source in ["routine", "scheduled", "manual"] {
-        for error in [
-            ServiceError::NotFound,
-            ServiceError::Failed,
-            ServiceError::Unavailable,
+async_cases! { quota_read_errors_defer_only_new_ready_work_and_clear_the_display_cases, quota_read_errors_defer_only_new_ready_work_and_clear_the_display;
+    routine("routine");
+    scheduled("scheduled");
+    manual("manual");
+}
+
+async fn quota_read_errors_defer_only_new_ready_work_and_clear_the_display(source: &str) {
+    for error in [
+        ServiceError::NotFound,
+        ServiceError::Failed,
+        ServiceError::Unavailable,
+    ] {
+        let f = Fixture::new().await;
+        let ready = f.task().await;
+        let pull = f.pull().await;
+        let quota = PullRequestQuota::new(2);
+        let mut selector = f.selector(source);
+        selector.quota = Some(&quota);
+        selector.candidates().await.unwrap();
+        assert!(quota.snapshot().is_some());
+        f.code
+            .faults
+            .fail("authored_open_pull_requests", error.clone());
+        assert!(!selector.candidates().await.unwrap().is_empty());
+        assert!(quota.snapshot().is_none());
+        assert_eq!(selector.next().await.unwrap().unwrap().0.url, pull.url);
+        assert_eq!(
+            selector.refresh(&ready).await.unwrap().is_none(),
+            source != "manual"
+        );
+        selector
+            .run(
+                &ready,
+                selector.invocation(&ready).unwrap(),
+                &f.trace(source),
+                5,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            f.runner.calls.lock().unwrap().len(),
+            usize::from(source == "manual")
+        );
+        for reason in [
+            "working_lane",
+            "issue_comment",
+            "issue_mention",
+            "pull_request_feedback",
+            "pull_request_review",
+            "pull_request_checks",
         ] {
-            let f = Fixture::new().await;
-            let ready = f.task().await;
-            let pull = f.pull().await;
-            let quota = PullRequestQuota::new(2);
-            let mut selector = f.selector(source);
-            selector.quota = Some(&quota);
-            selector.candidates().await.unwrap();
-            assert!(quota.snapshot().is_some());
-            f.code
-                .faults
-                .fail("authored_open_pull_requests", error.clone());
-            assert!(!selector.candidates().await.unwrap().is_empty());
-            assert!(quota.snapshot().is_none());
-            assert_eq!(selector.next().await.unwrap().unwrap().0.url, pull.url);
-            assert_eq!(
-                selector.refresh(&ready).await.unwrap().is_none(),
-                source != "manual"
-            );
+            let mut task = ready.clone();
+            task.status = "in_progress".into();
+            task.trigger_reason = Some(reason.into());
             selector
                 .run(
-                    &ready,
-                    selector.invocation(&ready).unwrap(),
+                    &task,
+                    selector.invocation(&task).unwrap(),
                     &f.trace(source),
                     5,
                 )
                 .await
                 .unwrap();
-            assert_eq!(
-                f.runner.calls.lock().unwrap().len(),
-                usize::from(source == "manual")
-            );
-            for reason in [
-                "working_lane",
-                "issue_comment",
-                "issue_mention",
-                "pull_request_feedback",
-                "pull_request_review",
-                "pull_request_checks",
-            ] {
-                let mut task = ready.clone();
-                task.status = "in_progress".into();
-                task.trigger_reason = Some(reason.into());
-                selector
-                    .run(
-                        &task,
-                        selector.invocation(&task).unwrap(),
-                        &f.trace(source),
-                        5,
-                    )
-                    .await
-                    .unwrap();
-            }
-            assert_eq!(
-                f.runner.calls.lock().unwrap().len(),
-                6 + usize::from(source == "manual")
-            );
-            let working = f.task().await;
-            f.ticket
-                .move_ticket(&working, MoveLane::InProgress)
-                .await
-                .unwrap();
-            // Without the PR's feedback, only ready and working tickets remain.
-            f.embedded
-                .owner
-                .pulls_set_open("acme/repo", 1, false)
-                .await
-                .unwrap();
-            if source != "manual" {
-                assert_eq!(selector.next().await.unwrap().unwrap().0.url, working.url);
-            }
-            f.code.faults.clear();
-            selector.candidates().await.unwrap();
-            assert!(quota.snapshot().is_some());
         }
+        assert_eq!(
+            f.runner.calls.lock().unwrap().len(),
+            6 + usize::from(source == "manual")
+        );
+        let working = f.task().await;
+        f.ticket
+            .move_ticket(&working, MoveLane::InProgress)
+            .await
+            .unwrap();
+        // Without the PR's feedback, only ready and working tickets remain.
+        f.embedded
+            .owner
+            .pulls_set_open("acme/repo", 1, false)
+            .await
+            .unwrap();
+        if source != "manual" {
+            assert_eq!(selector.next().await.unwrap().unwrap().0.url, working.url);
+        }
+        f.code.faults.clear();
+        selector.candidates().await.unwrap();
+        assert!(quota.snapshot().is_some());
     }
 }
 
+async_cases! { feedback_yields_once_before_author_runs_and_failures_are_best_effort_cases, feedback_yields_once_before_author_runs_and_failures_are_best_effort;
+    initial(false);
+    resumed(true);
+}
+
+async fn feedback_yields_once_before_author_runs_and_failures_are_best_effort(resumes: bool) {
+    check_yields(&["pull_request_feedback"], &[resumes]).await;
+}
+
 #[tokio::test]
-async fn feedback_yields_once_before_author_runs_and_failures_are_best_effort() {
-    for trigger in [
-        "pull_request_feedback",
-        "pull_request_checks",
-        "ready_lane",
-        "pull_request_review",
-        "issue_mention",
-    ] {
-        for resumes in [false, true] {
+async fn other_triggers_never_yield_checks() {
+    check_yields(
+        &[
+            "pull_request_checks",
+            "ready_lane",
+            "pull_request_review",
+            "issue_mention",
+        ],
+        &[false, true],
+    )
+    .await;
+}
+
+async fn check_yields(triggers: &[&str], resume_values: &[bool]) {
+    let mut f = Fixture::new().await;
+    let original = f.pull().await;
+    let mut case = 0;
+    for &trigger in triggers {
+        for &resumes in resume_values {
             for result in [
                 Ok(1),
                 Ok(0),
@@ -1637,16 +1681,33 @@ async fn feedback_yields_once_before_author_runs_and_failures_are_best_effort() 
                 Err(ServiceError::Unavailable),
             ] {
                 for fail_evidence in [false, true] {
-                    let mut f = Fixture::new().await;
-                    f.runner.fail_evidence = fail_evidence;
-                    let mut task = f.pull().await;
+                    // Keep the service, repository and members, but discard every
+                    // case's fault log and runner observations.
+                    f.code = Arc::new(CodeAgent::new(
+                        f.embedded.data(),
+                        "acme".into(),
+                        "aiko".into(),
+                        "Aiko".into(),
+                    ));
+                    f.runner = FakeRunner {
+                        fail_evidence,
+                        observed: Some(f.code.faults.clone()),
+                        ..Default::default()
+                    };
+                    case += 1;
+                    let branch = format!("case-{case}");
+                    let mut task = if trigger == "pull_request_feedback" {
+                        f.pull_branch(&branch).await
+                    } else {
+                        original.clone()
+                    };
                     let url = task.pull_request_url.clone().unwrap();
                     let feedback = trigger == "pull_request_feedback";
                     match &result {
                         // Only feedback yields: other work leaves the checks as they are.
                         Ok(0) => {}
                         Ok(_) if !feedback => {}
-                        Ok(_) => f.running_check(&url).await,
+                        Ok(_) => f.running_check_branch(&url, &branch).await,
                         Err(error) => f
                             .code
                             .faults

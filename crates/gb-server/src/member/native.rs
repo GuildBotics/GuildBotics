@@ -1058,6 +1058,17 @@ pub(crate) mod tests {
             Ok(())
         }
     }
+    // Each generated test owns its service and runtime state; nextest can schedule
+    // independent contracts separately instead of timing their whole product.
+    macro_rules! async_cases {
+        ($module:ident, $helper:ident; $($case:ident($($arg:expr),*);)*) => {
+            mod $module {
+                $(#[tokio::test]
+                async fn $case() { super::$helper($($arg),*).await; })*
+            }
+        };
+    }
+
     pub(crate) struct Support {
         embedded: branvil::test_support::Background,
         keys: Arc<Keys>,
@@ -2528,91 +2539,96 @@ pub(crate) mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn native_completed_ticket_waits_notify_once_and_later_execution_failure_reports_failed()
-    {
-        for source in ["routine", "manual"] {
-            for status in ["done", "asking", "blocked"] {
-                for phase in ["none", "before", "after"] {
-                    let failed = phase != "none";
-                    let fails_later = phase == "after";
-                    let root = tempfile::tempdir().unwrap();
-                    let native = fixture(root.path());
-                    write_json(
-                        &native
-                            .workspace
-                            .join(".guildbotics/config/team/members/aiko/member.yml"),
-                        json!({"is_active":true,"routine_commands":["workflows/ticket_driven_workflow"],"message_channels":[{"name":"notify","chat":{"channel_id":"C1","notify_work_stops":true}}]}),
-                    );
-                    let cleanup = tokio_util::task::TaskTracker::new();
-                    let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
-                    *driver.completion.lock().unwrap() = status;
-                    if fails_later {
-                        *driver.after_completion.lock().unwrap() =
-                            Some(crate::dispatcher::DispatchFailure::Journal);
-                    }
-                    if phase == "before" {
-                        driver
-                            .failures
-                            .lock()
-                            .unwrap()
-                            .push_back(crate::dispatcher::DispatchFailure::Journal);
-                    }
-                    let ticket = ready_ticket(&native, &runtime).await;
-                    let slot = crate::scheduler::slot(
-                        source,
-                        "aiko",
-                        crate::ticket_selector::COMMAND,
-                        "2026-11-05T12:00:00".parse().unwrap(),
-                    );
-                    let result = runtime
-                        .command(crate::ticket_selector::COMMAND, source, slot)
-                        .await;
-                    assert_eq!(result.is_err(), failed);
-                    if phase == "before" {
-                        let records = RunStore::open(&native.workspace).records().unwrap();
-                        assert_eq!(records.len(), 1);
-                        assert_eq!(records[0].status, gb_observability::runs::RunState::Failed);
-                        assert!(records[0].finished_at.is_some() && records[0].result.is_none());
-                    }
-                    let notices = runtime
-                        .chat
-                        .as_ref()
-                        .unwrap()
-                        .list_channel_events("C1", Default::default())
-                        .await
-                        .unwrap()
-                        .events;
-                    let expected = source != "manual" && (failed || status != "done");
-                    assert_eq!(notices.len(), usize::from(expected));
-                    if let Some(notice) = notices.first() {
-                        let payload =
-                            serde_json::to_value(notice.status.as_ref().unwrap()).unwrap();
-                        assert_eq!(payload["reason"], if failed { "failed" } else { status });
-                        assert_eq!(payload["subject"], ticket.target.url);
-                        let calls = driver.calls.lock().unwrap();
-                        assert_eq!(payload["run_id"], calls[0].run_id);
-                    }
-                    let comments = runtime
-                        .tickets
-                        .as_ref()
-                        .unwrap()
-                        .read(
-                            branvil::agent::port::Resource::TicketComments,
-                            &ticket.target.url,
-                            None,
-                            "",
-                        )
-                        .await
-                        .unwrap();
-                    assert_eq!(comments.items().len(), if fails_later { 2 } else { 1 });
-                    if failed {
-                        assert_ne!(comments.items().last().unwrap()["body"], "Handled.");
-                    }
-                    cleanup.close();
-                    cleanup.wait().await;
-                }
+    async_cases! { native_completed_ticket_waits_notify_once_and_later_execution_failure_reports_failed_cases, native_completed_ticket_waits_notify_once_and_later_execution_failure_reports_failed;
+        routine_done("routine", "done");
+        routine_asking("routine", "asking");
+        routine_blocked("routine", "blocked");
+        manual_done("manual", "done");
+        manual_asking("manual", "asking");
+        manual_blocked("manual", "blocked");
+    }
+
+    async fn native_completed_ticket_waits_notify_once_and_later_execution_failure_reports_failed(
+        source: &str,
+        status: &'static str,
+    ) {
+        for phase in ["none", "before", "after"] {
+            let failed = phase != "none";
+            let fails_later = phase == "after";
+            let root = tempfile::tempdir().unwrap();
+            let native = fixture(root.path());
+            write_json(
+                &native
+                    .workspace
+                    .join(".guildbotics/config/team/members/aiko/member.yml"),
+                json!({"is_active":true,"routine_commands":["workflows/ticket_driven_workflow"],"message_channels":[{"name":"notify","chat":{"channel_id":"C1","notify_work_stops":true}}]}),
+            );
+            let cleanup = tokio_util::task::TaskTracker::new();
+            let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+            *driver.completion.lock().unwrap() = status;
+            if fails_later {
+                *driver.after_completion.lock().unwrap() =
+                    Some(crate::dispatcher::DispatchFailure::Journal);
             }
+            if phase == "before" {
+                driver
+                    .failures
+                    .lock()
+                    .unwrap()
+                    .push_back(crate::dispatcher::DispatchFailure::Journal);
+            }
+            let ticket = ready_ticket(&native, &runtime).await;
+            let slot = crate::scheduler::slot(
+                source,
+                "aiko",
+                crate::ticket_selector::COMMAND,
+                "2026-11-05T12:00:00".parse().unwrap(),
+            );
+            let result = runtime
+                .command(crate::ticket_selector::COMMAND, source, slot)
+                .await;
+            assert_eq!(result.is_err(), failed);
+            if phase == "before" {
+                let records = RunStore::open(&native.workspace).records().unwrap();
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].status, gb_observability::runs::RunState::Failed);
+                assert!(records[0].finished_at.is_some() && records[0].result.is_none());
+            }
+            let notices = runtime
+                .chat
+                .as_ref()
+                .unwrap()
+                .list_channel_events("C1", Default::default())
+                .await
+                .unwrap()
+                .events;
+            let expected = source != "manual" && (failed || status != "done");
+            assert_eq!(notices.len(), usize::from(expected));
+            if let Some(notice) = notices.first() {
+                let payload = serde_json::to_value(notice.status.as_ref().unwrap()).unwrap();
+                assert_eq!(payload["reason"], if failed { "failed" } else { status });
+                assert_eq!(payload["subject"], ticket.target.url);
+                let calls = driver.calls.lock().unwrap();
+                assert_eq!(payload["run_id"], calls[0].run_id);
+            }
+            let comments = runtime
+                .tickets
+                .as_ref()
+                .unwrap()
+                .read(
+                    branvil::agent::port::Resource::TicketComments,
+                    &ticket.target.url,
+                    None,
+                    "",
+                )
+                .await
+                .unwrap();
+            assert_eq!(comments.items().len(), if fails_later { 2 } else { 1 });
+            if failed {
+                assert_ne!(comments.items().last().unwrap()["body"], "Handled.");
+            }
+            cleanup.close();
+            cleanup.wait().await;
         }
     }
 
@@ -2754,148 +2770,149 @@ pub(crate) mod tests {
             }
         }
     }
-    #[tokio::test]
-    async fn completed_chat_recovery_consumes_only_its_batch_and_updates_with_a_later_action() {
-        for batch in [false, true] {
-            for action in [
-                None,
-                Some("chat_reply"),
-                Some("chat_noop"),
-                Some("blocked"),
-                Some("issue_comment"),
-                Some("git_publish"),
-                Some("git_push"),
-                Some("issue_update"),
-            ] {
-                let root = tempfile::tempdir().unwrap();
-                let native = fixture(root.path());
-                let cleanup = tokio_util::task::TaskTracker::new();
-                let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
-                let runtime = Arc::new(runtime);
-                let dispatch = crate::chat_dispatch::Dispatcher {
-                    person: "aiko".into(),
-                    service: "local".into(),
-                    language: "en".into(),
-                    roster: runtime.roster.clone(),
-                    chat: runtime.chat.clone().unwrap(),
-                    store: Arc::new(crate::chat_state::Store {
-                        workspace: native.workspace.clone(),
-                        writes: runtime.writes.clone(),
-                        limit: 500,
-                    }),
-                    runner: runtime.clone(),
-                };
-                let rows = (1..=4)
-                    .map(|n| chat_row(&format!("M{n}"), "M1", "@local-aiko work", n))
-                    .collect::<Vec<_>>();
-                chat_history(&dispatch, &rows);
-                let events = dispatch
-                    .chat
-                    .list_thread_events("C1", "M1", None, 100)
-                    .await
-                    .unwrap()
-                    .events;
-                for (index, event) in events.into_iter().enumerate() {
-                    if index != 1 || batch {
-                        dispatch
-                            .store
-                            .receive("local", "aiko", event, "strict")
-                            .unwrap();
-                    }
+    async_cases! { completed_chat_recovery_consumes_only_its_batch_and_updates_with_a_later_action_cases, completed_chat_recovery_consumes_only_its_batch_and_updates_with_a_later_action;
+        single(false);
+        batch(true);
+    }
+
+    async fn completed_chat_recovery_consumes_only_its_batch_and_updates_with_a_later_action(
+        batch: bool,
+    ) {
+        for action in [
+            None,
+            Some("chat_reply"),
+            Some("chat_noop"),
+            Some("blocked"),
+            Some("issue_comment"),
+            Some("git_publish"),
+            Some("git_push"),
+            Some("issue_update"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let native = fixture(root.path());
+            let cleanup = tokio_util::task::TaskTracker::new();
+            let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
+            let runtime = Arc::new(runtime);
+            let dispatch = crate::chat_dispatch::Dispatcher {
+                person: "aiko".into(),
+                service: "local".into(),
+                language: "en".into(),
+                roster: runtime.roster.clone(),
+                chat: runtime.chat.clone().unwrap(),
+                store: Arc::new(crate::chat_state::Store {
+                    workspace: native.workspace.clone(),
+                    writes: runtime.writes.clone(),
+                    limit: 500,
+                }),
+                runner: runtime.clone(),
+            };
+            let rows = (1..=4)
+                .map(|n| chat_row(&format!("M{n}"), "M1", "@local-aiko work", n))
+                .collect::<Vec<_>>();
+            chat_history(&dispatch, &rows);
+            let events = dispatch
+                .chat
+                .list_thread_events("C1", "M1", None, 100)
+                .await
+                .unwrap()
+                .events;
+            for (index, event) in events.into_iter().enumerate() {
+                if index != 1 || batch {
+                    dispatch
+                        .store
+                        .receive("local", "aiko", event, "strict")
+                        .unwrap();
                 }
-                let mut evidence = vec![json!({"type":"chat_reply","payload":{"text":"answered"}})];
-                if batch {
-                    evidence.push(
-                        json!({"type":"chat_batch","payload":{"event_ids":["C1:M1","C1:M2"]}}),
-                    );
+            }
+            let mut evidence = vec![json!({"type":"chat_reply","payload":{"text":"answered"}})];
+            if batch {
+                evidence
+                    .push(json!({"type":"chat_batch","payload":{"event_ids":["C1:M1","C1:M2"]}}));
+            }
+            if let Some(action) = action {
+                evidence.push(json!({"type":"chat_updates","payload":{"event_ids":["C1:M3"]}}));
+                if action != "blocked" {
+                    evidence.push(json!({"type":action,"payload":{"text":"decision"}}));
                 }
-                if let Some(action) = action {
-                    evidence.push(json!({"type":"chat_updates","payload":{"event_ids":["C1:M3"]}}));
-                    if action != "blocked" {
-                        evidence.push(json!({"type":action,"payload":{"text":"decision"}}));
-                    }
-                }
-                let record:RunRecord=serde_json::from_value(json!({"run_id":"prior-run","work_kind":"chat","execution_mode":"autonomous","member_id":"aiko","device_id":"device","source":"event_queue","started_at":"2026-11-05T00:00:00Z","finished_at":"2026-11-05T00:01:00Z","status":"succeeded",
+            }
+            let record:RunRecord=serde_json::from_value(json!({"run_id":"prior-run","work_kind":"chat","execution_mode":"autonomous","member_id":"aiko","device_id":"device","source":"event_queue","started_at":"2026-11-05T00:00:00Z","finished_at":"2026-11-05T00:01:00Z","status":"succeeded",
                     "work_identity":{"service":"local","channel_id":"C1","event_id":"C1:M1"},"provider_evidence":evidence,
                     "result":{"subject_type":"chat","subject_id":"local:C1:M1","status":if action==Some("blocked") {"blocked"} else {"done"}}})).unwrap();
-                runtime
-                    .writes
-                    .transaction(|writer| {
-                        RunStore::open(&native.workspace)
-                            .start(writer, record.clone(), &runtime.redactor)
-                            .map(|_| ())
-                    })
-                    .unwrap();
-                if batch {
-                    // The host already emitted the terminal event before recovery.
-                    let mut prior =
-                        dispatch.store.pending("local", "aiko", "C1").unwrap()[0].clone();
-                    prior.run_id = "prior-run".into();
-                    crate::chat_dispatch::Runner::event(
-                        runtime.as_ref(),
-                        "workflow.completed",
-                        &prior,
-                        json!({"run_id":"prior-run","status":record.result.as_ref().unwrap().status}),
-                    );
-                }
-                assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
-                assert!(driver.calls.lock().unwrap().is_empty());
-                let pending = dispatch.store.pending("local", "aiko", "C1").unwrap();
-                let unhandled =
-                    action.is_none() || action == Some("chat_noop") || action == Some("blocked");
-                assert_eq!(
-                    pending
-                        .iter()
-                        .map(|p| p.event.event_id.as_str())
-                        .collect::<Vec<_>>(),
-                    if unhandled {
-                        vec!["C1:M3", "C1:M4"]
-                    } else {
-                        vec!["C1:M4"]
-                    }
-                );
-                assert!(
-                    dispatch.store.cursor("local", "aiko", "C1").unwrap()["processed_event_ids"]
-                        .as_array()
-                        .unwrap()
-                        .contains(&json!("C1:M1"))
-                );
-                let records = RunStore::open(&native.workspace).records().unwrap();
-                assert_eq!(records.len(), 1);
-                assert_eq!(records[0], record);
-                let transcript = std::fs::read_to_string(
-                    native
-                        .workspace
-                        .join(".guildbotics/local/run/sessions/prior-run.jsonl"),
-                )
+            runtime
+                .writes
+                .transaction(|writer| {
+                    RunStore::open(&native.workspace)
+                        .start(writer, record.clone(), &runtime.redactor)
+                        .map(|_| ())
+                })
                 .unwrap();
-                assert_eq!(
-                    transcript
-                        .lines()
-                        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-                        .filter(|e| e["type"] == "workflow.completed"
-                            && e["payload"]["run_id"] == "prior-run")
-                        .count(),
-                    1
+            if batch {
+                // The host already emitted the terminal event before recovery.
+                let mut prior = dispatch.store.pending("local", "aiko", "C1").unwrap()[0].clone();
+                prior.run_id = "prior-run".into();
+                crate::chat_dispatch::Runner::event(
+                    runtime.as_ref(),
+                    "workflow.completed",
+                    &prior,
+                    json!({"run_id":"prior-run","status":record.result.as_ref().unwrap().status}),
                 );
-                if !batch {
-                    let activity =
-                        gb_observability::activity::ActivityEvents::open(&native.workspace)
-                            .list_between(
-                                chrono::DateTime::<chrono::Utc>::MIN_UTC,
-                                chrono::DateTime::<chrono::Utc>::MAX_UTC,
-                            )
-                            .unwrap();
-                    let completed = activity
-                        .iter()
-                        .find(|event| event["kind"] == "workflow.completed")
-                        .unwrap();
-                    assert_eq!(completed["payload"]["run_id"], "prior-run");
-                    assert_eq!(completed["payload"]["recovered"], true);
-                }
-                cleanup.close();
-                cleanup.wait().await;
             }
+            assert_eq!(dispatch.process(chrono::Utc::now()).await.unwrap(), 1);
+            assert!(driver.calls.lock().unwrap().is_empty());
+            let pending = dispatch.store.pending("local", "aiko", "C1").unwrap();
+            let unhandled =
+                action.is_none() || action == Some("chat_noop") || action == Some("blocked");
+            assert_eq!(
+                pending
+                    .iter()
+                    .map(|p| p.event.event_id.as_str())
+                    .collect::<Vec<_>>(),
+                if unhandled {
+                    vec!["C1:M3", "C1:M4"]
+                } else {
+                    vec!["C1:M4"]
+                }
+            );
+            assert!(
+                dispatch.store.cursor("local", "aiko", "C1").unwrap()["processed_event_ids"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("C1:M1"))
+            );
+            let records = RunStore::open(&native.workspace).records().unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0], record);
+            let transcript = std::fs::read_to_string(
+                native
+                    .workspace
+                    .join(".guildbotics/local/run/sessions/prior-run.jsonl"),
+            )
+            .unwrap();
+            assert_eq!(
+                transcript
+                    .lines()
+                    .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                    .filter(|e| e["type"] == "workflow.completed"
+                        && e["payload"]["run_id"] == "prior-run")
+                    .count(),
+                1
+            );
+            if !batch {
+                let activity = gb_observability::activity::ActivityEvents::open(&native.workspace)
+                    .list_between(
+                        chrono::DateTime::<chrono::Utc>::MIN_UTC,
+                        chrono::DateTime::<chrono::Utc>::MAX_UTC,
+                    )
+                    .unwrap();
+                let completed = activity
+                    .iter()
+                    .find(|event| event["kind"] == "workflow.completed")
+                    .unwrap();
+                assert_eq!(completed["payload"]["run_id"], "prior-run");
+                assert_eq!(completed["payload"]["recovered"], true);
+            }
+            cleanup.close();
+            cleanup.wait().await;
         }
     }
     #[tokio::test]
