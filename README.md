@@ -267,6 +267,8 @@ Ticket patrol wakes when a member run finishes (including manual runs, excluding
 
 The interval recheck picks up member CLI writes from interactive sessions (comments, reviews, and pushes), and expired usage-limit waits. Interactive writes are agent writes, so they do not trigger a wake, and there is no run ending to trigger one either. If you subsequently run a command such as `guildbotics run repository/pr_checks`, that run's completion wakes other members' ticket patrols.
 
+When configured alongside other commands, the ticket-driven workflow takes one turn in the rotation, so rechecks occur every command count × patrol interval, plus the commands’ execution time. For example, two commands with a 3-minute interval recheck every 6 minutes, excluding execution time. Patrols triggered by changes run outside that rotation.
+
 A shorter interval responds sooner to work that only the recheck can find. A ticket patrol with no work only reads Branvil inside the server; it starts no run, isolated environment, or LLM. Environments with an interval already set in `.guildbotics/local/service.yml` keep that value.
 
 The patrol interval and the number of consecutive failures that stops a worker are set on the **Service** screen.

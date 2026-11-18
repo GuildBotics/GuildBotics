@@ -589,6 +589,7 @@ mod tests {
             scheduler.add("aiko".into(), engine.clone(), vec![], routines);
             let settings = Settings {
                 event_queue: false,
+                routine_interval_minutes: 10,
                 ..Default::default()
             };
             scheduler.tick("aiko", &settings, at(0)).await;
@@ -735,6 +736,7 @@ mod tests {
         );
         let settings = Settings {
             event_queue: false,
+            routine_interval_minutes: 10,
             ..Default::default()
         };
         scheduler.tick("aiko", &settings, at(0)).await;
