@@ -887,10 +887,13 @@ impl Runner {
         // The job's own steps; a `return` in the block ends them.
         let (conclusion, details) = async {
             // The work directory as the VM will see it: canonical (the runner's
-            // directory may sit behind system links such as macOS's /var), and
+            // directory may sit behind system links such as macOS's /var),
+            // spelled as Git and msb take it on Windows (the names joined below
+            // it never end in a dot or space, which Windows would drop), and
             // with no link anywhere below the runner's directory.
             let root = match std::fs::create_dir_all(&self.work_dir)
                 .and_then(|_| std::fs::canonicalize(&self.work_dir))
+                .and_then(|dir| executor::plain_path(dir, |p| std::fs::canonicalize(p)))
             {
                 Ok(r) => r,
                 Err(e) => {
