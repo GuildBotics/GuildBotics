@@ -1116,7 +1116,7 @@ impl Runner {
             .http
             .post(self.at("/claim"))
             .bearer_auth(&self.token)
-            .json(&json!({"executor": "test", "executor_state": "ready", "images":[{"reference":IMAGE,"architecture":"arm64","digest":format!("sha256:{}","2".repeat(64))}]}))
+            .json(&json!({"executor": "test", "executor_state": "ready", "architecture":"arm64", "images":[{"reference":IMAGE,"architecture":"arm64","digest":format!("sha256:{}","2".repeat(64))}]}))
             .send()
             .await
             .unwrap();

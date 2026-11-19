@@ -378,6 +378,9 @@ fn lease_of(headers: &HeaderMap) -> AppResult<String> {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct ClaimInput {
+    architecture: String,
+    #[serde(default = "accept_work")]
+    accept: bool,
     images: Vec<super::images::Image>,
     #[serde(default)]
     executor: String,
@@ -407,26 +410,29 @@ pub struct ClaimView {
     pub reuse: Option<queue::Reuse>,
 }
 
+fn accept_work() -> bool {
+    true
+}
+
 async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) -> R {
     require_runner(&app, &c)?;
     let mut input: ClaimInput = json(&body)?;
     if input.executor_state.as_deref() == Some("unavailable") {
         input.images.clear();
     }
-    app.ci.saw_runner(
-        c.name(),
-        Some((
-            input.executor.clone(),
-            input
-                .executor_state
-                .clone()
-                .unwrap_or_else(|| "ready".into()),
-            input.executor_detail.clone(),
-        )),
-    );
     let images =
         super::images::current(&app.layout.root, input.images).map_err(AppError::internal)?;
-    app.ci.runner_images(c.name(), images.clone());
+    app.ci.report_runner(
+        c.name(),
+        &input.executor,
+        input.executor_state.as_deref().unwrap_or("ready"),
+        input.executor_detail,
+        &input.architecture,
+        images.clone(),
+    );
+    if !input.accept {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
     let (runner, lease_secs, now) = (
         c.name().to_string(),
         app.ci.config().lease_secs,

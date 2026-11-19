@@ -686,7 +686,7 @@ impl Fixture {
                 self.embedded.data().base_url()
             ))
             .bearer_auth(token)
-            .json(&json!({"executor":"microsandbox","executor_state":"ready"}))
+            .json(&json!({"executor":"microsandbox","executor_state":"ready","architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","a".repeat(64))}]}))
             .send()
             .await
             .unwrap()

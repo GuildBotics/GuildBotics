@@ -14,7 +14,7 @@ git push ─▶ guildbotics server start ─ register run (pipeline from the com
 
 ## Images on runners of different CPUs
 
-Before claiming work, a runner reads the Hub's archive catalog for its own CPU
+In the background, a runner reads the Hub's archive catalog for its own CPU
 (`arm64` or `amd64`), downloads missing or changed versions, and loads them under
 its image-cache lock. Equal configuration digests cause no download or load.
 Claims advertise locally held tags, CPU architectures, and configuration digests.
@@ -471,7 +471,9 @@ No runner, no executor:
 - A runner whose executor is unusable advertises no images and leaves attempts
   for other ready runners. When no ready runner has an attempt's image, the same
   timeout concludes it `startup_failure`, naming the missing image and CPU.
-  Executor failure details remain visible in runner diagnostics.
+  The check includes the runner's CPU, executor or synchronization failure details,
+  and actions in Settings → CI / `load-ci` / `runner pull`. The same details remain
+  visible in runner diagnostics.
 
 Cancel and retry: `POST …/jobs/{id}/cancel` concludes a queued attempt
 `cancelled` at once and asks a running one to stop; `POST …/jobs/{id}/retry`

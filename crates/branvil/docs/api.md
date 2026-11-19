@@ -1108,7 +1108,7 @@ one class, available reusable results precede other attempts, with `seq` as the
 tie-breaker. See [CI scheduling](ci.md) for the classification rules. Running
 attempts are not interrupted by changes in class.
 
-- `POST /claim` `{"executor": "microsandbox", "executor_state": "ready"|"unavailable", "executor_detail"?: "...", "images":[{"reference":"tag", "architecture":"arm64"|"amd64", "digest":"sha256:..."}]}`
+- `POST /claim` `{"architecture":"arm64"|"amd64", "accept"?:true|false, "executor": "microsandbox", "executor_state": "ready"|"unavailable", "executor_detail"?: "...", "images":[{"reference":"tag", "architecture":"arm64"|"amd64", "digest":"sha256:..."}]}`
   → `204` (nothing queued, or the service is stopping: see "Stopping the
   service" in `docs/ci.md`) or
   `{"attempt_id","purpose","lease","expires_at","lease_secs","repo","sha","attempt","verified_sha":"<latest verified sha>"|null,"job":{"verified_sha":false,"name","image","commands","paths","timeout_secs"|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_scope":"protected"|"branch:<name>"|"probe","network":false,"queued_secs","reuse"}`.
@@ -1143,6 +1143,10 @@ attempts are not interrupted by changes in class.
 - `GET /images/{id}` → the immutable tar archive. Both image endpoints require a
   runner token. Runners compare local configuration digests before downloading and
   load changed archives under the image-cache lock before advertising them.
+  Synchronization runs independently of claims: downloads do not hold that lock,
+  and one failed archive does not prevent other archives or cached jobs.
+  Runners report synchronization progress/errors in `executor_detail`, including
+  while all slots are occupied (`accept:false` updates the report without leasing work).
 - `GET /attempts/{id}/source` → `application/x-git-bundle`: a v2 Git bundle of
   the commit as `HEAD`, with its history and the tags (`refs/tags/*`) whose
   commits it reaches.
