@@ -1,4 +1,8 @@
 use gb_base::{files::FileLock, shared_writes::*};
+#[cfg(unix)]
+#[path = "support/process.rs"]
+mod process;
+
 use std::{fs, path::Path, time::Duration};
 
 fn writes(root: &Path) -> SharedWrites {
@@ -398,6 +402,13 @@ fn a_shared_target_under_a_missing_parent_stays_locked_and_is_created_after() {
 #[cfg(unix)]
 #[test]
 fn an_unreadable_ancestor_or_file_stops_before_writing() {
+    if process::rerun(
+        "an_unreadable_ancestor_or_file_stops_before_writing",
+        true,
+        &[],
+    ) {
+        return;
+    }
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let writes = writes(dir.path());

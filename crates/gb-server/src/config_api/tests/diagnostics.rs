@@ -608,6 +608,13 @@ async fn troubleshooting_validates_before_execution_and_uses_the_named_conversat
 
 #[tokio::test]
 async fn debug_settings_reload_for_updates_and_workspace_selection() {
+    if process::rerun(
+        "config_api::tests::diagnostics::debug_settings_reload_for_updates_and_workspace_selection",
+        false,
+        &["LOG_LEVEL", "AGNO_DEBUG"],
+    ) {
+        return;
+    }
     let f = fixture();
     let applied = Arc::new(Mutex::new(Vec::new()));
     let captured = applied.clone();

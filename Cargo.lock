@@ -2373,6 +2373,7 @@ dependencies = [
  "gb-base",
  "gb-environment",
  "gb-server",
+ "libc",
  "loopback-auth",
  "reqwest",
  "rustls",

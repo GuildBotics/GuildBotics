@@ -862,6 +862,13 @@ async fn authoring_apply_requests_name_their_files_as_their_operation_does() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_failed_apply_puts_back_what_it_had_written() {
+    if process::rerun(
+        "config_api::tests::command_files::a_failed_apply_puts_back_what_it_had_written",
+        true,
+        &[],
+    ) {
+        return;
+    }
     use std::os::unix::fs::PermissionsExt;
     let f = workspace("en").await;
     let roots = gb_config::commands::CommandRoots {

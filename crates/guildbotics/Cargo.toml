@@ -40,3 +40,6 @@ loopback-auth = { path = "../loopback-auth" }
 [[test]]
 name = "main"
 path = "tests/main.rs"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc = "0.2"
