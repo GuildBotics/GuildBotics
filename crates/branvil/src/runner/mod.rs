@@ -1662,6 +1662,8 @@ fi
 
     struct Fake {
         ready: AtomicBool,
+        controlled: bool,
+        finishes: Mutex<std::collections::BTreeMap<String, Arc<tokio::sync::Notify>>>,
         sync_blocked: AtomicBool,
         sync_failed: AtomicBool,
         /// The image cache is held (by a pull or a load): checks wait.
@@ -1679,6 +1681,8 @@ fi
         fn new() -> Self {
             Self {
                 ready: AtomicBool::new(true),
+                controlled: false,
+                finishes: Default::default(),
                 sync_blocked: AtomicBool::new(false),
                 sync_failed: AtomicBool::new(false),
                 hold_images: AtomicBool::new(false),
@@ -1688,6 +1692,82 @@ fi
                 stopped: Default::default(),
             }
         }
+    }
+
+    impl Fake {
+        async fn wait(&self, id: &str, mut cancel: watch::Receiver<bool>) -> Outcome {
+            self.waiting.fetch_add(1, Ordering::SeqCst);
+            let finish = Arc::new(tokio::sync::Notify::new());
+            if self.controlled {
+                self.finishes
+                    .lock()
+                    .unwrap()
+                    .insert(id.into(), finish.clone());
+            }
+            tokio::select! {
+                biased;
+                _ = cancel.wait_for(|stop| *stop) => {
+                    self.stopped.fetch_add(1, Ordering::SeqCst);
+                    Outcome::Cancelled
+                }
+                _ = finish.notified(), if self.controlled => Outcome::Exited(0),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn fake_wait_observes_cancellation_in_every_mode() {
+        use std::task::Poll;
+        for controlled in [false, true] {
+            for initial in [false, true] {
+                let fake = Fake {
+                    controlled,
+                    ..Fake::new()
+                };
+                let (send, recv) = watch::channel(initial);
+                let mut wait = Box::pin(fake.wait("attempt", recv));
+                if !initial {
+                    assert!(futures_util::poll!(&mut wait).is_pending());
+                    send.send(false).unwrap();
+                    assert!(futures_util::poll!(&mut wait).is_pending());
+                    send.send(true).unwrap();
+                }
+                // Even if both signals are ready, a stop must be visible.
+                if controlled && !initial {
+                    fake.finishes.lock().unwrap()["attempt"].notify_one();
+                }
+                assert!(matches!(
+                    futures_util::poll!(&mut wait),
+                    Poll::Ready(Outcome::Cancelled)
+                ));
+                assert_eq!(fake.stopped.load(Ordering::SeqCst), 1);
+                assert_eq!(fake.waiting.load(Ordering::SeqCst), 1);
+            }
+            let fake = Fake {
+                controlled,
+                ..Fake::new()
+            };
+            let (send, recv) = watch::channel(false);
+            drop(send);
+            assert!(matches!(
+                fake.wait("closed", recv).await,
+                Outcome::Cancelled
+            ));
+            assert_eq!(fake.stopped.load(Ordering::SeqCst), 1);
+        }
+        let fake = Fake {
+            controlled: true,
+            ..Fake::new()
+        };
+        let (_send, recv) = watch::channel(false);
+        let mut wait = Box::pin(fake.wait("finish", recv));
+        assert!(futures_util::poll!(&mut wait).is_pending());
+        fake.finishes.lock().unwrap()["finish"].notify_one();
+        assert!(matches!(
+            futures_util::poll!(&mut wait),
+            Poll::Ready(Outcome::Exited(0))
+        ));
+        assert_eq!(fake.stopped.load(Ordering::SeqCst), 0);
     }
 
     /// The configuration digest the fake cache holds `image` as.
@@ -1747,7 +1827,7 @@ fi
             &self,
             job: JobRun<'_>,
             log: mpsc::Sender<Vec<u8>>,
-            mut cancel: watch::Receiver<bool>,
+            cancel: watch::Receiver<bool>,
         ) -> Outcome {
             self.ran.lock().unwrap().push((
                 job.job.image.clone(),
@@ -1771,15 +1851,7 @@ fi
                         let _ = log.send(git(job.work, args).into_bytes()).await;
                     }
                     ["exit", code] => return Outcome::Exited(code.parse().unwrap()),
-                    ["wait"] => {
-                        self.waiting.fetch_add(1, Ordering::SeqCst);
-                        loop {
-                            if cancel.changed().await.is_err() || *cancel.borrow() {
-                                self.stopped.fetch_add(1, Ordering::SeqCst);
-                                return Outcome::Cancelled;
-                            }
-                        }
-                    }
+                    ["wait"] => return self.wait(job.attempt_id, cancel).await,
                     _ => return Outcome::Exited(127),
                 }
             }
@@ -1878,10 +1950,22 @@ fi
     }
 
     async fn service_with_source_gate(pipeline: &str, gate: Option<SourceGate>) -> Service {
+        service_with_lease(pipeline, gate, 3).await
+    }
+
+    async fn service_with_lease(
+        pipeline: &str,
+        gate: Option<SourceGate>,
+        lease_secs: u64,
+    ) -> Service {
         let dir = tempfile::tempdir().unwrap();
         let data = dir.path().join("data");
         std::fs::create_dir_all(&data).unwrap();
-        std::fs::write(data.join("branvil.toml"), "[ci]\nlease_secs = 3\n").unwrap();
+        std::fs::write(
+            data.join("branvil.toml"),
+            format!("[ci]\nlease_secs = {lease_secs}\n"),
+        )
+        .unwrap();
         let config = crate::config::Config::load(None, &data).unwrap();
         let layout = config.layout();
         layout.create().unwrap();
@@ -2662,10 +2746,13 @@ esac
             http,
             repo,
             bare,
-        } = service(&pipeline).await;
+        } = service_with_lease(&pipeline, None, 60).await;
         let config = dir.path().join("runner.toml");
-        let max_jobs =
-            |n: u32| std::fs::write(&config, format!("[ci.executor]\nmax_jobs = {n}\n")).unwrap();
+        let max_jobs = |n: u32| {
+            let staged = config.with_extension("new");
+            std::fs::write(&staged, format!("[ci.executor]\nmax_jobs = {n}\n")).unwrap();
+            std::fs::rename(staged, &config).unwrap();
+        };
         max_jobs(2);
         let runner = Runner::new(
             Api::new(&url, &runner_token),
@@ -2673,13 +2760,24 @@ esac
             Some((config.clone(), dir.path().to_path_buf())),
             ExecutorConfig::default(),
         );
-        let fake = Arc::new(Fake::new());
-        let serving = tokio::spawn(Arc::new(runner).serve(move || fake.clone()));
+        // This tests scheduling, not heartbeat frequency. A three-second
+        // lease can expire under CI contention and this fixture has no reaper.
+        // Complete jobs explicitly; cancellation delivery is tested separately.
+        let fake = Arc::new(Fake {
+            controlled: true,
+            ..Fake::new()
+        });
+        let serving = tokio::spawn(Arc::new(runner).serve({
+            let fake = fake.clone();
+            move || fake.clone()
+        }));
         let sha = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
         // The checks once `done` holds of them (by name: status, attempt).
-        let settle = |done: fn(&[(String, String, u64)]) -> bool| {
+        let settle = |phase: &'static str, done: fn(&[(String, String, u64)]) -> bool| {
             let (app, repo, sha) = (app.clone(), repo.clone(), sha.clone());
+            let fake = fake.clone();
             async move {
+                let mut last = Vec::new();
                 for _ in 0..100 {
                     let mut seen: Vec<(String, String, u64, String)> = app
                         .ci
@@ -2703,16 +2801,34 @@ esac
                         .iter()
                         .map(|c| (c.0.clone(), c.1.clone(), c.2))
                         .collect();
-                    if done(&states) {
+                    if done(&states)
+                        && seen
+                            .iter()
+                            .filter(|c| c.1 == "in_progress")
+                            .all(|c| fake.finishes.lock().unwrap().contains_key(&c.3))
+                    {
                         return seen;
                     }
+                    last = seen;
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
-                panic!("the checks never settled");
+                let mut logs = Vec::new();
+                for check in &last {
+                    if !check.3.is_empty() {
+                        let log = app.ci.log_tail(&check.3, 4096).await.unwrap().0;
+                        logs.push((check.0.clone(), log));
+                    }
+                }
+                panic!(
+                    "{phase}: checks={last:?}; logs={logs:?}; executor started={}, stopped={}",
+                    fake.waiting.load(Ordering::SeqCst),
+                    fake.stopped.load(Ordering::SeqCst)
+                );
             }
         };
         let cancel = |id: String| {
             let (http, url, owner) = (http.clone(), url.clone(), owner.clone());
+            let fake = fake.clone();
             async move {
                 let resp = http
                     .post(format!("{url}/api/v1/repos/acme%2Fdemo/jobs/{id}/cancel"))
@@ -2721,6 +2837,12 @@ esac
                     .await
                     .unwrap();
                 assert_eq!(resp.status(), 200);
+                fake.finishes
+                    .lock()
+                    .unwrap()
+                    .get(&id)
+                    .expect("executor started")
+                    .notify_one();
             }
         };
         fn count(s: &[(String, String, u64)], status: &str) -> usize {
@@ -2729,7 +2851,10 @@ esac
 
         // Two run at once; the others wait in the queue, and the end of one
         // starts the next.
-        let seen = settle(|s| count(s, "in_progress") == 2 && count(s, "queued") == 2).await;
+        let seen = settle("initial two claims", |s| {
+            count(s, "in_progress") == 2 && count(s, "queued") == 2
+        })
+        .await;
         cancel(
             seen.iter()
                 .find(|c| c.1 == "in_progress")
@@ -2738,7 +2863,7 @@ esac
                 .clone(),
         )
         .await;
-        let seen = settle(|s| {
+        let seen = settle("replacement after cancellation", |s| {
             count(s, "cancelled") == 1 && count(s, "in_progress") == 2 && count(s, "queued") == 1
         })
         .await;
@@ -2747,9 +2872,15 @@ esac
         // running and the last queued.
         max_jobs(1);
         cancel(running[0].3.clone()).await;
-        settle(|s| count(s, "cancelled") == 2 && count(s, "in_progress") == 1).await;
+        settle("lowered limit after cancellation", |s| {
+            count(s, "cancelled") == 2 && count(s, "in_progress") == 1
+        })
+        .await;
         tokio::time::sleep(Duration::from_secs(3)).await;
-        let seen = settle(|s| count(s, "in_progress") == 1 && count(s, "queued") == 1).await;
+        let seen = settle("lowered limit stays effective", |s| {
+            count(s, "in_progress") == 1 && count(s, "queued") == 1
+        })
+        .await;
         assert!(
             seen.iter()
                 .any(|c| c.0 == running[1].0 && c.1 == "in_progress" && c.2 == 1),
@@ -2757,12 +2888,15 @@ esac
         );
         // Raised again, the last starts next to it.
         max_jobs(2);
-        let seen = settle(|s| count(s, "in_progress") == 2 && count(s, "cancelled") == 2).await;
+        let seen = settle("raised limit starts last job", |s| {
+            count(s, "in_progress") == 2 && count(s, "cancelled") == 2
+        })
+        .await;
         for c in seen.iter().filter(|c| c.1 == "in_progress") {
             assert_eq!(c.2, 1, "never interrupted: {seen:?}");
             cancel(c.3.clone()).await;
         }
-        settle(|s| count(s, "cancelled") == 4).await;
+        settle("all cancelled", |s| count(s, "cancelled") == 4).await;
         serving.abort();
     }
 
