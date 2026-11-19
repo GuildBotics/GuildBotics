@@ -948,11 +948,15 @@ async fn retained_publication_problems_apply_only_to_the_current_upstream() {
                 || async {
                     let got = w.server.ok(&pull, &w.owner).await;
                     match expected {
-                        Some(code) => got["landing"]["blockers"]
-                            .as_array()
-                            .unwrap()
-                            .iter()
-                            .any(|b| b["code"] == code),
+                        // The failure blocker is computed before the sweep posts its
+                        // notification. Wait for that comment before acknowledging it.
+                        Some(code) => [code, "unanswered"].iter().all(|code| {
+                            got["landing"]["blockers"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|b| b["code"] == *code)
+                        }),
                         None => got["landing"]["blockers"] == json!([]),
                     }
                 },
