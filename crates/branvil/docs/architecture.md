@@ -254,10 +254,12 @@ protected there, pull requests are approved and merged there by people, its CI
 (Windows included) and releases run there, and people outside see the finished
 pull requests there. Branvil never pushes the default branch; it follows it.
 
+Pull requests targeting other branches merge inside Branvil and leave linked tickets open. After an automatic child merge, a human verifies the child’s whole scope and closes the child ticket before marking the collecting PR ready.
+
 What the owner sees (GitHub as the example):
 
 1. Agents work in Branvil as before. Nothing reaches GitHub.
-2. On a pull request of a repository with an upstream, the merge button is
+2. On a pull request targeting the default branch of a repository with an upstream, the merge button is
    replaced by **Publish to GitHub**. It shows exactly what will be posted (the
    title and the current body, plus `Closes`/`Refs` lines for linked tickets
    that name a GitHub issue) and has the same preconditions as a merge (open,

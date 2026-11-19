@@ -983,8 +983,17 @@ async fn ticket_base_uses_nearest_draft_ancestor_and_create_reports_it() {
     };
     let made = f.code.create_pull_request(request("")).await.unwrap();
     assert_eq!(made.written.view.base, parent_branch);
-    let explicit = f.code.create_pull_request(request("main")).await.unwrap();
-    assert_eq!(explicit.written.view.base, "main");
+    f.owner
+        .pulls_update(
+            REPOSITORY,
+            parent_pr.pull.number,
+            input(json!({"draft":false})),
+        )
+        .await
+        .unwrap();
+    let ready_reuse = f.code.create_pull_request(request("")).await.unwrap();
+    assert!(!ready_reuse.created);
+    assert_eq!(ready_reuse.written.view.number, made.written.view.number);
     f.owner
         .pulls_set_open(REPOSITORY, parent_pr.pull.number, false)
         .await
@@ -1004,6 +1013,16 @@ async fn ticket_base_uses_nearest_draft_ancestor_and_create_reports_it() {
     assert_eq!(
         f.code.ticket_base(REPOSITORY, &key(&child)).await.unwrap(),
         "main"
+    );
+    let reused = f.code.create_pull_request(request("")).await.unwrap();
+    assert!(!reused.created);
+    assert_eq!(reused.written.view.number, made.written.view.number);
+    assert_eq!(reused.written.view.base, parent_branch);
+    let explicit = f.code.create_pull_request(request("main")).await.unwrap();
+    assert_eq!(explicit.written.view.base, "main");
+    assert_eq!(
+        f.code.create_pull_request(request("")).await.err().unwrap(),
+        ::branvil::agent::diagnostic("integrations.branvil.api.ambiguous_base", [])
     );
     context.stop().await;
 }

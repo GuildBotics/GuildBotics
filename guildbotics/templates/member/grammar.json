@@ -1221,7 +1221,7 @@
     ],
     "read_only": false,
     "content_required": true,
-    "help": "Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes every one of them; --closes-issue refuses a ticket kept outside this code host, which a merge cannot close."
+    "help": "Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR into the default branch closes every one of them; --closes-issue refuses a ticket kept outside this code host, which a merge cannot close."
   },
   "pr update": {
     "options": [
@@ -1274,7 +1274,7 @@
     ],
     "read_only": false,
     "content_required": false,
-    "help": "Change a PR's body, title, or ticket links. --issue-url replaces all links with those tickets; --closes-issue closes all of them on merge and --refs-issue only refers (the default). --drop-issue-links removes all links without requiring a body. Without either option, body replacement preserves existing ticket links and ignores new managed link lines in the body."
+    "help": "Change a PR's body, title, or ticket links. --issue-url replaces all links with those tickets; --closes-issue closes all of them on merge into the default branch and --refs-issue only refers (the default). --drop-issue-links removes all links without requiring a body. Without either option, body replacement preserves existing ticket links and ignores new managed link lines in the body."
   },
   "pr comment": {
     "options": [

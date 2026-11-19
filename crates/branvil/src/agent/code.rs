@@ -268,6 +268,19 @@ impl CodeAgent {
             self.fault("create_pull_request", &r.repository).await?;
             self.repository(&r.repository)?;
             if r.base.is_empty() {
+                let open = self.open_pull_requests(&r.repository, &r.head).await?;
+                match open.as_slice() {
+                    [url] => {
+                        r.base = self.pull(url).await?["base"]
+                            .as_str()
+                            .ok_or(ServiceError::Failed)?
+                            .into()
+                    }
+                    [] => {}
+                    _ => return Err(diagnostic("integrations.branvil.api.ambiguous_base", [])),
+                }
+            }
+            if r.base.is_empty() {
                 let prefix = format!("{}/{}/-/tickets/", self.data().base_url(), r.repository);
                 r.base =
                     if let Some(key) = r.tickets.iter().find_map(|t| t.url.strip_prefix(&prefix)) {

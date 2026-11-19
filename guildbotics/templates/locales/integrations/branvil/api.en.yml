@@ -17,3 +17,4 @@ en:
   artifact_too_large: "Artifact '%{name}' is above the %{limit} byte limit. Ask a human to retrieve it."
   stopped: "The embedded Branvil service is stopped."
   start_failed: "The embedded Branvil service could not start."
+  ambiguous_base: "Multiple open pull requests use this head. Specify --base to select one."
