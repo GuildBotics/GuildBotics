@@ -456,7 +456,7 @@ mod tests {
     #[cfg(unix)]
     use super::load_archive;
     #[cfg(unix)]
-    use crate::runner::executor::{Microsandbox, Msb, tests::write_script};
+    use crate::runner::executor::{Microsandbox, Msb, test_support::write_script};
 
     #[tokio::test]
     async fn foreign_archive_is_stored_without_touching_the_executor() {

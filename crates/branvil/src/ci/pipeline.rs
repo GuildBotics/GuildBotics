@@ -3,8 +3,8 @@
 //! unknown or out of range makes the whole pipeline invalid, which shows as a
 //! failing `pipeline` check, never as success.
 
+use serde::Deserialize;
 use serde::de::IgnoredAny;
-use serde::{Deserialize, Serialize};
 
 use std::path::Path;
 
@@ -79,42 +79,9 @@ pub async fn read(git: &Git, dir: &Path, sha: &str) -> AppResult<PipelineState> 
     })
 }
 
-/// One job as recorded with its attempts (the snapshot taken when the run was
-/// registered; retries reuse it).
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct JobDef {
-    pub verified_sha: bool,
-    pub name: String,
-    pub image: String,
-    pub commands: Vec<String>,
-    /// Git pathspec globs selecting PR-head jobs; empty means every change.
-    pub paths: Vec<String>,
-    /// The job's own time limit, when it gives one; the runner lowers it to
-    /// its limit and runs a job that gives none with its limit.
-    pub timeout_secs: Option<u64>,
-    pub artifacts: Vec<ArtifactDef>,
-    pub cache: Option<CacheDef>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct ArtifactDef {
-    pub name: String,
-    /// Files or directories, relative to the work directory.
-    pub paths: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct CacheDef {
-    /// Directories (relative to the work directory) restored before and saved
-    /// after the job.
-    pub paths: Vec<String>,
-    /// Files whose content is part of the cache key (`Cargo.lock`, ...).
-    #[serde(default)]
-    pub key_files: Vec<String>,
-}
-
+pub use gb_runner::ci::pipeline::{
+    ArtifactDef, CacheDef, JobDef, check_relative, valid_digest, valid_image,
+};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileSchema {
@@ -276,47 +243,6 @@ fn validate_job(j: JobSchema) -> Result<JobDef, String> {
 
 /// A path inside the work directory: relative, `/`-separated, no `.`/`..`
 /// components, no empty components except a trailing `/`.
-pub fn check_relative(path: &str) -> Result<(), String> {
-    let trimmed = path.strip_suffix('/').unwrap_or(path);
-    let ok = !trimmed.is_empty()
-        && trimmed.len() <= 512
-        && !trimmed.starts_with('/')
-        && !trimmed.contains('\\')
-        && !trimmed.contains('\0')
-        && !trimmed.contains(':')
-        && trimmed
-            .split('/')
-            .all(|c| !c.is_empty() && c != "." && c != "..");
-    if ok {
-        Ok(())
-    } else {
-        Err(format!(
-            "'{path}' is not a relative path inside the work directory."
-        ))
-    }
-}
-
-/// An OCI reference by tag, `[registry/]name[:tag]` (no digest: which
-/// version runs is the image the runner's cache holds under the tag),
-/// conservative characters only, never starting with `-` (it is passed as an
-/// argument).
-pub fn valid_image(image: &str) -> bool {
-    !image.is_empty()
-        && image.len() <= 256
-        && !image.starts_with('-')
-        && image
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-/:".contains(&b))
-}
-
-/// An image's configuration digest as the runner reports it:
-/// `sha256:<64 hex>`.
-pub fn valid_digest(digest: &str) -> bool {
-    digest
-        .strip_prefix("sha256:")
-        .is_some_and(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

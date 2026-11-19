@@ -55,6 +55,7 @@ export async function resumeSession(): Promise<boolean> {
 
 /** A local app's request on the consent page, as the server checks it. */
 export type AppAuthorizationRequest = {
+  runner?: string;
   client: string;
   redirect_uri: string;
   state: string;

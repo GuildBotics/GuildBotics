@@ -106,8 +106,7 @@ enum Command {
         branvil: bool,
     },
     /// Run the CI runner, a separate process that executes jobs in microVMs
-    #[cfg(feature = "hub")]
-    Runner(branvil::RunnerArgs),
+    Runner(gb_runner::RunnerArgs),
 }
 
 #[cfg(feature = "hub")]
@@ -270,6 +269,7 @@ fn main() -> ExitCode {
         None
     };
     let needs_update = matches!(&command, Command::Member { .. } | Command::Run { .. })
+        || matches!(&command, Command::Runner(args) if !args.is_join())
         || matches!(&command, Command::GitCredential { action } if credential_input.as_ref().unwrap().needs_hub(action));
     if needs_update {
         match block(gb_server::client::update::prepare()) {
@@ -319,7 +319,6 @@ fn main() -> ExitCode {
         Command::Environment { command, workspace } => {
             outcome(block(environment_cli::run(command, workspace)).map(|()| 0))
         }
-        #[cfg(feature = "hub")]
         Command::Runner(args) => outcome(block(runner(args))),
         Command::Member { arguments } => outcome(block(gb_server::client::member::run(arguments))),
         Command::GitCredential { action } => outcome(
@@ -548,13 +547,27 @@ fn browse(url: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// The CI runner, against the server of this machine unless told another.
-#[cfg(feature = "hub")]
-async fn runner(args: branvil::RunnerArgs) -> anyhow::Result<u8> {
-    let url = format!("http://127.0.0.1:{}", gb_server::port()?);
-    let data_dir = gb_server::endpoint::code_host_data()?;
-    let owner = async { Ok(gb_server::client::local_owner().await?.1) };
-    branvil::run_runner(args, url, data_dir, owner).await
+async fn runner(args: gb_runner::RunnerArgs) -> anyhow::Result<u8> {
+    if args.is_join() {
+        return gb_server::client::runner::join(|url| {
+            let _ = browse(url);
+        })
+        .await
+        .map(|_| 0);
+    }
+    #[cfg(feature = "hub")]
+    if gb_server::endpoint::running(&gb_base::home::data()?, gb_server::client::language().await)?
+        .is_some()
+    {
+        let language = gb_server::client::language().await;
+        let url = format!("http://127.0.0.1:{}", gb_server::port()?);
+        return gb_runner::run_runner(args, url, gb_server::endpoint::code_host_data()?, async {
+            Ok(gb_server::client::local_owner().await?.1)
+        })
+        .await
+        .map_err(|error| gb_server::client::runner::localized_error(error, language));
+    }
+    gb_server::client::runner::run(args).await
 }
 
 #[cfg(feature = "hub")]

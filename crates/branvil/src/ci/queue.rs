@@ -14,6 +14,7 @@
 //!   └─no runner───────▶ completed(startup_failure)  the runner stops and finishes)
 //! ```
 
+pub use gb_runner::ci::queue::{Basis, ResultInfo, Reuse};
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -922,26 +923,6 @@ pub struct Claimed {
     pub reuse: Option<Reuse>,
 }
 
-/// A successful execution the runner may reuse after checking its image and cache.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Reuse {
-    pub attempt_id: String,
-    pub sha: String,
-    pub image_digest: String,
-    pub cache_key: Option<String>,
-    pub basis: Basis,
-}
-
-/// What makes a result reusable: the same tree, or the same input digest
-/// of the job's paths (`Ci::job_inputs`). Never stored: a reused attempt's
-/// basis follows from its run's tree and its source's (`reused_basis`).
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
-pub enum Basis {
-    Tree,
-    Paths,
-}
-
 /// The basis on which `a` (with the scope and inputs copied at its claim)
 /// may reuse a result. Protected and gate runs check every job for real, so
 /// they reuse only the same tree; so do jobs without paths and attempts
@@ -983,16 +964,6 @@ pub fn reused_basis(r: &impl Rd, a: &Attempt, source: &Attempt) -> AppResult<Opt
     } else {
         Basis::Paths
     }))
-}
-
-/// The execution metadata reported by the runner at finish.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct ResultInfo {
-    pub image_digest: Option<String>,
-    pub reused_from: Option<String>,
-    pub cache_key: Option<String>,
-    #[serde(default)]
-    pub refresh_cache: bool,
 }
 
 fn reusable_shape(a: &Attempt, source: &Attempt) -> bool {

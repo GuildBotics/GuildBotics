@@ -1,1577 +1,179 @@
-//! `guildbotics runner`: the CI runner, a separate process from the service. It
-//! claims attempts over the runner API, checks the commit out of a Git bundle
-//! made by the service (it never touches the service's repositories or the
-//! database), runs the job in a microVM, streams the log, uploads artifacts,
-//! and reports the conclusion, renewing its lease while it works. See
-//! `docs/ci.md`.
-
-pub mod executor;
-pub mod workspace;
-pub mod zip;
-
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-
-use anyhow::{Context, bail};
-use clap::{Args, Subcommand};
-use serde::Deserialize;
-use tokio::sync::{mpsc, watch};
-
-use crate::ci::config::ExecutorConfig;
-use crate::ci::pipeline::JobDef;
-use crate::ci::queue::{Basis, ResultInfo, Reuse};
-use executor::{Executor, Health, JobRun, Microsandbox, Outcome};
-
-/// The runner's command line: run it, or one of its subcommands.
-#[derive(Args)]
-#[command(args_conflicts_with_subcommands = true)]
-pub struct RunnerArgs {
-    #[command(subcommand)]
-    command: Option<RunnerCommand>,
-    /// Per-job work directories and the dependency cache [default: ci.executor.work_dir of the configuration, else ~/.branvil/runner]
-    #[arg(long)]
-    work_dir: Option<PathBuf>,
-    /// Base URL of the server [default: the server on this machine]
-    #[arg(long, env = "BRANVIL_URL")]
-    url: Option<String>,
-    /// The runner's token
-    #[arg(long, env = "BRANVIL_TOKEN", hide_env_values = true)]
-    token: Option<String>,
-    /// Configuration file whose limits apply to every job, read again before each [default: the one of the data directory]
-    #[arg(long)]
-    config: Option<PathBuf>,
-    /// Data directory of the configuration [default: the server's]
-    #[arg(long, env = "BRANVIL_DATA_DIR")]
-    data_dir: Option<PathBuf>,
-}
-
-/// Runs the runner command `args`: `url` and `data_dir` are the server's on
-/// this machine, used when `args` names none, and `owner_token` gives the
-/// owner's token for `register`.
-pub async fn main(
-    args: RunnerArgs,
-    url: String,
-    data_dir: PathBuf,
-    owner_token: impl Future<Output = anyhow::Result<String>>,
-) -> anyhow::Result<u8> {
-    let data_dir = args.data_dir.unwrap_or(data_dir);
-    // A configuration named explicitly (the supervised runner gets the
-    // service's) has to be read: its limits apply to every job.
-    let config = match &args.config {
-        Some(file) => Some(crate::config::Config::load(Some(file), &data_dir)?),
-        None => crate::config::Config::load(None, &data_dir).ok(),
-    };
-    let url = args.url.unwrap_or(url);
-    let settings = Settings::new(url, args.token, args.work_dir, config.as_ref())?;
-    match args.command {
-        None => run(settings).await.map(|_| 0),
-        Some(RunnerCommand::Register { name }) => {
-            register(&settings.url, &owner_token.await?, &name)
-                .await
-                .map(|_| 0)
-        }
-        Some(RunnerCommand::Pull { image }) => pull(&settings, &image).await.map(|_| 0),
-        Some(RunnerCommand::Doctor) => doctor(&settings).await,
-        Some(RunnerCommand::InstallMsb { from }) => install_msb(&from).map(|_| 0),
-    }
-}
-
-#[derive(Subcommand)]
-enum RunnerCommand {
-    /// Create a runner member and print its token once (needs the owner's token)
-    Register {
-        /// Name of the runner member, e.g. runner1
-        name: String,
-    },
-    /// Pull an image into the runner's image cache (jobs never pull)
-    Pull {
-        /// Image reference by tag, [registry/]name[:tag], as pipelines name it
-        image: String,
-    },
-    /// Show which msb is used and whether the executor is ready
-    Doctor,
-    /// Copy an msb binary (and the libkrunfw next to it) into ~/.branvil/msb
-    InstallMsb {
-        /// Path of an msb binary that reports the pinned version
-        #[arg(long)]
-        from: PathBuf,
-    },
-}
-
-/// What the runner process needs, resolved from flags, environment, and the
-/// optional configuration.
-pub struct Settings {
-    pub url: String,
-    pub token: Option<String>,
-    pub work_dir: PathBuf,
-    pub executor: ExecutorConfig,
-    /// The configuration file and data directory the limits are read from
-    /// again before every claim, while the file exists.
-    pub config: Option<(PathBuf, PathBuf)>,
-    pub msb_path: Option<PathBuf>,
-    pub msb_home: PathBuf,
-}
-
-impl Settings {
-    pub fn new(
-        url: String,
-        token: Option<String>,
-        work_dir: Option<PathBuf>,
-        config: Option<&crate::config::Config>,
-    ) -> anyhow::Result<Self> {
-        let ci = config.map(|c| c.ci.clone()).unwrap_or_default();
-        Ok(Self {
-            url: crate::config::normalize_base_url(&url)?,
-            token,
-            work_dir: work_dir
-                .or(ci.executor.work_dir.clone())
-                .unwrap_or_else(|| executor::branvil_home().join("runner")),
-            msb_path: ci.microsandbox.msb_path.clone(),
-            msb_home: ci
-                .microsandbox
-                .home
-                .clone()
-                .unwrap_or_else(|| executor::branvil_home().join("msb-home")),
-            executor: ci.executor,
-            config: config.map(|c| (c.file.clone(), c.data_dir.clone())),
-        })
-    }
-
-    fn microsandbox(&self, runner: &str) -> Microsandbox {
-        Microsandbox::new(
-            executor::resolve_msb(self.msb_path.as_deref()),
-            self.msb_home.clone(),
-            runner,
-        )
-    }
-
-    fn api(&self) -> anyhow::Result<Api> {
-        let token = self
-            .token
-            .clone()
-            .context("a runner token is needed: pass --token or set BRANVIL_TOKEN (`guildbotics runner register`)")?;
-        Ok(Api {
-            url: self.url.clone(),
-            token,
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(600))
-                .build()?,
-        })
-    }
-}
-
-// ---------------------------------------------------------------- service client
-
-pub struct Api {
-    url: String,
-    token: String,
-    http: reqwest::Client,
-}
-
-#[derive(Debug)]
-pub enum ApiError {
-    /// The lease is not current any more: stop, report nothing.
-    Lost,
-    /// The token is not valid (revoked): the runner stops.
-    Unauthorized,
-    Other(String),
-}
-
-impl std::fmt::Display for ApiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ApiError::Lost => write!(f, "the lease is no longer current"),
-            ApiError::Unauthorized => write!(f, "the runner token is not valid (revoked?)"),
-            ApiError::Other(m) => write!(f, "{m}"),
-        }
-    }
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct Claim {
-    pub attempt_id: String,
-    pub lease: String,
-    pub lease_secs: u64,
-    pub repo: String,
-    pub sha: String,
-    pub attempt: u64,
-    pub job: JobDef,
-    pub verified_sha: Option<String>,
-    pub cache_scope: String,
-    pub network: bool,
-    pub queued_secs: u64,
-    pub reuse: Option<Reuse>,
-}
-
-impl Api {
-    pub fn new(url: &str, token: &str) -> Self {
-        Self {
-            url: url.trim_end_matches('/').to_string(),
-            token: token.to_string(),
-            http: reqwest::Client::new(),
-        }
-    }
-
-    fn at(&self, path: &str) -> String {
-        format!("{}/api/v1{path}", self.url)
-    }
-
-    async fn check(resp: reqwest::Response) -> Result<reqwest::Response, ApiError> {
-        let status = resp.status();
-        if status.is_success() {
-            return Ok(resp);
-        }
-        let body: serde_json::Value = resp.json().await.unwrap_or_default();
-        if status == reqwest::StatusCode::CONFLICT {
-            return Err(ApiError::Lost);
-        }
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(ApiError::Unauthorized);
-        }
-        Err(ApiError::Other(format!(
-            "{} ({})",
-            body["error"]["message"]
-                .as_str()
-                .unwrap_or("request failed"),
-            status.as_u16()
-        )))
-    }
-
-    fn net(e: reqwest::Error) -> ApiError {
-        ApiError::Other(format!("Branvil is not reachable: {e}"))
-    }
-
-    pub async fn me(&self) -> Result<serde_json::Value, ApiError> {
-        let resp = self
-            .http
-            .get(self.at("/me"))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .map_err(Self::net)?;
-        Self::check(resp).await?.json().await.map_err(Self::net)
-    }
-
-    /// Reconcile only this CPU's Hub archives, comparing configuration digests.
-    pub async fn sync_images(&self, ms: &Microsandbox) -> Result<(), ApiError> {
-        use crate::ci::images::{Archive, architecture};
-        use tokio::io::AsyncWriteExt;
-        let snapshot = ms.inventory(self).await?.images;
-        let resp = self
-            .http
-            .get(self.at(&format!("/runner/images?architecture={}", architecture())))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .map_err(Self::net)?;
-        let archives: Vec<Archive> = Self::check(resp).await?.json().await.map_err(Self::net)?;
-        let mut failures = Vec::new();
-        for archive in archives {
-            let reference = archive
-                .images
-                .iter()
-                .map(|i| i.reference.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let result = async {
-                let mut needed = Vec::new();
-                for image in &archive.images {
-                    if image.architecture != architecture() {
-                        continue;
-                    }
-                    let before = snapshot
-                        .iter()
-                        .find(|i| i.supports(&image.reference))
-                        .map(|i| i.digest.clone());
-                    if before.as_deref() != Some(&image.digest) {
-                        needed.push((image, before));
-                    }
-                }
-                if needed.is_empty() {
-                    return Ok::<_, ApiError>(());
-                }
-                std::fs::create_dir_all(ms.home()).map_err(|e| ApiError::Other(e.to_string()))?;
-                let temp = tempfile::NamedTempFile::new_in(ms.home())
-                    .map_err(|e| ApiError::Other(e.to_string()))?;
-                let mut file = tokio::fs::File::create(temp.path())
-                    .await
-                    .map_err(|e| ApiError::Other(e.to_string()))?;
-                let mut resp = Self::check(
-                    self.http
-                        .get(self.at(&format!("/runner/images/{}", archive.id)))
-                        .bearer_auth(&self.token)
-                        .send()
-                        .await
-                        .map_err(Self::net)?,
-                )
-                .await?;
-                use sha2::{Digest, Sha256};
-                let mut hash = Sha256::new();
-                while let Some(bytes) = resp.chunk().await.map_err(Self::net)? {
-                    hash.update(&bytes);
-                    file.write_all(&bytes)
-                        .await
-                        .map_err(|e| ApiError::Other(e.to_string()))?;
-                }
-                file.flush()
-                    .await
-                    .map_err(|e| ApiError::Other(e.to_string()))?;
-                drop(file);
-                if crate::util::hex(&hash.finalize()) != archive.id {
-                    return Err(ApiError::Other("CI archive digest mismatch".into()));
-                }
-                let _lock = ms.lock_images(true, || {}).await.map_err(ApiError::Other)?;
-                for (image, before) in needed {
-                    let held = ms
-                        .inspect(&image.reference)
-                        .await
-                        .map_err(ApiError::Other)?
-                        .map(|i| i.config_digest);
-                    // A concurrent writer owns any version installed during the download.
-                    if held != before || held.as_deref() == Some(&image.digest) {
-                        continue;
-                    }
-                    ms.load_as(temp.path(), &image.reference)
-                        .await
-                        .map_err(ApiError::Other)?;
-                    let held = ms
-                        .inspect(&image.reference)
-                        .await
-                        .map_err(ApiError::Other)?;
-                    if held.is_none_or(|i| i.config_digest != image.digest) {
-                        return Err(ApiError::Other(format!(
-                            "Loaded image {} has an unexpected digest",
-                            image.reference
-                        )));
-                    }
-                    ms.pin(&image.reference, Some(temp.path())).await;
-                }
-                ms.collect().await;
-                Ok(())
-            }
-            .await;
-            match result {
-                Ok(()) => {}
-                Err(ApiError::Unauthorized) => return Err(ApiError::Unauthorized),
-                Err(e) => failures.push(format!("{reference}: {e}")),
-            }
-        }
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(ApiError::Other(failures.join("; ")))
-        }
-    }
-
-    pub async fn claim(
-        &self,
-        executor: &str,
-        health: &Health,
-        images: &[crate::ci::images::Image],
-        accept: bool,
-    ) -> Result<Option<Claim>, ApiError> {
-        let body = serde_json::json!({
-            "executor": executor,
-            "architecture": crate::ci::images::architecture(),
-            "images": images,
-            "accept": accept,
-            "executor_state": if health.ready { "ready" } else { "unavailable" },
-            "executor_detail": health.detail,
-        });
-        let resp = self
-            .http
-            .post(self.at("/runner/claim"))
-            .bearer_auth(&self.token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(Self::net)?;
-        let resp = Self::check(resp).await?;
-        if resp.status() == reqwest::StatusCode::NO_CONTENT {
-            return Ok(None);
-        }
-        resp.json().await.map(Some).map_err(Self::net)
-    }
-
-    /// Writes the commit's Git bundle to `dest`; returns its size.
-    pub async fn source(&self, c: &Claim, dest: &Path) -> Result<u64, ApiError> {
-        use tokio::io::AsyncWriteExt;
-        let resp = self
-            .http
-            .get(self.at(&format!("/runner/attempts/{}/source", c.attempt_id)))
-            .bearer_auth(&self.token)
-            .header(crate::ci::api::LEASE_HEADER, &c.lease)
-            .send()
-            .await
-            .map_err(Self::net)?;
-        let mut resp = Self::check(resp).await?;
-        let io = |e: std::io::Error| ApiError::Other(format!("cannot write the source: {e}"));
-        let mut file = tokio::fs::File::create(dest).await.map_err(io)?;
-        let mut bytes = 0;
-        while let Some(chunk) = resp.chunk().await.map_err(Self::net)? {
-            file.write_all(&chunk).await.map_err(io)?;
-            bytes += chunk.len() as u64;
-        }
-        file.flush().await.map_err(io)?;
-        Ok(bytes)
-    }
-
-    /// Returns whether the service asks the runner to stop.
-    pub async fn heartbeat(&self, c: &Claim) -> Result<bool, ApiError> {
-        let resp = self
-            .http
-            .post(self.at(&format!("/runner/attempts/{}/heartbeat", c.attempt_id)))
-            .bearer_auth(&self.token)
-            .json(&serde_json::json!({"lease": c.lease}))
-            .send()
-            .await
-            .map_err(Self::net)?;
-        let v: serde_json::Value = Self::check(resp).await?.json().await.map_err(Self::net)?;
-        Ok(v["cancel"].as_bool().unwrap_or(false))
-    }
-
-    /// Returns whether the service truncated the log.
-    pub async fn log(&self, c: &Claim, bytes: Vec<u8>) -> Result<bool, ApiError> {
-        let resp = self
-            .http
-            .post(self.at(&format!("/runner/attempts/{}/log", c.attempt_id)))
-            .bearer_auth(&self.token)
-            .header(crate::ci::api::LEASE_HEADER, &c.lease)
-            .body(bytes)
-            .send()
-            .await
-            .map_err(Self::net)?;
-        let v: serde_json::Value = Self::check(resp).await?.json().await.map_err(Self::net)?;
-        Ok(v["truncated"].as_bool().unwrap_or(false))
-    }
-
-    pub async fn artifact(&self, c: &Claim, name: &str, data: Vec<u8>) -> Result<(), ApiError> {
-        let resp = self
-            .http
-            .put(self.at(&format!(
-                "/runner/attempts/{}/artifacts/{name}",
-                c.attempt_id
-            )))
-            .bearer_auth(&self.token)
-            .header(crate::ci::api::LEASE_HEADER, &c.lease)
-            .body(data)
-            .send()
-            .await
-            .map_err(Self::net)?;
-        Self::check(resp).await.map(|_| ())
-    }
-
-    pub async fn finish(
-        &self,
-        c: &Claim,
-        conclusion: &str,
-        details: Option<String>,
-        info: ResultInfo,
-    ) -> Result<(), ApiError> {
-        let resp = self
-            .http
-            .post(self.at(&format!("/runner/attempts/{}/finish", c.attempt_id)))
-            .bearer_auth(&self.token)
-            .json(&serde_json::json!({"lease": c.lease, "conclusion": conclusion, "details": details,
-                "image_digest": info.image_digest, "reused_from": info.reused_from, "cache_key": info.cache_key, "refresh_cache": info.refresh_cache}))
-            .send()
-            .await
-            .map_err(Self::net)?;
-        Self::check(resp).await.map(|_| ())
-    }
-}
-
-// ---------------------------------------------------------------- commands
-
-pub async fn register(url: &str, owner_token: &str, name: &str) -> anyhow::Result<()> {
-    let http = reqwest::Client::new();
-    let call = |method: reqwest::Method, path: String, body: serde_json::Value| {
-        http.request(method, format!("{url}/api/v1{path}"))
-            .bearer_auth(owner_token)
-            .json(&body)
-            .send()
-    };
-    let resp = call(
-        reqwest::Method::POST,
-        "/members".into(),
-        serde_json::json!({"name": name, "kind": "runner"}),
-    )
-    .await
-    .with_context(|| format!("the server is not reachable at {url}"))?;
-    if !resp.status().is_success() {
-        let v: serde_json::Value = resp.json().await.unwrap_or_default();
-        bail!(
-            "creating runner member {name}: {}",
-            v["error"]["message"].as_str().unwrap_or("failed")
-        );
-    }
-    let resp = call(
-        reqwest::Method::POST,
-        format!("/members/{}/tokens", crate::util::encode_segment(name)),
-        serde_json::json!({"label": "runner"}),
-    )
-    .await?;
-    let v: serde_json::Value = resp.json().await.unwrap_or_default();
-    let token = v["token"]
-        .as_str()
-        .context("the service did not return a token")?;
-    println!("{token}");
-    Ok(())
-}
-
-pub async fn pull(settings: &Settings, image: &str) -> anyhow::Result<()> {
-    if !crate::ci::pipeline::valid_image(image) {
-        bail!("'{image}' is not an image reference by tag ([registry/]name[:tag])");
-    }
-    let ms = settings.microsandbox("pull");
-    let Some(mut cmd) = ms.command() else {
-        bail!(
-            "{}",
-            match ms.msb() {
-                executor::Msb::Missing(m) => m.clone(),
-                executor::Msb::Found(_) => String::new(),
-            }
-        );
-    };
-    let _lock = ms
-        .lock_images(true, || {
-            eprintln!("waiting for another image pull or load to finish")
-        })
-        .await
-        .map_err(anyhow::Error::msg)?;
-    // Bounded like the GUI's pulls: jobs wait for the lock it holds.
-    let status = tokio::time::timeout(
-        executor::IMAGE_TRANSFER,
-        cmd.args(["pull", image])
-            .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
-            .status(),
-    )
-    .await
-    .with_context(|| format!("msb pull {image} timed out"))??;
-    if !status.success() {
-        bail!("msb pull {image} failed ({status})");
-    }
-    ms.pin(image, None).await;
-    ms.collect().await;
-    Ok(())
-}
-
-pub async fn doctor(settings: &Settings) -> anyhow::Result<u8> {
-    let ms = settings.microsandbox("doctor");
-    match ms.msb() {
-        executor::Msb::Found(p) => println!("msb: {} (msb {})", p.display(), executor::MSB_VERSION),
-        executor::Msb::Missing(m) => println!("msb: {m}"),
-    }
-    println!("MSB_HOME: {}", ms.home().display());
-    println!("work directory: {}", settings.work_dir.display());
-    let h = ms.health().await;
-    println!(
-        "executor: {}{}",
-        if h.ready { "ready" } else { "unavailable" },
-        h.detail.map(|d| format!(" ({d})")).unwrap_or_default()
-    );
-    Ok(if h.ready { 0 } else { 1 })
-}
-
-/// Copies an msb binary that reports the pinned version, and the libkrunfw
-/// library next to it (`../lib/`), into `~/.branvil/msb`.
-pub fn install_msb(from: &Path) -> anyhow::Result<()> {
-    match executor::resolve_msb(Some(from)) {
-        executor::Msb::Found(p) if p == from => {}
-        _ => bail!(
-            "{} is not an msb {} binary",
-            from.display(),
-            executor::MSB_VERSION
-        ),
-    }
-    let dest = executor::branvil_home().join("msb");
-    let lib_src = from
-        .parent()
-        .and_then(Path::parent)
-        .map(|p| p.join("lib"))
-        .context("cannot find the lib directory next to msb")?;
-    std::fs::create_dir_all(dest.join("bin"))?;
-    std::fs::create_dir_all(dest.join("lib"))?;
-    let bin = dest
-        .join("bin")
-        .join(from.file_name().context("msb file name")?);
-    std::fs::copy(from, &bin)?;
-    let mut libs = 0;
-    for e in std::fs::read_dir(&lib_src)
-        .with_context(|| format!("reading {}", lib_src.display()))?
-        .flatten()
-    {
-        if e.file_name().to_string_lossy().starts_with("libkrunfw") && e.path().is_file() {
-            std::fs::copy(e.path(), dest.join("lib").join(e.file_name()))?;
-            libs += 1;
-        }
-    }
-    if libs == 0 {
-        bail!("no libkrunfw found in {}", lib_src.display());
-    }
-    println!("installed {} and {libs} libkrunfw file(s)", bin.display());
-    Ok(())
-}
-
-/// Runs the runner until the process is stopped.
-pub async fn run(settings: Settings) -> anyhow::Result<()> {
-    let api = settings.api()?;
-    let me = api
-        .me()
-        .await
-        .map_err(|e| anyhow::anyhow!("cannot reach Branvil at {}: {e}", settings.url))?;
-    if me["kind"] != "runner" {
-        bail!(
-            "the token belongs to a {} member; the runner needs a runner member's token (`guildbotics runner register`)",
-            me["kind"]
-        );
-    }
-    let name = me["name"].as_str().unwrap_or("runner").to_string();
-    std::fs::create_dir_all(&settings.work_dir)?;
-    let lock = std::fs::File::create(settings.work_dir.join("runner.lock"))?;
-    if lock.try_lock().is_err() {
-        bail!(
-            "another runner uses {}; give each runner its own --work-dir",
-            settings.work_dir.display()
-        );
-    }
-    let runner = Runner::new(
-        api,
-        settings.work_dir.clone(),
-        settings.config.clone(),
-        settings.executor.clone(),
-    );
-    tracing::info!(
-        "runner {name} serving {} (work directory {})",
-        settings.url,
-        settings.work_dir.display()
-    );
-    Arc::new(runner)
-        .serve(move || Arc::new(settings.microsandbox(&name)))
-        .await
-}
-
-pub struct Runner {
-    pub api: Api,
-    pub work_dir: PathBuf,
-    /// Where `limits` are read from again before every claim, so that new
-    /// limits apply to the next job and leave the running ones alone.
-    config: Option<(PathBuf, PathBuf)>,
-    /// The limits last read, and why the file last could not be read (said
-    /// once, not at every claim).
-    limits: Mutex<(ExecutorConfig, Option<String>)>,
-    cache: Arc<workspace::Cache>,
-    sync_detail: Mutex<Option<String>>,
-}
-
-impl Runner {
-    pub fn new(
-        api: Api,
-        work_dir: PathBuf,
-        config: Option<(PathBuf, PathBuf)>,
-        limits: ExecutorConfig,
-    ) -> Self {
-        Self {
-            cache: Arc::new(workspace::Cache::new(work_dir.join("cache"))),
-            sync_detail: Mutex::new(None),
-            api,
-            work_dir,
-            config,
-            limits: Mutex::new((limits, None)),
-        }
-    }
-
-    /// The limits for the next job: the configuration file's as it reads
-    /// now (the last ones read when it cannot be read).
-    fn limits(&self) -> ExecutorConfig {
-        let mut last = self.limits.lock().unwrap();
-        let (limits, problem) = &mut *last;
-        if let Some((file, data_dir)) = self.config.as_ref().filter(|(f, _)| f.is_file()) {
-            match crate::config::Config::load(Some(file), data_dir) {
-                Ok(c) => (*limits, *problem) = (c.ci.executor, None),
-                Err(e) => {
-                    let e = format!("{e:#}");
-                    if problem.as_ref() != Some(&e) {
-                        tracing::warn!("keeping the runner's limits: {e}");
-                    }
-                    *problem = Some(e);
-                }
-            }
-        }
-        limits.clone()
-    }
-
-    /// Sweeps leftovers, then claims attempts and runs up to `max_jobs` of
-    /// them at once, until its token is refused. It claims only when it can
-    /// start the job, so waiting attempts stay queued in the service; with
-    /// the token refused, the running attempts end on their own (each
-    /// removing its microVM) before it returns.
-    pub async fn serve<E: Executor + 'static>(
-        self: Arc<Self>,
-        executor: impl Fn() -> Arc<E> + Send,
-    ) -> anyhow::Result<()> {
-        let mut current = executor();
-        current.sweep().await;
-        let _ = std::fs::remove_dir_all(self.work_dir.join("jobs"));
-        if let Err(e) = self.cache.remove_unpacked() {
-            tracing::warn!("removing cache entries of an earlier form failed: {e}");
-        }
-        let mut running = tokio::task::JoinSet::new();
-        let mut syncing = tokio::task::JoinSet::new();
-        let mut next_sync = Instant::now();
-        let mut backoff = 1;
-        'claiming: loop {
-            let limits = self.limits();
-            let mut wait = Duration::from_secs(2);
-            if syncing.is_empty() && Instant::now() >= next_sync && current.health().await.ready {
-                if self.sync_detail.lock().unwrap().is_none() {
-                    *self.sync_detail.lock().unwrap() =
-                        Some("CI image synchronization in progress".into());
-                }
-                let (runner, executor) = (self.clone(), current.clone());
-                syncing.spawn(async move { executor.synchronize(&runner.api).await });
-            }
-            if running.len() >= limits.max_jobs as usize
-                && let Err(ApiError::Unauthorized) = self.claim(&*current, false).await
-            {
-                break 'claiming;
-            }
-            if running.len() < limits.max_jobs as usize {
-                // Retry unresolved runtimes only. An accepted runtime retains
-                // both its ready and unavailable health cache across claims.
-                if current.needs_resolution() {
-                    current = executor();
-                }
-                match self.claim(&*current, true).await {
-                    Ok(Some((claim, health))) => {
-                        backoff = 1;
-                        let (runner, executor) = (self.clone(), current.clone());
-                        running.spawn(async move {
-                            runner.run(&*executor, &health, claim, &limits).await
-                        });
-                        continue;
-                    }
-                    Ok(None) => backoff = 1,
-                    Err(ApiError::Unauthorized) => break 'claiming,
-                    Err(e) => {
-                        tracing::warn!("{e}");
-                        wait = Duration::from_secs(backoff);
-                        backoff = (backoff * 2).min(30);
-                    }
-                }
-            }
-            tokio::select! {
-                Some(ended) = running.join_next() => match ended {
-                    Ok(Err(ApiError::Unauthorized)) => break 'claiming,
-                    Ok(Err(e)) => tracing::warn!("{e}"),
-                    Ok(Ok(())) => {}
-                    Err(e) => tracing::error!("an attempt's task failed: {e}"),
-                },
-                Some(ended) = syncing.join_next() => {
-                    next_sync = Instant::now() + Duration::from_secs(30);
-                    match ended {
-                        Ok(Err(ApiError::Unauthorized)) => break 'claiming,
-                        Ok(Err(e)) => *self.sync_detail.lock().unwrap() = Some(format!("CI image synchronization failed: {e}")),
-                        Ok(Ok(())) => *self.sync_detail.lock().unwrap() = None,
-                        Err(e) => *self.sync_detail.lock().unwrap() = Some(format!("CI image synchronization failed: {e}")),
-                    }
-                },
-                _ = tokio::time::sleep(wait) => {}
-            }
-        }
-        syncing.abort_all();
-        while syncing.join_next().await.is_some() {}
-        while running.join_next().await.is_some() {}
-        bail!("{}", ApiError::Unauthorized)
-    }
-
-    /// Claims an attempt, telling the service how the executor is.
-    async fn claim<E: Executor>(
-        &self,
-        executor: &E,
-        accept: bool,
-    ) -> Result<Option<(Claim, Health)>, ApiError> {
-        let mut health = executor.health().await;
-        let images = if health.ready {
-            match tokio::time::timeout(Duration::from_secs(10), executor.inventory(&self.api))
-                .await
-                .unwrap_or_else(|_| Err(ApiError::Other("Image cache inventory timed out".into())))
-            {
-                Ok(inventory) => {
-                    health.detail = inventory.detail;
-                    inventory.images
-                }
-                Err(ApiError::Unauthorized) => return Err(ApiError::Unauthorized),
-                Err(e) => {
-                    health.ready = false;
-                    health.detail = Some(format!("Cannot read the image cache: {e}"));
-                    Vec::new()
-                }
-            }
-        } else {
-            Vec::new()
-        };
-        if health.ready
-            && let Some(sync) = self.sync_detail.lock().unwrap().clone()
-        {
-            health.detail = Some(
-                health
-                    .detail
-                    .map_or(sync.clone(), |cache| format!("{sync}; {cache}")),
-            );
-        }
-        let claim = self
-            .api
-            .claim(executor.name(), &health, &images, accept)
-            .await?;
-        Ok(claim.map(|c| (c, health)))
-    }
-
-    /// Claims and runs at most one attempt. Returns whether there was one.
-    #[cfg(test)]
-    pub async fn once<E: Executor>(&self, executor: &E) -> Result<bool, ApiError> {
-        let limits = self.limits();
-        let Some((claim, health)) = self.claim(executor, true).await? else {
-            return Ok(false);
-        };
-        self.run(executor, &health, claim, &limits).await?;
-        Ok(true)
-    }
-
-    /// Runs a claimed attempt with `limits` and removes its directory.
-    async fn run<E: Executor>(
-        &self,
-        executor: &E,
-        health: &Health,
-        claim: Claim,
-        limits: &ExecutorConfig,
-    ) -> Result<(), ApiError> {
-        tracing::info!(
-            "attempt {} ({} #{} of {} {})",
-            claim.attempt_id,
-            claim.job.name,
-            claim.attempt,
-            claim.repo,
-            claim.sha
-        );
-        let result = self.attempt(executor, health, &claim, limits).await;
-        let _ = std::fs::remove_dir_all(self.job_dir(&claim));
-        match result {
-            Err(ApiError::Lost) => {
-                tracing::warn!(
-                    "attempt {}: the lease was lost; result dropped",
-                    claim.attempt_id
-                );
-                Ok(())
-            }
-            r => r,
-        }
-    }
-
-    fn job_dir(&self, c: &Claim) -> PathBuf {
-        self.work_dir.join("jobs").join(&c.attempt_id)
-    }
-
-    async fn attempt<E: Executor>(
-        &self,
-        executor: &E,
-        health: &Health,
-        c: &Claim,
-        limits: &ExecutorConfig,
-    ) -> Result<(), ApiError> {
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let lost = Arc::new(AtomicBool::new(false));
-        let beat = tokio::spawn(heartbeats(
-            Api::new(&self.api.url, &self.api.token),
-            c.clone(),
-            cancel_tx,
-            lost.clone(),
-        ));
-        let (log_tx, log_rx) = mpsc::channel::<Vec<u8>>(256);
-        let uploader = tokio::spawn(upload_log(
-            Api::new(&self.api.url, &self.api.token),
-            c.clone(),
-            log_rx,
-        ));
-        let result = self
-            .work(executor, health, c, limits, log_tx, cancel_rx, &lost)
-            .await;
-        let _ = uploader.await;
-        beat.abort();
-        if lost.load(Ordering::SeqCst) {
-            return Err(ApiError::Lost);
-        }
-        let (conclusion, details, info) = result;
-        self.api.finish(c, conclusion, details, info).await
-    }
-
-    /// Everything between the claim and the finish. Returns the conclusion,
-    /// its details, and the configuration digest of the image the job ran on
-    /// (none when it did not get that far).
-    #[allow(clippy::too_many_arguments)]
-    async fn work<E: Executor>(
-        &self,
-        executor: &E,
-        health: &Health,
-        c: &Claim,
-        limits: &ExecutorConfig,
-        log: mpsc::Sender<Vec<u8>>,
-        cancel: watch::Receiver<bool>,
-        lost: &AtomicBool,
-    ) -> (&'static str, Option<String>, ResultInfo) {
-        let say = |text: String| {
-            let log = log.clone();
-            async move {
-                let _ = log.send(format!("[branvil] {text}\n").into_bytes()).await;
-            }
-        };
-        if !health.ready {
-            let why = health
-                .detail
-                .clone()
-                .unwrap_or_else(|| "the executor is not usable".into());
-            say(format!("executor {} unavailable: {why}", executor.name())).await;
-            return (
-                "startup_failure",
-                Some(format!("The runner's executor is unavailable: {why}")),
-                ResultInfo::default(),
-            );
-        }
-        let job = &c.job;
-        let (cpus, memory_mib) = (limits.max_cpus, limits.max_memory_mib);
-        let max = limits.max_timeout_secs;
-        let timeout_secs = job.timeout_secs.map_or(max, |t| t.min(max));
-        say(format!(
-            "attempt {} of job {} on {} {} (executor {}, image {}, {cpus} cpu, {memory_mib} MiB, timeout {timeout_secs} s, network {})",
-            c.attempt,
-            job.name,
-            c.repo,
-            c.sha,
-            executor.name(),
-            job.image,
-            if c.network { "public only" } else { "off" }
-        ))
-        .await;
-        say(format!("queued for {} s", c.queued_secs)).await;
-        if let Some(t) = job.timeout_secs.filter(|t| *t > max) {
-            say(format!(
-                "timeout_secs {t} exceeds the runner limit {max}; using {max}"
-            ))
-            .await;
-        }
-        // Checked before the source is fetched; the lock that comes with the
-        // check keeps a load or a pull from re-pointing the checked tag until
-        // the VM has picked the image.
-        let mut stopping = cancel.clone();
-        let checked = tokio::select! {
-            checked = executor.resolve_image(&job.image, &log) => checked.map_err(Some),
-            Ok(_) = stopping.wait_for(|stop| *stop) => Err(None),
-        };
-        let (held, image_lock) = match checked {
-            Ok(checked) => checked,
-            Err(None) => {
-                say("job ended: cancelled while waiting for the image cache".into()).await;
-                return (
-                    "cancelled",
-                    Some("Stopped on request.".to_string()),
-                    ResultInfo::default(),
-                );
-            }
-            Err(Some(e)) => {
-                let why = format!("Checking the image failed: {e}");
-                say(why.clone()).await;
-                return ("startup_failure", Some(why), ResultInfo::default());
-            }
-        };
-        let Some(digest) = held else {
-            let why = format!(
-                "The image {} is not in the runner's image cache (jobs never pull); pull or load it under Settings → CI for the runner on the Hub, or run `guildbotics runner pull {}` on the runner's machine.",
-                job.image, job.image
-            );
-            say(why.clone()).await;
-            return ("startup_failure", Some(why), ResultInfo::default());
-        };
-        say(format!("image {} is {digest}", job.image)).await;
-        let mut info = ResultInfo {
-            image_digest: Some(digest.clone()),
-            ..Default::default()
-        };
-        if let Some(source) = &c.reuse {
-            let reason = if source.image_digest != digest {
-                Some(format!(
-                    "image digest differs (source {}, current {digest})",
-                    source.image_digest
-                ))
-            } else {
-                if job.cache.is_some()
-                    && c.cache_scope == "protected"
-                    && let Some(key) = &source.cache_key
-                {
-                    info.refresh_cache = match self
-                        .cache
-                        .saved_age(key, std::time::SystemTime::now())
-                    {
-                        Ok(Some(age))
-                            if age <= Duration::from_secs(workspace::CACHE_REFRESH_SECS) =>
-                        {
-                            say(format!(
-                                "reuse cache {key}: saved {} s ago (within {} s)",
-                                age.as_secs(),
-                                workspace::CACHE_REFRESH_SECS
-                            ))
-                            .await;
-                            false
-                        }
-                        Ok(Some(age)) => {
-                            say(format!("cache {key} last saved {} s ago (older than {} s); requesting refresh", age.as_secs(), workspace::CACHE_REFRESH_SECS)).await;
-                            true
-                        }
-                        Ok(None) => {
-                            say(format!(
-                                "cache {key} has no complete save; requesting refresh"
-                            ))
-                            .await;
-                            true
-                        }
-                        Err(e) => {
-                            say(format!(
-                                "cache {key} save cannot be checked: {e}; requesting refresh"
-                            ))
-                            .await;
-                            true
-                        }
-                    };
-                }
-                None
-            };
-            if let Some(reason) = reason {
-                say(format!(
-                    "reuse declined for {} ({}): {reason}; executing the job",
-                    source.attempt_id, source.sha
-                ))
-                .await;
-            } else {
-                let same = match source.basis {
-                    Basis::Tree => "the same tree",
-                    Basis::Paths => "the same contents of paths",
-                };
-                say(format!(
-                    "reused result of {} ({}, {same}), image {digest}",
-                    source.attempt_id, source.sha
-                ))
-                .await;
-                say("job ended: success (reused)".into()).await;
-                info.reused_from = Some(source.attempt_id.clone());
-                return ("success", None, info);
-            }
-        } else {
-            say("reuse unavailable: no reuse offered; executing the job".into()).await;
-        }
-        // The job's own steps; a `return` in the block ends them.
-        let (conclusion, details) = async {
-            // The work directory as the VM will see it: canonical (the runner's
-            // directory may sit behind system links such as macOS's /var),
-            // spelled as Git and msb take it on Windows (the names joined below
-            // it never end in a dot or space, which Windows would drop), and
-            // with no link anywhere below the runner's directory.
-            let root = match std::fs::create_dir_all(&self.work_dir)
-                .and_then(|_| std::fs::canonicalize(&self.work_dir))
-                .and_then(|dir| executor::plain_path(dir, |p| std::fs::canonicalize(p)))
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    return (
-                        "startup_failure",
-                        Some(format!("Cannot use the runner directory: {e}")),
-                    );
-                }
-            };
-            let rel = format!("jobs/{}/work", c.attempt_id);
-            let log_rel = format!("jobs/{}/log", c.attempt_id);
-            let io_rel = format!("jobs/{}/io", c.attempt_id);
-            let dir = root.join("jobs").join(&c.attempt_id);
-            let work = root.join(&rel);
-            let log_dir = root.join(&log_rel);
-            let io = root.join(&io_rel);
-            let _ = std::fs::remove_dir_all(&dir);
-            if let Err(e) = std::fs::create_dir_all(&work)
-                .and_then(|_| std::fs::create_dir(&log_dir))
-                .and_then(|_| std::fs::create_dir(&io))
-            {
-                return (
-                    "startup_failure",
-                    Some(format!("Cannot create the work directory: {e}")),
-                );
-            }
-            let bundle = dir.join("source.bundle");
-            let fetching = Instant::now();
-            match self.api.source(c, &bundle).await {
-                Ok(bytes) => {
-                    say(format!(
-                        "source fetched in {} ({bytes} bytes)",
-                        ms(fetching)
-                    ))
-                    .await;
-                    let checking_out = Instant::now();
-                    let checked_out = workspace::checkout(
-                        &bundle,
-                        &work,
-                        &dir.join("gitconfig"),
-                        &io.join(executor::CHECKOUT),
-                    )
-                    .await;
-                    let _ = std::fs::remove_file(&bundle);
-                    if let Err(e) = checked_out {
-                        return (
-                            "startup_failure",
-                            Some(format!("Checking out the source failed: {e}")),
-                        );
-                    }
-                    say(format!("checked out in {}", ms(checking_out))).await;
-                }
-                Err(ApiError::Lost) => {
-                    lost.store(true, Ordering::SeqCst);
-                    return ("cancelled", None);
-                }
-                Err(e) => {
-                    return (
-                        "startup_failure",
-                        Some(format!("Fetching the source failed: {e}")),
-                    );
-                }
-            }
-            // Re-check right before the VM gets the directories.
-            if let Err(e) = workspace::no_links_below(&root, &rel)
-                .and_then(|_| workspace::no_links_below(&root, &log_rel))
-                .and_then(|_| workspace::no_links_below(&root, &io_rel))
-            {
-                return (
-                    "startup_failure",
-                    Some(format!("Unsafe work directory: {e}")),
-                );
-            }
-            let key = job
-                .cache
-                .as_ref()
-                .map(|cache| workspace::cache_key(&c.repo, job, &digest, cache, &work));
-            if let Some(key) = &key {
-                let restoring = Instant::now();
-                let (store, into, key) =
-                    (self.cache.clone(), io.join(executor::CACHE_IN), key.clone());
-                match blocking(move || store.restore(&key, &into)).await {
-                    Ok(Some(bytes)) => {
-                        say(format!(
-                            "cache restored in {} ({bytes} bytes)",
-                            ms(restoring)
-                        ))
-                        .await
-                    }
-                    Ok(None) => say("no cache entry yet".into()).await,
-                    Err(e) => say(format!("cache restore failed: {e}")).await,
-                }
-            }
-            let env = job_environment(c);
-            info.cache_key = key.clone();
-            let outcome = executor
-                .run(
-                    JobRun {
-                        attempt_id: &c.attempt_id,
-                        job,
-                        image_lock,
-                        cpus,
-                        memory_mib,
-                        work_quota_mib: limits.work_quota_mib,
-                        timeout_secs,
-                        io: &io,
-                        save_cache: c.cache_scope == "protected",
-                        work: &work,
-                        log_dir: &log_dir,
-                        network: c.network,
-                        env,
-                    },
-                    log.clone(),
-                    cancel,
-                )
-                .await;
-            if lost.load(Ordering::SeqCst) {
-                return ("cancelled", None);
-            }
-            let (conclusion, details) = match &outcome {
-                Outcome::Exited(0) => ("success", None),
-                Outcome::Exited(code) => (
-                    "failure",
-                    Some(format!("A command exited with code {code}.")),
-                ),
-                Outcome::TimedOut => (
-                    "timed_out",
-                    Some(format!(
-                        "The job ran longer than {timeout_secs} s and was stopped."
-                    )),
-                ),
-                Outcome::Cancelled => ("cancelled", Some("Stopped on request.".to_string())),
-                Outcome::StartupFailure(m) => ("startup_failure", Some(m.clone())),
-            };
-            say(format!(
-                "job ended: {conclusion}{}",
-                details
-                    .as_ref()
-                    .map(|d| format!(" ({d})"))
-                    .unwrap_or_default()
-            ))
-            .await;
-            if matches!(outcome, Outcome::Exited(_) | Outcome::TimedOut)
-                && !job.artifacts.is_empty()
-            {
-                let collecting = Instant::now();
-                let mut budget = limits.artifacts_max_mib << 20;
-                for a in &job.artifacts {
-                    let mut notes = Vec::new();
-                    let packed = workspace::pack(&work, a, &mut budget, &mut notes);
-                    for n in notes {
-                        say(n).await;
-                    }
-                    match packed {
-                        Ok(Some(p)) => match self.api.artifact(c, &p.name, p.data).await {
-                            Ok(()) => {
-                                say(format!(
-                                    "artifact {} uploaded ({} file(s))",
-                                    p.name, p.files
-                                ))
-                                .await
-                            }
-                            Err(ApiError::Lost) => {
-                                lost.store(true, Ordering::SeqCst);
-                                return ("cancelled", None);
-                            }
-                            Err(e) => say(format!("artifact {}: upload failed: {e}", p.name)).await,
-                        },
-                        Ok(None) => {}
-                        Err(e) => say(format!("artifact {}: {e}", a.name)).await,
-                    }
-                }
-                say(format!("artifacts handled in {}", ms(collecting))).await;
-            }
-            // Only the runs of protected branches write the cache, which every
-            // run reads: a pull request plants nothing, and pushes none of
-            // its entries out.
-            if conclusion == "success" && job.cache.is_some() && c.cache_scope != "protected" {
-                say("cache not saved (only a protected branch's run saves it)".into()).await;
-            } else if conclusion == "success"
-                && let Some(key) = &key
-            {
-                let saving = Instant::now();
-                let (store, from, key) = (
-                    self.cache.clone(),
-                    io.join(executor::CACHE_OUT),
-                    key.clone(),
-                );
-                let max = limits.cache_max_mib << 20;
-                let owner = workspace::CacheOwner {
-                    repo: c.repo.clone(),
-                    job: job.name.clone(),
-                };
-                match blocking(move || store.save(&key, &owner, &from, max)).await {
-                    Ok(bytes) => {
-                        say(format!("cache saved in {} ({bytes} bytes)", ms(saving))).await
-                    }
-                    Err(e) => say(format!("cache save failed: {e}")).await,
-                }
-            }
-            (conclusion, details)
-        }
-        .await;
-        (conclusion, details, info)
-    }
-}
-
-/// Runs the cache's copies off the async threads, where the heartbeats and
-/// logs of the other jobs run.
-async fn blocking<T: Send + 'static>(
-    f: impl FnOnce() -> std::io::Result<T> + Send + 'static,
-) -> std::io::Result<T> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .unwrap_or_else(|e| Err(std::io::Error::other(e)))
-}
-
-/// The time since `since`, for the log.
-fn ms(since: Instant) -> String {
-    format!("{} ms", since.elapsed().as_millis())
-}
-
-/// Renews the lease every third of its length. The service asking to stop,
-/// or the lease turning out stale (or not renewable before it expires),
-/// stops the job.
-async fn heartbeats(api: Api, c: Claim, cancel: watch::Sender<bool>, lost: Arc<AtomicBool>) {
-    let every = Duration::from_secs((c.lease_secs / 3).clamp(1, 15));
-    let mut last_ok = tokio::time::Instant::now();
-    loop {
-        tokio::time::sleep(every).await;
-        match api.heartbeat(&c).await {
-            Ok(stop) => {
-                last_ok = tokio::time::Instant::now();
-                if stop {
-                    let _ = cancel.send(true);
-                }
-            }
-            Err(ApiError::Lost) => {
-                lost.store(true, Ordering::SeqCst);
-                let _ = cancel.send(true);
-                return;
-            }
-            Err(e) => {
-                tracing::warn!("heartbeat of {}: {e}", c.attempt_id);
-                if last_ok.elapsed() > Duration::from_secs(c.lease_secs) {
-                    // The lease has expired by now: nobody will accept the result.
-                    lost.store(true, Ordering::SeqCst);
-                    let _ = cancel.send(true);
-                    return;
-                }
-            }
-        }
-    }
-}
-
-/// Sends the log in batches (at most every 500 ms or 64 KiB) until every
-/// sender is gone or the service says the log is full.
-async fn upload_log(api: Api, c: Claim, mut rx: mpsc::Receiver<Vec<u8>>) {
-    let mut buf: Vec<u8> = Vec::new();
-    let mut full = false;
-    loop {
-        let more = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await;
-        let closed = matches!(more, Ok(None));
-        if let Ok(Some(bytes)) = more {
-            if !full {
-                buf.extend_from_slice(&bytes);
-            }
-            if buf.len() < 64 << 10 {
-                continue;
-            }
-        }
-        while !buf.is_empty() && !full {
-            let take = buf.len().min(512 << 10);
-            let chunk: Vec<u8> = buf.drain(..take).collect();
-            match api.log(&c, chunk).await {
-                Ok(truncated) => full = truncated,
-                Err(e) => {
-                    tracing::warn!("log of {}: {e}", c.attempt_id);
-                    full = true;
-                }
-            }
-        }
-        buf.clear();
-        if closed {
-            return;
-        }
-    }
-}
-
-/// Environment supplied to a job, including only its declared inputs.
-fn job_environment(c: &Claim) -> Vec<(String, String)> {
-    let mut env = vec![
-        ("CI".to_string(), "true".to_string()),
-        ("BRANVIL_CI".to_string(), "true".to_string()),
-        ("BRANVIL_REPOSITORY".to_string(), c.repo.clone()),
-        ("BRANVIL_SHA".to_string(), c.sha.clone()),
-        ("BRANVIL_JOB".to_string(), c.job.name.clone()),
-        ("BRANVIL_ATTEMPT_ID".to_string(), c.attempt_id.clone()),
-        ("BRANVIL_ATTEMPT".to_string(), c.attempt.to_string()),
-    ];
-    if c.job.verified_sha {
-        env.push((
-            "BRANVIL_VERIFIED_SHA".into(),
-            c.verified_sha.clone().unwrap_or_default(),
-        ));
-    }
-    env
-}
-
-/// Runs the test `test` (its full path) again in a child process with `env`
-/// added and `BRANVIL_TEST_CHILD` set, for what a test cannot change in its
-/// own process: Git and the runner read the environment. Fails with the
-/// child's output unless it passed.
+pub use gb_runner::runner::*;
 #[cfg(test)]
-pub(crate) fn pass_in_child(test: &str, env: &[(&str, &std::ffi::OsStr)]) {
-    let (_, test) = test.split_once("::").expect("a test path");
-    let out = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", test, "--nocapture"])
-        .env("BRANVIL_TEST_CHILD", "1")
-        .envs(env.iter().copied())
-        .output()
-        .unwrap();
-    let text = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        out.status.success() && text.contains("1 passed"),
-        "{text}{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-#[cfg(test)]
-mod tests {
-    //! The runner loop against an in-process service, with a fake executor
-    //! that interprets a few words (`echo`, `write`, `exit`, `wait`, and
-    //! `git`, which runs the host's Git in the work directory) and never
-    //! starts a VM.
-
+mod integration {
     use super::*;
-    use executor::ImageLock;
-    use std::sync::atomic::AtomicBool;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::Ordering;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn hub_archives_follow_cpu_and_digest_without_reloading_equal_versions() {
-        use crate::ci::images;
-        let s = service("").await;
-        let native = images::architecture();
-        let foreign = if native == "arm64" { "amd64" } else { "arm64" };
-        let archive = images::tests::docker(native, "1");
-        let saved = images::save(&s.app.layout.root, archive.path()).unwrap();
-        images::save(
-            &s.app.layout.root,
-            images::tests::docker(foreign, "1").path(),
-        )
-        .unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let msb = dir.path().join("msb");
-        let digest = &saved.images[0].digest;
-        executor::tests::write_script(
-            &msb,
-            &format!(
-                r#"#!/bin/sh
+    use tokio::sync::{mpsc, watch};
+
+    use crate::ci::config::ExecutorConfig;
+    use executor::{Executor, Health, JobRun, Microsandbox, Outcome};
+
+    #[cfg(test)]
+    mod tests {
+        //! The runner loop against an in-process service, with a fake executor
+        //! that interprets a few words (`echo`, `write`, `exit`, `wait`, and
+        //! `git`, which runs the host's Git in the work directory) and never
+        //! starts a VM.
+
+        use super::*;
+        use executor::ImageLock;
+        use std::sync::atomic::AtomicBool;
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn hub_archives_follow_cpu_and_digest_without_reloading_equal_versions() {
+            use crate::ci::images;
+            let s = service("").await;
+            let native = images::architecture();
+            let foreign = if native == "arm64" { "amd64" } else { "arm64" };
+            let archive = images::tests::docker(native, "1");
+            let saved = images::save(&s.app.layout.root, archive.path()).unwrap();
+            images::save(
+                &s.app.layout.root,
+                images::tests::docker(foreign, "1").path(),
+            )
+            .unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let msb = dir.path().join("msb");
+            let digest = &saved.images[0].digest;
+            executor::test_support::write_script(
+                &msb,
+                &format!(
+                    r#"#!/bin/sh
 case "$1 $2" in
 "load --quiet") echo loaded >> "$MSB_HOME/loads"; echo '{digest}' > "$MSB_HOME/digest" ;;
 "image inspect") [ -f "$MSB_HOME/digest" ] || exit 1; printf '{{"reference":"%s","digest":"sha256:manifest","config":{{"digest":"%s"}}}}' "$5" "$(cat "$MSB_HOME/digest")" ;;
 "image list") echo '[{{"reference":"test/image:dev","digest":"m"}}]' ;;
 esac
 "#
-            ),
-        );
-        let ms = Microsandbox::new(executor::Msb::Found(msb), dir.path().join("cache"), "test");
-        let api = Api::new(&s.url, &s.runner_token);
-        api.sync_images(&ms).await.unwrap();
-        let blob = images::path(&s.app.layout.root, &saved.id).unwrap();
-        std::fs::remove_file(&blob).unwrap();
-        // Equal digests work even when the archive cannot be fetched.
-        api.sync_images(&ms).await.unwrap();
-        std::fs::copy(archive.path(), &blob).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(ms.home().join("loads")).unwrap(),
-            "loaded\n"
-        );
-        std::fs::write(ms.home().join("digest"), "sha256:old").unwrap();
-        api.sync_images(&ms).await.unwrap();
-        assert_eq!(
-            std::fs::read_to_string(ms.home().join("loads")).unwrap(),
-            "loaded\nloaded\n"
-        );
-        let mut catalog = images::list(&s.app.layout.root).unwrap();
-        catalog.insert(
-            0,
-            images::Archive {
-                id: "0".repeat(64),
-                images: vec![images::Image {
-                    reference: "broken:dev".into(),
-                    architecture: native.into(),
-                    digest: "sha256:broken".into(),
-                }],
-            },
-        );
-        std::fs::write(
-            s.app.layout.root.join("ci/images/catalog.json"),
-            serde_json::to_vec(&catalog).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(ms.home().join("digest"), "sha256:old").unwrap();
-        assert!(
-            api.sync_images(&ms)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("broken:dev")
-        );
-        assert_eq!(
-            std::fs::read_to_string(ms.home().join("digest"))
-                .unwrap()
-                .trim(),
-            digest
-        );
-    }
+                ),
+            );
+            let ms = Microsandbox::new(executor::Msb::Found(msb), dir.path().join("cache"), "test");
+            let api = Api::new(&s.url, &s.runner_token);
+            api.sync_images(&ms).await.unwrap();
+            let blob = images::path(&s.app.layout.root, &saved.id).unwrap();
+            std::fs::remove_file(&blob).unwrap();
+            // Equal digests work even when the archive cannot be fetched.
+            api.sync_images(&ms).await.unwrap();
+            std::fs::copy(archive.path(), &blob).unwrap();
+            assert_eq!(
+                std::fs::read_to_string(ms.home().join("loads")).unwrap(),
+                "loaded\n"
+            );
+            std::fs::write(ms.home().join("digest"), "sha256:old").unwrap();
+            api.sync_images(&ms).await.unwrap();
+            assert_eq!(
+                std::fs::read_to_string(ms.home().join("loads")).unwrap(),
+                "loaded\nloaded\n"
+            );
+            let mut catalog = images::list(&s.app.layout.root).unwrap();
+            catalog.insert(
+                0,
+                images::Archive {
+                    id: "0".repeat(64),
+                    images: vec![images::Image {
+                        reference: "broken:dev".into(),
+                        architecture: native.into(),
+                        digest: "sha256:broken".into(),
+                    }],
+                },
+            );
+            std::fs::write(
+                s.app.layout.root.join("ci/images/catalog.json"),
+                serde_json::to_vec(&catalog).unwrap(),
+            )
+            .unwrap();
+            std::fs::write(ms.home().join("digest"), "sha256:old").unwrap();
+            assert!(
+                api.sync_images(&ms)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("broken:dev")
+            );
+            assert_eq!(
+                std::fs::read_to_string(ms.home().join("digest"))
+                    .unwrap()
+                    .trim(),
+                digest
+            );
+        }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn a_download_cannot_overwrite_a_concurrently_installed_version() {
-        use crate::ci::images;
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("cache");
-        std::fs::create_dir_all(&home).unwrap();
-        std::fs::write(home.join("digest"), "sha256:old").unwrap();
-        let archive = images::tests::docker(images::architecture(), "1");
-        let bytes = std::fs::read(archive.path()).unwrap();
-        let saved = images::Archive {
-            id: crate::util::hex(&crate::util::sha256(&bytes)),
-            images: images::inspect(archive.path()).unwrap(),
-        };
-        let msb = dir.path().join("msb");
-        executor::tests::write_script(
-            &msb,
-            r#"#!/bin/sh
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn a_download_cannot_overwrite_a_concurrently_installed_version() {
+            use crate::ci::images;
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("cache");
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::write(home.join("digest"), "sha256:old").unwrap();
+            let archive = images::tests::docker(images::architecture(), "1");
+            let bytes = std::fs::read(archive.path()).unwrap();
+            let saved = images::Archive {
+                id: crate::util::hex(&crate::util::sha256(&bytes)),
+                images: images::inspect(archive.path()).unwrap(),
+            };
+            let msb = dir.path().join("msb");
+            executor::test_support::write_script(
+                &msb,
+                r#"#!/bin/sh
 case "$1 $2" in
 "image inspect") printf '{"reference":"test/image:dev","digest":"m","config":{"digest":"%s"}}' "$(cat "$MSB_HOME/digest")" ;;
 "load --quiet") touch "$MSB_HOME/overwritten" ;;
 "image list") echo '[{"reference":"test/image:dev","digest":"m"}]' ;;
 esac
 "#,
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let target = home.join("digest");
-        let catalog_target = target.clone();
-        let router = axum::Router::new()
-            .route(
-                "/api/v1/runner/images",
-                axum::routing::get(move || {
-                    let saved = saved.clone();
-                    let target = catalog_target.clone();
-                    async move {
-                        std::fs::write(target, "sha256:concurrent").unwrap();
-                        axum::Json(vec![saved])
-                    }
-                }),
-            )
-            .route(
-                "/api/v1/runner/images/{id}",
-                axum::routing::get(move || {
-                    let bytes = bytes.clone();
-                    let target = target.clone();
-                    async move {
-                        std::fs::write(target, "sha256:concurrent").unwrap();
-                        bytes
-                    }
-                }),
             );
-        let server = tokio::spawn(axum::serve(listener, router).into_future());
-        let ms = Microsandbox::new(executor::Msb::Found(msb), home, "t");
-        Api::new(&url, "unused").sync_images(&ms).await.unwrap();
-        assert!(!ms.home().join("overwritten").exists());
-        assert_eq!(
-            std::fs::read_to_string(ms.home().join("digest")).unwrap(),
-            "sha256:concurrent"
-        );
-        server.abort();
-    }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let target = home.join("digest");
+            let catalog_target = target.clone();
+            let router = axum::Router::new()
+                .route(
+                    "/api/v1/runner/images",
+                    axum::routing::get(move || {
+                        let saved = saved.clone();
+                        let target = catalog_target.clone();
+                        async move {
+                            std::fs::write(target, "sha256:concurrent").unwrap();
+                            axum::Json(vec![saved])
+                        }
+                    }),
+                )
+                .route(
+                    "/api/v1/runner/images/{id}",
+                    axum::routing::get(move || {
+                        let bytes = bytes.clone();
+                        let target = target.clone();
+                        async move {
+                            std::fs::write(target, "sha256:concurrent").unwrap();
+                            bytes
+                        }
+                    }),
+                );
+            let server = tokio::spawn(axum::serve(listener, router).into_future());
+            let ms = Microsandbox::new(executor::Msb::Found(msb), home, "t");
+            Api::new(&url, "unused").sync_images(&ms).await.unwrap();
+            assert!(!ms.home().join("overwritten").exists());
+            assert_eq!(
+                std::fs::read_to_string(ms.home().join("digest")).unwrap(),
+                "sha256:concurrent"
+            );
+            server.abort();
+        }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn inventory_preserves_good_tags_and_reports_each_bad_tag() {
-        let dir = tempfile::tempdir().unwrap();
-        let msb = dir.path().join("msb");
-        executor::tests::write_script(
-            &msb,
-            r#"#!/bin/sh
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn inventory_preserves_good_tags_and_reports_each_bad_tag() {
+            let dir = tempfile::tempdir().unwrap();
+            let msb = dir.path().join("msb");
+            executor::test_support::write_script(
+                &msb,
+                r#"#!/bin/sh
 if [ "$2" = list ]; then
   echo '[{"reference":"failed","digest":"m"},{"reference":"malformed","digest":"m"},{"reference":"good","digest":"m"}]'
 else
@@ -1582,607 +184,610 @@ else
   esac
 fi
 "#,
-        );
-        let ms = Microsandbox::new(executor::Msb::Found(msb), dir.path().join("cache"), "t");
-        let inventory = ms
-            .inventory(&Api::new("http://127.0.0.1:1", "unused"))
-            .await
-            .unwrap();
-        assert_eq!(inventory.images.len(), 1);
-        assert_eq!(inventory.images[0].reference, "good");
-        let detail = inventory.detail.unwrap();
-        assert!(
-            detail.contains("permission denied") && detail.contains("malformed"),
-            "{detail}"
-        );
-    }
-
-    #[tokio::test]
-    async fn synchronization_does_not_block_cached_jobs_or_runner_reports() {
-        for blocked in [false, true] {
-            let s = service("[[jobs]]\nname = 'test'\nimage = 'alpine'\ncommands = ['echo ok']\n")
-                .await;
-            let fake = Arc::new(Fake::new());
-            fake.sync_blocked.store(blocked, Ordering::SeqCst);
-            fake.sync_failed.store(!blocked, Ordering::SeqCst);
-            let runner = Arc::new(Runner::new(
-                Api::new(&s.url, &s.runner_token),
-                s.dir.path().join("runner"),
-                None,
-                ExecutorConfig::default(),
-            ));
-            let running = tokio::spawn(runner.serve({
-                let fake = fake.clone();
-                move || fake.clone()
-            }));
-            let sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
-            tokio::time::timeout(Duration::from_secs(15), async {
-                loop {
-                    if result_of(&s, &sha).await.conclusion.as_deref() == Some("success") {
-                        break;
-                    }
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .unwrap();
-            tokio::time::timeout(Duration::from_secs(5), async {
-                loop {
-                    if s.app
-                        .ci
-                        .diagnostics()
-                        .await
-                        .to_string()
-                        .contains(if blocked {
-                            "synchronization in progress"
-                        } else {
-                            "broken archive"
-                        })
-                    {
-                        break;
-                    }
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .unwrap();
-            s.revoke_runner_token().await;
+            );
+            let ms = Microsandbox::new(executor::Msb::Found(msb), dir.path().join("cache"), "t");
+            let inventory = ms
+                .inventory(&Api::new("http://127.0.0.1:1", "unused"))
+                .await
+                .unwrap();
+            assert_eq!(inventory.images.len(), 1);
+            assert_eq!(inventory.images[0].reference, "good");
+            let detail = inventory.detail.unwrap();
             assert!(
-                tokio::time::timeout(Duration::from_secs(5), running)
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .is_err()
+                detail.contains("permission denied") && detail.contains("malformed"),
+                "{detail}"
             );
         }
-    }
 
-    /// What a run got: (image, cpus, memory MiB, timeout s, work quota MiB).
-    type Ran = (String, u32, u64, u64, u64);
-
-    struct Fake {
-        ready: AtomicBool,
-        controlled: bool,
-        finishes: Mutex<std::collections::BTreeMap<String, Arc<tokio::sync::Notify>>>,
-        sync_blocked: AtomicBool,
-        sync_failed: AtomicBool,
-        /// The image cache is held (by a pull or a load): checks wait.
-        hold_images: AtomicBool,
-        changed_image: AtomicBool,
-        /// What every run got.
-        ran: std::sync::Mutex<Vec<Ran>>,
-        /// Jobs that reached `wait`, after source fetching and checkout.
-        waiting: std::sync::atomic::AtomicUsize,
-        /// `wait`s that saw the stop (an aborted run never does).
-        stopped: std::sync::atomic::AtomicUsize,
-    }
-
-    impl Fake {
-        fn new() -> Self {
-            Self {
-                ready: AtomicBool::new(true),
-                controlled: false,
-                finishes: Default::default(),
-                sync_blocked: AtomicBool::new(false),
-                sync_failed: AtomicBool::new(false),
-                hold_images: AtomicBool::new(false),
-                changed_image: AtomicBool::new(false),
-                ran: Default::default(),
-                waiting: Default::default(),
-                stopped: Default::default(),
+        #[tokio::test]
+        async fn synchronization_does_not_block_cached_jobs_or_runner_reports() {
+            for blocked in [false, true] {
+                let s =
+                    service("[[jobs]]\nname = 'test'\nimage = 'alpine'\ncommands = ['echo ok']\n")
+                        .await;
+                let fake = Arc::new(Fake::new());
+                fake.sync_blocked.store(blocked, Ordering::SeqCst);
+                fake.sync_failed.store(!blocked, Ordering::SeqCst);
+                let runner = Arc::new(Runner::new(
+                    Api::new(&s.url, &s.runner_token),
+                    s.dir.path().join("runner"),
+                    None,
+                    ExecutorConfig::default(),
+                ));
+                let running = tokio::spawn(runner.serve({
+                    let fake = fake.clone();
+                    move || fake.clone()
+                }));
+                let sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
+                tokio::time::timeout(Duration::from_secs(15), async {
+                    loop {
+                        if result_of(&s, &sha).await.conclusion.as_deref() == Some("success") {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        if s.app
+                            .ci
+                            .diagnostics()
+                            .await
+                            .to_string()
+                            .contains(if blocked {
+                                "synchronization in progress"
+                            } else {
+                                "broken archive"
+                            })
+                        {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                s.revoke_runner_token().await;
+                assert!(
+                    tokio::time::timeout(Duration::from_secs(5), running)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .is_err()
+                );
             }
         }
-    }
 
-    impl Fake {
-        async fn wait(&self, id: &str, mut cancel: watch::Receiver<bool>) -> Outcome {
-            self.waiting.fetch_add(1, Ordering::SeqCst);
-            let finish = Arc::new(tokio::sync::Notify::new());
-            if self.controlled {
-                self.finishes
-                    .lock()
-                    .unwrap()
-                    .insert(id.into(), finish.clone());
-            }
-            tokio::select! {
-                biased;
-                _ = cancel.wait_for(|stop| *stop) => {
-                    self.stopped.fetch_add(1, Ordering::SeqCst);
-                    Outcome::Cancelled
+        /// What a run got: (image, cpus, memory MiB, timeout s, work quota MiB).
+        type Ran = (String, u32, u64, u64, u64);
+
+        struct Fake {
+            ready: AtomicBool,
+            controlled: bool,
+            finishes: Mutex<std::collections::BTreeMap<String, Arc<tokio::sync::Notify>>>,
+            sync_blocked: AtomicBool,
+            sync_failed: AtomicBool,
+            /// The image cache is held (by a pull or a load): checks wait.
+            hold_images: AtomicBool,
+            changed_image: AtomicBool,
+            /// What every run got.
+            ran: std::sync::Mutex<Vec<Ran>>,
+            /// Jobs that reached `wait`, after source fetching and checkout.
+            waiting: std::sync::atomic::AtomicUsize,
+            /// `wait`s that saw the stop (an aborted run never does).
+            stopped: std::sync::atomic::AtomicUsize,
+        }
+
+        impl Fake {
+            fn new() -> Self {
+                Self {
+                    ready: AtomicBool::new(true),
+                    controlled: false,
+                    finishes: Default::default(),
+                    sync_blocked: AtomicBool::new(false),
+                    sync_failed: AtomicBool::new(false),
+                    hold_images: AtomicBool::new(false),
+                    changed_image: AtomicBool::new(false),
+                    ran: Default::default(),
+                    waiting: Default::default(),
+                    stopped: Default::default(),
                 }
-                _ = finish.notified(), if self.controlled => Outcome::Exited(0),
             }
         }
-    }
 
-    #[tokio::test]
-    async fn fake_wait_observes_cancellation_in_every_mode() {
-        use std::task::Poll;
-        for controlled in [false, true] {
-            for initial in [false, true] {
+        impl Fake {
+            async fn wait(&self, id: &str, mut cancel: watch::Receiver<bool>) -> Outcome {
+                self.waiting.fetch_add(1, Ordering::SeqCst);
+                let finish = Arc::new(tokio::sync::Notify::new());
+                if self.controlled {
+                    self.finishes
+                        .lock()
+                        .unwrap()
+                        .insert(id.into(), finish.clone());
+                }
+                tokio::select! {
+                    biased;
+                    _ = cancel.wait_for(|stop| *stop) => {
+                        self.stopped.fetch_add(1, Ordering::SeqCst);
+                        Outcome::Cancelled
+                    }
+                    _ = finish.notified(), if self.controlled => Outcome::Exited(0),
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn fake_wait_observes_cancellation_in_every_mode() {
+            use std::task::Poll;
+            for controlled in [false, true] {
+                for initial in [false, true] {
+                    let fake = Fake {
+                        controlled,
+                        ..Fake::new()
+                    };
+                    let (send, recv) = watch::channel(initial);
+                    let mut wait = Box::pin(fake.wait("attempt", recv));
+                    if !initial {
+                        assert!(futures_util::poll!(&mut wait).is_pending());
+                        send.send(false).unwrap();
+                        assert!(futures_util::poll!(&mut wait).is_pending());
+                        send.send(true).unwrap();
+                    }
+                    // Even if both signals are ready, a stop must be visible.
+                    if controlled && !initial {
+                        fake.finishes.lock().unwrap()["attempt"].notify_one();
+                    }
+                    assert!(matches!(
+                        futures_util::poll!(&mut wait),
+                        Poll::Ready(Outcome::Cancelled)
+                    ));
+                    assert_eq!(fake.stopped.load(Ordering::SeqCst), 1);
+                    assert_eq!(fake.waiting.load(Ordering::SeqCst), 1);
+                }
                 let fake = Fake {
                     controlled,
                     ..Fake::new()
                 };
-                let (send, recv) = watch::channel(initial);
-                let mut wait = Box::pin(fake.wait("attempt", recv));
-                if !initial {
-                    assert!(futures_util::poll!(&mut wait).is_pending());
-                    send.send(false).unwrap();
-                    assert!(futures_util::poll!(&mut wait).is_pending());
-                    send.send(true).unwrap();
-                }
-                // Even if both signals are ready, a stop must be visible.
-                if controlled && !initial {
-                    fake.finishes.lock().unwrap()["attempt"].notify_one();
-                }
+                let (send, recv) = watch::channel(false);
+                drop(send);
                 assert!(matches!(
-                    futures_util::poll!(&mut wait),
-                    Poll::Ready(Outcome::Cancelled)
+                    fake.wait("closed", recv).await,
+                    Outcome::Cancelled
                 ));
                 assert_eq!(fake.stopped.load(Ordering::SeqCst), 1);
-                assert_eq!(fake.waiting.load(Ordering::SeqCst), 1);
             }
             let fake = Fake {
-                controlled,
+                controlled: true,
                 ..Fake::new()
             };
-            let (send, recv) = watch::channel(false);
-            drop(send);
+            let (_send, recv) = watch::channel(false);
+            let mut wait = Box::pin(fake.wait("finish", recv));
+            assert!(futures_util::poll!(&mut wait).is_pending());
+            fake.finishes.lock().unwrap()["finish"].notify_one();
             assert!(matches!(
-                fake.wait("closed", recv).await,
-                Outcome::Cancelled
+                futures_util::poll!(&mut wait),
+                Poll::Ready(Outcome::Exited(0))
             ));
-            assert_eq!(fake.stopped.load(Ordering::SeqCst), 1);
+            assert_eq!(fake.stopped.load(Ordering::SeqCst), 0);
         }
-        let fake = Fake {
-            controlled: true,
-            ..Fake::new()
-        };
-        let (_send, recv) = watch::channel(false);
-        let mut wait = Box::pin(fake.wait("finish", recv));
-        assert!(futures_util::poll!(&mut wait).is_pending());
-        fake.finishes.lock().unwrap()["finish"].notify_one();
-        assert!(matches!(
-            futures_util::poll!(&mut wait),
-            Poll::Ready(Outcome::Exited(0))
-        ));
-        assert_eq!(fake.stopped.load(Ordering::SeqCst), 0);
-    }
 
-    /// The configuration digest the fake cache holds `image` as.
-    fn digest_of(image: &str) -> String {
-        format!(
-            "sha256:{}",
-            crate::util::hex(&crate::util::sha256(image.as_bytes()))
-        )
-    }
+        /// The configuration digest the fake cache holds `image` as.
+        fn digest_of(image: &str) -> String {
+            format!(
+                "sha256:{}",
+                crate::util::hex(&crate::util::sha256(image.as_bytes()))
+            )
+        }
 
-    impl Executor for Fake {
-        async fn synchronize(&self, _api: &Api) -> Result<(), ApiError> {
-            if self.sync_blocked.load(Ordering::SeqCst) {
-                std::future::pending::<()>().await;
+        impl Executor for Fake {
+            async fn synchronize(&self, _api: &Api) -> Result<(), ApiError> {
+                if self.sync_blocked.load(Ordering::SeqCst) {
+                    std::future::pending::<()>().await;
+                }
+                if self.sync_failed.load(Ordering::SeqCst) {
+                    return Err(ApiError::Other("broken archive".into()));
+                }
+                Ok(())
             }
-            if self.sync_failed.load(Ordering::SeqCst) {
-                return Err(ApiError::Other("broken archive".into()));
+            async fn inventory(&self, _api: &Api) -> Result<executor::Inventory, ApiError> {
+                Ok(executor::Inventory {
+                    detail: None,
+                    images: vec![crate::ci::images::Image {
+                        reference: "alpine".into(),
+                        architecture: "arm64".into(),
+                        digest: "sha256:test".into(),
+                    }],
+                })
             }
-            Ok(())
-        }
-        async fn inventory(&self, _api: &Api) -> Result<executor::Inventory, ApiError> {
-            Ok(executor::Inventory {
-                detail: None,
-                images: vec![crate::ci::images::Image {
-                    reference: "alpine".into(),
-                    architecture: "arm64".into(),
-                    digest: "sha256:test".into(),
-                }],
-            })
-        }
-        fn name(&self) -> &'static str {
-            "fake"
-        }
-        async fn health(&self) -> Health {
-            let ready = self.ready.load(Ordering::SeqCst);
-            Health {
-                ready,
-                detail: (!ready).then(|| "fake executor switched off".to_string()),
+            fn name(&self) -> &'static str {
+                "fake"
             }
-        }
-        async fn resolve_image(
-            &self,
-            image: &str,
-            _: &mpsc::Sender<Vec<u8>>,
-        ) -> Result<(Option<String>, ImageLock), String> {
-            if self.hold_images.load(Ordering::SeqCst) {
-                std::future::pending::<()>().await;
-            }
-            let digest = if self.changed_image.load(Ordering::SeqCst) {
-                digest_of(&format!("updated-{image}"))
-            } else {
-                digest_of(image)
-            };
-            Ok((Some(digest), ImageLock::default()))
-        }
-        async fn run(
-            &self,
-            job: JobRun<'_>,
-            log: mpsc::Sender<Vec<u8>>,
-            cancel: watch::Receiver<bool>,
-        ) -> Outcome {
-            self.ran.lock().unwrap().push((
-                job.job.image.clone(),
-                job.cpus,
-                job.memory_mib,
-                job.timeout_secs,
-                job.work_quota_mib,
-            ));
-            for c in &job.job.commands {
-                let words: Vec<&str> = c.split_whitespace().collect();
-                match words.as_slice() {
-                    ["echo", rest @ ..] => {
-                        let _ = log.send(format!("{}\n", rest.join(" ")).into_bytes()).await;
-                    }
-                    ["write", path, content] => {
-                        let p = job.work.join(path);
-                        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-                        std::fs::write(p, content).unwrap();
-                    }
-                    ["git", args @ ..] => {
-                        let _ = log.send(git(job.work, args).into_bytes()).await;
-                    }
-                    ["exit", code] => return Outcome::Exited(code.parse().unwrap()),
-                    ["wait"] => return self.wait(job.attempt_id, cancel).await,
-                    _ => return Outcome::Exited(127),
+            async fn health(&self) -> Health {
+                let ready = self.ready.load(Ordering::SeqCst);
+                Health {
+                    ready,
+                    detail: (!ready).then(|| "fake executor switched off".to_string()),
                 }
             }
-            // What the VM that collects `/work` packs of the cached paths.
-            if job.save_cache && job.job.cache.is_some() {
-                std::fs::write(job.io.join(executor::CACHE_OUT), b"cached").unwrap();
+            async fn resolve_image(
+                &self,
+                image: &str,
+                _: &mpsc::Sender<Vec<u8>>,
+            ) -> Result<(Option<String>, ImageLock), String> {
+                if self.hold_images.load(Ordering::SeqCst) {
+                    std::future::pending::<()>().await;
+                }
+                let digest = if self.changed_image.load(Ordering::SeqCst) {
+                    digest_of(&format!("updated-{image}"))
+                } else {
+                    digest_of(image)
+                };
+                Ok((Some(digest), ImageLock::default()))
             }
-            Outcome::Exited(0)
+            async fn run(
+                &self,
+                job: JobRun<'_>,
+                log: mpsc::Sender<Vec<u8>>,
+                cancel: watch::Receiver<bool>,
+            ) -> Outcome {
+                self.ran.lock().unwrap().push((
+                    job.job.image.clone(),
+                    job.cpus,
+                    job.memory_mib,
+                    job.timeout_secs,
+                    job.work_quota_mib,
+                ));
+                for c in &job.job.commands {
+                    let words: Vec<&str> = c.split_whitespace().collect();
+                    match words.as_slice() {
+                        ["echo", rest @ ..] => {
+                            let _ = log.send(format!("{}\n", rest.join(" ")).into_bytes()).await;
+                        }
+                        ["write", path, content] => {
+                            let p = job.work.join(path);
+                            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+                            std::fs::write(p, content).unwrap();
+                        }
+                        ["git", args @ ..] => {
+                            let _ = log.send(git(job.work, args).into_bytes()).await;
+                        }
+                        ["exit", code] => return Outcome::Exited(code.parse().unwrap()),
+                        ["wait"] => return self.wait(job.attempt_id, cancel).await,
+                        _ => return Outcome::Exited(127),
+                    }
+                }
+                // What the VM that collects `/work` packs of the cached paths.
+                if job.save_cache && job.job.cache.is_some() {
+                    std::fs::write(job.io.join(executor::CACHE_OUT), b"cached").unwrap();
+                }
+                Outcome::Exited(0)
+            }
+            async fn sweep(&self) {}
         }
-        async fn sweep(&self) {}
-    }
 
-    /// Runs Git isolated from the user's configuration; returns its output.
-    fn git(dir: &Path, args: &[&str]) -> String {
-        let home = dir.join("..").join("git-home");
-        std::fs::create_dir_all(&home).unwrap();
-        let global = home.join("gitconfig");
-        std::fs::write(&global, "").unwrap();
-        let out = std::process::Command::new("git")
-            .current_dir(dir)
-            .args(["-c", "credential.helper=", "-c", "core.askPass="])
-            .args(args)
-            .env("HOME", &home)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", &global)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_ASKPASS", "/usr/bin/false")
-            .env("GIT_AUTHOR_NAME", "Test")
-            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
-            .env("GIT_COMMITTER_NAME", "Test")
-            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8(out.stdout).unwrap()
-    }
-
-    /// An in-process service with the owner alice, the runner member runner1,
-    /// and the repository acme/demo, whose main (tagged v1; the tag `later`
-    /// is of a commit it does not reach) has `pipeline`, recorded so that its
-    /// run is queued.
-    struct Service {
-        dir: tempfile::TempDir,
-        app: crate::app::Shared,
-        url: String,
-        owner: String,
-        runner_token: String,
-        http: reqwest::Client,
-        repo: crate::model::Repo,
-        bare: PathBuf,
-    }
-
-    impl Service {
-        async fn revoke_runner_token(&self) {
-            let tokens: serde_json::Value = self
-                .http
-                .get(format!("{}/api/v1/members/runner1/tokens", self.url))
-                .bearer_auth(&self.owner)
-                .send()
-                .await
-                .unwrap()
-                .json()
-                .await
+        /// Runs Git isolated from the user's configuration; returns its output.
+        fn git(dir: &Path, args: &[&str]) -> String {
+            let home = dir.join("..").join("git-home");
+            std::fs::create_dir_all(&home).unwrap();
+            let global = home.join("gitconfig");
+            std::fs::write(&global, "").unwrap();
+            let out = std::process::Command::new("git")
+                .current_dir(dir)
+                .args(["-c", "credential.helper=", "-c", "core.askPass="])
+                .args(args)
+                .env("HOME", &home)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", &global)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .env("GIT_ASKPASS", "/usr/bin/false")
+                .env("GIT_AUTHOR_NAME", "Test")
+                .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+                .env("GIT_COMMITTER_NAME", "Test")
+                .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+                .output()
                 .unwrap();
-            for t in tokens["items"].as_array().unwrap() {
-                let resp = self
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8(out.stdout).unwrap()
+        }
+
+        /// An in-process service with the owner alice, the runner member runner1,
+        /// and the repository acme/demo, whose main (tagged v1; the tag `later`
+        /// is of a commit it does not reach) has `pipeline`, recorded so that its
+        /// run is queued.
+        struct Service {
+            dir: tempfile::TempDir,
+            app: crate::app::Shared,
+            url: String,
+            owner: String,
+            runner_token: String,
+            http: reqwest::Client,
+            repo: crate::model::Repo,
+            bare: PathBuf,
+        }
+
+        impl Service {
+            async fn revoke_runner_token(&self) {
+                let tokens: serde_json::Value = self
                     .http
-                    .delete(format!(
-                        "{}/api/v1/members/runner1/tokens/{}",
-                        self.url,
-                        t["id"].as_str().unwrap()
-                    ))
+                    .get(format!("{}/api/v1/members/runner1/tokens", self.url))
                     .bearer_auth(&self.owner)
                     .send()
                     .await
-                    .unwrap();
-                assert!(resp.status().is_success(), "{}", resp.status());
-            }
-        }
-    }
-
-    /// Hold source requests before authentication, so revocation reliably
-    /// makes them fail with 401 rather than depending on checkout speed.
-    struct SourceGate {
-        requested: mpsc::Sender<tokio::sync::oneshot::Sender<()>>,
-        refused: Arc<tokio::sync::Notify>,
-        source_refusals: Arc<std::sync::atomic::AtomicUsize>,
-    }
-
-    async fn service(pipeline: &str) -> Service {
-        service_with_source_gate(pipeline, None).await
-    }
-
-    async fn service_with_source_gate(pipeline: &str, gate: Option<SourceGate>) -> Service {
-        service_with_lease(pipeline, gate, 3).await
-    }
-
-    async fn service_with_lease(
-        pipeline: &str,
-        gate: Option<SourceGate>,
-        lease_secs: u64,
-    ) -> Service {
-        let dir = tempfile::tempdir().unwrap();
-        let data = dir.path().join("data");
-        std::fs::create_dir_all(&data).unwrap();
-        std::fs::write(
-            data.join("branvil.toml"),
-            format!("[ci]\nlease_secs = {lease_secs}\n"),
-        )
-        .unwrap();
-        let config = crate::config::Config::load(None, &data).unwrap();
-        let layout = config.layout();
-        layout.create().unwrap();
-        let store = crate::store::Store::open(&layout.db(), 1 << 20, 2).unwrap();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let (owner, runner_token) = store
-            .write_sync(|w| {
-                use crate::domain::members::{NewMember, insert_member};
-                use crate::model::MemberKind;
-                for (name, kind) in [
-                    ("alice", MemberKind::Owner),
-                    ("runner1", MemberKind::Runner),
-                ] {
-                    insert_member(
-                        w,
-                        &NewMember {
-                            name: name.into(),
-                            display_name: None,
-                            kind,
-                        },
-                    )?;
-                }
-                Ok((
-                    crate::auth::issue_token(w, "alice", "t")?.1,
-                    crate::auth::issue_token(w, "runner1", "t")?.1,
-                ))
-            })
-            .unwrap();
-        let app = crate::app::App::new(
-            config,
-            url.clone(),
-            store,
-            std::sync::Arc::new(crate::vault::Memory::default()),
-            url.clone(),
-        );
-        // The test server's routes too: the test opens its PR over HTTP.
-        let mut router =
-            crate::http::router_with(app.clone(), crate::test_support::routes::routes());
-        if let Some(gate) = gate {
-            router = router.layer(axum::middleware::from_fn(
-                move |request: axum::extract::Request, next: axum::middleware::Next| {
-                    let (requested, refused) = (gate.requested.clone(), gate.refused.clone());
-                    let source_refusals = gate.source_refusals.clone();
-                    async move {
-                        let path = request.uri().path();
-                        let source = path.ends_with("/source");
-                        let claim = path.ends_with("/runner/claim");
-                        if source {
-                            let (resume, held) = tokio::sync::oneshot::channel();
-                            requested.send(resume).await.unwrap();
-                            held.await.unwrap();
-                        }
-                        let response = next.run(request).await;
-                        if response.status() == axum::http::StatusCode::UNAUTHORIZED {
-                            if claim {
-                                refused.notify_one();
-                            }
-                            if source {
-                                source_refusals.fetch_add(1, Ordering::SeqCst);
-                            }
-                        }
-                        response
-                    }
-                },
-            ));
-        }
-        tokio::spawn(axum::serve(listener, router).into_future());
-        let http = reqwest::Client::new();
-        for (path, body) in [
-            ("workspaces", serde_json::json!({"name": "acme"})),
-            ("repos", serde_json::json!({"path": "acme/demo"})),
-        ] {
-            let resp = http
-                .post(format!("{url}/api/v1/{path}"))
-                .bearer_auth(&owner)
-                .json(&body)
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(resp.status(), 201);
-        }
-
-        // A commit of main with a pipeline, pushed into the bare repository
-        // directly (no hooks: the hooks directory is empty) and recorded.
-        let work = dir.path().join("work");
-        std::fs::create_dir_all(work.join(".branvil")).unwrap();
-        std::fs::write(work.join(".branvil/ci.toml"), pipeline).unwrap();
-        git(&work, &["init", "-q", "-b", "main"]);
-        git(&work, &["add", "."]);
-        git(&work, &["commit", "-qm", "pipeline"]);
-        // A tag of the commit, and one of a commit it does not reach.
-        git(&work, &["tag", "-a", "v1", "-m", "v1"]);
-        git(&work, &["checkout", "-qb", "side"]);
-        git(&work, &["commit", "-q", "--allow-empty", "-m", "later"]);
-        git(&work, &["tag", "later"]);
-        git(&work, &["checkout", "-q", "main"]);
-        let bare = layout.repo_dir("acme/demo");
-        git(
-            &work,
-            &["push", "-q", bare.to_str().unwrap(), "main", "v1", "later"],
-        );
-        let repo = app
-            .store
-            .read(|r| crate::domain::repo_by_path(r, "acme/demo"))
-            .await
-            .unwrap();
-        crate::refs::record_refs(&app, &repo).await.unwrap();
-        Service {
-            dir,
-            app,
-            url,
-            owner,
-            runner_token,
-            http,
-            repo,
-            bare,
-        }
-    }
-
-    async fn empty_main(s: &Service, message: &str) -> String {
-        let work = s.dir.path().join("work");
-        git(&work, &["commit", "-q", "--allow-empty", "-m", message]);
-        git(&work, &["push", "-q", s.bare.to_str().unwrap(), "main"]);
-        crate::refs::record_refs(&s.app, &s.repo).await.unwrap();
-        s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone()
-    }
-
-    async fn result_of(s: &Service, sha: &str) -> crate::ci::queue::Attempt {
-        let (repo, sha) = (s.repo.id.clone(), sha.to_string());
-        s.app
-            .store
-            .read(move |r| {
-                Ok(crate::ci::queue::attempts_of(r, &repo, &sha)?
-                    .into_iter()
-                    .rfind(|a| a.purpose == crate::ci::queue::Purpose::Check)
-                    .unwrap())
-            })
-            .await
-            .unwrap()
-    }
-
-    /// The same runner must recover on the next attempt after msb arrives.
-    #[cfg(unix)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn a_runtime_installed_after_startup_runs_the_next_job() {
-        // Isolate the resolver's fallback paths without changing this process's
-        // environment or depending on an msb installed in the developer's home.
-        const CHILD: &str = "BRANVIL_TEST_LATE_RUNTIME_CHILD";
-        if std::env::var_os(CHILD).is_none() {
-            for mode in ["ready", "doctor-failure"] {
-                let home = tempfile::tempdir().unwrap();
-                let output = tokio::process::Command::new(std::env::current_exe().unwrap())
-                    .args([
-                        "--exact",
-                        "runner::tests::a_runtime_installed_after_startup_runs_the_next_job",
-                        "--nocapture",
-                    ])
-                    .env(CHILD, mode)
-                    .env("HOME", home.path())
-                    .env("USERPROFILE", home.path())
-                    .output()
+                    .unwrap()
+                    .json()
                     .await
                     .unwrap();
-                assert!(output.status.success(), "{mode}: {output:?}");
+                for t in tokens["items"].as_array().unwrap() {
+                    let resp = self
+                        .http
+                        .delete(format!(
+                            "{}/api/v1/members/runner1/tokens/{}",
+                            self.url,
+                            t["id"].as_str().unwrap()
+                        ))
+                        .bearer_auth(&self.owner)
+                        .send()
+                        .await
+                        .unwrap();
+                    assert!(resp.status().is_success(), "{}", resp.status());
+                }
             }
-            return;
         }
-        let doctor_fails = std::env::var(CHILD).unwrap() == "doctor-failure";
-        let s =
-            service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"echo ok\"]\n")
-                .await;
-        let msb = s.dir.path().join("msb");
-        let home = s.dir.path().join("msb-home");
-        let settings = Settings {
-            url: s.url.clone(),
-            token: Some(s.runner_token.clone()),
-            work_dir: s.dir.path().join("runner"),
-            executor: ExecutorConfig::default(),
-            config: None,
-            msb_path: Some(msb.clone()),
-            msb_home: home.clone(),
-        };
-        let serving = tokio::spawn(run(settings));
-        let sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
-        let settled = |sha: String| {
-            let s = &s;
-            async move {
-                tokio::time::timeout(Duration::from_secs(20), async {
-                    loop {
-                        let result = result_of(s, &sha).await;
-                        if result.conclusion.is_some() {
-                            return result;
-                        }
-                        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        /// Hold source requests before authentication, so revocation reliably
+        /// makes them fail with 401 rather than depending on checkout speed.
+        struct SourceGate {
+            requested: mpsc::Sender<tokio::sync::oneshot::Sender<()>>,
+            refused: Arc<tokio::sync::Notify>,
+            source_refusals: Arc<std::sync::atomic::AtomicUsize>,
+        }
+
+        async fn service(pipeline: &str) -> Service {
+            service_with_source_gate(pipeline, None).await
+        }
+
+        async fn service_with_source_gate(pipeline: &str, gate: Option<SourceGate>) -> Service {
+            service_with_lease(pipeline, gate, 3).await
+        }
+
+        async fn service_with_lease(
+            pipeline: &str,
+            gate: Option<SourceGate>,
+            lease_secs: u64,
+        ) -> Service {
+            let dir = tempfile::tempdir().unwrap();
+            let data = dir.path().join("data");
+            std::fs::create_dir_all(&data).unwrap();
+            std::fs::write(
+                data.join("branvil.toml"),
+                format!("[ci]\nlease_secs = {lease_secs}\n"),
+            )
+            .unwrap();
+            let config = crate::config::Config::load(None, &data).unwrap();
+            let layout = config.layout();
+            layout.create().unwrap();
+            let store = crate::store::Store::open(&layout.db(), 1 << 20, 2).unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let (owner, runner_token) = store
+                .write_sync(|w| {
+                    use crate::domain::members::{NewMember, insert_member};
+                    use crate::model::MemberKind;
+                    for (name, kind) in [
+                        ("alice", MemberKind::Owner),
+                        ("runner1", MemberKind::Runner),
+                    ] {
+                        insert_member(
+                            w,
+                            &NewMember {
+                                name: name.into(),
+                                display_name: None,
+                                kind,
+                            },
+                        )?;
                     }
+                    Ok((
+                        crate::auth::issue_token(w, "alice", "t")?.1,
+                        crate::auth::issue_token(w, "runner1", "t")?.1,
+                    ))
+                })
+                .unwrap();
+            let app = crate::app::App::new(
+                config,
+                url.clone(),
+                store,
+                std::sync::Arc::new(crate::vault::Memory::default()),
+                url.clone(),
+            );
+            // The test server's routes too: the test opens its PR over HTTP.
+            let mut router =
+                crate::http::router_with(app.clone(), crate::test_support::routes::routes());
+            if let Some(gate) = gate {
+                router = router.layer(axum::middleware::from_fn(
+                    move |request: axum::extract::Request, next: axum::middleware::Next| {
+                        let (requested, refused) = (gate.requested.clone(), gate.refused.clone());
+                        let source_refusals = gate.source_refusals.clone();
+                        async move {
+                            let path = request.uri().path();
+                            let source = path.ends_with("/source");
+                            let claim =
+                                path.ends_with("/runner/claim") || path.ends_with("/runner/health");
+                            if source {
+                                let (resume, held) = tokio::sync::oneshot::channel();
+                                requested.send(resume).await.unwrap();
+                                held.await.unwrap();
+                            }
+                            let response = next.run(request).await;
+                            if response.status() == axum::http::StatusCode::UNAUTHORIZED {
+                                if claim {
+                                    refused.notify_one();
+                                }
+                                if source {
+                                    source_refusals.fetch_add(1, Ordering::SeqCst);
+                                }
+                            }
+                            response
+                        }
+                    },
+                ));
+            }
+            tokio::spawn(axum::serve(listener, router).into_future());
+            let http = reqwest::Client::new();
+            for (path, body) in [
+                ("workspaces", serde_json::json!({"name": "acme"})),
+                ("repos", serde_json::json!({"path": "acme/demo"})),
+            ] {
+                let resp = http
+                    .post(format!("{url}/api/v1/{path}"))
+                    .bearer_auth(&owner)
+                    .json(&body)
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(resp.status(), 201);
+            }
+
+            // A commit of main with a pipeline, pushed into the bare repository
+            // directly (no hooks: the hooks directory is empty) and recorded.
+            let work = dir.path().join("work");
+            std::fs::create_dir_all(work.join(".branvil")).unwrap();
+            std::fs::write(work.join(".branvil/ci.toml"), pipeline).unwrap();
+            git(&work, &["init", "-q", "-b", "main"]);
+            git(&work, &["add", "."]);
+            git(&work, &["commit", "-qm", "pipeline"]);
+            // A tag of the commit, and one of a commit it does not reach.
+            git(&work, &["tag", "-a", "v1", "-m", "v1"]);
+            git(&work, &["checkout", "-qb", "side"]);
+            git(&work, &["commit", "-q", "--allow-empty", "-m", "later"]);
+            git(&work, &["tag", "later"]);
+            git(&work, &["checkout", "-q", "main"]);
+            let bare = layout.repo_dir("acme/demo");
+            git(
+                &work,
+                &["push", "-q", bare.to_str().unwrap(), "main", "v1", "later"],
+            );
+            let repo = app
+                .store
+                .read(|r| crate::domain::repo_by_path(r, "acme/demo"))
+                .await
+                .unwrap();
+            crate::refs::record_refs(&app, &repo).await.unwrap();
+            Service {
+                dir,
+                app,
+                url,
+                owner,
+                runner_token,
+                http,
+                repo,
+                bare,
+            }
+        }
+
+        async fn empty_main(s: &Service, message: &str) -> String {
+            let work = s.dir.path().join("work");
+            git(&work, &["commit", "-q", "--allow-empty", "-m", message]);
+            git(&work, &["push", "-q", s.bare.to_str().unwrap(), "main"]);
+            crate::refs::record_refs(&s.app, &s.repo).await.unwrap();
+            s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone()
+        }
+
+        async fn result_of(s: &Service, sha: &str) -> crate::ci::queue::Attempt {
+            let (repo, sha) = (s.repo.id.clone(), sha.to_string());
+            s.app
+                .store
+                .read(move |r| {
+                    Ok(crate::ci::queue::attempts_of(r, &repo, &sha)?
+                        .into_iter()
+                        .rfind(|a| a.purpose == crate::ci::queue::Purpose::Check)
+                        .unwrap())
                 })
                 .await
-                .expect("the attempt finished")
-            }
-        };
-        tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                if s.app.ci.diagnostics().await["state"] == "executor_unavailable" {
-                    break;
+                .unwrap()
+        }
+
+        /// The same runner must recover on the next attempt after msb arrives.
+        #[cfg(unix)]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn a_runtime_installed_after_startup_runs_the_next_job() {
+            // Isolate the resolver's fallback paths without changing this process's
+            // environment or depending on an msb installed in the developer's home.
+            const CHILD: &str = "BRANVIL_TEST_LATE_RUNTIME_CHILD";
+            if std::env::var_os(CHILD).is_none() {
+                for mode in ["ready", "doctor-failure"] {
+                    let home = tempfile::tempdir().unwrap();
+                    let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+                        .args([
+                            "--exact",
+                            "runner::tests::a_runtime_installed_after_startup_runs_the_next_job",
+                            "--nocapture",
+                        ])
+                        .env(CHILD, mode)
+                        .env("HOME", home.path())
+                        .env("USERPROFILE", home.path())
+                        .output()
+                        .await
+                        .unwrap();
+                    assert!(output.status.success(), "{mode}: {output:?}");
                 }
-                tokio::task::yield_now().await;
+                return;
             }
-        })
-        .await
-        .unwrap();
-        assert_eq!(result_of(&s, &sha).await.status, "queued");
-        // Install atomically, as the embedding host does. No VM is started.
-        let staged = s.dir.path().join("msb-staged");
-        executor::tests::write_script(
-            &staged,
-            r#"#!/bin/sh
+            let doctor_fails = std::env::var(CHILD).unwrap() == "doctor-failure";
+            let s = service(
+                "[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"echo ok\"]\n",
+            )
+            .await;
+            let msb = s.dir.path().join("msb");
+            let home = s.dir.path().join("msb-home");
+            let settings = Settings {
+                url: s.url.clone(),
+                token: Some(s.runner_token.clone()),
+                work_dir: s.dir.path().join("runner"),
+                executor: ExecutorConfig::default(),
+                config: None,
+                msb_path: Some(msb.clone()),
+                msb_home: home.clone(),
+            };
+            let serving = tokio::spawn(run(settings));
+            let sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
+            let settled = |sha: String| {
+                let s = &s;
+                async move {
+                    tokio::time::timeout(Duration::from_secs(20), async {
+                        loop {
+                            let result = result_of(s, &sha).await;
+                            if result.conclusion.is_some() {
+                                return result;
+                            }
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                    })
+                    .await
+                    .expect("the attempt finished")
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if s.app.ci.diagnostics().await["state"] == "executor_unavailable" {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(result_of(&s, &sha).await.status, "queued");
+            // Install atomically, as the embedding host does. No VM is started.
+            let staged = s.dir.path().join("msb-staged");
+            executor::test_support::write_script(
+                &staged,
+                r#"#!/bin/sh
 echo "$1" >> "$0.calls"
 case "$1" in
 --version) echo 'msb 0.6.17' ;;
@@ -2207,430 +812,430 @@ run)
 *) exit 1 ;;
 esac
 "#,
-        );
-        if doctor_fails {
-            std::fs::create_dir_all(&home).unwrap();
-            std::fs::write(home.join("doctor-fails"), "").unwrap();
-        }
-        std::fs::rename(staged, &msb).unwrap();
-        if doctor_fails {
-            tokio::time::timeout(Duration::from_secs(10), async {
-                loop {
-                    if std::fs::read_to_string(msb.with_extension("calls"))
-                        .unwrap_or_default()
-                        .lines()
-                        .any(|l| l == "doctor")
-                    {
-                        break;
+            );
+            if doctor_fails {
+                std::fs::create_dir_all(&home).unwrap();
+                std::fs::write(home.join("doctor-fails"), "").unwrap();
+            }
+            std::fs::rename(staged, &msb).unwrap();
+            if doctor_fails {
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    loop {
+                        if std::fs::read_to_string(msb.with_extension("calls"))
+                            .unwrap_or_default()
+                            .lines()
+                            .any(|l| l == "doctor")
+                        {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
                     }
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .unwrap();
-            assert_eq!(result_of(&s, &sha).await.status, "queued");
-        } else {
-            assert_eq!(
-                settled(sha.clone()).await.conclusion.as_deref(),
-                Some("success")
-            );
-        }
-        assert_eq!(home.join("ran").is_file(), !doctor_fails);
-        assert!(!serving.is_finished(), "the same runner is still serving");
-        if !doctor_fails {
-            let another_sha = empty_main(&s, "runtime still ready").await;
-            assert_eq!(
-                settled(another_sha).await.conclusion.as_deref(),
-                Some("success")
-            );
-        }
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        let calls = std::fs::read_to_string(msb.with_extension("calls")).unwrap();
-        assert_eq!(
-            calls.lines().filter(|c| *c == "doctor").count(),
-            1,
-            "{calls}"
-        );
-        assert_eq!(
-            calls.lines().filter(|c| *c == "--version").count(),
-            1,
-            "{calls}"
-        );
-        s.revoke_runner_token().await;
-        assert!(
-            tokio::time::timeout(Duration::from_secs(10), serving)
+                })
                 .await
-                .expect("the runner stops")
-                .unwrap()
-                .is_err()
-        );
-    }
+                .unwrap();
+                assert_eq!(result_of(&s, &sha).await.status, "queued");
+            } else {
+                assert_eq!(
+                    settled(sha.clone()).await.conclusion.as_deref(),
+                    Some("success")
+                );
+            }
+            assert_eq!(home.join("ran").is_file(), !doctor_fails);
+            assert!(!serving.is_finished(), "the same runner is still serving");
+            if !doctor_fails {
+                let another_sha = empty_main(&s, "runtime still ready").await;
+                assert_eq!(
+                    settled(another_sha).await.conclusion.as_deref(),
+                    Some("success")
+                );
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            let calls = std::fs::read_to_string(msb.with_extension("calls")).unwrap();
+            assert_eq!(
+                calls.lines().filter(|c| *c == "doctor").count(),
+                1,
+                "{calls}"
+            );
+            assert_eq!(
+                calls.lines().filter(|c| *c == "--version").count(),
+                1,
+                "{calls}"
+            );
+            s.revoke_runner_token().await;
+            assert!(
+                tokio::time::timeout(Duration::from_secs(10), serving)
+                    .await
+                    .expect("the runner stops")
+                    .unwrap()
+                    .is_err()
+            );
+        }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn a_pull_requests_head_reuses_a_result_by_the_contents_of_paths() {
-        let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write out/report yes\"]\npaths = [\"src/**\"]\n").await;
-        let runner = Runner::new(
-            Api::new(&s.url, &s.runner_token),
-            s.dir.path().join("runner"),
-            None,
-            ExecutorConfig::default(),
-        );
-        let fake = Fake::new();
-        let first_sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
-        runner.once(&fake).await.unwrap();
-        let first = result_of(&s, &first_sha).await;
-        assert!(first.inputs.is_some());
-        // A pull request's head that changes only docs.
-        let work = s.dir.path().join("work");
-        git(&work, &["checkout", "-qb", "docs"]);
-        std::fs::write(work.join("notes.md"), "docs\n").unwrap();
-        git(&work, &["add", "notes.md"]);
-        git(&work, &["commit", "-qm", "docs"]);
-        git(&work, &["push", "-q", s.bare.to_str().unwrap(), "docs"]);
-        let sha = git(&work, &["rev-parse", "HEAD"]).trim().to_string();
-        let tree = s.app.git.tree_oid(&s.bare, &sha).await.unwrap();
-        let (repo, at) = (s.repo.id.clone(), sha.clone());
-        let source_sha = first_sha.clone();
-        s.app
-            .store
-            .write(move |w| {
-                let main = crate::ci::queue::get_run(w, &repo, &source_sha)?.unwrap();
-                let reg = crate::ci::queue::Registration {
-                    order: Vec::new(),
-                    selection: None,
-                    repo,
-                    repo_path: "acme/demo".into(),
-                    sha: at,
-                    tree,
-                    branch: "docs".into(),
-                    protected: false,
-                    pipeline: main.pipeline,
-                    network: false,
-                    inputs: main.inputs,
-                };
-                crate::ci::queue::register(w, reg, 10, &crate::util::now())
-            })
-            .await
-            .unwrap();
-        runner.once(&fake).await.unwrap();
-        let reused = result_of(&s, &sha).await;
-        assert_eq!(reused.reused_from.as_deref(), Some(first.id.as_str()));
-        assert_eq!(fake.ran.lock().unwrap().len(), 1);
-        let log = s.app.ci.log_tail(&reused.id, 1 << 20).await.unwrap().0;
-        assert!(
-            log.contains(&format!(
-                "reused result of {} ({first_sha}, the same contents of paths)",
-                first.id
-            )),
-            "{log}"
-        );
-        let checks = s.app.ci.head_checks(&s.repo, &sha).await.unwrap().checks;
-        let from = checks[0].reused_from.as_ref().unwrap();
-        assert_eq!(
-            (from.sha.as_str(), from.basis),
-            (first_sha.as_str(), crate::ci::queue::Basis::Paths)
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn reuse_skips_source_and_vm_but_digest_changes_and_retry_execute() {
-        let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write out/report yes\"]\n").await;
-        let runner = Runner::new(
-            Api::new(&s.url, &s.runner_token),
-            s.dir.path().join("runner"),
-            None,
-            ExecutorConfig::default(),
-        );
-        let fake = Fake::new();
-        let first_sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
-        runner.once(&fake).await.unwrap();
-        let first = result_of(&s, &first_sha).await;
-        let sha = empty_main(&s, "same tree").await;
-        runner.once(&fake).await.unwrap();
-        let reused = result_of(&s, &sha).await;
-        assert_eq!(reused.reused_from.as_deref(), Some(first.id.as_str()));
-        assert_eq!(reused.image_digest, first.image_digest);
-        assert!(reused.cache_key.is_none());
-        assert_eq!(fake.ran.lock().unwrap().len(), 1);
-        let log = s.app.ci.log_tail(&reused.id, 1 << 20).await.unwrap().0;
-        assert!(
-            log.contains(&format!(
-                "reused result of {} ({first_sha}, the same tree)",
-                first.id
-            )),
-            "{log}"
-        );
-        assert!(
-            !log.contains("source fetched") && !log.contains("sandbox started"),
-            "{log}"
-        );
-        assert!(reused.details.is_none());
-        let checks = s.app.ci.head_checks(&s.repo, &sha).await.unwrap().checks;
-        assert!(checks[0].succeeded());
-        assert!(checks[0].details.is_none());
-        assert!(checks[0].artifact_names.is_empty());
-        assert_eq!(checks[0].reused_from.as_ref().unwrap().attempt_id, first.id);
-        assert_eq!(
-            checks[0].reused_from.as_ref().unwrap().basis,
-            crate::ci::queue::Basis::Tree
-        );
-        let view: serde_json::Value = s
-            .http
-            .get(format!(
-                "{}/api/v1/repos/acme%2Fdemo/jobs/{}",
-                s.url, reused.id
-            ))
-            .bearer_auth(&s.owner)
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        assert_eq!(view["reused_from"]["sha"], first_sha);
-        assert_eq!(view["reused_from"]["basis"], "tree");
-        assert_eq!(
-            view["reused_from"]["url"],
-            format!("{}/acme/demo/-/jobs/{}", s.url, first.id)
-        );
-        assert_eq!(view["artifact_names"], serde_json::json!([]));
-        assert!(view["details"].is_null());
-
-        fake.changed_image.store(true, Ordering::SeqCst);
-        let changed_sha = empty_main(&s, "new digest").await;
-        runner.once(&fake).await.unwrap();
-        let changed = result_of(&s, &changed_sha).await;
-        assert!(changed.reused_from.is_none());
-        assert_eq!(fake.ran.lock().unwrap().len(), 2);
-        let log = s.app.ci.log_tail(&changed.id, 1 << 20).await.unwrap().0;
-        assert!(
-            log.contains("image digest differs") && log.contains("source fetched"),
-            "{log}"
-        );
-        let next_sha = empty_main(&s, "reuse new digest").await;
-        runner.once(&fake).await.unwrap();
-        let next = result_of(&s, &next_sha).await;
-        assert_eq!(next.reused_from.as_deref(), Some(changed.id.as_str()));
-        let id = next.id.clone();
-        s.app
-            .store
-            .write(move |w| crate::ci::queue::retry(w, &id, 10, &crate::util::now()))
-            .await
-            .unwrap();
-        runner.once(&fake).await.unwrap();
-        let retried = result_of(&s, &next_sha).await;
-        assert!(retried.reused_from.is_none());
-        let retry_log = s.app.ci.log_tail(&retried.id, 1 << 20).await.unwrap().0;
-        assert!(
-            retry_log.contains("reuse unavailable: no reuse offered"),
-            "{retry_log}"
-        );
-        assert!(
-            !retry_log.contains("no matching successful execution"),
-            "{retry_log}"
-        );
-        assert_eq!(fake.ran.lock().unwrap().len(), 3);
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn artifact_jobs_execute_each_commit_and_keep_retention_per_execution() {
-        let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write out/report yes\"]\nartifacts = [{name = \"report\", paths = [\"out/\"]}]\n").await;
-        let runner = Runner::new(
-            Api::new(&s.url, &s.runner_token),
-            s.dir.path().join("runner"),
-            None,
-            ExecutorConfig::default(),
-        );
-        let fake = Fake::new();
-        let first_sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
-        runner.once(&fake).await.unwrap();
-        let first = result_of(&s, &first_sha).await;
-        let sha = empty_main(&s, "same tree").await;
-        runner.once(&fake).await.unwrap();
-        let current = result_of(&s, &sha).await;
-        assert!(current.reused_from.is_none());
-        assert_eq!(fake.ran.lock().unwrap().len(), 2);
-        let log = s.app.ci.log_tail(&current.id, 1 << 20).await.unwrap().0;
-        assert!(log.contains("source fetched"), "{log}");
-        let checks = s.app.ci.head_checks(&s.repo, &sha).await.unwrap().checks;
-        assert!(checks[0].succeeded());
-        assert!(checks[0].reused_from.is_none());
-        assert_eq!(checks[0].artifact_names, vec!["report"]);
-        let response = s
-            .http
-            .get(format!(
-                "{}/api/v1/repos/acme%2Fdemo/commits/{sha}/artifacts/report",
-                s.url
-            ))
-            .bearer_auth(&s.owner)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
-        assert_eq!(
-            response.bytes().await.unwrap().as_ref(),
-            std::fs::read(s.app.ci.artifact_path(&current.id, "report")).unwrap()
-        );
-
-        // Expiring the previous commit's execution cannot expire these artifacts.
-        let id = first.id.clone();
-        s.app
-            .store
-            .write(move |w| {
-                let mut expired = first;
-                expired.finished_at =
-                    Some(crate::ci::queue::earlier(&crate::util::now(), 31 * 86_400));
-                w.put(
-                    crate::store::CI_ATTEMPTS,
-                    &crate::ci::queue::Attempt::key(&expired.id),
-                    &expired,
-                )
-            })
-            .await
-            .unwrap();
-        crate::ci::files::apply_retention(&s.app).await.unwrap();
-        assert!(!s.app.ci.artifact_path(&id, "report").exists());
-        assert!(s.app.ci.artifact_path(&current.id, "report").exists());
-        assert_eq!(
-            s.app.ci.head_checks(&s.repo, &sha).await.unwrap().checks[0].artifact_names,
-            vec!["report"]
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn protected_reuse_refreshes_separately_from_checks() {
-        let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write target/out built\"]\ncache = { paths = [\"target\"] }\n").await;
-        let runner = Runner::new(
-            Api::new(&s.url, &s.runner_token),
-            s.dir.path().join("runner"),
-            None,
-            ExecutorConfig::default(),
-        );
-        let fake = Fake::new();
-        runner.once(&fake).await.unwrap();
-        let sha = empty_main(&s, "fresh cache").await;
-        runner.once(&fake).await.unwrap();
-        assert!(result_of(&s, &sha).await.reused_from.is_some());
-        assert_eq!(fake.ran.lock().unwrap().len(), 1);
-        let original_sha = git(&s.dir.path().join("work"), &["rev-parse", "HEAD^"])
-            .trim()
-            .to_string();
-        let original = result_of(&s, &original_sha).await;
-        let key = original.cache_key.unwrap();
-        let entry = runner.work_dir.join("cache").join(&key);
-        let saved = entry.join(".branvil-saved");
-        std::fs::File::options()
-            .write(true)
-            .open(&saved)
-            .unwrap()
-            .set_modified(
-                std::time::SystemTime::now()
-                    - Duration::from_secs(workspace::CACHE_REFRESH_SECS + 60),
-            )
-            .unwrap();
-        runner
-            .cache
-            .restore(&key, &s.dir.path().join("restored.tar"))
-            .unwrap();
-        let sha = empty_main(&s, "old save despite fresh restore").await;
-        runner.once(&fake).await.unwrap();
-        let reused = result_of(&s, &sha).await;
-        assert!(reused.reused_from.is_some());
-        assert_eq!(
-            fake.ran.lock().unwrap().len(),
-            1,
-            "reused check starts no VM"
-        );
-        let refresh_id = reused.cache_refresh.unwrap();
-        assert!(
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn a_pull_requests_head_reuses_a_result_by_the_contents_of_paths() {
+            let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write out/report yes\"]\npaths = [\"src/**\"]\n").await;
+            let runner = Runner::new(
+                Api::new(&s.url, &s.runner_token),
+                s.dir.path().join("runner"),
+                None,
+                ExecutorConfig::default(),
+            );
+            let fake = Fake::new();
+            let first_sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
+            runner.once(&fake).await.unwrap();
+            let first = result_of(&s, &first_sha).await;
+            assert!(first.inputs.is_some());
+            // A pull request's head that changes only docs.
+            let work = s.dir.path().join("work");
+            git(&work, &["checkout", "-qb", "docs"]);
+            std::fs::write(work.join("notes.md"), "docs\n").unwrap();
+            git(&work, &["add", "notes.md"]);
+            git(&work, &["commit", "-qm", "docs"]);
+            git(&work, &["push", "-q", s.bare.to_str().unwrap(), "docs"]);
+            let sha = git(&work, &["rev-parse", "HEAD"]).trim().to_string();
+            let tree = s.app.git.tree_oid(&s.bare, &sha).await.unwrap();
+            let (repo, at) = (s.repo.id.clone(), sha.clone());
+            let source_sha = first_sha.clone();
             s.app
-                .ci
-                .head_checks(&s.repo, &sha)
+                .store
+                .write(move |w| {
+                    let main = crate::ci::queue::get_run(w, &repo, &source_sha)?.unwrap();
+                    let reg = crate::ci::queue::Registration {
+                        order: Vec::new(),
+                        selection: None,
+                        repo,
+                        repo_path: "acme/demo".into(),
+                        sha: at,
+                        tree,
+                        branch: "docs".into(),
+                        protected: false,
+                        pipeline: main.pipeline,
+                        network: false,
+                        inputs: main.inputs,
+                    };
+                    crate::ci::queue::register(w, reg, 10, &crate::util::now())
+                })
+                .await
+                .unwrap();
+            runner.once(&fake).await.unwrap();
+            let reused = result_of(&s, &sha).await;
+            assert_eq!(reused.reused_from.as_deref(), Some(first.id.as_str()));
+            assert_eq!(fake.ran.lock().unwrap().len(), 1);
+            let log = s.app.ci.log_tail(&reused.id, 1 << 20).await.unwrap().0;
+            assert!(
+                log.contains(&format!(
+                    "reused result of {} ({first_sha}, the same contents of paths)",
+                    first.id
+                )),
+                "{log}"
+            );
+            let checks = s.app.ci.head_checks(&s.repo, &sha).await.unwrap().checks;
+            let from = checks[0].reused_from.as_ref().unwrap();
+            assert_eq!(
+                (from.sha.as_str(), from.basis),
+                (first_sha.as_str(), crate::ci::queue::Basis::Paths)
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn reuse_skips_source_and_vm_but_digest_changes_and_retry_execute() {
+            let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write out/report yes\"]\n").await;
+            let runner = Runner::new(
+                Api::new(&s.url, &s.runner_token),
+                s.dir.path().join("runner"),
+                None,
+                ExecutorConfig::default(),
+            );
+            let fake = Fake::new();
+            let first_sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
+            runner.once(&fake).await.unwrap();
+            let first = result_of(&s, &first_sha).await;
+            let sha = empty_main(&s, "same tree").await;
+            runner.once(&fake).await.unwrap();
+            let reused = result_of(&s, &sha).await;
+            assert_eq!(reused.reused_from.as_deref(), Some(first.id.as_str()));
+            assert_eq!(reused.image_digest, first.image_digest);
+            assert!(reused.cache_key.is_none());
+            assert_eq!(fake.ran.lock().unwrap().len(), 1);
+            let log = s.app.ci.log_tail(&reused.id, 1 << 20).await.unwrap().0;
+            assert!(
+                log.contains(&format!(
+                    "reused result of {} ({first_sha}, the same tree)",
+                    first.id
+                )),
+                "{log}"
+            );
+            assert!(
+                !log.contains("source fetched") && !log.contains("sandbox started"),
+                "{log}"
+            );
+            assert!(reused.details.is_none());
+            let checks = s.app.ci.head_checks(&s.repo, &sha).await.unwrap().checks;
+            assert!(checks[0].succeeded());
+            assert!(checks[0].details.is_none());
+            assert!(checks[0].artifact_names.is_empty());
+            assert_eq!(checks[0].reused_from.as_ref().unwrap().attempt_id, first.id);
+            assert_eq!(
+                checks[0].reused_from.as_ref().unwrap().basis,
+                crate::ci::queue::Basis::Tree
+            );
+            let view: serde_json::Value = s
+                .http
+                .get(format!(
+                    "{}/api/v1/repos/acme%2Fdemo/jobs/{}",
+                    s.url, reused.id
+                ))
+                .bearer_auth(&s.owner)
+                .send()
                 .await
                 .unwrap()
-                .checks
-                .iter()
-                .all(|c| c.succeeded())
-        );
-        runner.once(&fake).await.unwrap();
-        let refreshed = s
-            .app
-            .store
-            .read(move |r| crate::ci::queue::get_attempt(r, &refresh_id))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(refreshed.purpose, crate::ci::queue::Purpose::CacheRefresh);
-        assert!(refreshed.reused_from.is_none());
-        assert_eq!(refreshed.cache_key.as_deref(), Some(key.as_str()));
-        let log = s.app.ci.log_tail(&refreshed.id, 1 << 20).await.unwrap().0;
-        assert!(log.contains("cache saved"), "{log}");
-        let mut timed = refreshed.clone();
-        timed.started_at = Some("2026-10-14T10:00:00.000Z".into());
-        timed.finished_at = Some("2026-10-14T10:00:42.000Z".into());
-        s.app
-            .store
-            .write(move |w| {
-                w.put(
-                    crate::store::CI_ATTEMPTS,
-                    &crate::ci::queue::Attempt::key(&timed.id),
-                    &timed,
+                .json()
+                .await
+                .unwrap();
+            assert_eq!(view["reused_from"]["sha"], first_sha);
+            assert_eq!(view["reused_from"]["basis"], "tree");
+            assert_eq!(
+                view["reused_from"]["url"],
+                format!("{}/acme/demo/-/jobs/{}", s.url, first.id)
+            );
+            assert_eq!(view["artifact_names"], serde_json::json!([]));
+            assert!(view["details"].is_null());
+
+            fake.changed_image.store(true, Ordering::SeqCst);
+            let changed_sha = empty_main(&s, "new digest").await;
+            runner.once(&fake).await.unwrap();
+            let changed = result_of(&s, &changed_sha).await;
+            assert!(changed.reused_from.is_none());
+            assert_eq!(fake.ran.lock().unwrap().len(), 2);
+            let log = s.app.ci.log_tail(&changed.id, 1 << 20).await.unwrap().0;
+            assert!(
+                log.contains("image digest differs") && log.contains("source fetched"),
+                "{log}"
+            );
+            let next_sha = empty_main(&s, "reuse new digest").await;
+            runner.once(&fake).await.unwrap();
+            let next = result_of(&s, &next_sha).await;
+            assert_eq!(next.reused_from.as_deref(), Some(changed.id.as_str()));
+            let id = next.id.clone();
+            s.app
+                .store
+                .write(move |w| crate::ci::queue::retry(w, &id, 10, &crate::util::now()))
+                .await
+                .unwrap();
+            runner.once(&fake).await.unwrap();
+            let retried = result_of(&s, &next_sha).await;
+            assert!(retried.reused_from.is_none());
+            let retry_log = s.app.ci.log_tail(&retried.id, 1 << 20).await.unwrap().0;
+            assert!(
+                retry_log.contains("reuse unavailable: no reuse offered"),
+                "{retry_log}"
+            );
+            assert!(
+                !retry_log.contains("no matching successful execution"),
+                "{retry_log}"
+            );
+            assert_eq!(fake.ran.lock().unwrap().len(), 3);
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn artifact_jobs_execute_each_commit_and_keep_retention_per_execution() {
+            let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write out/report yes\"]\nartifacts = [{name = \"report\", paths = [\"out/\"]}]\n").await;
+            let runner = Runner::new(
+                Api::new(&s.url, &s.runner_token),
+                s.dir.path().join("runner"),
+                None,
+                ExecutorConfig::default(),
+            );
+            let fake = Fake::new();
+            let first_sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
+            runner.once(&fake).await.unwrap();
+            let first = result_of(&s, &first_sha).await;
+            let sha = empty_main(&s, "same tree").await;
+            runner.once(&fake).await.unwrap();
+            let current = result_of(&s, &sha).await;
+            assert!(current.reused_from.is_none());
+            assert_eq!(fake.ran.lock().unwrap().len(), 2);
+            let log = s.app.ci.log_tail(&current.id, 1 << 20).await.unwrap().0;
+            assert!(log.contains("source fetched"), "{log}");
+            let checks = s.app.ci.head_checks(&s.repo, &sha).await.unwrap().checks;
+            assert!(checks[0].succeeded());
+            assert!(checks[0].reused_from.is_none());
+            assert_eq!(checks[0].artifact_names, vec!["report"]);
+            let response = s
+                .http
+                .get(format!(
+                    "{}/api/v1/repos/acme%2Fdemo/commits/{sha}/artifacts/report",
+                    s.url
+                ))
+                .bearer_auth(&s.owner)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            assert_eq!(
+                response.bytes().await.unwrap().as_ref(),
+                std::fs::read(s.app.ci.artifact_path(&current.id, "report")).unwrap()
+            );
+
+            // Expiring the previous commit's execution cannot expire these artifacts.
+            let id = first.id.clone();
+            s.app
+                .store
+                .write(move |w| {
+                    let mut expired = first;
+                    expired.finished_at =
+                        Some(crate::ci::queue::earlier(&crate::util::now(), 31 * 86_400));
+                    w.put(
+                        crate::store::CI_ATTEMPTS,
+                        &crate::ci::queue::Attempt::key(&expired.id),
+                        &expired,
+                    )
+                })
+                .await
+                .unwrap();
+            crate::ci::files::apply_retention(&s.app).await.unwrap();
+            assert!(!s.app.ci.artifact_path(&id, "report").exists());
+            assert!(s.app.ci.artifact_path(&current.id, "report").exists());
+            assert_eq!(
+                s.app.ci.head_checks(&s.repo, &sha).await.unwrap().checks[0].artifact_names,
+                vec!["report"]
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn protected_reuse_refreshes_separately_from_checks() {
+            let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write target/out built\"]\ncache = { paths = [\"target\"] }\n").await;
+            let runner = Runner::new(
+                Api::new(&s.url, &s.runner_token),
+                s.dir.path().join("runner"),
+                None,
+                ExecutorConfig::default(),
+            );
+            let fake = Fake::new();
+            runner.once(&fake).await.unwrap();
+            let sha = empty_main(&s, "fresh cache").await;
+            runner.once(&fake).await.unwrap();
+            assert!(result_of(&s, &sha).await.reused_from.is_some());
+            assert_eq!(fake.ran.lock().unwrap().len(), 1);
+            let original_sha = git(&s.dir.path().join("work"), &["rev-parse", "HEAD^"])
+                .trim()
+                .to_string();
+            let original = result_of(&s, &original_sha).await;
+            let key = original.cache_key.unwrap();
+            let entry = runner.work_dir.join("cache").join(&key);
+            let saved = entry.join(".branvil-saved");
+            std::fs::File::options()
+                .write(true)
+                .open(&saved)
+                .unwrap()
+                .set_modified(
+                    std::time::SystemTime::now()
+                        - Duration::from_secs(workspace::CACHE_REFRESH_SECS + 60),
                 )
-            })
-            .await
-            .unwrap();
-        let mut estimates = vec![crate::ci::Check {
-            name: "build".into(),
-            status: "in_progress".into(),
-            attempt_id: Some("running".into()),
-            ..Default::default()
-        }];
-        s.app.ci.estimate(&s.repo, &sha, &mut estimates).await;
-        assert_eq!(
-            estimates[0].expected_secs,
-            Some(42),
-            "refresh execution supplies estimates"
-        );
-        let sha = empty_main(&s, "after refresh").await;
-        runner.once(&fake).await.unwrap();
-        assert!(result_of(&s, &sha).await.reused_from.is_some());
-        assert_eq!(fake.ran.lock().unwrap().len(), 2);
+                .unwrap();
+            runner
+                .test_cache()
+                .restore(&key, &s.dir.path().join("restored.tar"))
+                .unwrap();
+            let sha = empty_main(&s, "old save despite fresh restore").await;
+            runner.once(&fake).await.unwrap();
+            let reused = result_of(&s, &sha).await;
+            assert!(reused.reused_from.is_some());
+            assert_eq!(
+                fake.ran.lock().unwrap().len(),
+                1,
+                "reused check starts no VM"
+            );
+            let refresh_id = reused.cache_refresh.unwrap();
+            assert!(
+                s.app
+                    .ci
+                    .head_checks(&s.repo, &sha)
+                    .await
+                    .unwrap()
+                    .checks
+                    .iter()
+                    .all(|c| c.succeeded())
+            );
+            runner.once(&fake).await.unwrap();
+            let refreshed = s
+                .app
+                .store
+                .read(move |r| crate::ci::queue::get_attempt(r, &refresh_id))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(refreshed.purpose, crate::ci::queue::Purpose::CacheRefresh);
+            assert!(refreshed.reused_from.is_none());
+            assert_eq!(refreshed.cache_key.as_deref(), Some(key.as_str()));
+            let log = s.app.ci.log_tail(&refreshed.id, 1 << 20).await.unwrap().0;
+            assert!(log.contains("cache saved"), "{log}");
+            let mut timed = refreshed.clone();
+            timed.started_at = Some("2026-10-14T10:00:00.000Z".into());
+            timed.finished_at = Some("2026-10-14T10:00:42.000Z".into());
+            s.app
+                .store
+                .write(move |w| {
+                    w.put(
+                        crate::store::CI_ATTEMPTS,
+                        &crate::ci::queue::Attempt::key(&timed.id),
+                        &timed,
+                    )
+                })
+                .await
+                .unwrap();
+            let mut estimates = vec![crate::ci::Check {
+                name: "build".into(),
+                status: "in_progress".into(),
+                attempt_id: Some("running".into()),
+                ..Default::default()
+            }];
+            s.app.ci.estimate(&s.repo, &sha, &mut estimates).await;
+            assert_eq!(
+                estimates[0].expected_secs,
+                Some(42),
+                "refresh execution supplies estimates"
+            );
+            let sha = empty_main(&s, "after refresh").await;
+            runner.once(&fake).await.unwrap();
+            assert!(result_of(&s, &sha).await.reused_from.is_some());
+            assert_eq!(fake.ran.lock().unwrap().len(), 2);
 
-        std::fs::remove_dir_all(&entry).unwrap();
-        let sha = empty_main(&s, "missing save").await;
-        runner.once(&fake).await.unwrap();
-        let missing = result_of(&s, &sha).await;
-        assert!(missing.reused_from.is_some());
-        assert_eq!(fake.ran.lock().unwrap().len(), 2);
-        assert!(missing.cache_refresh.is_some());
-        let log = s.app.ci.log_tail(&missing.id, 1 << 20).await.unwrap().0;
-        assert!(log.contains("has no complete save"), "{log}");
+            std::fs::remove_dir_all(&entry).unwrap();
+            let sha = empty_main(&s, "missing save").await;
+            runner.once(&fake).await.unwrap();
+            let missing = result_of(&s, &sha).await;
+            assert!(missing.reused_from.is_some());
+            assert_eq!(fake.ran.lock().unwrap().len(), 2);
+            assert!(missing.cache_refresh.is_some());
+            let log = s.app.ci.log_tail(&missing.id, 1 << 20).await.unwrap().0;
+            assert!(log.contains("has no complete save"), "{log}");
 
-        runner.once(&fake).await.unwrap();
-        assert_eq!(fake.ran.lock().unwrap().len(), 3);
-        std::fs::remove_dir_all(&entry).unwrap();
-        let sha = empty_main(&s, "branch reuse needs no save").await;
-        let (repo, commit) = (s.repo.id.clone(), sha.clone());
-        s.app
-            .store
-            .write(move |w| {
-                let old = crate::ci::queue::get_run(w, &repo, &commit)?.unwrap();
-                let mut run = old.clone();
-                run.cache_scope = "branch:feature".into();
-                crate::ci::queue::put_run(w, &run)
-            })
-            .await
-            .unwrap();
-        runner.once(&fake).await.unwrap();
-        assert!(result_of(&s, &sha).await.reused_from.is_some());
-        assert_eq!(fake.ran.lock().unwrap().len(), 3);
-    }
+            runner.once(&fake).await.unwrap();
+            assert_eq!(fake.ran.lock().unwrap().len(), 3);
+            std::fs::remove_dir_all(&entry).unwrap();
+            let sha = empty_main(&s, "branch reuse needs no save").await;
+            let (repo, commit) = (s.repo.id.clone(), sha.clone());
+            s.app
+                .store
+                .write(move |w| {
+                    let old = crate::ci::queue::get_run(w, &repo, &commit)?.unwrap();
+                    let mut run = old.clone();
+                    run.cache_scope = "branch:feature".into();
+                    crate::ci::queue::put_run(w, &run)
+                })
+                .await
+                .unwrap();
+            runner.once(&fake).await.unwrap();
+            assert!(result_of(&s, &sha).await.reused_from.is_some());
+            assert_eq!(fake.ran.lock().unwrap().len(), 3);
+        }
 
-    /// The run of a protected branch saves the cache; a pull request's run
-    /// restores that entry and saves nothing.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn only_a_protected_branch_saves_the_cache() {
-        let Service {
+        /// The run of a protected branch saves the cache; a pull request's run
+        /// restores that entry and saves nothing.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn only_a_protected_branch_saves_the_cache() {
+            let Service {
             dir,
             app,
             url,
@@ -2643,403 +1248,408 @@ esac
             "[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write target/out built\"]\ncache = { paths = [\"target\"] }\n",
         )
         .await;
-        let runner = Runner::new(
-            Api::new(&url, &runner_token),
-            dir.path().join("runner"),
-            None,
-            ExecutorConfig::default(),
-        );
-        let fake = Fake::new();
-        let log_of = |sha: String| {
-            let (app, repo) = (app.clone(), repo.clone());
-            async move {
-                let checks = app.ci.head_checks(&repo, &sha).await.unwrap().checks;
-                let id = checks[0].attempt_id.clone().unwrap();
-                app.ci.log_tail(&id, 1 << 20).await.unwrap().0
-            }
-        };
-        let main = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
-        assert!(runner.once(&fake).await.unwrap());
-        let log = log_of(main).await;
-        assert!(log.contains("[branvil] no cache entry yet\n"), "{log}");
-        assert!(log.contains("[branvil] cache saved in "), "{log}");
-
-        let work = dir.path().join("work");
-        git(&work, &["checkout", "-qb", "feature"]);
-        std::fs::write(work.join("feature.txt"), "feature").unwrap();
-        git(&work, &["add", "."]);
-        git(&work, &["commit", "-q", "-m", "feature"]);
-        git(&work, &["push", "-q", bare.to_str().unwrap(), "feature"]);
-        crate::refs::record_refs(&app, &repo).await.unwrap();
-        let resp = http
-            .post(format!("{url}/api/v1/repos/acme%2Fdemo/pulls"))
-            .bearer_auth(&owner)
-            .json(&serde_json::json!({"title": "feature", "head": "feature", "base": "main"}))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), 201);
-        let feature = app.git.branch_tips(&bare).await.unwrap()["feature"].clone();
-        assert!(runner.once(&fake).await.unwrap());
-        let log = log_of(feature).await;
-        assert!(log.contains("[branvil] cache restored in "), "{log}");
-        assert!(
-            log.contains("[branvil] cache not saved (only a protected branch's run saves it)\n")
-                && !log.contains("cache saved"),
-            "{log}"
-        );
-        let entries = std::fs::read_dir(dir.path().join("runner/cache"))
-            .unwrap()
-            .count();
-        assert_eq!(entries, 1, "the pull request added no entry");
-
-        // A fast-forward merge queues the cache job as protected, but the
-        // same commit's PR execution and the existing recent save avoid a VM.
-        git(&work, &["checkout", "-q", "main"]);
-        git(&work, &["merge", "--ff-only", "feature"]);
-        git(&work, &["push", "-q", bare.to_str().unwrap(), "main"]);
-        crate::refs::record_refs(&app, &repo).await.unwrap();
-        assert!(runner.once(&fake).await.unwrap());
-        let feature = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
-        let log = log_of(feature).await;
-        assert!(
-            log.contains("reused result of") && log.contains("reuse cache"),
-            "{log}"
-        );
-        assert!(!log.contains("source fetched"), "{log}");
-        assert_eq!(fake.ran.lock().unwrap().len(), 2);
-
-        // main's next commit restores the entry and saves it again.
-        git(&work, &["checkout", "-q", "main"]);
-        std::fs::write(work.join("next.txt"), "next").unwrap();
-        git(&work, &["add", "."]);
-        git(&work, &["commit", "-q", "-m", "next"]);
-        git(&work, &["push", "-q", bare.to_str().unwrap(), "main"]);
-        crate::refs::record_refs(&app, &repo).await.unwrap();
-        let next = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
-        assert!(runner.once(&fake).await.unwrap());
-        let log = log_of(next).await;
-        assert!(
-            log.contains("[branvil] cache restored in ")
-                && log.contains("[branvil] cache saved in "),
-            "{log}"
-        );
-    }
-
-    /// Up to `max_jobs` attempts run at once, each to its own end. The
-    /// runner reads the limit from its configuration before every claim, so
-    /// a new limit applies to the next claim and stops no running job.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn the_runner_runs_up_to_max_jobs_attempts_at_once() {
-        let pipeline: String = ["a", "b", "c", "d"]
-            .iter()
-            .map(|n| {
-                format!("[[jobs]]\nname = \"{n}\"\nimage = \"alpine\"\ncommands = [\"wait\"]\n\n")
-            })
-            .collect();
-        let Service {
-            dir,
-            app,
-            url,
-            owner,
-            runner_token,
-            http,
-            repo,
-            bare,
-        } = service_with_lease(&pipeline, None, 60).await;
-        let config = dir.path().join("runner.toml");
-        let max_jobs = |n: u32| {
-            let staged = config.with_extension("new");
-            std::fs::write(&staged, format!("[ci.executor]\nmax_jobs = {n}\n")).unwrap();
-            std::fs::rename(staged, &config).unwrap();
-        };
-        max_jobs(2);
-        let runner = Runner::new(
-            Api::new(&url, &runner_token),
-            dir.path().join("runner"),
-            Some((config.clone(), dir.path().to_path_buf())),
-            ExecutorConfig::default(),
-        );
-        // This tests scheduling, not heartbeat frequency. A three-second
-        // lease can expire under CI contention and this fixture has no reaper.
-        // Complete jobs explicitly; cancellation delivery is tested separately.
-        let fake = Arc::new(Fake {
-            controlled: true,
-            ..Fake::new()
-        });
-        let serving = tokio::spawn(Arc::new(runner).serve({
-            let fake = fake.clone();
-            move || fake.clone()
-        }));
-        let sha = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
-        // The checks once `done` holds of them (by name: status, attempt).
-        let settle = |phase: &'static str, done: fn(&[(String, String, u64)]) -> bool| {
-            let (app, repo, sha) = (app.clone(), repo.clone(), sha.clone());
-            let fake = fake.clone();
-            async move {
-                let mut last = Vec::new();
-                for _ in 0..100 {
-                    let mut seen: Vec<(String, String, u64, String)> = app
-                        .ci
-                        .head_checks(&repo, &sha)
-                        .await
-                        .unwrap()
-                        .checks
-                        .into_iter()
-                        .map(|c| {
-                            let status = c.conclusion.unwrap_or(c.status);
-                            (
-                                c.name,
-                                status,
-                                c.attempt.unwrap_or(0),
-                                c.attempt_id.unwrap_or_default(),
-                            )
-                        })
-                        .collect();
-                    seen.sort();
-                    let states: Vec<_> = seen
-                        .iter()
-                        .map(|c| (c.0.clone(), c.1.clone(), c.2))
-                        .collect();
-                    if done(&states)
-                        && seen
-                            .iter()
-                            .filter(|c| c.1 == "in_progress")
-                            .all(|c| fake.finishes.lock().unwrap().contains_key(&c.3))
-                    {
-                        return seen;
-                    }
-                    last = seen;
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+            let runner = Runner::new(
+                Api::new(&url, &runner_token),
+                dir.path().join("runner"),
+                None,
+                ExecutorConfig::default(),
+            );
+            let fake = Fake::new();
+            let log_of = |sha: String| {
+                let (app, repo) = (app.clone(), repo.clone());
+                async move {
+                    let checks = app.ci.head_checks(&repo, &sha).await.unwrap().checks;
+                    let id = checks[0].attempt_id.clone().unwrap();
+                    app.ci.log_tail(&id, 1 << 20).await.unwrap().0
                 }
-                let mut logs = Vec::new();
-                for check in &last {
-                    if !check.3.is_empty() {
-                        let log = app.ci.log_tail(&check.3, 4096).await.unwrap().0;
-                        logs.push((check.0.clone(), log));
-                    }
-                }
-                panic!(
-                    "{phase}: checks={last:?}; logs={logs:?}; executor started={}, stopped={}",
-                    fake.waiting.load(Ordering::SeqCst),
-                    fake.stopped.load(Ordering::SeqCst)
-                );
-            }
-        };
-        let cancel = |id: String| {
-            let (http, url, owner) = (http.clone(), url.clone(), owner.clone());
-            let fake = fake.clone();
-            async move {
-                let resp = http
-                    .post(format!("{url}/api/v1/repos/acme%2Fdemo/jobs/{id}/cancel"))
-                    .bearer_auth(&owner)
-                    .send()
-                    .await
-                    .unwrap();
-                assert_eq!(resp.status(), 200);
-                fake.finishes
-                    .lock()
-                    .unwrap()
-                    .get(&id)
-                    .expect("executor started")
-                    .notify_one();
-            }
-        };
-        fn count(s: &[(String, String, u64)], status: &str) -> usize {
-            s.iter().filter(|c| c.1 == status).count()
-        }
+            };
+            let main = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
+            assert!(runner.once(&fake).await.unwrap());
+            let log = log_of(main).await;
+            assert!(log.contains("[branvil] no cache entry yet\n"), "{log}");
+            assert!(log.contains("[branvil] cache saved in "), "{log}");
 
-        // Two run at once; the others wait in the queue, and the end of one
-        // starts the next.
-        let seen = settle("initial two claims", |s| {
-            count(s, "in_progress") == 2 && count(s, "queued") == 2
-        })
-        .await;
-        cancel(
-            seen.iter()
-                .find(|c| c.1 == "in_progress")
+            let work = dir.path().join("work");
+            git(&work, &["checkout", "-qb", "feature"]);
+            std::fs::write(work.join("feature.txt"), "feature").unwrap();
+            git(&work, &["add", "."]);
+            git(&work, &["commit", "-q", "-m", "feature"]);
+            git(&work, &["push", "-q", bare.to_str().unwrap(), "feature"]);
+            crate::refs::record_refs(&app, &repo).await.unwrap();
+            let resp = http
+                .post(format!("{url}/api/v1/repos/acme%2Fdemo/pulls"))
+                .bearer_auth(&owner)
+                .json(&serde_json::json!({"title": "feature", "head": "feature", "base": "main"}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 201);
+            let feature = app.git.branch_tips(&bare).await.unwrap()["feature"].clone();
+            assert!(runner.once(&fake).await.unwrap());
+            let log = log_of(feature).await;
+            assert!(log.contains("[branvil] cache restored in "), "{log}");
+            assert!(
+                log.contains(
+                    "[branvil] cache not saved (only a protected branch's run saves it)\n"
+                ) && !log.contains("cache saved"),
+                "{log}"
+            );
+            let entries = std::fs::read_dir(dir.path().join("runner/cache"))
                 .unwrap()
-                .3
-                .clone(),
-        )
-        .await;
-        let seen = settle("replacement after cancellation", |s| {
-            count(s, "cancelled") == 1 && count(s, "in_progress") == 2 && count(s, "queued") == 1
-        })
-        .await;
-        let running: Vec<_> = seen.iter().filter(|c| c.1 == "in_progress").collect();
-        // With the limit lowered to one, the end of one job leaves the other
-        // running and the last queued.
-        max_jobs(1);
-        cancel(running[0].3.clone()).await;
-        settle("lowered limit after cancellation", |s| {
-            count(s, "cancelled") == 2 && count(s, "in_progress") == 1
-        })
-        .await;
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        let seen = settle("lowered limit stays effective", |s| {
-            count(s, "in_progress") == 1 && count(s, "queued") == 1
-        })
-        .await;
-        assert!(
-            seen.iter()
-                .any(|c| c.0 == running[1].0 && c.1 == "in_progress" && c.2 == 1),
-            "{seen:?}"
-        );
-        // Raised again, the last starts next to it.
-        max_jobs(2);
-        let seen = settle("raised limit starts last job", |s| {
-            count(s, "in_progress") == 2 && count(s, "cancelled") == 2
-        })
-        .await;
-        for c in seen.iter().filter(|c| c.1 == "in_progress") {
-            assert_eq!(c.2, 1, "never interrupted: {seen:?}");
-            cancel(c.3.clone()).await;
-        }
-        settle("all cancelled", |s| count(s, "cancelled") == 4).await;
-        serving.abort();
-    }
+                .count();
+            assert_eq!(entries, 1, "the pull request added no entry");
 
-    /// A refused token stops the runner, but only once the jobs it runs have
-    /// ended on their own (each stopping and removing its microVM), not by
-    /// dropping them with their VMs.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn a_refused_token_lets_the_running_jobs_end_first() {
-        let pipeline = "[[jobs]]\nname = \"a\"\nimage = \"alpine\"\ncommands = [\"wait\"]\n\n[[jobs]]\nname = \"b\"\nimage = \"alpine\"\ncommands = [\"wait\"]\n";
-        let s = service(pipeline).await;
-        let runner = Runner::new(
-            Api::new(&s.url, &s.runner_token),
-            s.dir.path().join("runner"),
-            None,
-            ExecutorConfig {
-                max_jobs: 2,
-                ..ExecutorConfig::default()
-            },
-        );
-        let fake = Arc::new(Fake::new());
-        let serving = tokio::spawn(Arc::new(runner).serve({
-            let fake = fake.clone();
-            move || fake.clone()
-        }));
-        // `in_progress` means claimed, not that the executor has started.
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while fake.waiting.load(Ordering::SeqCst) != 2 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("both jobs reached the executor's wait");
-        s.revoke_runner_token().await;
-        let stopped = tokio::time::timeout(Duration::from_secs(30), serving)
-            .await
-            .expect("the runner stops")
-            .unwrap();
-        assert!(stopped.is_err());
-        assert_eq!(
-            fake.stopped.load(Ordering::SeqCst),
-            2,
-            "both jobs ended on their own"
-        );
-    }
+            // A fast-forward merge queues the cache job as protected, but the
+            // same commit's PR execution and the existing recent save avoid a VM.
+            git(&work, &["checkout", "-q", "main"]);
+            git(&work, &["merge", "--ff-only", "feature"]);
+            git(&work, &["push", "-q", bare.to_str().unwrap(), "main"]);
+            crate::refs::record_refs(&app, &repo).await.unwrap();
+            assert!(runner.once(&fake).await.unwrap());
+            let feature = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
+            let log = log_of(feature).await;
+            assert!(
+                log.contains("reused result of") && log.contains("reuse cache"),
+                "{log}"
+            );
+            assert!(!log.contains("source fetched"), "{log}");
+            assert_eq!(fake.ran.lock().unwrap().len(), 2);
 
-    /// Source fetching is part of the attempt's lifetime too: even after a
-    /// claim is refused, each held request must return and clean up its job
-    /// directory, without ever starting the executor on a failed fetch.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn a_refused_token_lets_source_fetches_end_first() {
-        let pipeline: String = ["a", "b", "c"]
-            .iter()
-            .map(|name| {
-                format!(
-                    "[[jobs]]\nname = \"{name}\"\nimage = \"alpine\"\ncommands = [\"wait\"]\n\n"
-                )
-            })
-            .collect();
-        let (requested, mut requests) = mpsc::channel(2);
-        let refused = Arc::new(tokio::sync::Notify::new());
-        let source_refusals = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let s = service_with_source_gate(
-            &pipeline,
-            Some(SourceGate {
-                requested,
-                refused: refused.clone(),
-                source_refusals: source_refusals.clone(),
-            }),
-        )
-        .await;
-        let runner = Arc::new(Runner::new(
-            Api::new(&s.url, &s.runner_token),
-            s.dir.path().join("runner"),
-            None,
-            ExecutorConfig {
-                // Leave capacity for another claim to observe the refusal
-                // while all three source requests remain held.
-                max_jobs: 4,
-                ..ExecutorConfig::default()
-            },
-        ));
-        let fake = Arc::new(Fake::new());
-        let serving = tokio::spawn(runner.clone().serve({
-            let fake = fake.clone();
-            move || fake.clone()
-        }));
-        let mut held = Vec::new();
-        for _ in 0..3 {
-            held.push(
-                tokio::time::timeout(Duration::from_secs(10), requests.recv())
-                    .await
-                    .expect("the source request arrives")
-                    .unwrap(),
+            // main's next commit restores the entry and saves it again.
+            git(&work, &["checkout", "-q", "main"]);
+            std::fs::write(work.join("next.txt"), "next").unwrap();
+            git(&work, &["add", "."]);
+            git(&work, &["commit", "-q", "-m", "next"]);
+            git(&work, &["push", "-q", bare.to_str().unwrap(), "main"]);
+            crate::refs::record_refs(&app, &repo).await.unwrap();
+            let next = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
+            assert!(runner.once(&fake).await.unwrap());
+            let log = log_of(next).await;
+            assert!(
+                log.contains("[branvil] cache restored in ")
+                    && log.contains("[branvil] cache saved in "),
+                "{log}"
             );
         }
-        s.revoke_runner_token().await;
-        tokio::time::timeout(Duration::from_secs(10), refused.notified())
-            .await
-            .expect("a claim observes the refused token");
-        // One source fetch returns 401 and cleans up; the runner must still
-        // let the other two finish instead of dropping their tasks.
-        held.pop().unwrap().send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while std::fs::read_dir(runner.work_dir.join("jobs"))
-                .unwrap()
-                .count()
-                != held.len()
-            {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("the first source fetch ended and removed its directory");
-        assert!(!serving.is_finished(), "source requests are still held");
-        assert!(fake.ran.lock().unwrap().is_empty());
-        for resume in held {
-            resume.send(()).unwrap();
-        }
-        let result = tokio::time::timeout(Duration::from_secs(10), serving)
-            .await
-            .expect("the runner stops after all source fetches end")
-            .unwrap();
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("token is not valid")
-        );
-        assert!(fake.ran.lock().unwrap().is_empty(), "no executor started");
-        assert_eq!(source_refusals.load(Ordering::SeqCst), 3);
-        assert_eq!(fake.stopped.load(Ordering::SeqCst), 0);
-        assert_eq!(
-            std::fs::read_dir(runner.work_dir.join("jobs"))
-                .unwrap()
-                .count(),
-            0,
-            "every attempt removed its directory before the runner returned"
-        );
-    }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn the_runner_loop_reports_results_cancellation_and_an_unavailable_executor() {
-        let Service {
+        /// Up to `max_jobs` attempts run at once, each to its own end. The
+        /// runner reads the limit from its configuration before every claim, so
+        /// a new limit applies to the next claim and stops no running job.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn the_runner_runs_up_to_max_jobs_attempts_at_once() {
+            let pipeline: String = ["a", "b", "c", "d"]
+                .iter()
+                .map(|n| {
+                    format!(
+                        "[[jobs]]\nname = \"{n}\"\nimage = \"alpine\"\ncommands = [\"wait\"]\n\n"
+                    )
+                })
+                .collect();
+            let Service {
+                dir,
+                app,
+                url,
+                owner,
+                runner_token,
+                http,
+                repo,
+                bare,
+            } = service_with_lease(&pipeline, None, 60).await;
+            let config = dir.path().join("runner.toml");
+            let max_jobs = |n: u32| {
+                let staged = config.with_extension("new");
+                std::fs::write(&staged, format!("[ci.executor]\nmax_jobs = {n}\n")).unwrap();
+                std::fs::rename(staged, &config).unwrap();
+            };
+            max_jobs(2);
+            let runner = Runner::new(
+                Api::new(&url, &runner_token),
+                dir.path().join("runner"),
+                Some((config.clone(), dir.path().to_path_buf())),
+                ExecutorConfig::default(),
+            );
+            // This tests scheduling, not heartbeat frequency. A three-second
+            // lease can expire under CI contention and this fixture has no reaper.
+            // Complete jobs explicitly; cancellation delivery is tested separately.
+            let fake = Arc::new(Fake {
+                controlled: true,
+                ..Fake::new()
+            });
+            let serving = tokio::spawn(Arc::new(runner).serve({
+                let fake = fake.clone();
+                move || fake.clone()
+            }));
+            let sha = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
+            // The checks once `done` holds of them (by name: status, attempt).
+            let settle = |phase: &'static str, done: fn(&[(String, String, u64)]) -> bool| {
+                let (app, repo, sha) = (app.clone(), repo.clone(), sha.clone());
+                let fake = fake.clone();
+                async move {
+                    let mut last = Vec::new();
+                    for _ in 0..100 {
+                        let mut seen: Vec<(String, String, u64, String)> = app
+                            .ci
+                            .head_checks(&repo, &sha)
+                            .await
+                            .unwrap()
+                            .checks
+                            .into_iter()
+                            .map(|c| {
+                                let status = c.conclusion.unwrap_or(c.status);
+                                (
+                                    c.name,
+                                    status,
+                                    c.attempt.unwrap_or(0),
+                                    c.attempt_id.unwrap_or_default(),
+                                )
+                            })
+                            .collect();
+                        seen.sort();
+                        let states: Vec<_> = seen
+                            .iter()
+                            .map(|c| (c.0.clone(), c.1.clone(), c.2))
+                            .collect();
+                        if done(&states)
+                            && seen
+                                .iter()
+                                .filter(|c| c.1 == "in_progress")
+                                .all(|c| fake.finishes.lock().unwrap().contains_key(&c.3))
+                        {
+                            return seen;
+                        }
+                        last = seen;
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    let mut logs = Vec::new();
+                    for check in &last {
+                        if !check.3.is_empty() {
+                            let log = app.ci.log_tail(&check.3, 4096).await.unwrap().0;
+                            logs.push((check.0.clone(), log));
+                        }
+                    }
+                    panic!(
+                        "{phase}: checks={last:?}; logs={logs:?}; executor started={}, stopped={}",
+                        fake.waiting.load(Ordering::SeqCst),
+                        fake.stopped.load(Ordering::SeqCst)
+                    );
+                }
+            };
+            let cancel = |id: String| {
+                let (http, url, owner) = (http.clone(), url.clone(), owner.clone());
+                let fake = fake.clone();
+                async move {
+                    let resp = http
+                        .post(format!("{url}/api/v1/repos/acme%2Fdemo/jobs/{id}/cancel"))
+                        .bearer_auth(&owner)
+                        .send()
+                        .await
+                        .unwrap();
+                    assert_eq!(resp.status(), 200);
+                    fake.finishes
+                        .lock()
+                        .unwrap()
+                        .get(&id)
+                        .expect("executor started")
+                        .notify_one();
+                }
+            };
+            fn count(s: &[(String, String, u64)], status: &str) -> usize {
+                s.iter().filter(|c| c.1 == status).count()
+            }
+
+            // Two run at once; the others wait in the queue, and the end of one
+            // starts the next.
+            let seen = settle("initial two claims", |s| {
+                count(s, "in_progress") == 2 && count(s, "queued") == 2
+            })
+            .await;
+            cancel(
+                seen.iter()
+                    .find(|c| c.1 == "in_progress")
+                    .unwrap()
+                    .3
+                    .clone(),
+            )
+            .await;
+            let seen = settle("replacement after cancellation", |s| {
+                count(s, "cancelled") == 1
+                    && count(s, "in_progress") == 2
+                    && count(s, "queued") == 1
+            })
+            .await;
+            let running: Vec<_> = seen.iter().filter(|c| c.1 == "in_progress").collect();
+            // With the limit lowered to one, the end of one job leaves the other
+            // running and the last queued.
+            max_jobs(1);
+            cancel(running[0].3.clone()).await;
+            settle("lowered limit after cancellation", |s| {
+                count(s, "cancelled") == 2 && count(s, "in_progress") == 1
+            })
+            .await;
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            let seen = settle("lowered limit stays effective", |s| {
+                count(s, "in_progress") == 1 && count(s, "queued") == 1
+            })
+            .await;
+            assert!(
+                seen.iter()
+                    .any(|c| c.0 == running[1].0 && c.1 == "in_progress" && c.2 == 1),
+                "{seen:?}"
+            );
+            // Raised again, the last starts next to it.
+            max_jobs(2);
+            let seen = settle("raised limit starts last job", |s| {
+                count(s, "in_progress") == 2 && count(s, "cancelled") == 2
+            })
+            .await;
+            for c in seen.iter().filter(|c| c.1 == "in_progress") {
+                assert_eq!(c.2, 1, "never interrupted: {seen:?}");
+                cancel(c.3.clone()).await;
+            }
+            settle("all cancelled", |s| count(s, "cancelled") == 4).await;
+            serving.abort();
+        }
+
+        /// A refused token stops the runner, but only once the jobs it runs have
+        /// ended on their own (each stopping and removing its microVM), not by
+        /// dropping them with their VMs.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn a_refused_token_lets_the_running_jobs_end_first() {
+            let pipeline = "[[jobs]]\nname = \"a\"\nimage = \"alpine\"\ncommands = [\"wait\"]\n\n[[jobs]]\nname = \"b\"\nimage = \"alpine\"\ncommands = [\"wait\"]\n";
+            let s = service(pipeline).await;
+            let runner = Runner::new(
+                Api::new(&s.url, &s.runner_token),
+                s.dir.path().join("runner"),
+                None,
+                ExecutorConfig {
+                    max_jobs: 2,
+                    ..ExecutorConfig::default()
+                },
+            );
+            let fake = Arc::new(Fake::new());
+            let serving = tokio::spawn(Arc::new(runner).serve({
+                let fake = fake.clone();
+                move || fake.clone()
+            }));
+            // `in_progress` means claimed, not that the executor has started.
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while fake.waiting.load(Ordering::SeqCst) != 2 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("both jobs reached the executor's wait");
+            s.revoke_runner_token().await;
+            let stopped = tokio::time::timeout(Duration::from_secs(30), serving)
+                .await
+                .expect("the runner stops")
+                .unwrap();
+            assert!(stopped.is_err());
+            assert_eq!(
+                fake.stopped.load(Ordering::SeqCst),
+                2,
+                "both jobs ended on their own"
+            );
+        }
+
+        /// Source fetching is part of the attempt's lifetime too: even after a
+        /// claim is refused, each held request must return and clean up its job
+        /// directory, without ever starting the executor on a failed fetch.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn a_refused_token_lets_source_fetches_end_first() {
+            let pipeline: String = ["a", "b", "c"]
+                .iter()
+                .map(|name| {
+                    format!(
+                        "[[jobs]]\nname = \"{name}\"\nimage = \"alpine\"\ncommands = [\"wait\"]\n\n"
+                    )
+                })
+                .collect();
+            let (requested, mut requests) = mpsc::channel(2);
+            let refused = Arc::new(tokio::sync::Notify::new());
+            let source_refusals = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let s = service_with_source_gate(
+                &pipeline,
+                Some(SourceGate {
+                    requested,
+                    refused: refused.clone(),
+                    source_refusals: source_refusals.clone(),
+                }),
+            )
+            .await;
+            let runner = Arc::new(Runner::new(
+                Api::new(&s.url, &s.runner_token),
+                s.dir.path().join("runner"),
+                None,
+                ExecutorConfig {
+                    // Leave capacity for another claim to observe the refusal
+                    // while all three source requests remain held.
+                    max_jobs: 4,
+                    ..ExecutorConfig::default()
+                },
+            ));
+            let fake = Arc::new(Fake::new());
+            let serving = tokio::spawn(runner.clone().serve({
+                let fake = fake.clone();
+                move || fake.clone()
+            }));
+            let mut held = Vec::new();
+            for _ in 0..3 {
+                held.push(
+                    tokio::time::timeout(Duration::from_secs(10), requests.recv())
+                        .await
+                        .expect("the source request arrives")
+                        .unwrap(),
+                );
+            }
+            s.revoke_runner_token().await;
+            tokio::time::timeout(Duration::from_secs(10), refused.notified())
+                .await
+                .expect("the runner observes the refused token");
+            // One source fetch returns 401 and cleans up; the runner must still
+            // let the other two finish instead of dropping their tasks.
+            held.pop().unwrap().send(()).unwrap();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while std::fs::read_dir(runner.work_dir.join("jobs"))
+                    .unwrap()
+                    .count()
+                    != held.len()
+                {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("the first source fetch ended and removed its directory");
+            assert!(!serving.is_finished(), "source requests are still held");
+            assert!(fake.ran.lock().unwrap().is_empty());
+            for resume in held {
+                resume.send(()).unwrap();
+            }
+            let result = tokio::time::timeout(Duration::from_secs(10), serving)
+                .await
+                .expect("the runner stops after all source fetches end")
+                .unwrap();
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("token is not valid")
+            );
+            assert!(fake.ran.lock().unwrap().is_empty(), "no executor started");
+            assert_eq!(source_refusals.load(Ordering::SeqCst), 3);
+            assert_eq!(fake.stopped.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                std::fs::read_dir(runner.work_dir.join("jobs"))
+                    .unwrap()
+                    .count(),
+                0,
+                "every attempt removed its directory before the runner returned"
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn the_runner_loop_reports_results_cancellation_and_an_unavailable_executor() {
+            let Service {
             dir,
             app,
             url,
@@ -3054,193 +1664,196 @@ esac
         )
         .await;
 
-        let runner = Runner::new(
-            Api::new(&url, &runner_token),
-            dir.path().join("runner"),
-            None,
-            ExecutorConfig {
-                max_cpus: 3,
-                max_memory_mib: 2048,
-                work_quota_mib: 8192,
-                max_timeout_secs: 100,
-                ..ExecutorConfig::default()
-            },
-        );
-        let fake = Fake::new();
-        let job = |id: &str| {
-            let (http, url, owner, id) = (http.clone(), url.clone(), owner.clone(), id.to_string());
-            async move {
-                http.get(format!("{url}/api/v1/repos/acme%2Fdemo/jobs/{id}"))
-                    .bearer_auth(&owner)
-                    .send()
-                    .await
-                    .unwrap()
-                    .json::<serde_json::Value>()
-                    .await
-                    .unwrap()
-            }
-        };
-        let sha = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
-        let checks = || {
-            let (app, repo, sha) = (app.clone(), repo.clone(), sha.clone());
-            async move { app.ci.head_checks(&repo, &sha).await.unwrap().checks }
-        };
-
-        // Job "ok": output streamed, artifact collected, success.
-        assert!(runner.once(&fake).await.unwrap());
-        let ok = checks().await.into_iter().find(|c| c.name == "ok").unwrap();
-        assert_eq!(ok.conclusion.as_deref(), Some("success"), "{ok:?}");
-        // The executor runs the tag with the runner's CPUs, memory, and
-        // work directory quota, and the runner's time limit for a job that
-        // gives none.
-        assert_eq!(
-            fake.ran.lock().unwrap()[0],
-            ("alpine".to_string(), 3, 2048, 100, 8192)
-        );
-        assert_eq!(ok.artifact_names, vec!["report".to_string()]);
-        let id = ok.attempt_id.clone().unwrap();
-        // The attempt records the image it ran on, and the log says so first.
-        let digest = digest_of("alpine");
-        assert_eq!(job(&id).await["image_digest"], digest.as_str());
-        let (log, _) = app.ci.log_tail(&id, 1 << 20).await.unwrap();
-        let (first, rest) = log.split_once("\n[branvil] queued for ").unwrap();
-        assert_eq!(
-            first,
-            format!(
-                "[branvil] attempt 1 of job ok on acme/demo {sha} (executor fake, image alpine, 3 cpu, 2048 MiB, timeout 100 s, network off)"
-            )
-        );
-        assert!(
-            rest.split_once(" s\n")
-                .is_some_and(|(secs, rest)| secs.parse::<u64>().is_ok()
-                    && rest.starts_with(&format!("[branvil] image alpine is {digest}\n"))),
-            "{log}"
-        );
-        // Each step of the runner's own says how long it took.
-        for step in [
-            "[branvil] source fetched in ",
-            "[branvil] checked out in ",
-            "[branvil] artifacts handled in ",
-        ] {
-            assert!(log.contains(step), "{step} in {log}");
-        }
-        assert!(log.contains("hello from the job"), "{log}");
-        // The work directory is a checkout of the commit with its history
-        // and the tags it reaches, and without a remote.
-        assert!(
-            log.contains(&format!("\n{sha}\nv1\nv1\n.branvil/ci.toml\n")),
-            "{log}"
-        );
-        assert!(!log.contains("later") && !log.contains("remote."), "{log}");
-        assert!(
-            log.contains("artifact report uploaded (1 file(s))"),
-            "{log}"
-        );
-        assert!(
-            !runner.work_dir.join("jobs").join(&id).exists(),
-            "work directory removed"
-        );
-
-        // Job "slow": cancelled through the API while it runs, then again
-        // while its check waits for the image cache.
-        let cancel_slow = |runner: Runner, fake: Fake| {
-            let (checks, http, url, owner) = (checks, http.clone(), url.clone(), owner.clone());
-            async move {
-                let running = tokio::spawn(async move {
-                    let r = runner.once(&fake).await;
-                    (runner, fake, r)
-                });
-                let mut slow_id = None;
-                for _ in 0..50 {
-                    if let Some(c) = checks()
+            let runner = Runner::new(
+                Api::new(&url, &runner_token),
+                dir.path().join("runner"),
+                None,
+                ExecutorConfig {
+                    max_cpus: 3,
+                    max_memory_mib: 2048,
+                    work_quota_mib: 8192,
+                    max_timeout_secs: 100,
+                    ..ExecutorConfig::default()
+                },
+            );
+            let fake = Fake::new();
+            let job = |id: &str| {
+                let (http, url, owner, id) =
+                    (http.clone(), url.clone(), owner.clone(), id.to_string());
+                async move {
+                    http.get(format!("{url}/api/v1/repos/acme%2Fdemo/jobs/{id}"))
+                        .bearer_auth(&owner)
+                        .send()
                         .await
-                        .into_iter()
-                        .find(|c| c.name == "slow" && c.status == "in_progress")
-                    {
-                        slow_id = c.attempt_id;
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                        .unwrap()
+                        .json::<serde_json::Value>()
+                        .await
+                        .unwrap()
                 }
-                let slow_id = slow_id.expect("slow job running");
-                let resp = http
-                    .post(format!(
-                        "{url}/api/v1/repos/acme%2Fdemo/jobs/{slow_id}/cancel"
-                    ))
-                    .bearer_auth(&owner)
-                    .send()
-                    .await
-                    .unwrap();
-                assert_eq!(resp.status(), 200);
-                let (runner, fake, r) = tokio::time::timeout(Duration::from_secs(20), running)
-                    .await
-                    .unwrap()
-                    .unwrap();
-                assert!(r.unwrap());
-                (runner, fake, slow_id)
-            }
-        };
-        let (runner, fake, slow_id) = cancel_slow(runner, fake).await;
-        let slow = job(&slow_id).await;
-        assert_eq!(slow["conclusion"], "cancelled", "{slow}");
-        assert_eq!(slow["image_digest"], digest.as_str());
-        // A larger time limit is lowered to the runner's, and the log says so.
-        assert_eq!(fake.ran.lock().unwrap()[1].3, 100);
-        let (log, _) = app.ci.log_tail(&slow_id, 1 << 20).await.unwrap();
-        assert!(
-            log.contains("[branvil] timeout_secs 5000 exceeds the runner limit 100; using 100\n"),
-            "{log}"
-        );
-        fake.hold_images.store(true, Ordering::SeqCst);
-        let resp = http
-            .post(format!(
-                "{url}/api/v1/repos/acme%2Fdemo/jobs/{slow_id}/retry"
-            ))
-            .bearer_auth(&owner)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), 200);
-        let (runner, fake, waiting_id) = cancel_slow(runner, fake).await;
-        let waiting = job(&waiting_id).await;
-        assert_eq!(waiting["conclusion"], "cancelled", "{waiting}");
-        assert!(waiting["image_digest"].is_null(), "{waiting}");
-        // Its log still names the attempt it was.
-        let (log, _) = app.ci.log_tail(&waiting_id, 1 << 20).await.unwrap();
-        assert!(
-            log.starts_with("[branvil] attempt 2 of job slow on acme/demo ")
-                && log.contains("job ended: cancelled while waiting for the image cache"),
-            "{log}"
-        );
-        assert_eq!(
-            fake.ran.lock().unwrap().len(),
-            2,
-            "the waiting job never ran"
-        );
-        fake.hold_images.store(false, Ordering::SeqCst);
+            };
+            let sha = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
+            let checks = || {
+                let (app, repo, sha) = (app.clone(), repo.clone(), sha.clone());
+                async move { app.ci.head_checks(&repo, &sha).await.unwrap().checks }
+            };
 
-        // An unusable executor does not take a job away from a ready runner.
-        fake.ready.store(false, Ordering::SeqCst);
-        let resp = http
-            .post(format!("{url}/api/v1/repos/acme%2Fdemo/jobs/{id}/retry"))
-            .bearer_auth(&owner)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), 200);
-        assert!(!runner.once(&fake).await.unwrap());
-        let ok = checks().await.into_iter().find(|c| c.name == "ok").unwrap();
-        assert_eq!(ok.attempt, Some(2));
-        assert_eq!(ok.status, "queued");
-        let diag = app.ci.diagnostics().await;
-        assert_eq!(diag["state"], "executor_unavailable", "{diag}");
-        assert!(!runner.once(&fake).await.unwrap(), "nothing left");
-    }
-    #[test]
-    fn only_declared_jobs_receive_verified_sha_in_the_executor_environment() {
-        for declared in [false, true] {
-            for verified in [None, Some("verified")] {
-                let c: Claim = serde_json::from_value(serde_json::json!({
+            // Job "ok": output streamed, artifact collected, success.
+            assert!(runner.once(&fake).await.unwrap());
+            let ok = checks().await.into_iter().find(|c| c.name == "ok").unwrap();
+            assert_eq!(ok.conclusion.as_deref(), Some("success"), "{ok:?}");
+            // The executor runs the tag with the runner's CPUs, memory, and
+            // work directory quota, and the runner's time limit for a job that
+            // gives none.
+            assert_eq!(
+                fake.ran.lock().unwrap()[0],
+                ("alpine".to_string(), 3, 2048, 100, 8192)
+            );
+            assert_eq!(ok.artifact_names, vec!["report".to_string()]);
+            let id = ok.attempt_id.clone().unwrap();
+            // The attempt records the image it ran on, and the log says so first.
+            let digest = digest_of("alpine");
+            assert_eq!(job(&id).await["image_digest"], digest.as_str());
+            let (log, _) = app.ci.log_tail(&id, 1 << 20).await.unwrap();
+            let (first, rest) = log.split_once("\n[branvil] queued for ").unwrap();
+            assert_eq!(
+                first,
+                format!(
+                    "[branvil] attempt 1 of job ok on acme/demo {sha} (executor fake, image alpine, 3 cpu, 2048 MiB, timeout 100 s, network off)"
+                )
+            );
+            assert!(
+                rest.split_once(" s\n")
+                    .is_some_and(|(secs, rest)| secs.parse::<u64>().is_ok()
+                        && rest.starts_with(&format!("[branvil] image alpine is {digest}\n"))),
+                "{log}"
+            );
+            // Each step of the runner's own says how long it took.
+            for step in [
+                "[branvil] source fetched in ",
+                "[branvil] checked out in ",
+                "[branvil] artifacts handled in ",
+            ] {
+                assert!(log.contains(step), "{step} in {log}");
+            }
+            assert!(log.contains("hello from the job"), "{log}");
+            // The work directory is a checkout of the commit with its history
+            // and the tags it reaches, and without a remote.
+            assert!(
+                log.contains(&format!("\n{sha}\nv1\nv1\n.branvil/ci.toml\n")),
+                "{log}"
+            );
+            assert!(!log.contains("later") && !log.contains("remote."), "{log}");
+            assert!(
+                log.contains("artifact report uploaded (1 file(s))"),
+                "{log}"
+            );
+            assert!(
+                !runner.work_dir.join("jobs").join(&id).exists(),
+                "work directory removed"
+            );
+
+            // Job "slow": cancelled through the API while it runs, then again
+            // while its check waits for the image cache.
+            let cancel_slow = |runner: Runner, fake: Fake| {
+                let (checks, http, url, owner) = (checks, http.clone(), url.clone(), owner.clone());
+                async move {
+                    let running = tokio::spawn(async move {
+                        let r = runner.once(&fake).await;
+                        (runner, fake, r)
+                    });
+                    let mut slow_id = None;
+                    for _ in 0..50 {
+                        if let Some(c) = checks()
+                            .await
+                            .into_iter()
+                            .find(|c| c.name == "slow" && c.status == "in_progress")
+                        {
+                            slow_id = c.attempt_id;
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    let slow_id = slow_id.expect("slow job running");
+                    let resp = http
+                        .post(format!(
+                            "{url}/api/v1/repos/acme%2Fdemo/jobs/{slow_id}/cancel"
+                        ))
+                        .bearer_auth(&owner)
+                        .send()
+                        .await
+                        .unwrap();
+                    assert_eq!(resp.status(), 200);
+                    let (runner, fake, r) = tokio::time::timeout(Duration::from_secs(20), running)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert!(r.unwrap());
+                    (runner, fake, slow_id)
+                }
+            };
+            let (runner, fake, slow_id) = cancel_slow(runner, fake).await;
+            let slow = job(&slow_id).await;
+            assert_eq!(slow["conclusion"], "cancelled", "{slow}");
+            assert_eq!(slow["image_digest"], digest.as_str());
+            // A larger time limit is lowered to the runner's, and the log says so.
+            assert_eq!(fake.ran.lock().unwrap()[1].3, 100);
+            let (log, _) = app.ci.log_tail(&slow_id, 1 << 20).await.unwrap();
+            assert!(
+                log.contains(
+                    "[branvil] timeout_secs 5000 exceeds the runner limit 100; using 100\n"
+                ),
+                "{log}"
+            );
+            fake.hold_images.store(true, Ordering::SeqCst);
+            let resp = http
+                .post(format!(
+                    "{url}/api/v1/repos/acme%2Fdemo/jobs/{slow_id}/retry"
+                ))
+                .bearer_auth(&owner)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+            let (runner, fake, waiting_id) = cancel_slow(runner, fake).await;
+            let waiting = job(&waiting_id).await;
+            assert_eq!(waiting["conclusion"], "cancelled", "{waiting}");
+            assert!(waiting["image_digest"].is_null(), "{waiting}");
+            // Its log still names the attempt it was.
+            let (log, _) = app.ci.log_tail(&waiting_id, 1 << 20).await.unwrap();
+            assert!(
+                log.starts_with("[branvil] attempt 2 of job slow on acme/demo ")
+                    && log.contains("job ended: cancelled while waiting for the image cache"),
+                "{log}"
+            );
+            assert_eq!(
+                fake.ran.lock().unwrap().len(),
+                2,
+                "the waiting job never ran"
+            );
+            fake.hold_images.store(false, Ordering::SeqCst);
+
+            // An unusable executor does not take a job away from a ready runner.
+            fake.ready.store(false, Ordering::SeqCst);
+            let resp = http
+                .post(format!("{url}/api/v1/repos/acme%2Fdemo/jobs/{id}/retry"))
+                .bearer_auth(&owner)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+            assert!(!runner.once(&fake).await.unwrap());
+            let ok = checks().await.into_iter().find(|c| c.name == "ok").unwrap();
+            assert_eq!(ok.attempt, Some(2));
+            assert_eq!(ok.status, "queued");
+            let diag = app.ci.diagnostics().await;
+            assert_eq!(diag["state"], "executor_unavailable", "{diag}");
+            assert!(!runner.once(&fake).await.unwrap(), "nothing left");
+        }
+        #[test]
+        fn only_declared_jobs_receive_verified_sha_in_the_executor_environment() {
+            for declared in [false, true] {
+                for verified in [None, Some("verified")] {
+                    let c: Claim = serde_json::from_value(serde_json::json!({
                     "attempt_id":"att", "lease":"lease", "lease_secs":60,
                     "repo":"acme/demo", "sha":"head", "attempt":1,
                     "job":{"name":"test", "image":"alpine", "commands":["true"], "paths":[],
@@ -3249,13 +1862,14 @@ esac
                     "queued_secs":0, "reuse":null
                 }))
                 .unwrap();
-                let env = job_environment(&c);
-                let value = env
-                    .iter()
-                    .find(|(k, _)| k == "BRANVIL_VERIFIED_SHA")
-                    .map(|(_, v)| v.as_str());
-                assert_eq!(value, declared.then_some(verified.unwrap_or_default()));
-                assert!(env.contains(&("BRANVIL_SHA".into(), "head".into())));
+                    let env = job_environment(&c);
+                    let value = env
+                        .iter()
+                        .find(|(k, _)| k == "BRANVIL_VERIFIED_SHA")
+                        .map(|(_, v)| v.as_str());
+                    assert_eq!(value, declared.then_some(verified.unwrap_or_default()));
+                    assert!(env.contains(&("BRANVIL_SHA".into(), "head".into())));
+                }
             }
         }
     }

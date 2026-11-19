@@ -211,7 +211,8 @@ def test_the_client_build_has_no_branvil() -> None:
 #: depending on a code host or the server, which the client also builds.
 _ALLOWED = {
     "loopback-auth": set(),
-    "branvil": {"loopback-auth", "gb-base"},
+    "branvil": {"loopback-auth", "gb-base", "gb-runner"},
+    "gb-runner": {"gb-base"},
     "gb-base": set(),
     "gb-workspace": {"gb-base"},
     "gb-observability": {"gb-base"},
@@ -222,6 +223,7 @@ _ALLOWED = {
     "gb-setup": {"gb-base", "gb-config"},
     "gb-environment": {"gb-base", "gb-config", "gb-wire"},
     "gb-server": {
+        "gb-runner",
         "gb-base",
         "gb-config",
         "gb-setup",
@@ -235,6 +237,7 @@ _ALLOWED = {
         "branvil",
     },
     "guildbotics": {
+        "gb-runner",
         "gb-base",
         "gb-server",
         "gb-environment",

@@ -145,22 +145,7 @@ pub fn base_command(global_config: &Path) -> tokio::process::Command {
 }
 
 /// The same isolated Git environment for offline synchronous upgrades.
-pub fn base_command_sync(global_config: &Path) -> std::process::Command {
-    let mut cmd = std::process::Command::new("git");
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("GIT_") {
-            cmd.env_remove(&key);
-        }
-    }
-    cmd.env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", global_config)
-        .env("GIT_ATTR_NOSYSTEM", "1")
-        .env("XDG_CONFIG_HOME", global_config)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null());
-    cmd
-}
+pub use gb_runner::git::base_command_sync;
 
 /// Removes the lock files a killed Git can leave in the repository `dir`:
 /// its own (`HEAD.lock`, `packed-refs.lock`, `config.lock`), its refs' and
