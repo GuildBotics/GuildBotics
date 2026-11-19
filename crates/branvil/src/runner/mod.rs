@@ -393,7 +393,7 @@ fi
                     detail: None,
                     images: vec![crate::ci::images::Image {
                         reference: "alpine".into(),
-                        architecture: "arm64".into(),
+                        architecture: crate::ci::images::architecture().into(),
                         digest: "sha256:test".into(),
                     }],
                 })
