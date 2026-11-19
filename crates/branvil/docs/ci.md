@@ -518,12 +518,13 @@ A VM packs the artifacts' paths of `/work` once the job's VM ended, by exit
 or by timeout ("The runner"), leaving out a path that goes through a
 symbolic link, and the runner unpacks that archive into the emptied work
 directory: directories, regular files, and hard links between them, each
-inside the directory, and symbolic links only where the runner's machine
-makes them (elsewhere, and for anything else, a note in the log). The job's
-modes are not kept (files get 0644, directories 0755). It collects the
-artifact paths from there without following symbolic links: a link is
-skipped and noted in the log, a path through a link is refused, and nothing
-outside the work directory is read.
+inside the directory (an absolute name lands inside too); a symbolic link is
+skipped and noted in the log, and anything else (a FIFO, a sparse file) is
+skipped. The job's modes are not kept (files get 0644, directories 0755). It
+reads the archive only as a regular file, without following a link or
+waiting for a FIFO, and no more of it than the collecting VM's quota, then
+collects the artifact paths from the work directory; nothing outside it is
+read.
 
 ## Dependency cache
 
@@ -558,10 +559,12 @@ of the repository, the job name, the configuration digest of the image the
 job runs on (a new version of the tag does not reuse what the previous one
 built), the user the job runs as (the archive keeps the owner of each file),
 the cached paths, and the content of `cache.key_files`. The cache lives in
-`<runner work dir>/cache/`, an entry's archive in `<key>/cache.tar`; a
-restore links the archive into the job's `io` directory (copies it where
-the file system makes no links), and a save moves the new archive in, so an
-entry is never changed in place.
+`<runner work dir>/cache/`, an entry's archive in `<key>/cache.tar`. A
+restore copies the archive into the job's `io` directory, which the
+preparing VM can write, so no VM ever has an entry's own file; a save copies
+the new archive in, read as the artifacts' archive is (a regular file, no
+link followed, no FIFO waited for), and replaces the entry, which is never
+changed in place.
 
 A job finds no entry (`no cache entry yet`) when no protected branch's run
 has saved one for its key yet, or the entry was evicted. Changing a lock file
@@ -674,17 +677,17 @@ Per job the runner:
    `out` (opened once, before the VM exists), and checks that no component
    below the runner's directory is a symbolic link. Git never runs in the
    work directory once a VM has had what it holds;
-3. puts the cache entry's archive at `io/cache-in.tar`, then prepares `/work`
+3. puts a copy of the cache entry's archive at `io/cache-in.tar`, then prepares `/work`
    in a VM of the job's image:
-   `msb run --name bv-prep-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --user 0:0 --mount-dir <io>:/.branvil-io --mount-named bv-work-<runner>-<attempt>:/work:kind=disk,size=SM --max-duration 3600s --no-net <image> -- /bin/sh -c <unpack the archives into /work; chown -R 1000:1000 /work>`,
-   removes that sandbox and `io/cache-in.tar` (the cache entry is shared, so
-   nothing after this reads it), and runs the job. The cache entry is not
+   `msb run --name bv-prep-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --user 0:0 --mount-dir <io>:/.branvil-io:quota=1M --mount-named bv-work-<runner>-<attempt>:/work:kind=disk,size=SM --max-duration 3600s --no-net <image> -- /bin/sh -c <unpack the archives into /work; chown -R 1000:1000 /work>`,
+   removes that sandbox and `io/cache-in.tar`, and runs the job. The cache entry is not
    unpacked when a cached path goes through a symbolic link of the commit
    (it would be written through) or the archive does not unpack: `/work` is
    then the checkout alone, and the log says the job runs without the cache.
    The job:
-   `msb run --name bv-job-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --cpus N --memory NM --user 1000:1000 --mount-named bv-work-<runner>-<attempt>:/work:kind=disk,size=SM --mount-dir <log>:/.branvil-log:uid=1000,gid=1000 --mount-named bv-tmp-<runner>-<attempt>:/tmp:kind=disk,size=4G --workdir /work --max-duration <timeout+60>s --no-net <image> -- /bin/sh -c <script>`
-   (`N` and `M` the runner's CPUs and memory, `S` the size of `/work`);
+   `msb run --name bv-job-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --cpus N --memory NM --user 1000:1000 --mount-named bv-work-<runner>-<attempt>:/work:kind=disk,size=SM --mount-dir <log>:/.branvil-log:uid=1000,gid=1000,quota=QM --mount-named bv-tmp-<runner>-<attempt>:/tmp:kind=disk,size=4G --workdir /work --max-duration <timeout+60>s --no-net <image> -- /bin/sh -c <script>`
+   (`N` and `M` the runner's CPUs and memory, `S` the size of `/work`, `Q`
+   `ci.executor.work_quota_mib`: what the job may write to the host);
    the script first sends its stdout and stderr to `/.branvil-log/out` and
    sets `HOME` ("The job's environment"). The job's VM never has the
    `io` directory;
@@ -696,7 +699,8 @@ Per job the runner:
    job's VM ended by exit or timeout, and the job declares artifacts or
    succeeded in a protected branch's run with a cache, a VM like the one
    that prepared `/work` (`bv-collect-<attempt>`, started under the shared
-   image lock as the job's VM is) packs the artifacts' paths into
+   image lock as the job's VM is, `io` mounted with `quota=` twice `S`, as
+   the artifacts and the cache may pack the same files) packs the artifacts' paths into
    `io/artifacts.tar` and the cached paths into `io/cache.tar`: those that
    exist and go through no symbolic link (one at the end goes as a link),
    an empty archive when there is none, written in large blocks. An archive

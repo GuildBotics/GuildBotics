@@ -534,15 +534,15 @@ impl Microsandbox {
     }
 
     /// Runs `script` as root in a VM of the job's image with the job's
-    /// `/work` (`disk`) and the transfer directory `io`, to prepare `/work`
-    /// or to collect from it; `cancel` turning true stops it. The VM is
-    /// removed once it ended. Returns why it failed, or `None` when it was
-    /// stopped.
+    /// `/work` (`disk`) and the transfer directory `io`, to which it may add
+    /// `quota_mib`, to prepare `/work` or to collect from it; `cancel`
+    /// turning true stops it. The VM is removed once it ended. Returns why it
+    /// failed, or `None` when it was stopped.
     async fn helper(
         &self,
         job: &JobRun<'_>,
         what: &str,
-        (io, disk): (&str, &str),
+        (io, quota_mib, disk): (&str, u64, &str),
         script: &str,
         cancel: &mut watch::Receiver<bool>,
     ) -> Result<(), Option<String>> {
@@ -552,7 +552,10 @@ impl Microsandbox {
             .args(["--label", &format!("branvil.runner={}", self.runner)])
             .args(["--label", &format!("branvil.job={}", job.attempt_id)])
             .args(["--user", "0:0"])
-            .args(["--mount-dir", &format!("{io}:{IO_MOUNT}")])
+            .args([
+                "--mount-dir",
+                &format!("{io}:{IO_MOUNT}:quota={quota_mib}M"),
+            ])
             .args(["--mount-named", disk])
             .args(["--max-duration", &format!("{HELPER_SECS}s")])
             .arg("--no-net")
@@ -942,11 +945,14 @@ impl Executor for Microsandbox {
             .filter_map(|f| std::fs::metadata(job.io.join(f)).ok())
             .map(|m| m.len())
             .sum();
+        let disk_mib = work_disk_mib(job.work_quota_mib, archives);
         let disk = format!(
-            "{}:/work:kind=disk,size={}M",
-            self.work_volume(job.attempt_id),
-            work_disk_mib(job.work_quota_mib, archives)
+            "{}:/work:kind=disk,size={disk_mib}M",
+            self.work_volume(job.attempt_id)
         );
+        // What the collecting VM may add to `io`: archives of `/work`'s
+        // files, twice when the artifacts and the cache name the same ones.
+        let collect_mib = 2 * disk_mib;
         let image_lock = std::mem::take(&mut job.image_lock);
         let cache_paths: Vec<&str> = job
             .job
@@ -959,12 +965,12 @@ impl Executor for Microsandbox {
             .helper(
                 &job,
                 "prep",
-                (&io, &disk),
+                // It writes no more than a `.failed` mark.
+                (&io, 1, &disk),
                 &prepare_script(IO_MOUNT, &cache_paths),
                 &mut cancel,
             )
             .await;
-        // The cache's entry is shared: nothing after this may read or write it.
         let _ = std::fs::remove_file(job.io.join(CACHE_IN));
         if std::fs::remove_file(job.io.join(format!("{CACHE_IN}.failed"))).is_ok() {
             say("the cache entry was not unpacked (a cached path goes through a link of the commit, or the archive is unreadable); the job runs without it".into()).await;
@@ -1029,8 +1035,14 @@ impl Executor for Microsandbox {
             // the VM has picked it.
             let collected = match self.lock_images(false, || {}).await {
                 Ok(_lock) => {
-                    self.helper(&job, "collect", (&io, &disk), &script, &mut cancel)
-                        .await
+                    self.helper(
+                        &job,
+                        "collect",
+                        (&io, collect_mib, &disk),
+                        &script,
+                        &mut cancel,
+                    )
+                    .await
                 }
                 Err(e) => Err(Some(e)),
             };
@@ -1088,13 +1100,20 @@ impl Executor for Microsandbox {
         // The work directory holds what came back, and nothing of the
         // checkout: a path the job did not leave has no artifact.
         if !artifacts.is_empty() {
-            let returned = job.io.join(ARTIFACTS);
-            let unpacked = std::fs::remove_dir_all(job.work)
-                .and_then(|_| std::fs::create_dir(job.work))
-                .and_then(|_| match returned.exists() {
-                    true => crate::runner::workspace::unpack_returned(&returned, job.work),
-                    false => Ok(Vec::new()),
-                });
+            // Off the async threads, where the other jobs' heartbeats run.
+            let (work, returned) = (job.work.to_path_buf(), job.io.join(ARTIFACTS));
+            let unpacked = super::blocking(move || {
+                std::fs::remove_dir_all(&work)
+                    .and_then(|_| std::fs::create_dir(&work))
+                    .and_then(|_| {
+                        crate::runner::workspace::unpack_returned(
+                            &returned,
+                            collect_mib << 20,
+                            &work,
+                        )
+                    })
+            })
+            .await;
             match unpacked {
                 Ok(notes) => {
                     for n in notes {
@@ -1155,7 +1174,14 @@ impl Microsandbox {
             .args(["--memory", &format!("{}M", job.memory_mib)])
             .args(["--user", &format!("{JOB_USER_ID}:{JOB_USER_ID}")])
             .args(["--mount-named", disk])
-            .args(["--mount-dir", &format!("{log_dir}:{LOG_MOUNT}:{owner}")])
+            // What the job writes to the host is bounded as `/work` is.
+            .args([
+                "--mount-dir",
+                &format!(
+                    "{log_dir}:{LOG_MOUNT}:{owner},quota={}M",
+                    job.work_quota_mib
+                ),
+            ])
             // On a disk, not in the VM's memory (msb's default /tmp).
             .args([
                 "--mount-named",
@@ -1527,7 +1553,7 @@ run)
     [ "$prev" = "--name" ] && name="$a"
     [ "$prev" = "--mount-dir" ] && case "$a" in
       *:/.branvil-log:*) log="${a%%:/.branvil-log:*}" ;;
-      *:/.branvil-io) io="${a%%:/.branvil-io}" ;;
+      *:/.branvil-io:*) io="${a%%:/.branvil-io:*}" ;;
     esac
     prev="$a"
   done
@@ -1662,7 +1688,7 @@ esac
             args.windows(2).any(|w| w == [flag, value])
         };
         let disk = "bv-work-t-a1:/work:kind=disk,size=2432M";
-        let io_mount = format!("{}:/.branvil-io", root.join("io").display());
+        let io_mount = format!("{}:/.branvil-io:quota=1M", root.join("io").display());
         let prep = args("bv-prep-a1").unwrap();
         for (flag, value) in [
             ("--user", "0:0"),
@@ -1679,7 +1705,7 @@ esac
             (
                 "--mount-dir",
                 &format!(
-                    "{}:/.branvil-log:uid=1000,gid=1000",
+                    "{}:/.branvil-log:uid=1000,gid=1000,quota=2048M",
                     root.join("log").display()
                 ),
             ),
@@ -1688,7 +1714,8 @@ esac
             assert!(has(&ran, flag, value), "{flag} {value} in {ran}");
         }
         assert!(!ran.contains("/.branvil-io"), "{ran}");
-        assert!(!ran.contains("quota="), "{ran}");
+        // Its only directory mount is the log's, with a quota.
+        assert_eq!(ran.matches("--mount-dir").count(), 1, "{ran}");
         assert!(args("bv-collect-a1").is_err());
         assert_eq!(
             std::fs::read_to_string(state.join("removed")).unwrap(),
@@ -1876,6 +1903,9 @@ esac
             let script = std::fs::read_to_string(state.join("args-bv-collect-a1"));
             assert_eq!(script.is_ok(), collected, "{ending}");
             if let Ok(script) = script {
+                // It may add to `io` twice what `/work` holds.
+                let io_mount = format!("{}:/.branvil-io:quota=4864M", io.display());
+                assert!(script.lines().any(|l| l == io_mount), "{script}");
                 assert!(script.contains("'out/'"), "{script}");
                 assert_eq!(script.contains("'target'"), cached, "{script}");
                 assert!(!script.contains("--user\n1000"), "{script}");

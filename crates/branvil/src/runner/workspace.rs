@@ -154,41 +154,95 @@ fn pack_checkout(work: &Path, index: &[u8], into: &Path) -> io::Result<u64> {
     Ok(fs::metadata(into)?.len())
 }
 
+/// Opens `path`, which a VM could write, for reading: the file itself, never
+/// a symbolic link's target, without waiting for a writer when it is a FIFO,
+/// and only when it is a regular file of at most `max` bytes; no more than
+/// the size it had when opened is read. Returns none when there is no such
+/// file.
+pub fn open_returned(path: &Path, max: u64) -> io::Result<Option<io::Take<fs::File>>> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(
+        &mut options,
+        libc::O_NOFOLLOW | libc::O_NONBLOCK,
+    );
+    // FILE_FLAG_OPEN_REPARSE_POINT: a link itself, not what it points to.
+    #[cfg(windows)]
+    std::os::windows::fs::OpenOptionsExt::custom_flags(&mut options, 0x0020_0000);
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io::Error::other(format!("{}: {e}", path.display()))),
+    };
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(io::Error::other(format!(
+            "{} is not a regular file",
+            path.display()
+        )));
+    }
+    if meta.len() > max {
+        return Err(io::Error::other(format!(
+            "{} has {} bytes, more than {max}",
+            path.display(),
+            meta.len()
+        )));
+    }
+    Ok(Some(io::Read::take(file, meta.len())))
+}
+
 /// Unpacks the archive of what a VM returned (`tar`, written by the job's
-/// image) into the empty directory `into`: directories, regular files, and
-/// hard links between them, each of which stays inside `into`; symbolic
-/// links only where the machine makes them (they are reported where it does
-/// not), and nothing else. The job's modes are not kept (an artifact is
-/// zipped as a readable file): directories get 0755 and files 0644, so that
-/// nothing stops their unpacking, reading, or removal. Returns the notes for
-/// the log.
-pub fn unpack_returned(tar: &Path, into: &Path) -> io::Result<Vec<String>> {
+/// image, read as [`open_returned`] reads it, nothing when there is none)
+/// into the empty directory `into`: directories, regular files, and hard
+/// links between them, each of which stays inside `into`, and nothing else:
+/// a symbolic link is reported (an artifact never takes one), so none is
+/// there for a later entry to go through. The job's modes are not kept (an
+/// artifact is zipped as a readable file): directories get 0755 and files
+/// 0644, so that nothing stops their unpacking, reading, or removal. Returns
+/// the notes for the log.
+pub fn unpack_returned(tar: &Path, max: u64, into: &Path) -> io::Result<Vec<String>> {
     use tar::EntryType as T;
     let mut notes = Vec::new();
-    let mut archive = tar::Archive::new(io::BufReader::new(fs::File::open(tar)?));
+    let Some(file) = open_returned(tar, max)? else {
+        return Ok(notes);
+    };
+    let mut archive = tar::Archive::new(io::BufReader::new(file));
     for entry in archive.entries()? {
         let mut entry = entry?;
         let kind = entry.header().entry_type();
-        let name = entry.path()?.to_string_lossy().into_owned();
+        let path = entry.path()?.into_owned();
+        let name = path.to_string_lossy().into_owned();
         match kind {
-            T::Directory | T::Regular | T::Continuous | T::GNUSparse | T::Link => {}
-            T::Symlink if cfg!(unix) => {}
+            T::Directory | T::Regular | T::Link => {}
             T::Symlink => {
                 notes.push(format!("{name} is a symbolic link; skipped"));
                 continue;
             }
-            _ => continue,
+            _ => {
+                notes.push(format!(
+                    "{name} is not a file, a directory, or a hard link; skipped"
+                ));
+                continue;
+            }
         }
         match entry.unpack_in(into) {
             Ok(true) => {
+                // Where `unpack_in` put it: a root or `.` component is
+                // dropped (one with `..` is refused), and a name of nothing
+                // else is `into` itself, which it leaves alone.
                 #[cfg(unix)]
-                if matches!(
-                    kind,
-                    T::Directory | T::Regular | T::Continuous | T::GNUSparse
-                ) {
+                {
                     use std::os::unix::fs::PermissionsExt;
-                    let mode = if kind == T::Directory { 0o755 } else { 0o644 };
-                    fs::set_permissions(into.join(&name), fs::Permissions::from_mode(mode))?;
+                    use std::path::Component;
+                    let at: PathBuf = path
+                        .components()
+                        .filter(|c| matches!(c, Component::Normal(_)))
+                        .collect();
+                    if kind != T::Link && !at.as_os_str().is_empty() {
+                        let mode = if kind == T::Directory { 0o755 } else { 0o644 };
+                        fs::set_permissions(into.join(at), fs::Permissions::from_mode(mode))?;
+                    }
                 }
             }
             Ok(false) => notes.push(format!("{name} is outside the work directory; skipped")),
@@ -419,9 +473,9 @@ impl Cache {
         Ok(())
     }
 
-    /// Puts the archive of `key`'s entry at `into`, for the VM to unpack:
-    /// a link to it on Unix where the file system makes one (a save replaces
-    /// an entry rather than changing it), else a copy. Returns its size, or
+    /// Puts a copy of the archive of `key`'s entry at `into`, for the VM to
+    /// unpack: that VM can write the directory, so it never gets the entry's
+    /// own file (a link would let it change the entry). Returns its size, or
     /// none when there is no such entry.
     pub fn restore(&self, key: &str, into: &Path) -> io::Result<Option<u64>> {
         let _reading = self.lock.read().unwrap_or_else(|e| e.into_inner());
@@ -430,19 +484,16 @@ impl Cache {
         if !archive.is_file() {
             return Ok(None);
         }
-        // Windows cannot remove a file another process holds open, as a
-        // save or an eviction would while the VM reads its link.
-        if !cfg!(unix) || fs::hard_link(&archive, into).is_err() {
-            fs::copy(&archive, into)?;
-        }
+        fs::copy(&archive, into)?;
         record_use(&entry, SystemTime::now())?;
         Ok(Some(fs::metadata(into)?.len()))
     }
 
     /// Saves `archive`, the cached paths of a successful job as its VM packed
-    /// them, as the entry of `key` (moving the file), then removes superseded
-    /// generations before current entries beyond `max_bytes`. Returns its
-    /// size.
+    /// them, as the entry of `key` (a copy read as [`open_returned`] reads
+    /// it; the quota of the VM that wrote it bounds its size), then removes
+    /// superseded generations before current entries beyond `max_bytes`.
+    /// Returns its size.
     pub fn save(
         &self,
         key: &str,
@@ -468,11 +519,17 @@ impl Cache {
             .root
             .join(format!(".{key}.{}", crate::util::random_secret::<6>()));
         let saved = (|| {
+            let from = open_returned(archive, u64::MAX)?.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("{} is missing", archive.display()),
+                )
+            })?;
             fs::create_dir_all(&tmp)?;
-            if fs::rename(archive, tmp.join(ARCHIVE)).is_err() {
-                fs::copy(archive, tmp.join(ARCHIVE))?;
-            }
-            let total = fs::metadata(tmp.join(ARCHIVE))?.len();
+            let total = io::copy(
+                &mut io::BufReader::with_capacity(4 << 20, from),
+                &mut fs::File::create(tmp.join(ARCHIVE))?,
+            )?;
             fs::write(tmp.join(OWNER), serde_json::to_vec(owner)?)?;
             let saved_at = now();
             record_use(&tmp, saved_at)?;
@@ -582,11 +639,74 @@ mod tests {
             .unwrap();
     }
 
-    /// An archive a VM packed, holding `content`, ready for a save to move.
+    /// An archive a VM packed, holding `content`, ready for a save to copy.
     fn packed(dir: &Path, content: &[u8]) -> PathBuf {
         let path = dir.join(format!("packed-{}", crate::util::random_secret::<6>()));
         fs::write(&path, content).unwrap();
         path
+    }
+
+    /// Every way the host reads a file a VM returned (the artifacts'
+    /// archive, the cache's) refuses what the VM may have put there instead
+    /// of a regular file, without following a link to the host's file or
+    /// waiting for a FIFO's writer; the artifacts' archive also beyond its
+    /// limit. Nothing of the host's file is read.
+    #[test]
+    fn returned_files_are_read_only_as_regular_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().to_path_buf();
+        fs::write(d.join("host-secret"), "secret").unwrap();
+        let mut planted: Vec<(&str, PathBuf)> = Vec::new();
+        let directory = d.join("directory");
+        fs::create_dir(&directory).unwrap();
+        planted.push(("a directory", directory));
+        #[cfg(unix)]
+        {
+            let link = d.join("link");
+            std::os::unix::fs::symlink(d.join("host-secret"), &link).unwrap();
+            planted.push(("a link", link));
+            let fifo = d.join("fifo");
+            let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0);
+            planted.push(("a FIFO", fifo));
+        }
+        let mut tar = tar::Builder::new(Vec::new());
+        let mut h = tar::Header::new_gnu();
+        h.set_size(1);
+        tar.append_data(&mut h, "big", &b"x"[..]).unwrap();
+        let large = packed(&d, &tar.into_inner().unwrap());
+        let (done, results) = std::sync::mpsc::channel();
+        let readers = std::thread::spawn(move || {
+            let into = d.join("into");
+            for (what, path) in &planted {
+                fs::create_dir_all(&into).unwrap();
+                let unpacked = unpack_returned(path, 1 << 20, &into);
+                let saved = Cache::new(d.join("cache")).save("k", &owner("r", "j"), path, 1 << 20);
+                let restored = Cache::new(d.join("cache")).restore("k", &d.join("given"));
+                done.send((
+                    what.to_string(),
+                    unpacked.is_err(),
+                    saved.is_err(),
+                    restored,
+                ))
+                .unwrap();
+                fs::remove_dir_all(&into).unwrap();
+            }
+            fs::create_dir_all(&into).unwrap();
+            let too_large = unpack_returned(&large, 1024, &into);
+            let refused = too_large.is_err() && !into.join("big").exists();
+            done.send(("large".into(), refused, true, Ok(None)))
+                .unwrap();
+        });
+        for _ in 0..if cfg!(unix) { 4 } else { 2 } {
+            let (what, unpack_refused, save_refused, restored) = results
+                .recv_timeout(Duration::from_secs(30))
+                .expect("a reader is waiting");
+            assert!(unpack_refused, "unpacking {what}");
+            assert!(save_refused, "saving {what}");
+            assert_eq!(restored.unwrap(), None, "{what} became an entry");
+        }
+        readers.join().unwrap();
     }
 
     #[test]
@@ -783,13 +903,23 @@ mod tests {
 
     /// What a VM returns was written by the job: nothing of it lands outside
     /// the directory it is unpacked into, and only files, directories, and
-    /// hard links between them (and links where the machine makes them) do.
+    /// hard links between them do.
     #[test]
     fn returned_archives_unpack_only_inside_their_directory() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
         let outside = d.join("outside");
         fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("secret"), "secret").unwrap();
+        #[cfg(unix)]
+        for (p, mode) in [(outside.clone(), 0o700), (outside.join("secret"), 0o600)] {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(p, fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let (outside_dir, secret) = (
+            outside.to_string_lossy().into_owned(),
+            outside.join("secret").to_string_lossy().into_owned(),
+        );
         let mut tar = tar::Builder::new(Vec::new());
         let mut add = |name: &str, kind: tar::EntryType, link: Option<&Path>, data: &[u8]| {
             let mut h = tar::Header::new_gnu();
@@ -800,6 +930,13 @@ mod tests {
             if let Some(l) = link {
                 h.set_link_name(l).unwrap();
             }
+            // A sparse file of a TiB whose archive holds its last byte.
+            if kind == tar::EntryType::GNUSparse {
+                let gnu = h.as_gnu_mut().unwrap();
+                gnu.set_real_size(1 << 40);
+                gnu.sparse[0].set_offset((1 << 40) - data.len() as u64);
+                gnu.sparse[0].set_length(data.len() as u64);
+            }
             h.set_cksum();
             tar.append(&h, data).unwrap();
         };
@@ -808,26 +945,49 @@ mod tests {
         add("out/b.txt", T::Link, Some(Path::new("out/a.txt")), b"");
         add("../escape.txt", T::Regular, None, b"x");
         add("out/d", T::Symlink, Some(&outside), b"");
+        add("out/d", T::Directory, None, b"");
         add("out/d/x", T::Regular, None, b"x");
         add("out/fifo", T::Fifo, None, b"");
+        add("out/sparse", T::GNUSparse, None, b"s");
+        add("out/contiguous", T::Continuous, None, b"c");
+        // Absolute names land inside too, and the modes set after the
+        // unpacking change nothing outside.
+        add(&outside_dir, T::Directory, None, b"");
+        add(&secret, T::Regular, None, b"x");
+        // A name of nothing but a root leaves the directory as it is.
+        add("/", T::Regular, None, b"");
+        add("out/last.txt", T::Regular, None, b"l");
         let archive = d.join("returned.tar");
         fs::write(&archive, tar.into_inner().unwrap()).unwrap();
         let into = d.join("work");
         fs::create_dir(&into).unwrap();
-        let notes = unpack_returned(&archive, &into).unwrap();
+        let notes = unpack_returned(&archive, 1 << 20, &into).unwrap();
         assert_eq!(fs::read(into.join("out/a.txt")).unwrap(), b"a");
         assert_eq!(fs::read(into.join("out/b.txt")).unwrap(), b"a");
         assert!(!d.join("escape.txt").exists());
         assert!(!outside.join("x").exists());
-        assert!(!into.join("out/fifo").exists());
-        assert!(notes.iter().any(|n| n.contains("escape.txt")), "{notes:?}");
-        if cfg!(unix) {
-            assert!(notes.iter().any(|n| n.contains("out/d/x")), "{notes:?}");
-        } else {
+        assert!(into.join("out/d").is_dir() && !into.join("out/d").is_symlink());
+        assert_eq!(fs::read(into.join("out/d/x")).unwrap(), b"x");
+        for kind in ["fifo", "sparse", "contiguous"] {
+            assert!(!into.join("out").join(kind).exists(), "{kind}");
             assert!(
-                notes.iter().any(|n| n.contains("out/d is a symbolic link")),
+                notes
+                    .iter()
+                    .any(|n| n.starts_with(&format!("out/{kind} is not a file"))),
                 "{notes:?}"
             );
+        }
+        assert_eq!(fs::read(into.join("out/last.txt")).unwrap(), b"l");
+        assert!(notes.iter().any(|n| n.contains("escape.txt")), "{notes:?}");
+        assert!(
+            notes.iter().any(|n| n.contains("out/d is a symbolic link")),
+            "{notes:?}"
+        );
+        assert_eq!(fs::read(outside.join("secret")).unwrap(), b"secret");
+        #[cfg(unix)]
+        for (p, mode) in [(outside.clone(), 0o700), (outside.join("secret"), 0o600)] {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&p).unwrap().permissions().mode() & 0o777, mode);
         }
         // The job's modes are not kept: none stops the unpacking, the
         // reading, or the removal.
@@ -846,7 +1006,7 @@ mod tests {
         let into = d.join("modes");
         fs::create_dir(&into).unwrap();
         assert_eq!(
-            unpack_returned(&archive, &into).unwrap(),
+            unpack_returned(&archive, 1 << 20, &into).unwrap(),
             Vec::<String>::new()
         );
         assert_eq!(fs::read(into.join("ro/f")).unwrap(), b"f");
@@ -925,21 +1085,27 @@ mod tests {
         Cache::new(root.clone())
             .save(&k1, &owner("acme/demo", &job.name), &archive, 1 << 20)
             .unwrap();
-        assert!(!archive.exists(), "the save moved the archive");
+        // The entry and what a VM is given are copies: writing the archive
+        // the VM returned, or the one it is given, changes no entry.
+        fs::write(&archive, "changed").unwrap();
         let fresh = dir.path().join("fresh");
         fs::create_dir_all(&fresh).unwrap();
         fs::write(fresh.join("Cargo.lock"), "v1").unwrap();
         assert_eq!(cache_key("acme/demo", &job, IMAGE, &cache, &fresh), k1);
-        assert_eq!(
-            Cache::new(root.clone())
-                .restore(&k1, &fresh.join("cache.tar"))
-                .unwrap(),
-            Some(6)
-        );
-        assert_eq!(
-            fs::read_to_string(fresh.join("cache.tar")).unwrap(),
-            "object"
-        );
+        for _ in 0..2 {
+            assert_eq!(
+                Cache::new(root.clone())
+                    .restore(&k1, &fresh.join("cache.tar"))
+                    .unwrap(),
+                Some(6)
+            );
+            assert_eq!(
+                fs::read_to_string(fresh.join("cache.tar")).unwrap(),
+                "object"
+            );
+            fs::write(fresh.join("cache.tar"), "changed").unwrap();
+            fs::remove_file(fresh.join("cache.tar")).unwrap();
+        }
         fs::write(fresh.join("Cargo.lock"), "v2").unwrap();
         let k2 = cache_key("acme/demo", &job, IMAGE, &cache, &fresh);
         assert_ne!(k1, k2, "key files are in the key");

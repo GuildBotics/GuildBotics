@@ -165,11 +165,17 @@ own [unit `auth::tests::the_host_identifies_the_owner_and_member_tokens_their_me
   VM has had what it holds), checks that nothing below its work directory is
   a link before a VM gets a directory of it, and hands the job's `/work` (a
   disk of its own) over as archives through a directory the job's VM never
-  has. The VM that collects `/work` packs no path through a link; the runner
-  unpacks only the artifacts' archive, keeping nothing outside the directory,
-  no link it cannot make, and none of the job's modes, collects artifacts
-  without following links, and keeps the cache as archives it never unpacks
+  has; the VMs that prepare and collect it may add to that directory only up
+  to a quota, and the job's VM to its log directory only up to the work
+  quota. A restore hands a copy of the cache entry, never the entry's own
+  file. The VM that collects `/work` packs no path through a link; the runner
+  reads what came back only as regular files, without following a link or
+  waiting for a FIFO, unpacks only the artifacts' archive, keeping nothing
+  outside the directory, no link, no sparse file, and none of the job's
+  modes, collects artifacts without following links, and keeps the cache as
+  archives it never unpacks
   [unit `the_pack_script_packs_existing_paths_through_no_link`,
+  `returned_files_are_read_only_as_regular_files`,
   `returned_archives_unpack_only_inside_their_directory`,
   `artifacts_skip_links_and_stay_inside_the_work_directory`,
   `work_is_collected_after_the_jobs_vm_ended`,
@@ -272,7 +278,7 @@ user profile's ACL.
 - **CI.** Jobs never receive `secrets/` or these values: the runner gets the
   commit as a Git bundle from the service and nothing else (its checkout keeps
   no remote), and a job's microVM runs its commands as a user that is not
-  root, has only its throwaway work and log directories mounted (the runner
+  root, has only its own `/work` disk and its log directory mounted (the runner
   reads the log through a handle it opened before the VM started), no
   network unless the owner allows public destinations, and an environment of CI metadata only (no tokens, no
   host variables; `msb` itself runs with an empty `DOCKER_CONFIG`). The runner's
