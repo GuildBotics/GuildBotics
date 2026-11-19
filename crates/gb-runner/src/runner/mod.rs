@@ -47,6 +47,24 @@ pub struct RunnerArgs {
     data_dir: Option<PathBuf>,
 }
 
+impl RunnerArgs {
+    pub fn default_work(mut self, path: PathBuf) -> Self {
+        if self.work_dir.is_none() {
+            self.work_dir = Some(path);
+        }
+        self
+    }
+    pub fn is_join(&self) -> bool {
+        matches!(self.command, Some(RunnerCommand::Join))
+    }
+    pub fn default_token(mut self, token: Option<String>) -> Self {
+        if self.token.is_none() {
+            self.token = token;
+        }
+        self
+    }
+}
+
 /// Runs the runner command `args`: `url` and `data_dir` are the server's on
 /// this machine, used when `args` names none, and `owner_token` gives the
 /// owner's token for `register`.
@@ -66,6 +84,7 @@ pub async fn main(
     let url = args.url.unwrap_or(url);
     let settings = Settings::new(url, args.token, args.work_dir, config.as_ref())?;
     match args.command {
+        Some(RunnerCommand::Join) => bail!("Join requires the GuildBotics client"),
         None => run(settings).await.map(|_| 0),
         Some(RunnerCommand::Register { name }) => {
             register(&settings.url, &owner_token.await?, &name)
@@ -80,6 +99,8 @@ pub async fn main(
 
 #[derive(Subcommand)]
 enum RunnerCommand {
+    /// Join this machine as a runner through the owner consent screen
+    Join,
     /// Create a runner member and print its token once (needs the owner's token)
     Register {
         /// Name of the runner member, e.g. runner1
@@ -241,6 +262,23 @@ impl Api {
 
     fn net(e: reqwest::Error) -> ApiError {
         ApiError::Other(format!("Branvil is not reachable: {e}"))
+    }
+
+    pub async fn current_version(&self) -> Result<bool, ApiError> {
+        let reply = Self::check(
+            self.http
+                .get(self.at("/runner/health"))
+                .bearer_auth(&self.token)
+                .send()
+                .await
+                .map_err(Self::net)?,
+        )
+        .await?;
+        let body: serde_json::Value = reply.json().await.map_err(Self::net)?;
+        let version = body["version"]
+            .as_str()
+            .ok_or_else(|| ApiError::Other("Missing Hub version".into()))?;
+        Ok(version == gb_base::BUILD_VERSION)
     }
 
     pub async fn me(&self) -> Result<serde_json::Value, ApiError> {
@@ -654,6 +692,16 @@ pub async fn run(settings: Settings) -> anyhow::Result<()> {
         .await
 }
 
+/// Signals that the service should restart after all held attempts have drained.
+#[derive(Debug)]
+pub struct VersionChanged;
+impl std::fmt::Display for VersionChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("runner_version_changed")
+    }
+}
+impl std::error::Error for VersionChanged {}
+
 pub struct Runner {
     pub api: Api,
     pub work_dir: PathBuf,
@@ -687,7 +735,9 @@ impl Runner {
     /// The limits for the next job: the configuration file's as it reads
     /// now (the last ones read when it cannot be read).
     #[cfg(feature = "test-support")]
-    pub fn test_cache(&self) -> &workspace::Cache { &self.cache }
+    pub fn test_cache(&self) -> &workspace::Cache {
+        &self.cache
+    }
 
     fn limits(&self) -> ExecutorConfig {
         let mut last = self.limits.lock().unwrap();
@@ -726,7 +776,21 @@ impl Runner {
         let mut syncing = tokio::task::JoinSet::new();
         let mut next_sync = Instant::now();
         let mut backoff = 1;
+        let mut version_changed = false;
         'claiming: loop {
+            match self.api.current_version().await {
+                Ok(true) => {}
+                Ok(false) => {
+                    version_changed = true;
+                    break 'claiming;
+                }
+                Err(ApiError::Unauthorized) => break 'claiming,
+                Err(e) => {
+                    tracing::warn!("{e}");
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    continue;
+                }
+            }
             let limits = self.limits();
             let mut wait = Duration::from_secs(2);
             if syncing.is_empty() && Instant::now() >= next_sync && current.health().await.ready {
@@ -788,7 +852,11 @@ impl Runner {
         syncing.abort_all();
         while syncing.join_next().await.is_some() {}
         while running.join_next().await.is_some() {}
-        bail!("{}", ApiError::Unauthorized)
+        if version_changed {
+            Err(VersionChanged.into())
+        } else {
+            bail!("{}", ApiError::Unauthorized)
+        }
     }
 
     /// Claims an attempt, telling the service how the executor is.
@@ -1413,3 +1481,37 @@ pub(crate) fn pass_in_child(test: &str, env: &[(&str, &std::ffi::OsStr)]) {
     );
 }
 
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+    #[tokio::test]
+    async fn mismatch_stops_without_claiming() {
+        use axum::{Json, Router, routing::get};
+        let app = Router::new().route(
+            "/api/v1/runner/health",
+            get(|| async { Json(serde_json::json!({"version":"different-build"})) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let temp = tempfile::tempdir().unwrap();
+        let runner = Arc::new(Runner::new(
+            Api::new(&url, "fixture"),
+            temp.path().join("work"),
+            None,
+            ExecutorConfig::default(),
+        ));
+        let home = temp.path().join("msb");
+        let result = runner
+            .serve(move || {
+                Arc::new(Microsandbox::new(
+                    executor::Msb::Missing("fixture".into()),
+                    home.clone(),
+                    "fixture",
+                ))
+            })
+            .await;
+        assert!(result.unwrap_err().is::<VersionChanged>());
+        server.abort();
+    }
+}

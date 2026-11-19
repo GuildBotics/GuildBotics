@@ -115,6 +115,12 @@ Notes:
 - Design: [`docs/architecture.md`](docs/architecture.md) ("Upstream"); API:
   [`docs/api.md`](docs/api.md) ("Upstream").
 
+## CI runners
+
+For a Windows runner on another machine, install the client and persistent SSH
+forwarding first, then run `guildbotics runner join` and approve runner access.
+See [Join a Windows runner](docs/ci.md#join-a-windows-runner).
+
 ## Development
 
 The repository's `scripts/dev.sh` builds the GUI and runs Branvil, on data of

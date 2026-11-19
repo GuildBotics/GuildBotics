@@ -1562,3 +1562,7 @@ Undetermined and abandoned searches produce no hint.
 
 
 Embedded hosts may attach a device-local Hub status callback through `DataApi::attach_hub_status`. Diagnostics returns its result as `hub` (`null` for standalone Branvil): `current` and `target` versions (`sha`, `subject`, nullable `url`) and nullable `operation` (`kind`, `phase`, `since`, `commit`, `waiting`). Branvil supplies `operation.waiting.ci_jobs` from its own queue. `hub_status_changed` events invalidate diagnostics. This state is never persisted.
+
+`GET /api/v1/runner/health` requires a runner credential and returns the Hub
+`version`. Runners compare it before claiming work and drain before restarting
+when the build changes.

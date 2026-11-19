@@ -318,3 +318,12 @@ one request. The server commits them together; patrol never observes a partially
 configured ticket. Interactive tickets and their descendants are excluded from
 patrol. Without an explicit lane, a ticket with a parent or blockers starts in
 `ready`; other tickets start in `new`.
+
+## Join another machine as a CI runner
+
+Keep SSH forwarding running and install/connect the GuildBotics client first.
+On Windows x86_64 run `guildbotics runner join`, then approve CI runner access
+in the browser. The token stays in the OS keychain. The per-user scheduled task
+starts at login and restarts the runner after a failure or Hub version change.
+Rejoining revokes that device's previous runner token. The runtime is downloaded
+from the pinned microsandbox release and verified with SHA-256 and `msb --version`.

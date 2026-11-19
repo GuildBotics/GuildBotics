@@ -643,6 +643,20 @@ it never opens the database or the service's repositories (the source arrives
 as a Git bundle made by the service, which the runner checks out with the
 Git of its machine).
 
+### Join a Windows runner
+
+Install the GuildBotics client and keep SSH forwarding to the Hub running first.
+Run `guildbotics runner join` and approve **CI runner** access in the browser.
+The command verifies and installs msb 0.6.17, stores the runner credential in the
+OS keychain, and registers a per-user login task. It never prints the credential.
+Joining again replaces the previous credential for that device. Work is kept
+under the machine's GuildBotics directory, outside the Windows temporary directory.
+The runner checks `/api/v1/runner/health` before claims. A changed Hub version
+stops new claims, drains running attempts, and exits so the task restarts it;
+the client updater installs the matching Hub build before it resumes.
+
+### Manual runner maintenance
+
 ```sh
 # once, on the Hub machine (the owner's token from the data directory): create the runner member, print its token
 guildbotics runner register runner1 --url http://127.0.0.1:7878
@@ -869,12 +883,12 @@ reports itself unavailable without it, as without `msb`).
   executor's `wait`, separately from held source requests that return 401
   and clean up without starting the executor), and a cache that only
   a protected branch's run saves).
-- `src/runner/workspace.rs`: the checkout's archive (modes and links from
+- `crates/gb-runner/src/runner/workspace.rs`: the checkout's archive (modes and links from
   the index), the unpacking of what a VM returns (nothing outside its
   directory), and the dependency cache (keys, eviction, entries of an
   earlier form, and restores and saves of one entry at once getting whole
   archives).
-- `src/runner/executor.rs`: `msb` run as a fake script (the VMs that prepare
+- `crates/gb-runner/src/runner/executor.rs`: `msb` run as a fake script (the VMs that prepare
   and collect `/work` as root with the `io` directory, the job's as its user
   without it, the mounts and volumes a job gets, collecting after an exit or
   a timeout and never after a stop, their removal, and the sweep of this

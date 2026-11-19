@@ -308,6 +308,37 @@ describe("the entry page", () => {
 });
 
 describe("the consent page", () => {
+  it("refuses an invalid runner identifier before offering consent", async () => {
+    const calls = serve({ "GET /-/guildbotics/api/session": SESSION });
+    renderPage(`${AUTHORIZE}&runner=not-a-device`);
+    expect(await screen.findByText(/runner/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: t("session.authorize.allow") })).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it("shows runner execution permission and binds the device to consent", async () => {
+    const id = "0123456789abcdef0123456789abcdef";
+    const calls = serve({
+      "GET /-/guildbotics/api/session": SESSION,
+      "POST /-/guildbotics/api/apps/authorizations": {
+        status: 201,
+        body: { redirect: `${REDIRECT}?code=runner&state=s%261` },
+      },
+    });
+    renderPage(`${AUTHORIZE}&runner=${id}`);
+    expect(
+      await screen.findByText(t("session.authorize.runner", { client: REQUEST.client })),
+    ).toBeInTheDocument();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: t("session.authorize.allow") }));
+    await waitFor(() =>
+      expect(
+        calls.find((call) => call.url === "/-/guildbotics/api/apps/authorizations")?.body,
+      ).toEqual({ ...REQUEST, runner: id }),
+    );
+  });
+
   it("refuses an invalid request without offering anything", async () => {
     const calls = serve({ "GET /-/guildbotics/api/session": SESSION });
 

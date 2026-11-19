@@ -32,6 +32,7 @@ export function parseAppRequest(search: string): AppAuthorizationRequest | { inv
   const url = URL.canParse(redirect) ? new URL(redirect) : null;
   const stateBytes = new TextEncoder().encode(state).length;
   const checks: [string, boolean][] = [
+    ["runner", !query.has("runner") || /^[0-9a-f]{32}$/i.test(query.get("runner")!)],
     ["client", /^[A-Za-z0-9 ._-]{1,64}$/.test(client) && client.trim() !== ""],
     [
       "redirect_uri",
@@ -49,7 +50,13 @@ export function parseAppRequest(search: string): AppAuthorizationRequest | { inv
   const invalid = checks.filter(([, ok]) => !ok).map(([name]) => name);
   return invalid.length > 0
     ? { invalid }
-    : { client, redirect_uri: redirect, state, code_challenge: challenge };
+    : {
+        client,
+        redirect_uri: redirect,
+        state,
+        code_challenge: challenge,
+        ...(query.has("runner") ? { runner: query.get("runner")! } : {}),
+      };
 }
 
 /** The app's address with the owner's refusal, as OAuth's redirect carries it. */

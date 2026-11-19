@@ -72,6 +72,8 @@ struct State {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Authorization {
+    #[serde(default)]
+    runner: Option<String>,
     client: String,
     redirect_uri: String,
     state: String,
@@ -87,6 +89,7 @@ pub(crate) struct Exchange {
 }
 
 struct Consent {
+    runner: Option<String>,
     client: String,
     redirect_uri: String,
     challenge: String,
@@ -256,6 +259,7 @@ impl ServerAuth {
         let redirect = "http://127.0.0.1:54321/callback";
         let url = self
             .authorize(Authorization {
+                runner: None,
                 client: "test-client".into(),
                 redirect_uri: redirect.into(),
                 state: "fixture".into(),
@@ -281,9 +285,40 @@ impl ServerAuth {
             .to_owned()
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_runner_exchange(&self, id: &str) -> Exchange {
+        let verifier = "a".repeat(43);
+        let redirect = "http://127.0.0.1:54321/callback";
+        let link = self
+            .authorize(Authorization {
+                runner: Some(id.into()),
+                client: "fixture runner".into(),
+                redirect_uri: redirect.into(),
+                state: "fixture".into(),
+                code_challenge: loopback_auth::b64(&loopback_auth::sha256(verifier.as_bytes())),
+            })
+            .unwrap();
+        let code = url::Url::parse(&link)
+            .unwrap()
+            .query_pairs()
+            .find(|(k, _)| k == "code")
+            .unwrap()
+            .1
+            .into_owned();
+        Exchange {
+            code,
+            redirect_uri: redirect.into(),
+            code_verifier: verifier,
+        }
+    }
+
     pub(crate) fn authorize(&self, request: Authorization) -> Option<String> {
         let mut redirect = loopback_auth::loopback_redirect(&request.redirect_uri)?;
-        if !loopback_auth::valid_client(&request.client)
+        if request
+            .runner
+            .as_ref()
+            .is_some_and(|id| id.len() != 32 || !id.bytes().all(|b| b.is_ascii_hexdigit()))
+            || !loopback_auth::valid_client(&request.client)
             || !loopback_auth::valid_challenge(&request.code_challenge)
             || !(1..=512).contains(&request.state.len())
             || redirect
@@ -294,6 +329,7 @@ impl ServerAuth {
         }
         let code = self.state.lock().unwrap().consents.issue(
             Consent {
+                runner: request.runner,
                 client: request.client,
                 redirect_uri: request.redirect_uri,
                 challenge: request.code_challenge,
@@ -320,6 +356,9 @@ impl ServerAuth {
             || !loopback_auth::verifier_matches(&request.code_verifier, &consent.challenge)
         {
             return Ok(None);
+        }
+        if let Some(runner) = consent.runner {
+            return Ok(Some(serde_json::json!({"runner":runner})));
         }
         let label = format!("app:{}", consent.client);
         let (id, digest, token) = new_token();
@@ -444,6 +483,21 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn runner_consent_rejects_invalid_device_identifiers() {
+        let temp = tempfile::tempdir().unwrap();
+        let auth = ServerAuth::open(temp.path(), 8765).unwrap();
+        for id in [
+            "",
+            "not-a-device",
+            "0123456789abcdef0123456789abcdef00",
+            "../other-runner",
+        ] {
+            let request=serde_json::from_value(serde_json::json!({"runner":id,"client":"runner","redirect_uri":"http://127.0.0.1:54321/callback","state":"fixture","code_challenge":"a".repeat(43)})).unwrap();
+            assert!(auth.authorize(request).is_none());
+        }
+    }
+
+    #[test]
     fn branvil_uses_only_the_live_owner_cookie_its_csrf_and_the_owner_file_token() {
         use branvil::host::{Denied as HostDenied, Host};
         let data = tempfile::tempdir().unwrap();
@@ -545,6 +599,7 @@ mod tests {
         let consent = || {
             let redirect = auth
                 .authorize(Authorization {
+                    runner: None,
                     client: "test-app".into(),
                     redirect_uri: redirect.into(),
                     state: "state-1".into(),
@@ -595,6 +650,7 @@ mod tests {
         }
         let code = auth.state.lock().unwrap().consents.issue(
             Consent {
+                runner: None,
                 client: "test-app".into(),
                 redirect_uri: redirect.into(),
                 challenge,
@@ -610,6 +666,7 @@ mod tests {
         ] {
             assert!(
                 auth.authorize(Authorization {
+                    runner: None,
                     client: "test-app".into(),
                     redirect_uri: uri.into(),
                     state: "state".into(),

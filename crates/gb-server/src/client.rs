@@ -19,6 +19,8 @@ pub mod diagnostics;
 mod git_credentials;
 pub mod install;
 pub mod member;
+pub mod runner;
+pub mod runner_runtime;
 #[cfg(feature = "server")]
 pub mod secrets;
 pub mod update;

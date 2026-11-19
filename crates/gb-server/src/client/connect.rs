@@ -42,6 +42,25 @@ async fn connect_to(
     language: &'static str,
     open: impl FnOnce(&str),
 ) -> anyhow::Result<String> {
+    connect_as(port, name, language, open, None).await
+}
+
+pub async fn connect_runner(
+    port: u16,
+    id: &str,
+    language: &'static str,
+    open: impl FnOnce(&str),
+) -> anyhow::Result<String> {
+    connect_as(port, "GuildBotics CI runner", language, open, Some(id)).await
+}
+
+async fn connect_as(
+    port: u16,
+    name: &str,
+    language: &'static str,
+    open: impl FnOnce(&str),
+    runner: Option<&str>,
+) -> anyhow::Result<String> {
     let text = |key| i18n::t(language, key, &[]);
     let base = format!("http://127.0.0.1:{port}");
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
@@ -60,6 +79,9 @@ async fn connect_to(
         .append_pair("code_challenge", &challenge)
         .append_pair("code_challenge_method", "S256");
 
+    if let Some(id) = runner {
+        url.query_pairs_mut().append_pair("runner", id);
+    }
     let (send, received) = oneshot::channel();
     let router = Router::new()
         .route("/callback", get(answer))
@@ -104,7 +126,13 @@ async fn connect_to(
         let reply: Value = super::checked(call.send().await?).await?.json().await?;
         reply["token"]
             .as_str()
-            .filter(|token| crate::auth_protocol::parse_token(token).is_some())
+            .filter(|token| {
+                if runner.is_some() {
+                    token.starts_with("bvt_") && token.len() > 32
+                } else {
+                    crate::auth_protocol::parse_token(token).is_some()
+                }
+            })
             .map(str::to_owned)
             .ok_or_else(|| anyhow::anyhow!(text("cli.server.invalid_token")))
     }

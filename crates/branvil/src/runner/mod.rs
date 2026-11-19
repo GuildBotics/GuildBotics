@@ -616,7 +616,8 @@ fi
                         async move {
                             let path = request.uri().path();
                             let source = path.ends_with("/source");
-                            let claim = path.ends_with("/runner/claim");
+                            let claim =
+                                path.ends_with("/runner/claim") || path.ends_with("/runner/health");
                             if source {
                                 let (resume, held) = tokio::sync::oneshot::channel();
                                 requested.send(resume).await.unwrap();
@@ -1604,7 +1605,7 @@ esac
             s.revoke_runner_token().await;
             tokio::time::timeout(Duration::from_secs(10), refused.notified())
                 .await
-                .expect("a claim observes the refused token");
+                .expect("the runner observes the refused token");
             // One source fetch returns 401 and cleans up; the runner must still
             // let the other two finish instead of dropping their tasks.
             held.pop().unwrap().send(()).unwrap();

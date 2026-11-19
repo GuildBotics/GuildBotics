@@ -118,6 +118,7 @@ For workspace setup and examples, see the [README](../README.md).
 - [`guildbotics connect`](#guildbotics-connect)
 - [`guildbotics open`](#guildbotics-open)
 - [`guildbotics runner`](#guildbotics-runner)
+- [`guildbotics runner join`](#guildbotics-runner-join)
 - [`guildbotics runner register`](#guildbotics-runner-register)
 - [`guildbotics runner pull`](#guildbotics-runner-pull)
 - [`guildbotics runner doctor`](#guildbotics-runner-doctor)
@@ -1848,6 +1849,7 @@ Usage: guildbotics runner [OPTIONS]
        guildbotics runner <COMMAND>
 
 Commands:
+  join         Join this machine as a runner through the owner consent screen
   register     Create a runner member and print its token once (needs the owner's token)
   pull         Pull an image into the runner's image cache (jobs never pull)
   doctor       Show which msb is used and whether the executor is ready
@@ -1876,6 +1878,18 @@ Options:
 
           [env: BRANVIL_DATA_DIR]
 
+  -h, --help
+          Print help
+```
+
+## guildbotics runner join
+
+```text
+Join this machine as a runner through the owner consent screen
+
+Usage: guildbotics runner join
+
+Options:
   -h, --help
           Print help
 ```

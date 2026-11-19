@@ -53,7 +53,11 @@ export function AuthorizeView() {
   const busy = allow.isPending || allow.isSuccess;
   return (
     <GuideCard title={t("session.authorize.title", { client: request.client })}>
-      <Text size="sm">{t("session.authorize.rights", { client: request.client })}</Text>
+      <Text size="sm">
+        {t(request.runner ? "session.authorize.runner" : "session.authorize.rights", {
+          client: request.client,
+        })}
+      </Text>
       <Text size="sm" c="dimmed">
         {t("session.authorize.returns", { address: new URL(request.redirect_uri).origin })}
       </Text>

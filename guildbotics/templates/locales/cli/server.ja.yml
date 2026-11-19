@@ -17,3 +17,8 @@ ja:
   update_missing_hash: "配信情報に sha256 がありません。"
   update_hash_mismatch: "クライアントの sha256 が一致しません。"
   update_skills_failed: "スキルの導入に失敗しました。コマンドを実行する前に guildbotics install を再試行してください。"
+  runner_service_failed: "ランナーの常駐登録に失敗しました。guildbotics runner join を再実行してください。"
+  runner_joined: "このマシンが CI ランナーとして参加しました。"
+  runner_join_required: "先に guildbotics runner join を実行してください。"
+  runner_version_changed: "Hub の版が変わりました。実行中の試行を終えたランナーを再起動します。"
+  runner_runtime_invalid: "ランナーの runtime のハッシュまたは版の検証に失敗しました。"

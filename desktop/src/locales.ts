@@ -81,6 +81,8 @@ export const resources = {
         },
         authorize: {
           title: "Allow {{client}} to use GuildBotics?",
+          runner:
+            "Allow this machine to execute CI jobs as a runner. It does not receive owner access.",
           rights:
             "{{client}} gets the same rights as you on this GuildBotics server. Allowing it again replaces the access it had.",
           returns: "After you choose, you return to {{address}}.",
@@ -1535,6 +1537,8 @@ export const resources = {
         },
         authorize: {
           title: "{{client}} に GuildBotics の使用を許可しますか？",
+          runner:
+            "このマシンがランナーとして CI ジョブを実行することを許可します。オーナー権限は付与しません。",
           rights:
             "{{client}} は、この GuildBotics のサーバーであなたと同じ権限を持ちます。もう一度許可すると、それまでのアクセスは置き換わります。",
           returns: "選ぶと {{address}} に戻ります。",

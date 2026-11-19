@@ -239,7 +239,7 @@ impl Ci {
   before they are recorded, and every call checks the lease in the same
   transaction that changes the attempt.
 
-The runner (`src/runner/`) is a separate process with its own failure domain:
+The shared runner (`crates/gb-runner/src/runner/`) is a separate process with its own failure domain:
 it holds no database handle, no repository, and no secret except its own
 token. Its `Executor` trait has one implementation, microsandbox; tests use a
 fake executor that starts no process. Details, limits, and the trust model:

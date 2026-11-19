@@ -1149,7 +1149,50 @@ async fn app_token(
     Body(request): Body<crate::auth::Exchange>,
 ) -> Response {
     match api.auth.app_token(request) {
-        Ok(Some(token)) => (StatusCode::CREATED, Json(token)).into_response(),
+        Ok(Some(token)) => {
+            if let Some(id) = token["runner"].as_str() {
+                let result = async {
+                    let owner = api
+                        .branvil
+                        .get()
+                        .ok_or_else(|| anyhow::anyhow!("code host unavailable"))?
+                        .owner();
+                    let name = format!("runner-{id}");
+                    match owner.members_get(name.clone()).await {
+                        Ok(member) => anyhow::ensure!(
+                            serde_json::to_value(member.kind)? == "runner",
+                            "runner name occupied"
+                        ),
+                        Err(error) if error.code == "not_found" => {
+                            owner
+                                .members_create(serde_json::from_value(
+                                    json!({"name":name,"kind":"runner"}),
+                                )?)
+                                .await?;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                    let issued = owner
+                        .members_issue_token(
+                            name,
+                            serde_json::from_value(json!({"label":"runner-join","replace":true}))?,
+                        )
+                        .await?;
+                    Ok::<_, anyhow::Error>(json!({"token":issued.token}))
+                }
+                .await;
+                return match result {
+                    Ok(value) => (StatusCode::CREATED, Json(value)).into_response(),
+                    Err(_) => ApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        &headers,
+                    )
+                    .into_response(),
+                };
+            }
+            (StatusCode::CREATED, Json(token)).into_response()
+        }
         Ok(None) => ApiError::new(StatusCode::BAD_REQUEST, "invalid", &headers).into_response(),
         Err(error) => {
             tracing::error!("cannot save app token: {error:#}");
@@ -1230,6 +1273,57 @@ async fn session(State(api): State<Shared>, headers: HeaderMap) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn runner_consent_issues_only_runner_access_and_rejoin_revokes_previous() {
+        let fixture = branvil::test_support::Fixture::new("ownerfixture").await;
+        let root = tempfile::tempdir().unwrap();
+        let api = Arc::new(Api::new(
+            Selected::default(),
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            ServerAuth::open(root.path(), 8765).unwrap(),
+            "fixture".into(),
+            root.path().into(),
+        ));
+        api.branvil.set(fixture.data()).ok().unwrap();
+        let id = "0123456789abcdef0123456789abcdef";
+        let mut tokens = Vec::new();
+        for _ in 0..2 {
+            let response = app_token(
+                State(api.clone()),
+                HeaderMap::new(),
+                Body(api.auth.test_runner_exchange(id)),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::CREATED);
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let value: Value = serde_json::from_slice(&bytes).unwrap();
+            tokens.push(value["token"].as_str().unwrap().to_owned());
+        }
+        let http = reqwest::Client::new();
+        let base = fixture.data().base_url().to_owned();
+        for (index, token) in tokens.iter().enumerate() {
+            let reply = http
+                .get(format!("{base}/api/v1/runner/health"))
+                .bearer_auth(token)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(reply.status().as_u16(), if index == 0 { 401 } else { 200 });
+        }
+        let reply = http
+            .get(format!("{base}/api/v1/members"))
+            .bearer_auth(&tokens[1])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(reply.status().as_u16(), 403);
+        let replay=app_token(State(api),HeaderMap::new(),Body(serde_json::from_value(json!({"code":"unapproved","redirect_uri":"http://127.0.0.1:54321/callback","code_verifier":"a".repeat(43)})).unwrap())).await;
+        assert_eq!(replay.status(), StatusCode::BAD_REQUEST);
+        fixture.stop().await;
+    }
+
     #[tokio::test]
     async fn consent_downloads_only_the_running_builds_verified_client() {
         use tower::ServiceExt;

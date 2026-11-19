@@ -356,6 +356,11 @@ fn stream_file(
 
 // ---------------------------------------------------------------- runner API
 
+async fn runner_health(State(app): State<Shared>, c: Caller) -> R {
+    require_runner(&app, &c)?;
+    Ok(ok(serde_json::json!({"version":gb_base::BUILD_VERSION})))
+}
+
 fn require_runner(app: &Shared, c: &Caller) -> AppResult<()> {
     if c.member.kind != MemberKind::Runner {
         return Err(AppError::forbidden(
@@ -825,6 +830,7 @@ loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
     ("/repos/{repo}/commits/{sha}/artifacts/{name}", (get, artifact_get, MemberSession)),
     ("/runner/images", (get, images, MemberSession)),
     ("/runner/images/{id}", (get, image_archive, MemberSession)),
+    ("/runner/health", (get, runner_health, MemberSession)),
     ("/runner/claim", (post, claim, MemberSession)),
     ("/runner/attempts/{id}/source", (get, source, MemberSession)),
     ("/runner/attempts/{id}/heartbeat", (post, heartbeat, MemberSession)),
