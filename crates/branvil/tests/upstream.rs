@@ -2053,6 +2053,7 @@ async fn feature_collection(auto: bool) {
         .await;
     assert_eq!(ticket["state"], "open");
     with_aiko_account(&w).await;
+    let pause = auto.then(|| gh.pause_answer("POST", &format!("/repos/{GH}/pulls")));
     let (st, v) = s.patch(&parent_url, &w.owner, json!({"draft":false})).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     if !auto {
@@ -2063,7 +2064,17 @@ async fn feature_collection(auto: bool) {
         let (st, v) = publish(&w, parent["number"].as_u64().unwrap()).await;
         assert_eq!(st, StatusCode::OK, "{v}");
     }
-    eventually("parent published", || async { !gh.pulls(GH).is_empty() }).await;
+    if let Some(pause) = pause {
+        // The host has created the PR, but Branvil has not received its number yet.
+        pause.reached().await;
+        assert!(!gh.pulls(GH).is_empty());
+        assert!(s.ok(&parent_url, &w.owner).await["upstream"]["number"].is_null());
+        drop(pause);
+    }
+    eventually("parent publication recorded", || async {
+        s.ok(&parent_url, &w.owner).await["upstream"]["number"].is_u64()
+    })
+    .await;
     let p = s.ok(&parent_url, &w.owner).await;
     gh.squash_merge(GH, p["upstream"]["number"].as_u64().unwrap());
     refresh(&w).await;
