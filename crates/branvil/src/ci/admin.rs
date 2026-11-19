@@ -272,9 +272,40 @@ pub(crate) async fn data_load(
     tokio::spawn(async move {
         let settings = worker.ci.settings();
         let ms = settings.microsandbox(AUTO_RUNNER).await;
-        settings.end(load_archive(&ms, path).await);
+        settings.end(store_archive(&ms, worker.layout.root.clone(), path).await);
     });
     data_settings(app, c).await
+}
+
+async fn store_archive(
+    ms: &Microsandbox,
+    root: PathBuf,
+    path: PathBuf,
+) -> Result<Vec<Loaded>, String> {
+    let destination = root.clone();
+    let archive = tokio::task::spawn_blocking(move || super::images::save(&destination, &path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    if archive
+        .images
+        .iter()
+        .all(|i| i.architecture == super::images::architecture())
+    {
+        load_archive(
+            ms,
+            super::images::path(&root, &archive.id).map_err(|e| e.to_string())?,
+        )
+        .await
+    } else {
+        Ok(archive
+            .images
+            .iter()
+            .map(|i| Loaded {
+                reference: i.reference.clone(),
+            })
+            .collect())
+    }
 }
 
 /// Loads the image archive at `path` into the cache (see [`transfer`]). An
@@ -426,6 +457,32 @@ mod tests {
     use super::load_archive;
     #[cfg(unix)]
     use crate::runner::executor::{Microsandbox, Msb, tests::write_script};
+
+    #[tokio::test]
+    async fn foreign_archive_is_stored_without_touching_the_executor() {
+        let root = tempfile::tempdir().unwrap();
+        let foreign = if super::super::images::architecture() == "arm64" {
+            "amd64"
+        } else {
+            "arm64"
+        };
+        let archive = super::super::images::tests::docker(foreign, "1");
+        let ms = crate::runner::executor::Microsandbox::new(
+            crate::runner::executor::Msb::Missing("must not run".into()),
+            root.path().join("cache"),
+            "test",
+        );
+        let loaded =
+            super::store_archive(&ms, root.path().to_path_buf(), archive.path().to_path_buf())
+                .await
+                .unwrap();
+        assert_eq!(loaded[0].reference, "test/image:dev");
+        assert_eq!(
+            super::super::images::list(root.path()).unwrap()[0].images[0].architecture,
+            foreign
+        );
+        assert!(!ms.home().exists());
+    }
 
     fn archive(entries: &[(&str, &str)]) -> tempfile::NamedTempFile {
         let file = tempfile::NamedTempFile::new().unwrap();

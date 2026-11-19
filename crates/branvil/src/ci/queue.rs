@@ -1183,8 +1183,26 @@ pub fn scheduled(r: &impl Rd, first_only: bool) -> AppResult<Vec<(Attempt, Optio
 }
 
 /// Hands the highest-priority queued attempt to `runner` under a new lease.
+#[cfg(test)]
 pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Option<Claimed>> {
     let Some((a, reuse)) = scheduled(w, true)?.into_iter().next() else {
+        return Ok(None);
+    };
+    claim_selected(w, runner, lease_secs, now, a, reuse).map(Some)
+}
+
+/// Claim only work supported by the runner's advertised inventory.
+pub fn claim_images(
+    w: &Wtx,
+    runner: &str,
+    lease_secs: u64,
+    now: &str,
+    images: &[super::images::Image],
+) -> AppResult<Option<Claimed>> {
+    let Some((a, reuse)) = scheduled(w, false)?
+        .into_iter()
+        .find(|(a, _)| images.iter().any(|i| i.supports(&a.job.image)))
+    else {
         return Ok(None);
     };
     claim_selected(w, runner, lease_secs, now, a, reuse).map(Some)
@@ -1753,11 +1771,21 @@ fn interrupt(w: &Wtx, old: &Attempt, why: &str, now: &str) -> AppResult<()> {
 
 /// Concludes `startup_failure` for queued attempts created before `before`
 /// (no runner took them in time), except retries already waiting for a runner.
+#[cfg(test)]
 pub fn fail_queued(
     w: &Wtx,
     before: &str,
     details: &str,
     now: &str,
+) -> AppResult<Vec<(String, String)>> {
+    fail_unavailable(w, before, now, |_| Some(details.to_owned()))
+}
+
+pub fn fail_unavailable(
+    w: &Wtx,
+    before: &str,
+    now: &str,
+    reason: impl Fn(&Attempt) -> Option<String>,
 ) -> AppResult<Vec<(String, String)>> {
     let mut changed = Vec::new();
     for (_, id) in w.prefix_raw(store::IX_CI_PENDING, &[], None, usize::MAX)? {
@@ -1770,6 +1798,9 @@ pub fn fail_queued(
         if old.wait_for_runner || old.created_at.as_str() >= before {
             continue;
         }
+        let Some(details) = reason(&old) else {
+            continue;
+        };
         let next = prepare_auto_retry(w, &old, true, now)?;
         let mut a = old.clone();
         conclude(
@@ -1829,6 +1860,41 @@ pub fn counts(r: &impl Rd) -> AppResult<(usize, usize, usize)> {
 mod tests {
     use super::*;
     use crate::store::Store;
+
+    #[test]
+    fn inventory_filters_claims_and_missing_images_expire() {
+        let (_d, s) = store();
+        s.write_sync(|w| {
+            register(w, reg("s1", "feature", &["test"]), 10, T0)?;
+            let queued = scheduled(w, false)?[0].0.clone();
+            let mut image = super::super::images::Image {
+                reference: "wrong/image".into(),
+                architecture: "arm64".into(),
+                digest: "sha256:test".into(),
+            };
+            assert!(claim_images(w, "r", 60, T0, &[])?.is_none());
+            assert!(claim_images(w, "r", 60, T0, &[image.clone()])?.is_none());
+            image.reference = queued.job.image.clone();
+            image.architecture = "ppc64".into();
+            assert!(claim_images(w, "r", 60, T0, &[image.clone()])?.is_none());
+            image.architecture = "amd64".into();
+            assert!(claim_images(w, "r", 60, T0, &[image])?.is_some());
+            register(w, reg("s2", "feature", &["test"]), 10, T0)?;
+            let changed = fail_unavailable(w, T1, T2, |a| {
+                Some(format!("Missing image {} for CPU amd64", a.job.image))
+            })?;
+            assert!(!changed.is_empty());
+            let failed = attempts_of(w, "repo_1", "s2")?;
+            assert!(
+                failed
+                    .iter()
+                    .any(|a| a.conclusion.as_deref() == Some("startup_failure")
+                        && a.details.as_deref().unwrap().contains("amd64"))
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
 
     fn require_test(w: &Wtx) -> AppResult<()> {
         let repo = crate::model::Repo {

@@ -254,9 +254,129 @@ impl Api {
         Self::check(resp).await?.json().await.map_err(Self::net)
     }
 
-    pub async fn claim(&self, executor: &str, health: &Health) -> Result<Option<Claim>, ApiError> {
+    /// Reconcile only this CPU's Hub archives, comparing configuration digests.
+    pub async fn sync_images(&self, ms: &Microsandbox) -> Result<(), ApiError> {
+        use crate::ci::images::{Archive, architecture};
+        use tokio::io::AsyncWriteExt;
+        let snapshot = ms.inventory(self).await?.images;
+        let resp = self
+            .http
+            .get(self.at(&format!("/runner/images?architecture={}", architecture())))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(Self::net)?;
+        let archives: Vec<Archive> = Self::check(resp).await?.json().await.map_err(Self::net)?;
+        let mut failures = Vec::new();
+        for archive in archives {
+            let reference = archive
+                .images
+                .iter()
+                .map(|i| i.reference.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let result = async {
+                let mut needed = Vec::new();
+                for image in &archive.images {
+                    if image.architecture != architecture() {
+                        continue;
+                    }
+                    let before = snapshot
+                        .iter()
+                        .find(|i| i.supports(&image.reference))
+                        .map(|i| i.digest.clone());
+                    if before.as_deref() != Some(&image.digest) {
+                        needed.push((image, before));
+                    }
+                }
+                if needed.is_empty() {
+                    return Ok::<_, ApiError>(());
+                }
+                std::fs::create_dir_all(ms.home()).map_err(|e| ApiError::Other(e.to_string()))?;
+                let temp = tempfile::NamedTempFile::new_in(ms.home())
+                    .map_err(|e| ApiError::Other(e.to_string()))?;
+                let mut file = tokio::fs::File::create(temp.path())
+                    .await
+                    .map_err(|e| ApiError::Other(e.to_string()))?;
+                let mut resp = Self::check(
+                    self.http
+                        .get(self.at(&format!("/runner/images/{}", archive.id)))
+                        .bearer_auth(&self.token)
+                        .send()
+                        .await
+                        .map_err(Self::net)?,
+                )
+                .await?;
+                use sha2::{Digest, Sha256};
+                let mut hash = Sha256::new();
+                while let Some(bytes) = resp.chunk().await.map_err(Self::net)? {
+                    hash.update(&bytes);
+                    file.write_all(&bytes)
+                        .await
+                        .map_err(|e| ApiError::Other(e.to_string()))?;
+                }
+                file.flush()
+                    .await
+                    .map_err(|e| ApiError::Other(e.to_string()))?;
+                drop(file);
+                if crate::util::hex(&hash.finalize()) != archive.id {
+                    return Err(ApiError::Other("CI archive digest mismatch".into()));
+                }
+                let _lock = ms.lock_images(true, || {}).await.map_err(ApiError::Other)?;
+                for (image, before) in needed {
+                    let held = ms
+                        .inspect(&image.reference)
+                        .await
+                        .map_err(ApiError::Other)?
+                        .map(|i| i.config_digest);
+                    // A concurrent writer owns any version installed during the download.
+                    if held != before || held.as_deref() == Some(&image.digest) {
+                        continue;
+                    }
+                    ms.load_as(temp.path(), &image.reference)
+                        .await
+                        .map_err(ApiError::Other)?;
+                    let held = ms
+                        .inspect(&image.reference)
+                        .await
+                        .map_err(ApiError::Other)?;
+                    if held.is_none_or(|i| i.config_digest != image.digest) {
+                        return Err(ApiError::Other(format!(
+                            "Loaded image {} has an unexpected digest",
+                            image.reference
+                        )));
+                    }
+                    ms.pin(&image.reference, Some(temp.path())).await;
+                }
+                ms.collect().await;
+                Ok(())
+            }
+            .await;
+            match result {
+                Ok(()) => {}
+                Err(ApiError::Unauthorized) => return Err(ApiError::Unauthorized),
+                Err(e) => failures.push(format!("{reference}: {e}")),
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(ApiError::Other(failures.join("; ")))
+        }
+    }
+
+    pub async fn claim(
+        &self,
+        executor: &str,
+        health: &Health,
+        images: &[crate::ci::images::Image],
+        accept: bool,
+    ) -> Result<Option<Claim>, ApiError> {
         let body = serde_json::json!({
             "executor": executor,
+            "architecture": crate::ci::images::architecture(),
+            "images": images,
+            "accept": accept,
             "executor_state": if health.ready { "ready" } else { "unavailable" },
             "executor_detail": health.detail,
         });
@@ -544,6 +664,7 @@ pub struct Runner {
     /// once, not at every claim).
     limits: Mutex<(ExecutorConfig, Option<String>)>,
     cache: Arc<workspace::Cache>,
+    sync_detail: Mutex<Option<String>>,
 }
 
 impl Runner {
@@ -555,6 +676,7 @@ impl Runner {
     ) -> Self {
         Self {
             cache: Arc::new(workspace::Cache::new(work_dir.join("cache"))),
+            sync_detail: Mutex::new(None),
             api,
             work_dir,
             config,
@@ -598,17 +720,32 @@ impl Runner {
             tracing::warn!("removing cache entries of an earlier form failed: {e}");
         }
         let mut running = tokio::task::JoinSet::new();
+        let mut syncing = tokio::task::JoinSet::new();
+        let mut next_sync = Instant::now();
         let mut backoff = 1;
         'claiming: loop {
             let limits = self.limits();
             let mut wait = Duration::from_secs(2);
+            if syncing.is_empty() && Instant::now() >= next_sync && current.health().await.ready {
+                if self.sync_detail.lock().unwrap().is_none() {
+                    *self.sync_detail.lock().unwrap() =
+                        Some("CI image synchronization in progress".into());
+                }
+                let (runner, executor) = (self.clone(), current.clone());
+                syncing.spawn(async move { executor.synchronize(&runner.api).await });
+            }
+            if running.len() >= limits.max_jobs as usize
+                && let Err(ApiError::Unauthorized) = self.claim(&*current, false).await
+            {
+                break 'claiming;
+            }
             if running.len() < limits.max_jobs as usize {
                 // Retry unresolved runtimes only. An accepted runtime retains
                 // both its ready and unavailable health cache across claims.
                 if current.needs_resolution() {
                     current = executor();
                 }
-                match self.claim(&*current).await {
+                match self.claim(&*current, true).await {
                     Ok(Some((claim, health))) => {
                         backoff = 1;
                         let (runner, executor) = (self.clone(), current.clone());
@@ -633,17 +770,63 @@ impl Runner {
                     Ok(Ok(())) => {}
                     Err(e) => tracing::error!("an attempt's task failed: {e}"),
                 },
+                Some(ended) = syncing.join_next() => {
+                    next_sync = Instant::now() + Duration::from_secs(30);
+                    match ended {
+                        Ok(Err(ApiError::Unauthorized)) => break 'claiming,
+                        Ok(Err(e)) => *self.sync_detail.lock().unwrap() = Some(format!("CI image synchronization failed: {e}")),
+                        Ok(Ok(())) => *self.sync_detail.lock().unwrap() = None,
+                        Err(e) => *self.sync_detail.lock().unwrap() = Some(format!("CI image synchronization failed: {e}")),
+                    }
+                },
                 _ = tokio::time::sleep(wait) => {}
             }
         }
+        syncing.abort_all();
+        while syncing.join_next().await.is_some() {}
         while running.join_next().await.is_some() {}
         bail!("{}", ApiError::Unauthorized)
     }
 
     /// Claims an attempt, telling the service how the executor is.
-    async fn claim<E: Executor>(&self, executor: &E) -> Result<Option<(Claim, Health)>, ApiError> {
-        let health = executor.health().await;
-        let claim = self.api.claim(executor.name(), &health).await?;
+    async fn claim<E: Executor>(
+        &self,
+        executor: &E,
+        accept: bool,
+    ) -> Result<Option<(Claim, Health)>, ApiError> {
+        let mut health = executor.health().await;
+        let images = if health.ready {
+            match tokio::time::timeout(Duration::from_secs(10), executor.inventory(&self.api))
+                .await
+                .unwrap_or_else(|_| Err(ApiError::Other("Image cache inventory timed out".into())))
+            {
+                Ok(inventory) => {
+                    health.detail = inventory.detail;
+                    inventory.images
+                }
+                Err(ApiError::Unauthorized) => return Err(ApiError::Unauthorized),
+                Err(e) => {
+                    health.ready = false;
+                    health.detail = Some(format!("Cannot read the image cache: {e}"));
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        if health.ready
+            && let Some(sync) = self.sync_detail.lock().unwrap().clone()
+        {
+            health.detail = Some(
+                health
+                    .detail
+                    .map_or(sync.clone(), |cache| format!("{sync}; {cache}")),
+            );
+        }
+        let claim = self
+            .api
+            .claim(executor.name(), &health, &images, accept)
+            .await?;
         Ok(claim.map(|c| (c, health)))
     }
 
@@ -651,7 +834,7 @@ impl Runner {
     #[cfg(test)]
     pub async fn once<E: Executor>(&self, executor: &E) -> Result<bool, ApiError> {
         let limits = self.limits();
-        let Some((claim, health)) = self.claim(executor).await? else {
+        let Some((claim, health)) = self.claim(executor, true).await? else {
             return Ok(false);
         };
         self.run(executor, &health, claim, &limits).await?;
@@ -1238,11 +1421,249 @@ mod tests {
     use executor::ImageLock;
     use std::sync::atomic::AtomicBool;
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hub_archives_follow_cpu_and_digest_without_reloading_equal_versions() {
+        use crate::ci::images;
+        let s = service("").await;
+        let native = images::architecture();
+        let foreign = if native == "arm64" { "amd64" } else { "arm64" };
+        let archive = images::tests::docker(native, "1");
+        let saved = images::save(&s.app.layout.root, archive.path()).unwrap();
+        images::save(
+            &s.app.layout.root,
+            images::tests::docker(foreign, "1").path(),
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let msb = dir.path().join("msb");
+        let digest = &saved.images[0].digest;
+        executor::tests::write_script(
+            &msb,
+            &format!(
+                r#"#!/bin/sh
+case "$1 $2" in
+"load --quiet") echo loaded >> "$MSB_HOME/loads"; echo '{digest}' > "$MSB_HOME/digest" ;;
+"image inspect") [ -f "$MSB_HOME/digest" ] || exit 1; printf '{{"reference":"%s","digest":"sha256:manifest","config":{{"digest":"%s"}}}}' "$5" "$(cat "$MSB_HOME/digest")" ;;
+"image list") echo '[{{"reference":"test/image:dev","digest":"m"}}]' ;;
+esac
+"#
+            ),
+        );
+        let ms = Microsandbox::new(executor::Msb::Found(msb), dir.path().join("cache"), "test");
+        let api = Api::new(&s.url, &s.runner_token);
+        api.sync_images(&ms).await.unwrap();
+        let blob = images::path(&s.app.layout.root, &saved.id).unwrap();
+        std::fs::remove_file(&blob).unwrap();
+        // Equal digests work even when the archive cannot be fetched.
+        api.sync_images(&ms).await.unwrap();
+        std::fs::copy(archive.path(), &blob).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(ms.home().join("loads")).unwrap(),
+            "loaded\n"
+        );
+        std::fs::write(ms.home().join("digest"), "sha256:old").unwrap();
+        api.sync_images(&ms).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(ms.home().join("loads")).unwrap(),
+            "loaded\nloaded\n"
+        );
+        let mut catalog = images::list(&s.app.layout.root).unwrap();
+        catalog.insert(
+            0,
+            images::Archive {
+                id: "0".repeat(64),
+                images: vec![images::Image {
+                    reference: "broken:dev".into(),
+                    architecture: native.into(),
+                    digest: "sha256:broken".into(),
+                }],
+            },
+        );
+        std::fs::write(
+            s.app.layout.root.join("ci/images/catalog.json"),
+            serde_json::to_vec(&catalog).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(ms.home().join("digest"), "sha256:old").unwrap();
+        assert!(
+            api.sync_images(&ms)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("broken:dev")
+        );
+        assert_eq!(
+            std::fs::read_to_string(ms.home().join("digest"))
+                .unwrap()
+                .trim(),
+            digest
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_download_cannot_overwrite_a_concurrently_installed_version() {
+        use crate::ci::images;
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("cache");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("digest"), "sha256:old").unwrap();
+        let archive = images::tests::docker(images::architecture(), "1");
+        let bytes = std::fs::read(archive.path()).unwrap();
+        let saved = images::Archive {
+            id: crate::util::hex(&crate::util::sha256(&bytes)),
+            images: images::inspect(archive.path()).unwrap(),
+        };
+        let msb = dir.path().join("msb");
+        executor::tests::write_script(
+            &msb,
+            r#"#!/bin/sh
+case "$1 $2" in
+"image inspect") printf '{"reference":"test/image:dev","digest":"m","config":{"digest":"%s"}}' "$(cat "$MSB_HOME/digest")" ;;
+"load --quiet") touch "$MSB_HOME/overwritten" ;;
+"image list") echo '[{"reference":"test/image:dev","digest":"m"}]' ;;
+esac
+"#,
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let target = home.join("digest");
+        let catalog_target = target.clone();
+        let router = axum::Router::new()
+            .route(
+                "/api/v1/runner/images",
+                axum::routing::get(move || {
+                    let saved = saved.clone();
+                    let target = catalog_target.clone();
+                    async move {
+                        std::fs::write(target, "sha256:concurrent").unwrap();
+                        axum::Json(vec![saved])
+                    }
+                }),
+            )
+            .route(
+                "/api/v1/runner/images/{id}",
+                axum::routing::get(move || {
+                    let bytes = bytes.clone();
+                    let target = target.clone();
+                    async move {
+                        std::fs::write(target, "sha256:concurrent").unwrap();
+                        bytes
+                    }
+                }),
+            );
+        let server = tokio::spawn(axum::serve(listener, router).into_future());
+        let ms = Microsandbox::new(executor::Msb::Found(msb), home, "t");
+        Api::new(&url, "unused").sync_images(&ms).await.unwrap();
+        assert!(!ms.home().join("overwritten").exists());
+        assert_eq!(
+            std::fs::read_to_string(ms.home().join("digest")).unwrap(),
+            "sha256:concurrent"
+        );
+        server.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn inventory_preserves_good_tags_and_reports_each_bad_tag() {
+        let dir = tempfile::tempdir().unwrap();
+        let msb = dir.path().join("msb");
+        executor::tests::write_script(
+            &msb,
+            r#"#!/bin/sh
+if [ "$2" = list ]; then
+  echo '[{"reference":"failed","digest":"m"},{"reference":"malformed","digest":"m"},{"reference":"good","digest":"m"}]'
+else
+  case "$5" in
+    failed) echo 'permission denied' >&2; exit 1 ;;
+    malformed) echo 'not json' ;;
+    good) echo '{"reference":"good","digest":"m","config":{"digest":"sha256:c"}}' ;;
+  esac
+fi
+"#,
+        );
+        let ms = Microsandbox::new(executor::Msb::Found(msb), dir.path().join("cache"), "t");
+        let inventory = ms
+            .inventory(&Api::new("http://127.0.0.1:1", "unused"))
+            .await
+            .unwrap();
+        assert_eq!(inventory.images.len(), 1);
+        assert_eq!(inventory.images[0].reference, "good");
+        let detail = inventory.detail.unwrap();
+        assert!(
+            detail.contains("permission denied") && detail.contains("malformed"),
+            "{detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn synchronization_does_not_block_cached_jobs_or_runner_reports() {
+        for blocked in [false, true] {
+            let s = service("[[jobs]]\nname = 'test'\nimage = 'alpine'\ncommands = ['echo ok']\n")
+                .await;
+            let fake = Arc::new(Fake::new());
+            fake.sync_blocked.store(blocked, Ordering::SeqCst);
+            fake.sync_failed.store(!blocked, Ordering::SeqCst);
+            let runner = Arc::new(Runner::new(
+                Api::new(&s.url, &s.runner_token),
+                s.dir.path().join("runner"),
+                None,
+                ExecutorConfig::default(),
+            ));
+            let running = tokio::spawn(runner.serve({
+                let fake = fake.clone();
+                move || fake.clone()
+            }));
+            let sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
+            tokio::time::timeout(Duration::from_secs(15), async {
+                loop {
+                    if result_of(&s, &sha).await.conclusion.as_deref() == Some("success") {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if s.app
+                        .ci
+                        .diagnostics()
+                        .await
+                        .to_string()
+                        .contains(if blocked {
+                            "synchronization in progress"
+                        } else {
+                            "broken archive"
+                        })
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            s.revoke_runner_token().await;
+            assert!(
+                tokio::time::timeout(Duration::from_secs(5), running)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .is_err()
+            );
+        }
+    }
+
     /// What a run got: (image, cpus, memory MiB, timeout s, work quota MiB).
     type Ran = (String, u32, u64, u64, u64);
 
     struct Fake {
         ready: AtomicBool,
+        sync_blocked: AtomicBool,
+        sync_failed: AtomicBool,
         /// The image cache is held (by a pull or a load): checks wait.
         hold_images: AtomicBool,
         changed_image: AtomicBool,
@@ -1258,6 +1679,8 @@ mod tests {
         fn new() -> Self {
             Self {
                 ready: AtomicBool::new(true),
+                sync_blocked: AtomicBool::new(false),
+                sync_failed: AtomicBool::new(false),
                 hold_images: AtomicBool::new(false),
                 changed_image: AtomicBool::new(false),
                 ran: Default::default(),
@@ -1276,6 +1699,25 @@ mod tests {
     }
 
     impl Executor for Fake {
+        async fn synchronize(&self, _api: &Api) -> Result<(), ApiError> {
+            if self.sync_blocked.load(Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
+            if self.sync_failed.load(Ordering::SeqCst) {
+                return Err(ApiError::Other("broken archive".into()));
+            }
+            Ok(())
+        }
+        async fn inventory(&self, _api: &Api) -> Result<executor::Inventory, ApiError> {
+            Ok(executor::Inventory {
+                detail: None,
+                images: vec![crate::ci::images::Image {
+                    reference: "alpine".into(),
+                    architecture: "arm64".into(),
+                    digest: "sha256:test".into(),
+                }],
+            })
+        }
         fn name(&self) -> &'static str {
             "fake"
         }
@@ -1641,9 +2083,17 @@ mod tests {
                 .expect("the attempt finished")
             }
         };
-        let first = settled(sha).await;
-        assert_eq!(first.conclusion.as_deref(), Some("startup_failure"));
-        assert!(first.details.as_deref().unwrap().contains("not found"));
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if s.app.ci.diagnostics().await["state"] == "executor_unavailable" {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(result_of(&s, &sha).await.status, "queued");
         // Install atomically, as the embedding host does. No VM is started.
         let staged = s.dir.path().join("msb-staged");
         executor::tests::write_script(
@@ -1655,7 +2105,12 @@ case "$1" in
 doctor) [ ! -f "$MSB_HOME/doctor-fails" ] ;;
 remove) exit 0 ;;
 volume) echo '[]' ;;
-image) printf '{"reference":"alpine","digest":"sha256:m","config":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}' ;;
+image)
+  if [ "$2" = list ]; then
+    echo '[{"reference":"alpine","digest":"sha256:m"}]'
+  else
+    printf '{"reference":"alpine","digest":"sha256:m","config":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}'
+  fi ;;
 run)
   prev=''
   for arg in "$@"; do
@@ -1674,23 +2129,37 @@ esac
             std::fs::write(home.join("doctor-fails"), "").unwrap();
         }
         std::fs::rename(staged, &msb).unwrap();
-        let expected = if doctor_fails {
-            "startup_failure"
+        if doctor_fails {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if std::fs::read_to_string(msb.with_extension("calls"))
+                        .unwrap_or_default()
+                        .lines()
+                        .any(|l| l == "doctor")
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(result_of(&s, &sha).await.status, "queued");
         } else {
-            "success"
-        };
-        let next_sha = empty_main(&s, "runtime installed").await;
-        let next = settled(next_sha).await;
-        assert_eq!(next.conclusion.as_deref(), Some(expected), "{next:?}");
+            assert_eq!(
+                settled(sha.clone()).await.conclusion.as_deref(),
+                Some("success")
+            );
+        }
         assert_eq!(home.join("ran").is_file(), !doctor_fails);
         assert!(!serving.is_finished(), "the same runner is still serving");
-        // Exercise another job and idle polls within either health TTL.
-        // Neither resolution nor doctor should run again, even when unready.
-        let another_sha = empty_main(&s, "runtime still ready").await;
-        assert_eq!(
-            settled(another_sha).await.conclusion.as_deref(),
-            Some(expected)
-        );
+        if !doctor_fails {
+            let another_sha = empty_main(&s, "runtime still ready").await;
+            assert_eq!(
+                settled(another_sha).await.conclusion.as_deref(),
+                Some("success")
+            );
+        }
         tokio::time::sleep(Duration::from_secs(5)).await;
         let calls = std::fs::read_to_string(msb.with_extension("calls")).unwrap();
         assert_eq!(
@@ -2616,7 +3085,7 @@ esac
         );
         fake.hold_images.store(false, Ordering::SeqCst);
 
-        // An unusable executor: the job concludes startup_failure with why.
+        // An unusable executor does not take a job away from a ready runner.
         fake.ready.store(false, Ordering::SeqCst);
         let resp = http
             .post(format!("{url}/api/v1/repos/acme%2Fdemo/jobs/{id}/retry"))
@@ -2625,11 +3094,10 @@ esac
             .await
             .unwrap();
         assert_eq!(resp.status(), 200);
-        assert!(runner.once(&fake).await.unwrap());
+        assert!(!runner.once(&fake).await.unwrap());
         let ok = checks().await.into_iter().find(|c| c.name == "ok").unwrap();
         assert_eq!(ok.attempt, Some(2));
-        assert_eq!(ok.conclusion.as_deref(), Some("startup_failure"));
-        assert!(ok.details.as_deref().unwrap().contains("switched off"));
+        assert_eq!(ok.status, "queued");
         let diag = app.ci.diagnostics().await;
         assert_eq!(diag["state"], "executor_unavailable", "{diag}");
         assert!(!runner.once(&fake).await.unwrap(), "nothing left");

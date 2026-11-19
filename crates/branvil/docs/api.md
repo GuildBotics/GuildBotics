@@ -1108,7 +1108,7 @@ one class, available reusable results precede other attempts, with `seq` as the
 tie-breaker. See [CI scheduling](ci.md) for the classification rules. Running
 attempts are not interrupted by changes in class.
 
-- `POST /claim` `{"executor": "microsandbox", "executor_state": "ready"|"unavailable", "executor_detail"?: "..."}`
+- `POST /claim` `{"architecture":"arm64"|"amd64", "accept"?:true|false, "executor": "microsandbox", "executor_state": "ready"|"unavailable", "executor_detail"?: "...", "images":[{"reference":"tag", "architecture":"arm64"|"amd64", "digest":"sha256:..."}]}`
   → `204` (nothing queued, or the service is stopping: see "Stopping the
   service" in `docs/ci.md`) or
   `{"attempt_id","purpose","lease","expires_at","lease_secs","repo","sha","attempt","verified_sha":"<latest verified sha>"|null,"job":{"verified_sha":false,"name","image","commands","paths","timeout_secs"|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_scope":"protected"|"branch:<name>"|"probe","network":false,"queued_secs","reuse"}`.
@@ -1131,7 +1131,22 @@ attempts are not interrupted by changes in class.
   The runner compares the current image digest before fetching source. A match
   succeeds without a VM. Protected cached jobs set `refresh_cache: true` at
   finish if the save is absent, unreadable, or older than 24 hours. The executor
-  state appears in diagnostics; an unavailable executor still claims and concludes `startup_failure`.
+  state appears in diagnostics. Runners advertise only locally cached images for their CPU;
+  the service selects the highest-priority compatible attempt, leaving incompatible work queued.
+  Hub-managed tags must match the currently published digest for that CPU. An unavailable
+  executor advertises an empty inventory. If no live, ready runner has the image for
+  `runner_absent_secs`, queued work ends with `startup_failure` naming the missing tag and CPU.
+- `GET /images?architecture=arm64|amd64` → an array of
+  `{"id":"<archive SHA-256>","images":[{"reference","architecture","digest"}]}`.
+  Only archives for that CPU are returned. `digest` is the image configuration digest,
+  preserved by `docker save` and `msb load`.
+- `GET /images/{id}` → the immutable tar archive. Both image endpoints require a
+  runner token. Runners compare local configuration digests before downloading and
+  load changed archives under the image-cache lock before advertising them.
+  Synchronization runs independently of claims: downloads do not hold that lock,
+  and one failed archive does not prevent other archives or cached jobs.
+  Runners report synchronization progress/errors in `executor_detail`, including
+  while all slots are occupied (`accept:false` updates the report without leasing work).
 - `GET /attempts/{id}/source` → `application/x-git-bundle`: a v2 Git bundle of
   the commit as `HEAD`, with its history and the tags (`refs/tags/*`) whose
   commits it reaches.
@@ -1389,7 +1404,11 @@ runner's (`[ci.microsandbox] home`).
   is refused). Pulling a tag again brings its new version, if any.
 - `POST /api/v1/admin/ci/images/load` (owner) `{"path"}` → `202` likewise. The
   path is absolute and names a regular file (a `docker save` / OCI archive) on
-  the service's machine; `400 invalid` otherwise.
+  the service's machine; `400 invalid` otherwise. The Hub copies the archive into
+  `<data>/ci/images`, indexing tags by CPU and configuration digest. Archives must
+  contain one Linux image configuration for one CPU (arm64 or amd64), with one or
+  more tags. Foreign-CPU archives are stored
+  for distribution and never loaded into the Hub runner cache; native ones are also loaded.
 - The mode or limits already in effect change nothing (the runner goes on).
   A configuration file that cannot be updated (not TOML, or no longer a
   configuration once changed) is `409 conflict` and stays as it is.

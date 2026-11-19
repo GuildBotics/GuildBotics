@@ -148,8 +148,23 @@ pub struct ImageLock {
     _file: Option<std::fs::File>,
 }
 
+pub struct Inventory {
+    pub images: Vec<crate::ci::images::Image>,
+    pub detail: Option<String>,
+}
+
 pub trait Executor: Send + Sync {
     fn name(&self) -> &'static str;
+    fn inventory(
+        &self,
+        api: &super::Api,
+    ) -> impl Future<Output = Result<Inventory, super::ApiError>> + Send;
+    fn synchronize(
+        &self,
+        _api: &super::Api,
+    ) -> impl Future<Output = Result<(), super::ApiError>> + Send {
+        async { Ok(()) }
+    }
     /// Whether runtime resolution failed and should be retried before a claim.
     /// Health failures of an accepted runtime keep its existing cache.
     fn needs_resolution(&self) -> bool {
@@ -324,10 +339,25 @@ impl Microsandbox {
 
     /// The cached image `reference`, or `None` when the cache has none.
     pub async fn inspect(&self, reference: &str) -> Result<Option<ImageInfo>, String> {
+        self.inspect_status(reference, false).await
+    }
+
+    async fn inspect_status(
+        &self,
+        reference: &str,
+        listed: bool,
+    ) -> Result<Option<ImageInfo>, String> {
         let out = self
             .output(&["image", "inspect", "--format", "json", reference])
             .await?;
         if !out.status.success() {
+            if listed {
+                return Err(format!(
+                    "msb image inspect failed: {}{}",
+                    tail(&out.stdout, 1024),
+                    tail(&out.stderr, 1024)
+                ));
+            }
             return Ok(None);
         }
         serde_json::from_slice::<Inspected>(&out.stdout)
@@ -497,6 +527,19 @@ impl Microsandbox {
             "load",
             self.output_within(&["load", "--quiet", "--input", &path], IMAGE_TRANSFER)
                 .await?,
+        )
+    }
+
+    /// Load one configuration under exactly the requested tag, without moving its other aliases.
+    pub async fn load_as(&self, archive: &Path, reference: &str) -> Result<(), String> {
+        let path = archive.to_string_lossy();
+        self.finish(
+            "load",
+            self.output_within(
+                &["load", "--quiet", "--input", &path, "--tag", reference],
+                IMAGE_TRANSFER,
+            )
+            .await?,
         )
     }
 
@@ -862,6 +905,33 @@ impl Executor for Microsandbox {
 
     fn name(&self) -> &'static str {
         "microsandbox"
+    }
+
+    async fn synchronize(&self, api: &super::Api) -> Result<(), super::ApiError> {
+        api.sync_images(self).await
+    }
+    async fn inventory(&self, _api: &super::Api) -> Result<Inventory, super::ApiError> {
+        let mut images = Vec::new();
+        let mut failures = Vec::new();
+        for item in self.listed().await.map_err(super::ApiError::Other)? {
+            if pinned(&item.reference) {
+                continue;
+            }
+            match self.inspect_status(&item.reference, true).await {
+                Ok(Some(i)) => images.push(crate::ci::images::Image {
+                    reference: i.reference,
+                    digest: i.config_digest,
+                    architecture: crate::ci::images::architecture().into(),
+                }),
+                Ok(None) => {}
+                Err(e) => failures.push(format!("{}: {e}", item.reference)),
+            }
+        }
+        Ok(Inventory {
+            images,
+            detail: (!failures.is_empty())
+                .then(|| format!("Cannot inspect cached images: {}", failures.join("; "))),
+        })
     }
 
     async fn health(&self) -> Health {

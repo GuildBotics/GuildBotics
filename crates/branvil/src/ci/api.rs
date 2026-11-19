@@ -378,6 +378,10 @@ fn lease_of(headers: &HeaderMap) -> AppResult<String> {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct ClaimInput {
+    architecture: String,
+    #[serde(default = "accept_work")]
+    accept: bool,
+    images: Vec<super::images::Image>,
     #[serde(default)]
     executor: String,
     /// `ready` or `unavailable`.
@@ -406,20 +410,29 @@ pub struct ClaimView {
     pub reuse: Option<queue::Reuse>,
 }
 
+fn accept_work() -> bool {
+    true
+}
+
 async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) -> R {
     require_runner(&app, &c)?;
-    let input: ClaimInput = json(&body)?;
-    app.ci.saw_runner(
+    let mut input: ClaimInput = json(&body)?;
+    if input.executor_state.as_deref() == Some("unavailable") {
+        input.images.clear();
+    }
+    let images =
+        super::images::current(&app.layout.root, input.images).map_err(AppError::internal)?;
+    app.ci.report_runner(
         c.name(),
-        Some((
-            input.executor.clone(),
-            input
-                .executor_state
-                .clone()
-                .unwrap_or_else(|| "ready".into()),
-            input.executor_detail.clone(),
-        )),
+        &input.executor,
+        input.executor_state.as_deref().unwrap_or("ready"),
+        input.executor_detail,
+        &input.architecture,
+        images.clone(),
     );
+    if !input.accept {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
     let (runner, lease_secs, now) = (
         c.name().to_string(),
         app.ci.config().lease_secs,
@@ -435,7 +448,7 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
             if ci.stopping() {
                 return Ok(None);
             }
-            queue::claim(w, &runner, lease_secs, &at)
+            queue::claim_images(w, &runner, lease_secs, &at, &images)
         })
         .await?;
     let Some(cl) = claimed else {
@@ -460,6 +473,35 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
             .map_or(0, |t| (now - t.to_utc()).num_seconds().max(0) as u64),
         reuse: cl.reuse,
     }))
+}
+
+async fn images(State(app): State<Shared>, c: Caller, Q(q): Q) -> R {
+    require_runner(&app, &c)?;
+    let archives = super::images::list(&app.layout.root).map_err(AppError::internal)?;
+    Ok(ok(archives
+        .into_iter()
+        .filter(|a| {
+            a.images
+                .iter()
+                .any(|i| Some(&i.architecture) == q.get("architecture"))
+        })
+        .collect::<Vec<_>>()))
+}
+async fn image_archive(State(app): State<Shared>, c: Caller, Path(id): Path<String>) -> R {
+    require_runner(&app, &c)?;
+    let path =
+        super::images::path(&app.layout.root, &id).map_err(|e| AppError::invalid(e.to_string()))?;
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|_| AppError::not_found("CI archive not found"))?;
+    let stream = futures_util::stream::try_unfold(file, |mut file| async move {
+        use tokio::io::AsyncReadExt;
+        let mut bytes = vec![0; 65536];
+        let n = file.read(&mut bytes).await?;
+        bytes.truncate(n);
+        Ok::<_, std::io::Error>((n != 0).then_some((bytes, file)))
+    });
+    Ok(Response::new(Body::from_stream(stream)))
 }
 
 async fn leased(app: &Shared, id: &str, lease: &str) -> AppResult<Attempt> {
@@ -781,6 +823,8 @@ loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
     ("/repos/{repo}/jobs/{id}/retry", (post, job_retry, MemberSession)),
     ("/repos/{repo}/jobs/{id}/cancel", (post, job_cancel, MemberSession)),
     ("/repos/{repo}/commits/{sha}/artifacts/{name}", (get, artifact_get, MemberSession)),
+    ("/runner/images", (get, images, MemberSession)),
+    ("/runner/images/{id}", (get, image_archive, MemberSession)),
     ("/runner/claim", (post, claim, MemberSession)),
     ("/runner/attempts/{id}/source", (get, source, MemberSession)),
     ("/runner/attempts/{id}/heartbeat", (post, heartbeat, MemberSession)),

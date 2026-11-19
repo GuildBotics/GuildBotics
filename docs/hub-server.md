@@ -425,3 +425,15 @@ GuildBotics と組み込み Branvil は、すべてのページの上部に Hub 
 今の版は GuildBotics のサービス画面に常時表示し、帯には今の版と受け取った更新先の版を表示します。SHA の先頭 8 桁と題名を示し、ワークスペースのコードホストがリモートを解決できればコミットへのリンクにします。開発用起動などビルド情報がない場合は今の版を表示しません。Branvil 単体では従来の CI 停止の案内を使います。
 
 更新スクリプトは現行ビルドの `server stop` に新しい引数を渡さず、`GUILDBOTICS_HUB_STOP_REASON` をシェルから継承しない形で設定します（`update` / `restart`、指定しなければ `stop`）。`server hub-phase` の準備・解除の通知は表示用で、古いビルドが受け付けない場合もログに残して更新を続けます。最初の更新で帯が出なくても、対応版の次の更新から表示します。
+
+## CPU 別の CI イメージへの更新（手作業の版 8）
+
+Hub とランナーを新しい版に更新してから、Hub のリポジトリで
+`scripts/build-agent-environment-image.sh` を実行し直す。
+arm64 と amd64 のアーカイブが Hub のデータに保存され、各ランナーが
+自分の CPU のイメージを取得する。既存のアーカイブを使う場合は、それぞれを
+`guildbotics environment image load-ci <archive>` で登録する。
+Hub の既存キャッシュだけでは、別 CPU のアーカイブは配布されない。
+
+ランナーは取得・読み込みのあと、保有するタグ・CPU・digest を通知する。
+レジストリのイメージは各ランナーで `guildbotics runner pull <tag>` を実行する。
