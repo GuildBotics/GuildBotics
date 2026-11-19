@@ -57,8 +57,9 @@ fn sandboxes(runner: &str) -> Vec<String> {
         .collect()
 }
 
-/// The `/tmp` volumes of Branvil's MSB_HOME that the runner `runner` named
-/// its own (`bv-tmp-<runner>-<attempt id>`).
+/// The `/tmp` and `/work` volumes of Branvil's MSB_HOME that the runner
+/// `runner` named its own (`bv-tmp-<runner>-<attempt id>`,
+/// `bv-work-<runner>-<attempt id>`).
 fn volumes(runner: &str) -> Vec<String> {
     let out = Command::new(msb())
         .args(["volume", "list", "--format", "json"])
@@ -70,7 +71,10 @@ fn volumes(runner: &str) -> Vec<String> {
         .unwrap()
         .iter()
         .filter_map(|s| s["name"].as_str())
-        .filter(|n| n.starts_with(&format!("bv-tmp-{runner}-")))
+        .filter(|n| {
+            n.starts_with(&format!("bv-tmp-{runner}-"))
+                || n.starts_with(&format!("bv-work-{runner}-"))
+        })
         .map(str::to_string)
         .collect()
 }
@@ -156,6 +160,7 @@ commands = [
   "echo secret > /tmp/s && chmod 0 /tmp/s && ! cat /tmp/s",
   "echo secret > s0 && chmod 0 s0 && ! cat s0",
   "grep -q '^/dev/[a-z]* /tmp ext4 ' /proc/mounts",
+  "grep -q '^/dev/[a-z]* /work ext4 ' /proc/mounts",
   "touch \"$HOME/x\"",
   "mkdir -p .ci/cache && echo $BRANVIL_ATTEMPT >> .ci/cache/attempts && echo cached $(cat .ci/cache/attempts)",
 ]

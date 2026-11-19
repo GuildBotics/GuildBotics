@@ -161,11 +161,18 @@ own [unit `auth::tests::the_host_identifies_the_owner_and_member_tokens_their_me
   `att_<ULID>` before they become file names); uploads must be zip archives
   within the size limit [`tests/ci.rs`]. The runner checks the source out with
   Git (which writes nothing outside the work tree or through a link; it runs
-  with an empty global configuration, and never in the work directory once
-  the job has had it), checks that nothing below its work directory is a
-  link before the VM gets it, collects
-  artifacts without following links, and never writes through a link when it
-  restores a cache [unit `artifacts_skip_links_and_stay_inside_the_work_directory`,
+  with an empty global configuration, and never in the work directory once a
+  VM has had what it holds), checks that nothing below its work directory is
+  a link before a VM gets a directory of it, and hands the job's `/work` (a
+  disk of its own) over as archives through a directory the job's VM never
+  has. The VM that collects `/work` packs no path through a link; the runner
+  unpacks only the artifacts' archive, keeping nothing outside the directory,
+  no link it cannot make, and none of the job's modes, collects artifacts
+  without following links, and keeps the cache as archives it never unpacks
+  [unit `the_pack_script_packs_existing_paths_through_no_link`,
+  `returned_archives_unpack_only_inside_their_directory`,
+  `artifacts_skip_links_and_stay_inside_the_work_directory`,
+  `work_is_collected_after_the_jobs_vm_ended`,
   `cache_round_trip_and_eviction`]. Cache eviction removes superseded generations
   before another repository or job's current entry, then applies LRU within
   each group [unit

@@ -594,6 +594,9 @@ impl Runner {
         let mut current = executor();
         current.sweep().await;
         let _ = std::fs::remove_dir_all(self.work_dir.join("jobs"));
+        if let Err(e) = self.cache.remove_unpacked() {
+            tracing::warn!("removing cache entries of an earlier form failed: {e}");
+        }
         let mut running = tokio::task::JoinSet::new();
         let mut backoff = 1;
         'claiming: loop {
@@ -905,12 +908,15 @@ impl Runner {
             };
             let rel = format!("jobs/{}/work", c.attempt_id);
             let log_rel = format!("jobs/{}/log", c.attempt_id);
+            let io_rel = format!("jobs/{}/io", c.attempt_id);
             let dir = root.join("jobs").join(&c.attempt_id);
             let work = root.join(&rel);
             let log_dir = root.join(&log_rel);
+            let io = root.join(&io_rel);
             let _ = std::fs::remove_dir_all(&dir);
-            if let Err(e) =
-                std::fs::create_dir_all(&work).and_then(|_| std::fs::create_dir(&log_dir))
+            if let Err(e) = std::fs::create_dir_all(&work)
+                .and_then(|_| std::fs::create_dir(&log_dir))
+                .and_then(|_| std::fs::create_dir(&io))
             {
                 return (
                     "startup_failure",
@@ -927,8 +933,13 @@ impl Runner {
                     ))
                     .await;
                     let checking_out = Instant::now();
-                    let checked_out =
-                        workspace::checkout(&bundle, &work, &dir.join("gitconfig")).await;
+                    let checked_out = workspace::checkout(
+                        &bundle,
+                        &work,
+                        &dir.join("gitconfig"),
+                        &io.join(executor::CHECKOUT),
+                    )
+                    .await;
                     let _ = std::fs::remove_file(&bundle);
                     if let Err(e) = checked_out {
                         return (
@@ -952,6 +963,7 @@ impl Runner {
             // Re-check right before the VM gets the directories.
             if let Err(e) = workspace::no_links_below(&root, &rel)
                 .and_then(|_| workspace::no_links_below(&root, &log_rel))
+                .and_then(|_| workspace::no_links_below(&root, &io_rel))
             {
                 return (
                     "startup_failure",
@@ -962,11 +974,11 @@ impl Runner {
                 .cache
                 .as_ref()
                 .map(|cache| workspace::cache_key(&c.repo, job, &digest, cache, &work));
-            if let (Some(cache), Some(key)) = (&job.cache, &key) {
+            if let Some(key) = &key {
                 let restoring = Instant::now();
-                let (store, def, into, key) =
-                    (self.cache.clone(), cache.clone(), work.clone(), key.clone());
-                match blocking(move || store.restore(&key, &def, &into)).await {
+                let (store, into, key) =
+                    (self.cache.clone(), io.join(executor::CACHE_IN), key.clone());
+                match blocking(move || store.restore(&key, &into)).await {
                     Ok(Some(bytes)) => {
                         say(format!(
                             "cache restored in {} ({bytes} bytes)",
@@ -990,6 +1002,8 @@ impl Runner {
                         memory_mib,
                         work_quota_mib: limits.work_quota_mib,
                         timeout_secs,
+                        io: &io,
+                        save_cache: c.cache_scope == "protected",
                         work: &work,
                         log_dir: &log_dir,
                         network: c.network,
@@ -1063,17 +1077,20 @@ impl Runner {
             if conclusion == "success" && job.cache.is_some() && c.cache_scope != "protected" {
                 say("cache not saved (only a protected branch's run saves it)".into()).await;
             } else if conclusion == "success"
-                && let (Some(cache), Some(key)) = (&job.cache, &key)
+                && let Some(key) = &key
             {
                 let saving = Instant::now();
-                let (store, def, from, key) =
-                    (self.cache.clone(), cache.clone(), work.clone(), key.clone());
+                let (store, from, key) = (
+                    self.cache.clone(),
+                    io.join(executor::CACHE_OUT),
+                    key.clone(),
+                );
                 let max = limits.cache_max_mib << 20;
                 let owner = workspace::CacheOwner {
                     repo: c.repo.clone(),
                     job: job.name.clone(),
                 };
-                match blocking(move || store.save(&key, &owner, &def, &from, max)).await {
+                match blocking(move || store.save(&key, &owner, &from, max)).await {
                     Ok(bytes) => {
                         say(format!("cache saved in {} ({bytes} bytes)", ms(saving))).await
                     }
@@ -1323,6 +1340,10 @@ mod tests {
                     }
                     _ => return Outcome::Exited(127),
                 }
+            }
+            // What the VM that collects `/work` packs of the cached paths.
+            if job.save_cache && job.job.cache.is_some() {
+                std::fs::write(job.io.join(executor::CACHE_OUT), b"cached").unwrap();
             }
             Outcome::Exited(0)
         }
@@ -1954,11 +1975,9 @@ esac
                     - Duration::from_secs(workspace::CACHE_REFRESH_SECS + 60),
             )
             .unwrap();
-        let restore = s.dir.path().join("restored");
-        std::fs::create_dir(&restore).unwrap();
         runner
             .cache
-            .restore(&key, original.job.cache.as_ref().unwrap(), &restore)
+            .restore(&key, &s.dir.path().join("restored.tar"))
             .unwrap();
         let sha = empty_main(&s, "old save despite fresh restore").await;
         runner.once(&fake).await.unwrap();

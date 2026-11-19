@@ -1,7 +1,8 @@
-//! The per-job work directory on the runner's machine: checking out the
-//! source, collecting artifacts, and the dependency cache. Everything inside
-//! the work directory was written by the job, so nothing here follows a
-//! symbolic link: links are skipped (artifacts) or copied as links (cache).
+//! The per-job directories on the runner's machine: checking out the
+//! source, collecting artifacts, and the dependency cache. What comes back
+//! from a VM was written by the job, so nothing here follows a symbolic link:
+//! links are skipped (artifacts), and the cache is an archive the host never
+//! unpacks.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -14,26 +15,36 @@ use crate::ci::pipeline::{ArtifactDef, CacheDef, JobDef, check_relative};
 
 use super::zip::ZipWriter;
 
+/// Settings the VM's Git needs whatever the runner's machine is: a clone
+/// records what Git found there (no exec bits or links on Windows, a
+/// case-insensitive or normalizing file system on macOS), while the VM's
+/// `/work` has all of them. Inside the VM the files also have another owner,
+/// other inodes, and other change times than the index records: comparing
+/// only modification times, sizes, and modes keeps the index clean there
+/// (`git diff-index --quiet HEAD`).
+const VM_GIT_CONFIG: &str = "[core]\n\tfilemode = true\n\tsymlinks = true\n\tignorecase = false\n\tprecomposeunicode = false\n\tcheckStat = minimal\n\ttrustCtime = false\n";
+
 /// Checks the commit out of its Git bundle (`GET …/source`) into the empty
-/// directory `work`: a clone detached at the bundle's `HEAD`, with its
-/// history and tags, and then without the remote that names the bundle. Git
-/// runs with `global_config` (written empty) and writes no reflog, so nothing
-/// of this machine (a path, its user) reaches the job. Git never runs in the
-/// work directory once the job has had it.
-pub async fn checkout(bundle: &Path, work: &Path, global_config: &Path) -> io::Result<()> {
+/// directory `work`, a clone detached at the bundle's `HEAD` with its history
+/// and tags and without the remote that names the bundle, and packs it into
+/// the archive `into` for the VM ([`pack_checkout`]). Git runs with
+/// `global_config` (written empty) and writes no reflog, so nothing of this
+/// machine (a path, its user) reaches the job. Git never runs in the work
+/// directory once the job has had it. Returns the archive's size.
+pub async fn checkout(
+    bundle: &Path,
+    work: &Path,
+    global_config: &Path,
+    into: &Path,
+) -> io::Result<u64> {
     fs::write(global_config, "")?;
     let mut clone = crate::git::base_command(global_config);
     clone
-        // Inside the VM the files have another owner and other inodes than
-        // the index records: comparing only times, sizes, and modes keeps
-        // the index clean there (`git diff-index --quiet HEAD`).
         .args([
             "-c",
             "core.logAllRefUpdates=false",
             "clone",
             "--quiet",
-            "-c",
-            "core.checkStat=minimal",
             "--",
         ])
         .arg(bundle)
@@ -43,9 +54,12 @@ pub async fn checkout(bundle: &Path, work: &Path, global_config: &Path) -> io::R
         .arg("-C")
         .arg(work)
         .args(["remote", "remove", "origin"]);
-    for mut git in [clone, unlink] {
+    let mut list = crate::git::base_command(global_config);
+    list.arg("-C").arg(work).args(["ls-files", "-s", "-z"]);
+    let mut index = Vec::new();
+    for mut git in [clone, unlink, list] {
         let out = git
-            .stdout(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output()
             .await
@@ -56,8 +70,132 @@ pub async fn checkout(bundle: &Path, work: &Path, global_config: &Path) -> io::R
                 String::from_utf8_lossy(&out.stderr).trim()
             )));
         }
+        index = out.stdout;
     }
-    Ok(())
+    // Later keys win: the settings the clone recorded are overridden.
+    fs::OpenOptions::new()
+        .append(true)
+        .open(work.join(".git/config"))
+        .and_then(|mut f| io::Write::write_all(&mut f, VM_GIT_CONFIG.as_bytes()))?;
+    let (work, into) = (work.to_path_buf(), into.to_path_buf());
+    tokio::task::spawn_blocking(move || pack_checkout(&work, &index, &into))
+        .await
+        .map_err(io::Error::other)?
+}
+
+/// Packs the checkout in `work` into one tar archive: each file Git tracks
+/// (`index`, the output of `git ls-files -s -z`) with the mode and the kind
+/// the index records, rather than what the machine's file system can tell,
+/// and `.git` as it is. Returns the archive's size.
+fn pack_checkout(work: &Path, index: &[u8], into: &Path) -> io::Result<u64> {
+    let mut tar = tar::Builder::new(io::BufWriter::new(fs::File::create(into)?));
+    tar.follow_symlinks(false);
+    for record in index.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+        let record = std::str::from_utf8(record)
+            .map_err(|_| io::Error::other("a tracked path is not valid UTF-8"))?;
+        let (meta, path) = record
+            .split_once('\t')
+            .ok_or_else(|| io::Error::other(format!("unexpected index entry {record:?}")))?;
+        let file = work.join(path);
+        let stat = fs::symlink_metadata(&file)?;
+        let mut header = tar::Header::new_gnu();
+        header.set_mtime(
+            stat.modified()?
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+        );
+        match meta.split(' ').next() {
+            // A link the machine could not make is a file holding its target.
+            // The target goes as it is (the blob's bytes): no normalizing.
+            Some("120000") => {
+                let target = if stat.file_type().is_symlink() {
+                    fs::read_link(&file)?.into_os_string().into_encoded_bytes()
+                } else {
+                    fs::read(&file)?
+                };
+                let short = header.as_old().linkname.len();
+                if target.len() >= short {
+                    let mut long = tar::Header::new_gnu();
+                    long.as_old_mut().name[..13].copy_from_slice(b"././@LongLink");
+                    long.set_entry_type(tar::EntryType::GNULongLink);
+                    long.set_mode(0o644);
+                    long.set_size(target.len() as u64 + 1);
+                    long.set_cksum();
+                    tar.append(&long, [&target[..], b"\0"].concat().as_slice())?;
+                }
+                header.set_link_name_literal(&target[..target.len().min(short - 1)])?;
+                header.set_entry_type(tar::EntryType::Symlink);
+                header.set_mode(0o777);
+                header.set_size(0);
+                tar.append_data(&mut header, path, io::empty())?;
+            }
+            // A submodule's commit: an empty directory, as a clone leaves it.
+            Some("160000") => {
+                header.set_entry_type(tar::EntryType::Directory);
+                header.set_mode(0o755);
+                header.set_size(0);
+                tar.append_data(&mut header, path, io::empty())?;
+            }
+            Some(mode) => {
+                header.set_entry_type(tar::EntryType::Regular);
+                header.set_mode(if mode == "100755" { 0o755 } else { 0o644 });
+                header.set_size(stat.len());
+                tar.append_data(&mut header, path, fs::File::open(&file)?)?;
+            }
+            None => {
+                return Err(io::Error::other(format!(
+                    "unexpected index entry {record:?}"
+                )));
+            }
+        }
+    }
+    tar.append_dir_all(".git", work.join(".git"))?;
+    tar.into_inner()?.into_inner().map_err(|e| e.into_error())?;
+    Ok(fs::metadata(into)?.len())
+}
+
+/// Unpacks the archive of what a VM returned (`tar`, written by the job's
+/// image) into the empty directory `into`: directories, regular files, and
+/// hard links between them, each of which stays inside `into`; symbolic
+/// links only where the machine makes them (they are reported where it does
+/// not), and nothing else. The job's modes are not kept (an artifact is
+/// zipped as a readable file): directories get 0755 and files 0644, so that
+/// nothing stops their unpacking, reading, or removal. Returns the notes for
+/// the log.
+pub fn unpack_returned(tar: &Path, into: &Path) -> io::Result<Vec<String>> {
+    use tar::EntryType as T;
+    let mut notes = Vec::new();
+    let mut archive = tar::Archive::new(io::BufReader::new(fs::File::open(tar)?));
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let kind = entry.header().entry_type();
+        let name = entry.path()?.to_string_lossy().into_owned();
+        match kind {
+            T::Directory | T::Regular | T::Continuous | T::GNUSparse | T::Link => {}
+            T::Symlink if cfg!(unix) => {}
+            T::Symlink => {
+                notes.push(format!("{name} is a symbolic link; skipped"));
+                continue;
+            }
+            _ => continue,
+        }
+        match entry.unpack_in(into) {
+            Ok(true) => {
+                #[cfg(unix)]
+                if matches!(
+                    kind,
+                    T::Directory | T::Regular | T::Continuous | T::GNUSparse
+                ) {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = if kind == T::Directory { 0o755 } else { 0o644 };
+                    fs::set_permissions(into.join(&name), fs::Permissions::from_mode(mode))?;
+                }
+            }
+            Ok(false) => notes.push(format!("{name} is outside the work directory; skipped")),
+            Err(e) => notes.push(format!("{name}: {e}; skipped")),
+        }
+    }
+    Ok(notes)
 }
 
 /// Fails when any component of `path` below `root` is a symbolic link or is
@@ -205,41 +343,6 @@ pub fn cache_key(
     crate::util::hex(&crate::util::sha256(&h))
 }
 
-/// Copies a tree without following symbolic links (links are recreated as
-/// links on Unix and skipped elsewhere). Returns the bytes copied.
-pub fn copy_tree(from: &Path, to: &Path) -> io::Result<u64> {
-    let m = fs::symlink_metadata(from)?;
-    // Never write through a link at the destination (the work directory's
-    // content comes from the commit and the job): replace the link itself.
-    if fs::symlink_metadata(to).is_ok_and(|d| d.file_type().is_symlink()) {
-        fs::remove_file(to)?;
-    }
-    if m.file_type().is_symlink() {
-        #[cfg(unix)]
-        {
-            let target = fs::read_link(from)?;
-            let _ = fs::remove_file(to);
-            std::os::unix::fs::symlink(target, to)?;
-        }
-        return Ok(0);
-    }
-    if m.is_dir() {
-        fs::create_dir_all(to)?;
-        let mut total = 0;
-        for e in fs::read_dir(from)?.flatten() {
-            total += copy_tree(&e.path(), &to.join(e.file_name()))?;
-        }
-        Ok(total)
-    } else if m.is_file() {
-        if let Some(parent) = to.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(from, to)
-    } else {
-        Ok(0)
-    }
-}
-
 fn tree_size(path: &Path) -> u64 {
     let Ok(m) = fs::symlink_metadata(path) else {
         return 0;
@@ -256,6 +359,8 @@ fn tree_size(path: &Path) -> u64 {
 const USED: &str = ".branvil-used";
 const SAVED: &str = ".branvil-saved";
 const OWNER: &str = ".branvil-owner";
+/// The archive an entry holds: what the VM packed of the cached paths.
+const ARCHIVE: &str = "cache.tar";
 pub const CACHE_REFRESH_SECS: u64 = 24 * 60 * 60;
 
 /// The repository and job whose cache generations share an eviction priority.
@@ -269,31 +374,12 @@ fn record_use(entry: &Path, used: SystemTime) -> io::Result<()> {
     fs::File::create(entry.join(USED))?.set_modified(used)
 }
 
-/// Creates the missing parent directories of `rel` below `root`, refusing a
-/// symbolic link anywhere on the way.
-fn make_parents(root: &Path, rel: &str) -> io::Result<()> {
-    let mut p = root.to_path_buf();
-    let parts: Vec<&str> = rel.split('/').collect();
-    for c in &parts[..parts.len().saturating_sub(1)] {
-        p.push(c);
-        match fs::symlink_metadata(&p) {
-            Ok(m) if m.file_type().is_symlink() => {
-                return Err(io::Error::other(format!(
-                    "{rel} goes through a symbolic link"
-                )));
-            }
-            Ok(_) => {}
-            Err(_) => fs::create_dir(&p)?,
-        }
-    }
-    Ok(())
-}
-
-/// The runner's dependency cache. The jobs a runner runs at once share it:
-/// a save replaces its entry and evicts others only while no restore copies
-/// from the cache, so a restore copies an entry whole, the old one or the new
-/// one. One runner uses a work directory (`runner.lock`), so a lock of the
-/// process is enough.
+/// The runner's dependency cache: per key, the archive a VM packed of the
+/// cached paths, which the host never unpacks. The jobs a runner runs at once
+/// share it: a save replaces its entry and evicts others only while no
+/// restore reads from the cache, so a restore gets an entry whole, the old
+/// one or the new one. One runner uses a work directory (`runner.lock`), so a
+/// lock of the process is enough.
 pub struct Cache {
     root: PathBuf,
     lock: RwLock<()>,
@@ -317,63 +403,76 @@ impl Cache {
         }
     }
 
-    /// Restores the entry of `key` into the work directory. Returns the
-    /// bytes copied, or none when there is no such entry.
-    pub fn restore(&self, key: &str, cache: &CacheDef, work: &Path) -> io::Result<Option<u64>> {
-        let _reading = self.lock.read().unwrap_or_else(|e| e.into_inner());
-        let entry = self.root.join(key);
-        if !entry.is_dir() {
-            return Ok(None);
-        }
-        let mut total = 0;
-        for p in &cache.paths {
-            let src = entry.join("paths").join(p.trim_end_matches('/'));
-            if fs::symlink_metadata(&src).is_ok() {
-                let rel = p.trim_end_matches('/');
-                make_parents(work, rel)?;
-                total += copy_tree(&src, &work.join(rel))?;
+    /// Removes the entries of an earlier form (a tree of the cached paths
+    /// rather than an archive), which no restore reads.
+    pub fn remove_unpacked(&self) -> io::Result<()> {
+        let _writing = self.lock.write().unwrap_or_else(|e| e.into_inner());
+        let Ok(entries) = fs::read_dir(&self.root) else {
+            return Ok(());
+        };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.is_dir() && !path.join(ARCHIVE).is_file() {
+                fs::remove_dir_all(&path)?;
             }
         }
-        record_use(&entry, SystemTime::now())?;
-        Ok(Some(total))
+        Ok(())
     }
 
-    /// Saves the cached paths of a successful job under `key`, then removes
-    /// superseded generations before current entries beyond `max_bytes`.
+    /// Puts the archive of `key`'s entry at `into`, for the VM to unpack:
+    /// a link to it on Unix where the file system makes one (a save replaces
+    /// an entry rather than changing it), else a copy. Returns its size, or
+    /// none when there is no such entry.
+    pub fn restore(&self, key: &str, into: &Path) -> io::Result<Option<u64>> {
+        let _reading = self.lock.read().unwrap_or_else(|e| e.into_inner());
+        let entry = self.root.join(key);
+        let archive = entry.join(ARCHIVE);
+        if !archive.is_file() {
+            return Ok(None);
+        }
+        // Windows cannot remove a file another process holds open, as a
+        // save or an eviction would while the VM reads its link.
+        if !cfg!(unix) || fs::hard_link(&archive, into).is_err() {
+            fs::copy(&archive, into)?;
+        }
+        record_use(&entry, SystemTime::now())?;
+        Ok(Some(fs::metadata(into)?.len()))
+    }
+
+    /// Saves `archive`, the cached paths of a successful job as its VM packed
+    /// them, as the entry of `key` (moving the file), then removes superseded
+    /// generations before current entries beyond `max_bytes`. Returns its
+    /// size.
     pub fn save(
         &self,
         key: &str,
         owner: &CacheOwner,
-        cache: &CacheDef,
-        work: &Path,
+        archive: &Path,
         max_bytes: u64,
     ) -> io::Result<u64> {
-        self.save_with_clock(key, owner, cache, work, max_bytes, SystemTime::now)
+        self.save_with_clock(key, owner, archive, max_bytes, SystemTime::now)
     }
 
     fn save_with_clock(
         &self,
         key: &str,
         owner: &CacheOwner,
-        cache: &CacheDef,
-        work: &Path,
+        archive: &Path,
         max_bytes: u64,
         now: impl FnOnce() -> SystemTime,
     ) -> io::Result<u64> {
         fs::create_dir_all(&self.root)?;
-        // Copied aside without the lock (the copy is the long part), then
-        // put in place under it.
+        // Put aside without the lock (a copy is the long part), then in
+        // place under it.
         let tmp = self
             .root
             .join(format!(".{key}.{}", crate::util::random_secret::<6>()));
         let saved = (|| {
-            let mut total = 0;
-            for p in &cache.paths {
-                if let Ok(src) = no_links_below(work, p) {
-                    total += copy_tree(&src, &tmp.join("paths").join(p.trim_end_matches('/')))?;
-                }
-            }
             fs::create_dir_all(&tmp)?;
+            if fs::rename(archive, tmp.join(ARCHIVE)).is_err() {
+                fs::copy(archive, tmp.join(ARCHIVE))?;
+            }
+            let total = fs::metadata(tmp.join(ARCHIVE))?.len();
             fs::write(tmp.join(OWNER), serde_json::to_vec(owner)?)?;
             let saved_at = now();
             record_use(&tmp, saved_at)?;
@@ -483,30 +582,29 @@ mod tests {
             .unwrap();
     }
 
+    /// An archive a VM packed, holding `content`, ready for a save to move.
+    fn packed(dir: &Path, content: &[u8]) -> PathBuf {
+        let path = dir.join(format!("packed-{}", crate::util::random_secret::<6>()));
+        fs::write(&path, content).unwrap();
+        path
+    }
+
     #[test]
     fn cache_save_age_tracks_complete_saves_and_survives_restore_and_eviction() {
         let dir = tempfile::tempdir().unwrap();
-        let cache = Cache::new(dir.path().join("cache"));
-        let work = dir.path().join("work");
-        fs::create_dir_all(work.join("target")).unwrap();
-        fs::write(work.join("target/file"), "content").unwrap();
-        let def = CacheDef {
-            paths: vec!["target".into()],
-            key_files: vec![],
-        };
+        let d = dir.path();
+        let cache = Cache::new(d.join("cache"));
         let saved = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
         assert_eq!(cache.saved_age("k", saved).unwrap(), None);
         cache
-            .save_with_clock("k", &owner("r", "j"), &def, &work, 1 << 20, || saved)
+            .save_with_clock("k", &owner("r", "j"), &packed(d, b"x"), 1 << 20, || saved)
             .unwrap();
         let now = saved + Duration::from_secs(CACHE_REFRESH_SECS);
         assert_eq!(
             cache.saved_age("k", now).unwrap(),
             Some(Duration::from_secs(CACHE_REFRESH_SECS))
         );
-        let restored = dir.path().join("restored");
-        fs::create_dir(&restored).unwrap();
-        cache.restore("k", &def, &restored).unwrap();
+        cache.restore("k", &d.join("restored.tar")).unwrap();
         assert_eq!(
             cache.saved_age("k", now).unwrap(),
             Some(Duration::from_secs(CACHE_REFRESH_SECS))
@@ -522,13 +620,36 @@ mod tests {
         fs::remove_file(cache.root.join("k").join(SAVED)).unwrap();
         assert_eq!(cache.saved_age("k", now).unwrap(), None);
         cache
-            .save_with_clock("k", &owner("r", "j"), &def, &work, 0, || now)
+            .save_with_clock("k", &owner("r", "j"), &packed(d, b"x"), 0, || now)
             .unwrap();
         assert_eq!(
             cache.saved_age("k", now).unwrap(),
             None,
             "evicted entries have no save"
         );
+    }
+
+    /// An entry of the earlier form (a tree of the cached paths) is never
+    /// restored, and the runner removes it.
+    #[test]
+    fn cache_entries_without_an_archive_are_not_restored_and_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let cache = Cache::new(d.join("cache"));
+        cache
+            .save("new", &owner("r", "j"), &packed(d, b"new"), 1 << 20)
+            .unwrap();
+        let old = d.join("cache/old");
+        fs::create_dir_all(old.join("paths/target")).unwrap();
+        fs::write(old.join("paths/target/file"), b"old").unwrap();
+        mark_owner(&old, "r", "old");
+        mark_saved(&old, SystemTime::now());
+        assert_eq!(cache.restore("old", &d.join("old.tar")).unwrap(), None);
+        assert!(!d.join("old.tar").exists());
+        cache.remove_unpacked().unwrap();
+        assert!(!old.exists());
+        assert_eq!(cache.restore("new", &d.join("new.tar")).unwrap(), Some(3));
+        assert_eq!(fs::read(d.join("new.tar")).unwrap(), b"new");
     }
 
     /// The machine's Git attributes never change the checkout. Git finds
@@ -539,10 +660,17 @@ mod tests {
         if std::env::var_os("BRANVIL_TEST_CHILD").is_some() {
             let dir = PathBuf::from(std::env::var_os("BRANVIL_TEST_DIR").unwrap());
             let work = dir.join("work");
-            checkout(&dir.join("b.bundle"), &work, &dir.join("gitconfig"))
-                .await
-                .unwrap();
+            checkout(
+                &dir.join("b.bundle"),
+                &work,
+                &dir.join("gitconfig"),
+                &dir.join("checkout.tar"),
+            )
+            .await
+            .unwrap();
             assert_eq!(fs::read(work.join("f")).unwrap(), b"a\n");
+            let config = fs::read_to_string(work.join(".git/config")).unwrap();
+            assert!(config.ends_with(VM_GIT_CONFIG), "{config}");
             return;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -594,6 +722,135 @@ mod tests {
                 ("HOME", d.join("home").as_os_str()),
             ],
         );
+    }
+
+    /// The archive takes each tracked file's mode and kind from the index,
+    /// not from the machine's file system: a machine without exec bits or
+    /// links (Windows, where a clone leaves a link as its target in a file)
+    /// packs the same archive.
+    #[test]
+    fn the_checkout_archive_takes_modes_and_links_from_the_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("work");
+        fs::create_dir_all(work.join(".git")).unwrap();
+        fs::write(work.join(".git/config"), "[core]\n").unwrap();
+        fs::write(work.join("run.sh"), "#!/bin/sh\n").unwrap();
+        fs::write(work.join("file.txt"), "text").unwrap();
+        fs::write(work.join("link"), "file.txt").unwrap();
+        fs::create_dir(work.join("module")).unwrap();
+        // Targets as the blobs hold them, unnormalized, however long.
+        let long = format!("{}/x", "d".repeat(150));
+        fs::write(work.join("odd"), "a//./b/").unwrap();
+        fs::write(work.join("long"), &long).unwrap();
+        let index = b"100755 0a 0\trun.sh\x00100644 0b 0\tfile.txt\x00120000 0c 0\tlink\x00160000 0d 0\tmodule\x00120000 0e 0\todd\x00120000 0f 0\tlong\x00";
+        let into = dir.path().join("checkout.tar");
+        pack_checkout(&work, index, &into).unwrap();
+        let mut archive = tar::Archive::new(fs::File::open(&into).unwrap());
+        let entries: Vec<_> = archive
+            .entries()
+            .unwrap()
+            .map(|e| {
+                let e = e.unwrap();
+                let h = e.header();
+                let link = e.link_name().unwrap().map(|l| l.display().to_string());
+                (
+                    e.path().unwrap().display().to_string(),
+                    h.entry_type(),
+                    h.mode().unwrap(),
+                    link,
+                )
+            })
+            .collect();
+        use tar::EntryType as T;
+        let link =
+            |name: &str, target: &str| (name.to_string(), T::Symlink, 0o777, Some(target.into()));
+        assert_eq!(
+            entries[..6],
+            [
+                ("run.sh".to_string(), T::Regular, 0o755, None),
+                ("file.txt".to_string(), T::Regular, 0o644, None),
+                link("link", "file.txt"),
+                ("module".to_string(), T::Directory, 0o755, None),
+                link("odd", "a//./b/"),
+                link("long", &long),
+            ]
+        );
+        assert!(
+            entries[6..].iter().any(|e| e.0 == ".git/config"),
+            "{entries:?}"
+        );
+    }
+
+    /// What a VM returns was written by the job: nothing of it lands outside
+    /// the directory it is unpacked into, and only files, directories, and
+    /// hard links between them (and links where the machine makes them) do.
+    #[test]
+    fn returned_archives_unpack_only_inside_their_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let outside = d.join("outside");
+        fs::create_dir(&outside).unwrap();
+        let mut tar = tar::Builder::new(Vec::new());
+        let mut add = |name: &str, kind: tar::EntryType, link: Option<&Path>, data: &[u8]| {
+            let mut h = tar::Header::new_gnu();
+            h.as_old_mut().name[..name.len()].copy_from_slice(name.as_bytes());
+            h.set_entry_type(kind);
+            h.set_mode(0o644);
+            h.set_size(data.len() as u64);
+            if let Some(l) = link {
+                h.set_link_name(l).unwrap();
+            }
+            h.set_cksum();
+            tar.append(&h, data).unwrap();
+        };
+        use tar::EntryType as T;
+        add("out/a.txt", T::Regular, None, b"a");
+        add("out/b.txt", T::Link, Some(Path::new("out/a.txt")), b"");
+        add("../escape.txt", T::Regular, None, b"x");
+        add("out/d", T::Symlink, Some(&outside), b"");
+        add("out/d/x", T::Regular, None, b"x");
+        add("out/fifo", T::Fifo, None, b"");
+        let archive = d.join("returned.tar");
+        fs::write(&archive, tar.into_inner().unwrap()).unwrap();
+        let into = d.join("work");
+        fs::create_dir(&into).unwrap();
+        let notes = unpack_returned(&archive, &into).unwrap();
+        assert_eq!(fs::read(into.join("out/a.txt")).unwrap(), b"a");
+        assert_eq!(fs::read(into.join("out/b.txt")).unwrap(), b"a");
+        assert!(!d.join("escape.txt").exists());
+        assert!(!outside.join("x").exists());
+        assert!(!into.join("out/fifo").exists());
+        assert!(notes.iter().any(|n| n.contains("escape.txt")), "{notes:?}");
+        if cfg!(unix) {
+            assert!(notes.iter().any(|n| n.contains("out/d/x")), "{notes:?}");
+        } else {
+            assert!(
+                notes.iter().any(|n| n.contains("out/d is a symbolic link")),
+                "{notes:?}"
+            );
+        }
+        // The job's modes are not kept: none stops the unpacking, the
+        // reading, or the removal.
+        let mut tar = tar::Builder::new(Vec::new());
+        for (name, kind, mode, data) in [
+            ("ro", T::Directory, 0o555, &b""[..]),
+            ("ro/f", T::Regular, 0o000, &b"f"[..]),
+        ] {
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(kind);
+            h.set_mode(mode);
+            h.set_size(data.len() as u64);
+            tar.append_data(&mut h, name, data).unwrap();
+        }
+        fs::write(&archive, tar.into_inner().unwrap()).unwrap();
+        let into = d.join("modes");
+        fs::create_dir(&into).unwrap();
+        assert_eq!(
+            unpack_returned(&archive, &into).unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(fs::read(into.join("ro/f")).unwrap(), b"f");
+        fs::remove_dir_all(&into).unwrap();
     }
 
     #[test]
@@ -664,21 +921,23 @@ mod tests {
             cache_key("acme/demo", &job, &IMAGE.replace('1', "2"), &cache, &work),
             "the image's digest is in the key"
         );
+        let archive = packed(dir.path(), b"object");
         Cache::new(root.clone())
-            .save(&k1, &owner("acme/demo", &job.name), &cache, &work, 1 << 20)
+            .save(&k1, &owner("acme/demo", &job.name), &archive, 1 << 20)
             .unwrap();
+        assert!(!archive.exists(), "the save moved the archive");
         let fresh = dir.path().join("fresh");
         fs::create_dir_all(&fresh).unwrap();
         fs::write(fresh.join("Cargo.lock"), "v1").unwrap();
         assert_eq!(cache_key("acme/demo", &job, IMAGE, &cache, &fresh), k1);
         assert_eq!(
             Cache::new(root.clone())
-                .restore(&k1, &cache, &fresh)
+                .restore(&k1, &fresh.join("cache.tar"))
                 .unwrap(),
             Some(6)
         );
         assert_eq!(
-            fs::read_to_string(fresh.join("target/a.o")).unwrap(),
+            fs::read_to_string(fresh.join("cache.tar")).unwrap(),
             "object"
         );
         fs::write(fresh.join("Cargo.lock"), "v2").unwrap();
@@ -689,8 +948,7 @@ mod tests {
             .save(
                 &k2,
                 &owner("acme/demo", &job.name),
-                &cache,
-                &fresh,
+                &packed(dir.path(), b"object"),
                 tree_size(&root.join(&k1)),
             )
             .unwrap();
@@ -702,28 +960,22 @@ mod tests {
     fn cache_eviction_removes_superseded_generations_before_other_repositories_and_jobs() {
         for other in [owner("r2", "build"), owner("r1", "tests")] {
             let dir = tempfile::tempdir().unwrap();
-            let store = Cache::new(dir.path().join("cache"));
-            let work = dir.path().join("work");
-            fs::create_dir_all(work.join("target")).unwrap();
-            fs::write(work.join("target/file"), b"object").unwrap();
-            let def = CacheDef {
-                paths: vec!["target".into()],
-                key_files: vec![],
-            };
+            let d = dir.path();
+            let store = Cache::new(d.join("cache"));
             let first = owner("r1", "build");
             let time = |n| SystemTime::UNIX_EPOCH + Duration::from_secs(n);
             store
-                .save_with_clock("k1", &first, &def, &work, u64::MAX, || time(1))
+                .save_with_clock("k1", &first, &packed(d, b"object"), u64::MAX, || time(1))
                 .unwrap();
             store
-                .save_with_clock("other", &other, &def, &work, u64::MAX, || time(2))
+                .save_with_clock("other", &other, &packed(d, b"object"), u64::MAX, || time(2))
                 .unwrap();
             // Restoring an old generation makes it newer by use than the other
             // group's only entry. Plain LRU would evict that current entry.
             record_use(&store.root.join("k1"), time(3)).unwrap();
             let budget = tree_size(&store.root.join("k1")) + tree_size(&store.root.join("other"));
             store
-                .save_with_clock("k2", &first, &def, &work, budget, || time(4))
+                .save_with_clock("k2", &first, &packed(d, b"object"), budget, || time(4))
                 .unwrap();
             assert!(!store.root.join("k1").exists());
             assert!(store.root.join("other").exists());
@@ -734,42 +986,35 @@ mod tests {
     #[test]
     fn cache_save_retains_and_restores_old_generations_when_they_fit() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Cache::new(dir.path().join("cache"));
-        let work = dir.path().join("work");
-        fs::create_dir_all(work.join("target")).unwrap();
-        let def = CacheDef {
-            paths: vec!["target".into()],
-            key_files: vec![],
-        };
+        let d = dir.path();
+        let store = Cache::new(d.join("cache"));
         let owner = owner("r", "j");
-        fs::write(work.join("target/file"), b"old").unwrap();
-        store.save("old", &owner, &def, &work, u64::MAX).unwrap();
-        fs::write(work.join("target/file"), b"new").unwrap();
-        store.save("new", &owner, &def, &work, u64::MAX).unwrap();
+        store
+            .save("old", &owner, &packed(d, b"old"), u64::MAX)
+            .unwrap();
+        store
+            .save("new", &owner, &packed(d, b"new"), u64::MAX)
+            .unwrap();
         assert!(store.root.join("new").exists());
-        assert_eq!(store.restore("old", &def, &work).unwrap(), Some(3));
-        assert_eq!(fs::read(work.join("target/file")).unwrap(), b"old");
+        assert_eq!(store.restore("old", &d.join("old.tar")).unwrap(), Some(3));
+        assert_eq!(fs::read(d.join("old.tar")).unwrap(), b"old");
     }
 
     #[test]
     fn cache_save_is_current_even_when_another_generation_has_a_later_save_time() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Cache::new(dir.path().join("cache"));
-        let work = dir.path().join("work");
-        fs::create_dir_all(work.join("target")).unwrap();
-        fs::write(work.join("target/file"), b"object").unwrap();
-        let def = CacheDef {
-            paths: vec!["target".into()],
-            key_files: vec![],
-        };
+        let d = dir.path();
+        let store = Cache::new(d.join("cache"));
         let owner = owner("r", "j");
         let time = |n| SystemTime::UNIX_EPOCH + Duration::from_secs(n);
         store
-            .save_with_clock("later", &owner, &def, &work, u64::MAX, || time(20))
+            .save_with_clock("later", &owner, &packed(d, b"object"), u64::MAX, || {
+                time(20)
+            })
             .unwrap();
         let budget = tree_size(&store.root.join("later"));
         store
-            .save_with_clock("saved", &owner, &def, &work, budget, || time(10))
+            .save_with_clock("saved", &owner, &packed(d, b"object"), budget, || time(10))
             .unwrap();
         assert!(!store.root.join("later").exists());
         assert!(store.root.join("saved").exists());
@@ -855,8 +1100,8 @@ mod tests {
                 let dir = tempfile::tempdir().unwrap();
                 let root = dir.path().join("cache");
                 let invalid = root.join("invalid");
-                fs::create_dir_all(invalid.join("paths")).unwrap();
-                fs::write(invalid.join("paths/file"), b"old").unwrap();
+                fs::create_dir_all(&invalid).unwrap();
+                fs::write(invalid.join(ARCHIVE), b"old").unwrap();
                 mark_saved(&invalid, SystemTime::now());
                 match bad_owner {
                     "missing" => {}
@@ -873,31 +1118,29 @@ mod tests {
                     )
                     .unwrap(),
                 }
-                let work = dir.path().join("work");
-                fs::create_dir_all(work.join("target")).unwrap();
-                fs::write(work.join("target/object"), b"object").unwrap();
-                let def = CacheDef {
-                    paths: vec!["target".into()],
-                    key_files: vec![],
-                };
                 let store = Cache::new(root.clone());
                 // The invalid entry must not poison this or a later save.
                 for key in ["new", "next"] {
                     assert_eq!(
                         store
-                            .save(key, &owner("r", "j"), &def, &work, budget)
+                            .save(
+                                key,
+                                &owner("r", "j"),
+                                &packed(dir.path(), b"object"),
+                                budget
+                            )
                             .unwrap(),
                         6,
                         "owner: {bad_owner}, budget: {budget}"
                     );
                     assert!(!invalid.exists(), "owner: {bad_owner}, budget: {budget}");
-                    let restored = dir.path().join(format!("restore-{key}"));
+                    let restored = dir.path().join(format!("restore-{key}.tar"));
                     assert_eq!(
-                        store.restore(key, &def, &restored).unwrap(),
+                        store.restore(key, &restored).unwrap(),
                         (budget != 0).then_some(6)
                     );
                     if budget != 0 {
-                        assert_eq!(fs::read(restored.join("target/object")).unwrap(), b"object");
+                        assert_eq!(fs::read(&restored).unwrap(), b"object");
                     }
                 }
             }
@@ -954,22 +1197,14 @@ mod tests {
     #[test]
     fn cache_save_after_restore_keeps_the_save_when_timestamps_tie() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("cache");
-        let work = dir.path().join("work");
-        let fresh = dir.path().join("fresh");
-        let cache = CacheDef {
-            paths: vec!["target".into()],
-            key_files: vec![],
-        };
-        fs::create_dir_all(work.join("target")).unwrap();
-        fs::create_dir(&fresh).unwrap();
-        fs::write(work.join("target/object"), b"object").unwrap();
+        let d = dir.path();
+        let root = d.join("cache");
         Cache::new(root.clone())
-            .save("z-old", &owner("r", "old"), &cache, &work, 100)
+            .save("z-old", &owner("r", "old"), &packed(d, b"object"), 100)
             .unwrap();
         assert_eq!(
             Cache::new(root.clone())
-                .restore("z-old", &cache, &fresh)
+                .restore("z-old", &d.join("restored.tar"))
                 .unwrap(),
             Some(6)
         );
@@ -988,8 +1223,7 @@ mod tests {
                 .save_with_clock(
                     "a-new",
                     &owner("r", "new"),
-                    &cache,
-                    &fresh,
+                    &packed(d, b"object"),
                     tree_size(&root.join("z-old")),
                     || restored_at
                 )
@@ -998,7 +1232,7 @@ mod tests {
         );
         assert!(!root.join("z-old").exists());
         assert_eq!(
-            fs::read(root.join("a-new/paths/target/object")).unwrap(),
+            fs::read(root.join("a-new").join(ARCHIVE)).unwrap(),
             b"object"
         );
         assert_eq!(
@@ -1048,29 +1282,21 @@ mod tests {
     }
 
     /// The jobs a runner runs at once share its cache: a restore while a
-    /// save replaces the same entry copies the old entry or the new one,
-    /// whole, and saves of one key leave no temporary directory behind.
+    /// save replaces the same entry gets the old archive or the new one,
+    /// whole, and keeps it when a later save replaces the entry; saves of one
+    /// key leave no temporary directory behind.
     #[test]
     fn concurrent_restores_and_saves_of_one_key_see_whole_entries() {
         let dir = tempfile::tempdir().unwrap();
         let cache = std::sync::Arc::new(Cache::new(dir.path().join("cache")));
-        let def = CacheDef {
-            paths: vec!["target".into()],
-            key_files: vec![],
-        };
         let saves: Vec<_> = (0..4)
             .map(|n| {
-                let work = dir.path().join(format!("work{n}"));
-                for f in 0..200 {
-                    let file = work.join("target").join(format!("{f:03}"));
-                    fs::create_dir_all(file.parent().unwrap()).unwrap();
-                    fs::write(file, format!("v{n}")).unwrap();
-                }
-                let (cache, def) = (cache.clone(), def.clone());
+                let (cache, root) = (cache.clone(), dir.path().to_path_buf());
                 std::thread::spawn(move || {
                     for _ in 0..10 {
+                        let archive = packed(&root, format!("v{n}").repeat(1000).as_bytes());
                         cache
-                            .save("k", &owner("r", "j"), &def, &work, 1 << 30)
+                            .save("k", &owner("r", "j"), &archive, 1 << 30)
                             .unwrap();
                     }
                 })
@@ -1078,21 +1304,19 @@ mod tests {
             .collect();
         let restores: Vec<_> = (0..4)
             .map(|n| {
-                let (cache, def, root) = (cache.clone(), def.clone(), dir.path().to_path_buf());
+                let (cache, root) = (cache.clone(), dir.path().to_path_buf());
                 std::thread::spawn(move || {
+                    let mut kept = Vec::new();
                     for i in 0..20 {
-                        let fresh = root.join(format!("fresh{n}-{i}"));
-                        fs::create_dir_all(&fresh).unwrap();
-                        if cache.restore("k", &def, &fresh).unwrap().is_none() {
-                            continue;
+                        let into = root.join(format!("fresh{n}-{i}.tar"));
+                        if cache.restore("k", &into).unwrap().is_some() {
+                            kept.push(into);
                         }
-                        let versions: std::collections::BTreeSet<String> =
-                            fs::read_dir(fresh.join("target"))
-                                .unwrap()
-                                .map(|e| fs::read_to_string(e.unwrap().path()).unwrap())
-                                .collect();
-                        let files = fs::read_dir(fresh.join("target")).unwrap().count();
-                        assert_eq!((versions.len(), files), (1, 200), "{versions:?}");
+                    }
+                    for into in kept {
+                        let content = fs::read_to_string(&into).unwrap();
+                        let one = content[..2].repeat(1000);
+                        assert_eq!(content, one, "{into:?}");
                     }
                 })
             })
