@@ -1,13 +1,14 @@
 //! The real executor, end to end: a real test server, a real
 //! `guildbotics runner` process, and microVMs started by the pinned `msb`.
 //!
-//! Opt-in (it needs the msb 0.6.17 runtime, a hypervisor, and the images
-//! below already in Branvil's image cache):
+//! Opt-in (it needs GuildBotics' msb 0.6.17 runtime in
+//! `~/.guildbotics/data/msb`, which the runner is given too, a hypervisor,
+//! and the images below already in Branvil's image cache):
 //!
 //! ```sh
 //! guildbotics runner pull docker.io/library/alpine:3.22
 //! guildbotics runner pull docker.io/library/node:22.23.2-bookworm
-//! BRANVIL_REAL_EXECUTOR=1 cargo test --test main real_executor:: -- --nocapture
+//! BRANVIL_REAL_EXECUTOR=1 cargo test --locked -p branvil --features test-support --test main real_executor:: -- --nocapture
 //! ```
 
 use crate::common;
@@ -235,7 +236,10 @@ async fn jobs_run_in_microvms_without_network_or_host_files() {
     let config = w.dir.path().join("runner.toml");
     std::fs::write(
         &config,
-        "[ci.executor]\nmax_cpus = 1\nmax_memory_mib = 512\n",
+        format!(
+            "[ci.executor]\nmax_cpus = 1\nmax_memory_mib = 512\n[ci.microsandbox]\nmsb_path = {:?}\n",
+            msb()
+        ),
     )
     .unwrap();
     let mut child = branvil_command()

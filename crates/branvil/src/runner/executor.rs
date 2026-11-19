@@ -710,9 +710,14 @@ const HELPER_SECS: u64 = 3600;
 
 /// The size of a job's `/work`, which the archives are unpacked into: the
 /// quota, plus twice their size (a disk's blocks and inodes hold many small
-/// files in more than the archive's bytes) and room for the file system.
+/// files in more than the archive's bytes) and room for the file system,
+/// rounded up to whole ext4 block groups: msb refuses a disk whose last,
+/// partial group is too small for its metadata (16642 MiB, the default quota
+/// with a small checkout, ends in a group of 2 MiB).
 fn work_disk_mib(quota_mib: u64, archives: u64) -> u64 {
-    quota_mib + 2 * archives.div_ceil(1 << 20) + 256
+    /// An ext4 block group: 32768 blocks of 4 KiB.
+    const GROUP_MIB: u64 = 128;
+    (quota_mib + 2 * archives.div_ceil(1 << 20) + 256).next_multiple_of(GROUP_MIB)
 }
 
 /// A shell loop over `paths`, quoted, that sets `q` to each without its
@@ -1449,6 +1454,25 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_work_disk_is_whole_ext4_block_groups() {
+        // The default quota with a checkout of a few bytes: msb refused
+        // 16642 MiB, whose last group is 2 MiB.
+        assert_eq!(work_disk_mib(16384, 1), 16768);
+        assert_eq!(work_disk_mib(2048, 0), 2304);
+        for quota in [0, 1, 127, 128, 2048, 16384, 16385] {
+            for archives in [0u64, 1, 1 << 20, (1 << 20) + 1, 21_343_338, 2_132_153_879] {
+                let raw = quota + 2 * archives.div_ceil(1 << 20) + 256;
+                let mib = work_disk_mib(quota, archives);
+                assert_eq!(mib % 128, 0, "{quota} MiB, {archives} bytes: {mib}");
+                assert!(
+                    (raw..raw + 128).contains(&mib),
+                    "{quota} MiB, {archives} bytes: {mib}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn the_script_quotes_every_command() {
         let s = script(&["echo 'a b'".into(), "exit 3".into()]);
         assert!(s.starts_with(
@@ -1637,7 +1661,7 @@ esac
             let args: Vec<&str> = args.lines().collect();
             args.windows(2).any(|w| w == [flag, value])
         };
-        let disk = "bv-work-t-a1:/work:kind=disk,size=2308M";
+        let disk = "bv-work-t-a1:/work:kind=disk,size=2432M";
         let io_mount = format!("{}:/.branvil-io", root.join("io").display());
         let prep = args("bv-prep-a1").unwrap();
         for (flag, value) in [
@@ -1898,6 +1922,9 @@ esac
             let out = std::process::Command::new("/bin/sh")
                 .args(["-c", &pack_script(io_path, name, paths)])
                 .current_dir(&work)
+                // The script runs in a Linux VM; macOS's tar would add an
+                // AppleDouble `._` entry for each file's extended attributes.
+                .env("COPYFILE_DISABLE", "1")
                 .output()
                 .unwrap();
             assert!(

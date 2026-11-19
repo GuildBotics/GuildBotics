@@ -714,7 +714,9 @@ Per job the runner:
 
 `S` is `ci.executor.work_quota_mib`, plus twice the size of the archives
 unpacked into `/work` (a disk's blocks and inodes hold many small files in
-more than the archive's bytes) and 256 MiB. Its volume is in `MSB_HOME`
+more than the archive's bytes) and 256 MiB, rounded up to a multiple of
+128 MiB (an ext4 block group; microsandbox refuses a disk whose last, partial
+group is too small for its metadata). Its volume is in `MSB_HOME`
 (`[ci.microsandbox] home`), not in the runner's work directory. `/work` is a
 disk rather than the host directory mounted into the VM: microsandbox's
 directory mounts read and write a file at a time across the VM's boundary,
