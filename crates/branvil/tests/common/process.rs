@@ -295,7 +295,10 @@ mod tests {
                 "timeout" => assert_eq!(process.exit_within(Duration::ZERO).unwrap(), None),
                 "success" | "failure" | "bounded" => {
                     let code = if mode == "failure" { 17 } else { 0 };
-                    std::fs::write(dir.path().join("exit"), code.to_string()).unwrap();
+                    // Publish only the complete code: the fixture polls this file.
+                    let pending = dir.path().join("exit.tmp");
+                    std::fs::write(&pending, code.to_string()).unwrap();
+                    std::fs::rename(pending, dir.path().join("exit")).unwrap();
                     let start = Instant::now();
                     while !process.exited().unwrap() {
                         assert!(start.elapsed() < Duration::from_secs(10));
