@@ -715,26 +715,28 @@ Per job the runner:
    `io` directory;
 4. streams that file to the log (read every 50 ms through the handle opened
    in step 2, so a link the job puts there is never followed), stops the VM
-   when the timeout passes or the service asks to cancel (at the timeout,
-   after `msb exec <job's sandbox> -- sync`, as the artifacts are collected
-   from the disk: the job runs on while it flushes, for at most 30 s, and
-   `commands ran for` includes it; killing `msb run`
+   when the timeout passes or the service asks to cancel (at the timeout of
+   a job that declares artifacts, after `msb exec <job's sandbox> -- sync`,
+   as they are collected from the disk: the job runs on while it flushes,
+   for at most 30 s, `commands ran for` includes it, a flush that fails is
+   logged, and a cancel stops it at once; killing `msb run`
    ends the VM through its parent watchdog, so every process in it stops),
    keeps what the job wrote up to then, and removes its sandbox. Once the
    job's VM ended by exit or timeout, and the job declares artifacts or
    succeeded in a protected branch's run with a cache, a VM like the one
    that prepared `/work` (`bv-collect-<attempt>`, started under the shared
-   image lock as the job's VM is, `io` mounted with `quota=` twice `S`, as
+   image lock as the job's VM is, a cancel ending the wait for it, `io`
+   mounted with `quota=` twice `S`, as
    the artifacts and the cache may pack the same files) packs the artifacts' paths into
    `io/artifacts.tar` and the cached paths into `io/cache.tar`: those that
    exist and go through no symbolic link (one at the end goes as a link),
    an empty archive when there is none, written in large blocks and flushed
-   (`dd … conv=fsync`, so a write that does not reach `io` fails). A failure
-   that leaves no mark (the empty archive's write, a `/work` that is not
-   there) fails the VM (`set -e`). An archive
-   whose packing failed (`<archive>.failed`), and both when the VM failed
-   or was stopped, are dropped, as they may be cut short; a stop makes the
-   attempt `cancelled`. It then removes
+   (`dd … conv=fsync`, so a write that does not reach `io` fails). Each is
+   written as `<archive>.part` and renamed once `tar` and `dd` succeeded, so
+   an archive whose packing failed is not there (the log says so); a failure
+   of the script itself (a `/work` that is not there) fails the VM (`set -e`).
+   Both archives are dropped when the VM failed or was stopped; a stop
+   makes the attempt `cancelled`. It then removes
    every sandbox of the attempt (by its `branvil.job` label) and the `/tmp`
    and `/work` volumes (which outlive the sandboxes), warning only about one
    that exists and could not be removed, and, for a job with artifacts,
@@ -756,7 +758,7 @@ which on Windows made the small files of a build about 30 times slower than
 on the host (a Rust workspace's build passed its time limit), while a disk
 is as fast as the VM's own. What crosses the boundary is one archive at a
 time. The image needs `/bin/sh`, `tar`, `chown`, `find`, `dd` (with `obs=`
-and `conv=fsync`), and `sync` for this, and `mkdir` when it gives the job's user no home it can write.
+and `conv=fsync`), `rm`, `mv`, and `sync` for this, and `mkdir` when it gives the job's user no home it can write.
 Without `sync`, preparing `/work` fails for every job, so an image that ran
 jobs before needs it too.
 
