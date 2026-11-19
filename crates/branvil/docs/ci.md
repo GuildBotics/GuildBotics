@@ -697,17 +697,22 @@ Per job the runner:
    work directory once a VM has had what it holds;
 3. puts a copy of the cache entry's archive at `io/cache-in.tar`, then prepares `/work`
    in a VM of the job's image:
-   `msb run --name bv-prep-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --user 0:0 --mount-dir <io>:/.branvil-io:quota=1M --mount-named bv-work-<runner>-<attempt>:/work:kind=disk,size=SM --max-duration 3600s --no-net <image> -- /bin/sh -c <unpack the archives into /work; chown -R 1000:1000 /work>`,
+   `msb run --name bv-prep-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --user 0:0 --mount-dir <io>:/.branvil-io:quota=1M --mount-named bv-work-<runner>-<attempt>:/work:kind=disk,size=SM --max-duration 3600s --no-net <image> -- /bin/sh -c <unpack the archives into /work; chown -R 1000:1000 /work; sync>`,
    removes that sandbox and `io/cache-in.tar`, and runs the job. The cache entry is not
    unpacked when a cached path goes through a symbolic link of the commit
    (it would be written through) or the archive does not unpack: `/work` is
    then the checkout alone, and the log says the job runs without the cache.
+   Every VM of the job flushes before its command ends (`sync`): the runner
+   removes a sandbox once its command ended, and what the guest has not
+   written to `/work` or `io` by then is lost (a lost `chown` leaves the
+   checkout unwritable to the job).
    The job:
    `msb run --name bv-job-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --cpus N --memory NM --user 1000:1000 --mount-named bv-work-<runner>-<attempt>:/work:kind=disk,size=SM --mount-dir <log>:/.branvil-log:uid=1000,gid=1000,quota=QM --mount-named bv-tmp-<runner>-<attempt>:/tmp:kind=disk,size=4G --workdir /work --max-duration <timeout+60>s --no-net <image> -- /bin/sh -c <script>`
    (`N` and `M` the runner's CPUs and memory, `S` the size of `/work`, `Q`
    `ci.executor.work_quota_mib`: what the job may write to the host);
-   the script first sends its stdout and stderr to `/.branvil-log/out` and
-   sets `HOME` ("The job's environment"). The job's VM never has the
+   the script first flushes when it exits (`trap sync EXIT`; a job stopped by
+   its timeout or a cancellation is not flushed), sends its stdout and stderr
+   to `/.branvil-log/out`, and sets `HOME` ("The job's environment"). The job's VM never has the
    `io` directory;
 4. streams that file to the log (read every 50 ms through the handle opened
    in step 2, so a link the job puts there is never followed), stops the VM
@@ -721,7 +726,8 @@ Per job the runner:
    the artifacts and the cache may pack the same files) packs the artifacts' paths into
    `io/artifacts.tar` and the cached paths into `io/cache.tar`: those that
    exist and go through no symbolic link (one at the end goes as a link),
-   an empty archive when there is none, written in large blocks. An archive
+   an empty archive when there is none, written in large blocks, then
+   flushes. An archive
    whose packing failed (`<archive>.failed`), and both when the VM failed
    or was stopped, are dropped, as they may be cut short; a stop makes the
    attempt `cancelled`. It then removes

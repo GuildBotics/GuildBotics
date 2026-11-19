@@ -790,11 +790,12 @@ fn each_path(paths: &[&str], last: bool, body: &str) -> String {
 /// cache entry unless a cached path goes through a link the commit has
 /// there (it would be written through) or it does not unpack, in which case
 /// `/work` is the checkout alone and `<cache-in>.failed` says so; then hands
-/// `/work` to the job's user.
+/// `/work` to the job's user, and flushes: the runner removes the VM once its
+/// command ends, and what the guest has not written to the disk is lost.
 fn prepare_script(io: &str, cached: &[&str]) -> String {
     let unlinked = each_path(cached, true, "  [ -z \"$link\" ] || exit 1");
     format!(
-        "set -e\ntar -xf {io}/{CHECKOUT} -C /work\nif [ -e {io}/{CACHE_IN} ]; then\n  if ! (cd /work\n{unlinked}) || ! tar -xf {io}/{CACHE_IN} -C /work; then\n    echo failed >{io}/{CACHE_IN}.failed\n    find /work -mindepth 1 -delete\n    tar -xf {io}/{CHECKOUT} -C /work\n  fi\nfi\nchown -R {JOB_USER_ID}:{JOB_USER_ID} /work\n"
+        "set -e\ntar -xf {io}/{CHECKOUT} -C /work\nif [ -e {io}/{CACHE_IN} ]; then\n  if ! (cd /work\n{unlinked}) || ! tar -xf {io}/{CACHE_IN} -C /work; then\n    echo failed >{io}/{CACHE_IN}.failed\n    find /work -mindepth 1 -delete\n    tar -xf {io}/{CHECKOUT} -C /work\n  fi\nfi\nchown -R {JOB_USER_ID}:{JOB_USER_ID} /work\nsync\n"
     )
 }
 
@@ -814,7 +815,8 @@ fn pack_script(io: &str, name: &str, paths: &[&str]) -> String {
     )
 }
 
-/// The shell script a job runs: its output into the log file, `HOME` moved
+/// The shell script a job runs: a flush when it exits (as for the helpers,
+/// the VM is removed once it ended), its output into the log file, `HOME` moved
 /// to `/tmp/home` when the user cannot write the one the image gives it (or
 /// it has none), a start marker, then each command in its own `sh -c`,
 /// stopping at the first failure with its exit code.
@@ -825,7 +827,7 @@ fn pack_script(io: &str, name: &str, paths: &[&str]) -> String {
 /// (a timeout, a cancellation) would be lost.
 pub fn script(commands: &[String]) -> String {
     let mut s = format!(
-        "exec >>{LOG_MOUNT}/out 2>&1\n[ -w \"$HOME\" ] || {{ export HOME=/tmp/home; mkdir -p \"$HOME\"; }}\nprintf '\\036branvil:started\\n'\n"
+        "trap sync EXIT\nexec >>{LOG_MOUNT}/out 2>&1\n[ -w \"$HOME\" ] || {{ export HOME=/tmp/home; mkdir -p \"$HOME\"; }}\nprintf '\\036branvil:started\\n'\n"
     );
     for c in commands {
         let q = c.replace('\'', "'\\''");
@@ -1101,6 +1103,7 @@ impl Executor for Microsandbox {
             if !cached.is_empty() {
                 script.push_str(&pack_script(IO_MOUNT, CACHE_OUT, &cached));
             }
+            script.push_str("sync\n");
             // As for the job's VM: the image the tag names stays put until
             // the VM has picked it.
             let collected = match self.lock_images(false, || {}).await {
@@ -1571,8 +1574,10 @@ pub(crate) mod tests {
     #[test]
     fn the_script_quotes_every_command() {
         let s = script(&["echo 'a b'".into(), "exit 3".into()]);
+        // What the job wrote reaches `/work` and the log before its VM is
+        // removed, however the commands end.
         assert!(s.starts_with(
-            "exec >>/.branvil-log/out 2>&1\n[ -w \"$HOME\" ] || { export HOME=/tmp/home; mkdir -p \"$HOME\"; }\nprintf '\\036branvil:started\\n'\n"
+            "trap sync EXIT\nexec >>/.branvil-log/out 2>&1\n[ -w \"$HOME\" ] || { export HOME=/tmp/home; mkdir -p \"$HOME\"; }\nprintf '\\036branvil:started\\n'\n"
         ));
         assert!(s.contains("/bin/sh -c 'echo '\\''a b'\\''' || exit $?"));
         assert!(s.contains("/bin/sh -c 'exit 3' || exit $?"));
@@ -1767,7 +1772,8 @@ esac
         ] {
             assert!(has(&prep, flag, value), "{flag} {value} in {prep}");
         }
-        assert!(prep.contains("chown -R 1000:1000 /work"), "{prep}");
+        // Its writes reach the disk before its VM is removed.
+        assert!(prep.contains("chown -R 1000:1000 /work\nsync\n"), "{prep}");
         let ran = args("bv-job-a1").unwrap();
         for (flag, value) in [
             ("--user", "1000:1000"),
@@ -1979,6 +1985,8 @@ esac
                 assert!(script.contains("'out/'"), "{script}");
                 assert_eq!(script.contains("'target'"), cached, "{script}");
                 assert!(!script.contains("--user\n1000"), "{script}");
+                // Its archives reach `io` before its VM is removed.
+                assert!(script.trim_end().ends_with("\nsync"), "{script}");
                 // Nothing of the checkout is taken for an artifact.
                 assert!(!work.join("README").exists(), "{ending}");
                 if ending == "collect-fails" {

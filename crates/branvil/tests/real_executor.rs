@@ -158,6 +158,7 @@ commands = [
   "test \"$(git describe --tags)\" = v-real",
   "test -z \"$(git remote)\"",
   "test \"$(id -u):$(id -g)\" = 1000:1000",
+  "test -z \"$(find /work ! -user 1000)\"",
   "echo secret > /tmp/s && chmod 0 /tmp/s && ! cat /tmp/s",
   "echo secret > s0 && chmod 0 s0 && ! cat s0",
   "grep -q '^/dev/[a-z]* /tmp ext4 ' /proc/mounts",
