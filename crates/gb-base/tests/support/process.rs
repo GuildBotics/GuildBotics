@@ -1,6 +1,8 @@
 //! Re-run a permission or environment contract without the caller's privileges/settings.
 use std::process::Command;
 
+const RERUN: &str = "GB_TEST_RERUN";
+
 /// Returns true in the parent after the exact test passed in a child process.
 /// The child creates its own fixtures; no privileged files are shared with it.
 pub fn rerun(test: &str, unprivileged: bool, remove_env: &[&str]) -> bool {
@@ -54,7 +56,14 @@ pub fn rerun(test: &str, unprivileged: bool, remove_env: &[&str]) -> bool {
     if !needed {
         return false;
     }
+    assert!(
+        std::env::var_os(RERUN).as_deref() != Some(std::ffi::OsStr::new(test)),
+        "re-exec preconditions still unmet in child for {test}; check DAC inheritable/ambient capabilities and requested environment removals"
+    );
+    // Apply this after env_remove: even removing the marker itself must fail
+    // once in the child instead of creating an unbounded chain of processes.
     let output = command
+        .env(RERUN, test)
         .args(["--exact", test, "--nocapture"])
         .output()
         .unwrap();
