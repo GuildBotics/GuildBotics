@@ -1141,15 +1141,33 @@ async def test_startup_requests_share_the_turn_deadline(
 
 
 @pytest.mark.asyncio
-async def test_startup_and_execution_use_one_deadline(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("phase", ["startup", "execution"])
+async def test_startup_and_execution_use_one_deadline(
+    monkeypatch, tmp_path, fake_environment, phase
+) -> None:
     process = _Process(complete_turn=False)
     handle = process.handle
-    initialized = asyncio.Event()
+    initializing = asyncio.Event()
+    executing = asyncio.Event()
+    initialize_request = None
+    deadlines = []
+    native_timeout = asyncio.timeout
+
+    def controlled_timeout(delay):
+        # Keep asyncio's real cancellation and TimeoutError conversion, but
+        # fire the deadline explicitly after reaching the chosen protocol state.
+        deadline = native_timeout(None)
+        deadlines.append((delay, deadline))
+        return deadline
 
     def delayed(message):
+        nonlocal initialize_request
         if message.get("method") == "initialize":
-            initialized.set()
-            asyncio.get_running_loop().call_later(0.08, handle, message)
+            initialize_request = message
+            initializing.set()
+        elif message.get("method") == "turn/interrupt":
+            process.messages.append(message)
+            process._result(message["id"], {})
         else:
             handle(message)
 
@@ -1159,7 +1177,15 @@ async def test_startup_and_execution_use_one_deadline(monkeypatch, tmp_path) -> 
         return process
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    adapter = CodexAppServerAdapter(timeout=0.12)
+    monkeypatch.setattr(asyncio, "timeout", controlled_timeout)
+    adapter = CodexAppServerAdapter(timeout=120)
+    next_notification = adapter._transport.next_notification
+
+    async def waiting_for_execution():
+        executing.set()
+        return await next_notification()
+
+    monkeypatch.setattr(adapter._transport, "next_notification", waiting_for_execution)
     context = _context(tmp_path)
     task = asyncio.create_task(
         adapter.run_turn(
@@ -1169,11 +1195,35 @@ async def test_startup_and_execution_use_one_deadline(monkeypatch, tmp_path) -> 
             lambda _event: None,
         )
     )
-    await initialized.wait()
-    # Startup has spent 0.08 of the 0.12-second budget; execution gets only
-    # the remainder. A newly started execution timer would still be waiting.
-    with pytest.raises(AgentRuntimeError) as raised:
-        await asyncio.wait_for(task, timeout=0.18)
-    assert raised.value.category is AgentRuntimeErrorCategory.TIMEOUT
-    assert any(m.get("method") == "turn/interrupt" for m in process.messages)
-    assert process.returncode is not None
+    try:
+        # These waits are deadlock guards, not observations of elapsed time.
+        await asyncio.wait_for(initializing.wait(), timeout=10)
+        assert len(deadlines) == 1
+        budget, deadline = deadlines[0]
+        assert budget == 120
+        if phase == "execution":
+            handle(initialize_request)
+            await asyncio.wait_for(executing.wait(), timeout=10)
+            # Startup and execution must remain inside the same timeout context.
+            # A fresh execution budget, even of the same length, is a regression.
+            assert deadlines == [(budget, deadline)]
+        deadline.reschedule(asyncio.get_running_loop().time() - 1)
+        with pytest.raises(AgentRuntimeError) as raised:
+            await asyncio.wait_for(task, timeout=10)
+        assert raised.value.category is AgentRuntimeErrorCategory.TIMEOUT
+        assert raised.value.details["timeout_seconds"] == budget
+        interrupts = [
+            m["params"] for m in process.messages if m.get("method") == "turn/interrupt"
+        ]
+        assert interrupts == (
+            [{"threadId": "thread-1", "turnId": "turn-1"}]
+            if phase == "execution"
+            else []
+        )
+        assert process.returncode is not None
+        assert fake_environment.started[-1].closed
+        assert not adapter._transport._pending
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
