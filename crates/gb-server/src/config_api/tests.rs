@@ -1,5 +1,8 @@
 //! The setup screens' configuration API over HTTP, against a server whose
 //! machine, identities and workspaces are temporary directories.
+#[path = "../../../gb-base/tests/support/process.rs"]
+mod process;
+
 use super::*;
 use axum::body::Body as HttpBody;
 use axum::http::Request;

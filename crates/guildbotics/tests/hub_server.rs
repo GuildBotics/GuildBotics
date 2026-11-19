@@ -1,6 +1,9 @@
 //! Exercise the Hub script with a real Git source tree and stubbed OS tools.
 #![cfg(unix)]
 
+#[path = "../../gb-base/tests/support/process.rs"]
+mod process;
+
 use std::{
     fs,
     os::unix::fs::{PermissionsExt, symlink},
@@ -653,6 +656,13 @@ fn a_guildbotics_process_takes_its_source_tree_before_it_starts() {
 
 #[test]
 fn hub_prune_removes_every_unused_build_it_can() {
+    if process::rerun(
+        "hub_server::hub_prune_removes_every_unused_build_it_can",
+        true,
+        &[],
+    ) {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let builds = temp.path().join("builds");
     for tree in ["kept", "unused", "interrupted", "held", "stuck/inner"] {
