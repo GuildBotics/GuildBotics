@@ -753,6 +753,8 @@ pub const ARTIFACTS: &str = "artifacts.tar";
 pub const CACHE_OUT: &str = "cache.tar";
 /// The time limit of a VM that prepares or collects `/work`.
 const HELPER_SECS: u64 = 3600;
+/// How long a job stopped at its timeout may take to flush its disks.
+const TIMEOUT_FLUSH: Duration = Duration::from_secs(30);
 
 /// The size of a job's `/work`, which the archives are unpacked into: the
 /// quota, plus twice their size (a disk's blocks and inodes hold many small
@@ -790,11 +792,12 @@ fn each_path(paths: &[&str], last: bool, body: &str) -> String {
 /// cache entry unless a cached path goes through a link the commit has
 /// there (it would be written through) or it does not unpack, in which case
 /// `/work` is the checkout alone and `<cache-in>.failed` says so; then hands
-/// `/work` to the job's user.
+/// `/work` to the job's user, and flushes: microsandbox stops the VM when its
+/// command ends, and what the guest has not written to the disk can be lost.
 fn prepare_script(io: &str, cached: &[&str]) -> String {
     let unlinked = each_path(cached, true, "  [ -z \"$link\" ] || exit 1");
     format!(
-        "set -e\ntar -xf {io}/{CHECKOUT} -C /work\nif [ -e {io}/{CACHE_IN} ]; then\n  if ! (cd /work\n{unlinked}) || ! tar -xf {io}/{CACHE_IN} -C /work; then\n    echo failed >{io}/{CACHE_IN}.failed\n    find /work -mindepth 1 -delete\n    tar -xf {io}/{CHECKOUT} -C /work\n  fi\nfi\nchown -R {JOB_USER_ID}:{JOB_USER_ID} /work\n"
+        "set -e\ntar -xf {io}/{CHECKOUT} -C /work\nif [ -e {io}/{CACHE_IN} ]; then\n  if ! (cd /work\n{unlinked}) || ! tar -xf {io}/{CACHE_IN} -C /work; then\n    echo failed >{io}/{CACHE_IN}.failed\n    find /work -mindepth 1 -delete\n    tar -xf {io}/{CHECKOUT} -C /work\n  fi\nfi\nchown -R {JOB_USER_ID}:{JOB_USER_ID} /work\nsync\n"
     )
 }
 
@@ -802,7 +805,11 @@ fn prepare_script(io: &str, cached: &[&str]) -> String {
 /// and go through no link (one at the end is packed as a link) into the
 /// archive `name` of the directory `io`, an empty archive when there are
 /// none, written in large blocks (writes through a mount are slow one by
-/// one); a failure leaves `<name>.failed` there.
+/// one) and flushed (`conv=fsync`: the VM is removed once it ended, and a
+/// write that does not reach `io` fails `dd`). It is written as
+/// `<name>.part` and gets its name only once `tar` (whose status the
+/// pipeline loses, so it leaves `<name>.packed`) and `dd` succeeded: a
+/// failure, of any of them or of the marks, leaves no archive by that name.
 fn pack_script(io: &str, name: &str, paths: &[&str]) -> String {
     let pick = each_path(
         paths,
@@ -810,11 +817,29 @@ fn pack_script(io: &str, name: &str, paths: &[&str]) -> String {
         "  if [ -z \"$link\" ] && { [ -e \"./$q\" ] || [ -h \"./$q\" ]; }; then set -- \"$@\" \"./$q\"; fi",
     );
     format!(
-        "set --\n{pick}if [ $# -gt 0 ]; then\n  {{ tar -cf - \"$@\" || echo failed >{io}/{name}.failed; }} | dd of={io}/{name} obs=4194304 2>/dev/null || echo failed >{io}/{name}.failed\nelse\n  dd if=/dev/zero of={io}/{name} bs=10240 count=1 2>/dev/null\nfi\n"
+        "set --\n{pick}rm -f {done}\nif [ $# -gt 0 ]; then\n  {{ tar -cf - \"$@\" && : >{done}; }} | dd of={part} obs=4194304 conv=fsync 2>/dev/null || rm -f {done}\nelse\n  dd if=/dev/zero of={part} bs=10240 count=1 conv=fsync 2>/dev/null && : >{done} || rm -f {done}\nfi\nif [ -f {done} ]; then mv {part} {io}/{name}; fi\n",
+        done = format!("{io}/{name}.packed"),
+        part = format!("{io}/{name}.part"),
     )
 }
 
-/// The shell script a job runs: its output into the log file, `HOME` moved
+/// Packs `artifacts` and `cached` of `work` into their archives in `io`; an
+/// archive that failed is not there. A failure of the script itself (`work`
+/// not there, a mark that cannot be removed, the rename) fails it, and the
+/// host keeps neither.
+fn collect_script(work: &str, io: &str, artifacts: &[&str], cached: &[&str]) -> String {
+    let mut s = format!("set -e\ncd {work}\n");
+    if !artifacts.is_empty() {
+        s.push_str(&pack_script(io, ARTIFACTS, artifacts));
+    }
+    if !cached.is_empty() {
+        s.push_str(&pack_script(io, CACHE_OUT, cached));
+    }
+    s
+}
+
+/// The shell script a job runs: a flush when it exits (as for the helpers,
+/// the VM stops when it ends), its output into the log file, `HOME` moved
 /// to `/tmp/home` when the user cannot write the one the image gives it (or
 /// it has none), a start marker, then each command in its own `sh -c`,
 /// stopping at the first failure with its exit code.
@@ -825,7 +850,7 @@ fn pack_script(io: &str, name: &str, paths: &[&str]) -> String {
 /// (a timeout, a cancellation) would be lost.
 pub fn script(commands: &[String]) -> String {
     let mut s = format!(
-        "exec >>{LOG_MOUNT}/out 2>&1\n[ -w \"$HOME\" ] || {{ export HOME=/tmp/home; mkdir -p \"$HOME\"; }}\nprintf '\\036branvil:started\\n'\n"
+        "trap sync EXIT\nexec >>{LOG_MOUNT}/out 2>&1\n[ -w \"$HOME\" ] || {{ export HOME=/tmp/home; mkdir -p \"$HOME\"; }}\nprintf '\\036branvil:started\\n'\n"
     );
     for c in commands {
         let q = c.replace('\'', "'\\''");
@@ -1094,16 +1119,15 @@ impl Executor for Microsandbox {
         let collect = !artifacts.is_empty() || !cached.is_empty();
         if collect {
             let collecting = Instant::now();
-            let mut script = String::from("cd /work\n");
-            if !artifacts.is_empty() {
-                script.push_str(&pack_script(IO_MOUNT, ARTIFACTS, &artifacts));
-            }
-            if !cached.is_empty() {
-                script.push_str(&pack_script(IO_MOUNT, CACHE_OUT, &cached));
-            }
+            let script = collect_script("/work", IO_MOUNT, &artifacts, &cached);
             // As for the job's VM: the image the tag names stays put until
             // the VM has picked it.
-            let collected = match self.lock_images(false, || {}).await {
+            // A stop does not wait for a load that holds the cache.
+            let locked = tokio::select! {
+                l = self.lock_images(false, || {}) => l.map_err(Some),
+                Ok(_) = cancel.wait_for(|stop| *stop) => Err(None),
+            };
+            let collected = match locked {
                 Ok(_lock) => {
                     self.helper(
                         &job,
@@ -1114,7 +1138,7 @@ impl Executor for Microsandbox {
                     )
                     .await
                 }
-                Err(e) => Err(Some(e)),
+                Err(e) => Err(e),
             };
             match collected {
                 Ok(()) => {
@@ -1122,7 +1146,13 @@ impl Executor for Microsandbox {
                         "/work collected in {} ms",
                         collecting.elapsed().as_millis()
                     ))
-                    .await
+                    .await;
+                    // An archive is there only once it was packed whole.
+                    for (name, asked) in [(ARTIFACTS, &artifacts), (CACHE_OUT, &cached)] {
+                        if !asked.is_empty() && !job.io.join(name).is_file() {
+                            say(format!("packing {name} failed")).await;
+                        }
+                    }
                 }
                 Err(e) => {
                     if e.is_none() {
@@ -1137,12 +1167,6 @@ impl Executor for Microsandbox {
                     for name in [ARTIFACTS, CACHE_OUT] {
                         let _ = std::fs::remove_file(job.io.join(name));
                     }
-                }
-            }
-            for name in [ARTIFACTS, CACHE_OUT] {
-                if std::fs::remove_file(job.io.join(format!("{name}.failed"))).is_ok() {
-                    say(format!("packing {name} failed")).await;
-                    let _ = std::fs::remove_file(job.io.join(name));
                 }
             }
         }
@@ -1355,8 +1379,30 @@ impl Microsandbox {
         }
         // Started or not, the VM is past picking an image.
         drop(image_lock);
+        let mut unflushed = false;
         let outcome = match stop {
             Some(o) => {
+                let o = if o == Outcome::TimedOut && !j.artifacts.is_empty() {
+                    // Its artifacts are collected: flush what it wrote,
+                    // which the kill would lose (the job's own flush runs
+                    // only when its script exits). A stop does not wait.
+                    let flush = ["exec", name.as_str(), "--", "sync"];
+                    let flushed = tokio::select! {
+                        out = self.output_within(&flush, TIMEOUT_FLUSH) => {
+                            Some(out.is_ok_and(|out| out.status.success()))
+                        }
+                        Ok(_) = cancel.wait_for(|stop| *stop) => None,
+                    };
+                    match flushed {
+                        Some(ok) => {
+                            unflushed = !ok;
+                            o
+                        }
+                        None => Outcome::Cancelled,
+                    }
+                } else {
+                    o
+                };
                 // Killing `msb run` stops the VM (its watchdog watches the
                 // parent), and every process inside it with it.
                 let _ = child.kill().await;
@@ -1381,6 +1427,10 @@ impl Microsandbox {
         // What the job wrote up to the moment it was stopped.
         job_log.read_from(&mut output).await;
         job_log.flush().await;
+        if unflushed {
+            let note = "[branvil] flushing the job at its timeout failed: its artifacts may miss what it wrote last\n";
+            let _ = log.send(note.into()).await;
+        }
         err_reader.abort();
         if let Some(at) = job_log.started {
             let note = format!(
@@ -1571,8 +1621,10 @@ pub(crate) mod tests {
     #[test]
     fn the_script_quotes_every_command() {
         let s = script(&["echo 'a b'".into(), "exit 3".into()]);
+        // What the job wrote reaches `/work` and the log before its VM is
+        // removed, however the commands end.
         assert!(s.starts_with(
-            "exec >>/.branvil-log/out 2>&1\n[ -w \"$HOME\" ] || { export HOME=/tmp/home; mkdir -p \"$HOME\"; }\nprintf '\\036branvil:started\\n'\n"
+            "trap sync EXIT\nexec >>/.branvil-log/out 2>&1\n[ -w \"$HOME\" ] || { export HOME=/tmp/home; mkdir -p \"$HOME\"; }\nprintf '\\036branvil:started\\n'\n"
         ));
         assert!(s.contains("/bin/sh -c 'echo '\\''a b'\\''' || exit $?"));
         assert!(s.contains("/bin/sh -c 'exit 3' || exit $?"));
@@ -1607,7 +1659,10 @@ pub(crate) mod tests {
     /// writes the start marker, and runs until `fake/done` exists; the VM
     /// that collects `/work` copies `fake/returned/*` into the transfer
     /// directory; the others end at once. `volume list` answers
-    /// `fake/volumes`; removals are noted in `fake/removed`.
+    /// `fake/volumes`; removals are noted in `fake/removed`, and so is an
+    /// `exec` into a job's VM while its `run` is alive (it fails otherwise,
+    /// and when `fake/exec-fails` exists), which then runs while
+    /// `fake/exec-hangs` exists.
     #[cfg(unix)]
     const FAKE_MSB: &str = r#"#!/bin/sh
 state="$MSB_HOME/fake"
@@ -1630,7 +1685,7 @@ run)
   printf '%s\n' "$@" > "$state/args-$name"
   case "$name" in
   bv-collect-*) cp "$state"/returned/* "$io" 2>/dev/null; [ ! -e "$state/collect-fails" ]; exit $? ;;
-  bv-job-*) ;;
+  bv-job-*) echo $$ > "$state/pid-$name" ;;
   *) exit 0 ;;
   esac
   cat "$state/tag" > "$state/ran"
@@ -1638,6 +1693,11 @@ run)
   while [ ! -f "$state/done" ]; do sleep 0.05; done ;;
 remove)
   echo "$*" >> "$state/removed" ;;
+exec)
+  [ ! -e "$state/exec-fails" ] || exit 1
+  kill -0 "$(cat "$state/pid-$2")" 2>/dev/null || exit 1
+  echo "$*" >> "$state/removed"
+  while [ -e "$state/exec-hangs" ]; do sleep 0.05; done ;;
 volume)
   case "$2" in
   list) cat "$state/volumes" ;;
@@ -1767,7 +1827,8 @@ esac
         ] {
             assert!(has(&prep, flag, value), "{flag} {value} in {prep}");
         }
-        assert!(prep.contains("chown -R 1000:1000 /work"), "{prep}");
+        // Its writes reach the disk before its VM is removed.
+        assert!(prep.contains("chown -R 1000:1000 /work\nsync\n"), "{prep}");
         let ran = args("bv-job-a1").unwrap();
         for (flag, value) in [
             ("--user", "1000:1000"),
@@ -1904,9 +1965,18 @@ esac
                 key_files: vec![],
             }),
         };
+        // A job that declares no artifacts collects nothing after a timeout.
+        let bare = JobDef {
+            artifacts: vec![],
+            ..job.clone()
+        };
         for (ending, collected, cached) in [
             ("exit", true, true),
             ("timeout", true, false),
+            ("timeout-bare", false, false),
+            ("timeout-unflushed", true, false),
+            ("stop-while-flushing", false, false),
+            ("stop-while-locked", false, false),
             ("stop", false, false),
             ("collect-fails", true, true),
         ] {
@@ -1921,16 +1991,38 @@ esac
             let _ = std::fs::remove_file(state.join("done"));
             let _ = std::fs::remove_file(state.join("args-bv-collect-a1"));
             let _ = std::fs::remove_file(state.join("collect-fails"));
-            if ending == "exit" || ending == "collect-fails" {
+            let _ = std::fs::remove_file(state.join("removed"));
+            let _ = std::fs::remove_file(state.join("exec-hangs"));
+            let _ = std::fs::remove_file(state.join("exec-fails"));
+            if ending == "timeout-unflushed" {
+                std::fs::write(state.join("exec-fails"), "").unwrap();
+            }
+            if ending == "stop-while-flushing" {
+                std::fs::write(state.join("exec-hangs"), "").unwrap();
+            }
+            if ["exit", "collect-fails", "stop-while-locked"].contains(&ending) {
                 std::fs::write(state.join("done"), "").unwrap();
             }
             if ending == "collect-fails" {
                 std::fs::write(state.join("collect-fails"), "").unwrap();
             }
             let (stop, cancel) = watch::channel(false);
-            let (log, _logs) = mpsc::channel(256);
+            let (log, mut logs) = mpsc::channel(256);
+            // A load holds the image cache when the job's /work would be
+            // collected.
+            let load = if ending == "stop-while-locked" {
+                let service = Microsandbox::new(Msb::Found(msb.clone()), home.clone(), "service");
+                Some(service.lock_images(true, || {}).await.unwrap())
+            } else {
+                None
+            };
             let runner = Microsandbox::new(Msb::Found(msb.clone()), home.clone(), "t");
-            let (job, work_dir, io_dir) = (&job, work.clone(), io.clone());
+            let job = if ending == "timeout-bare" {
+                &bare
+            } else {
+                &job
+            };
+            let (work_dir, io_dir) = (work.clone(), io.clone());
             let running = async move {
                 runner
                     .run(
@@ -1941,7 +2033,13 @@ esac
                             cpus: 1,
                             memory_mib: 256,
                             work_quota_mib: 2048,
-                            timeout_secs: if ending == "timeout" { 1 } else { 60 },
+                            timeout_secs: if ending.starts_with("timeout")
+                                || ending == "stop-while-flushing"
+                            {
+                                1
+                            } else {
+                                60
+                            },
                             io: &io_dir,
                             save_cache: true,
                             work: &work_dir,
@@ -1954,22 +2052,67 @@ esac
                     )
                     .await
             };
+            let removed_file = state.join("removed");
             let stopping = async {
                 if ending == "stop" {
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     stop.send(true).unwrap();
                 }
+                if ending == "stop-while-locked" {
+                    // The job's VM is removed right before /work is collected.
+                    while !std::fs::read_to_string(&removed_file)
+                        .is_ok_and(|r| r.contains("remove --force -q bv-job-a1"))
+                    {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    stop.send(true).unwrap();
+                }
+                if ending == "stop-while-flushing" {
+                    // Stopped while the timeout's flush runs.
+                    while !std::fs::read_to_string(&removed_file).is_ok_and(|r| r.contains("exec"))
+                    {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    stop.send(true).unwrap();
+                }
             };
+            let started = Instant::now();
             let (outcome, ()) = tokio::join!(running, stopping);
+            drop(load);
+            let _ = std::fs::remove_file(state.join("exec-hangs"));
             assert_eq!(
                 outcome,
                 match ending {
                     "exit" | "collect-fails" => Outcome::Exited(0),
-                    "timeout" => Outcome::TimedOut,
+                    "timeout" | "timeout-bare" | "timeout-unflushed" => Outcome::TimedOut,
                     _ => Outcome::Cancelled,
                 }
             );
+            // A stop waits neither for the flush nor for the load.
+            assert!(started.elapsed() < TIMEOUT_FLUSH / 3, "{ending}");
+            // A flush that fails is said.
+            let mut text = String::new();
+            while let Ok(bytes) = logs.try_recv() {
+                text.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            assert_eq!(
+                text.contains("flushing the job at its timeout failed"),
+                ending == "timeout-unflushed",
+                "{ending}: {text}"
+            );
             assert!(!io.join(CACHE_IN).exists(), "{ending}");
+            // A job stopped at its timeout is flushed before it is killed
+            // when it declares artifacts: they are collected from what
+            // reached the disk. One that exits flushes itself; a cancelled
+            // one, and one with nothing to collect, are not flushed.
+            let flushed = ending == "timeout" || ending == "stop-while-flushing";
+            let removed = std::fs::read_to_string(&removed_file).unwrap();
+            assert_eq!(
+                removed.contains("\nexec bv-job-a1 -- sync\nremove --force -q bv-job-a1\n"),
+                flushed,
+                "{ending}: {removed}"
+            );
+            assert_eq!(removed.contains("exec"), flushed, "{ending}: {removed}");
             let script = std::fs::read_to_string(state.join("args-bv-collect-a1"));
             assert_eq!(script.is_ok(), collected, "{ending}");
             if let Ok(script) = script {
@@ -1979,6 +2122,7 @@ esac
                 assert!(script.contains("'out/'"), "{script}");
                 assert_eq!(script.contains("'target'"), cached, "{script}");
                 assert!(!script.contains("--user\n1000"), "{script}");
+                assert!(script.contains("\nset -e\ncd /work\n"), "{script}");
                 // Nothing of the checkout is taken for an artifact.
                 assert!(!work.join("README").exists(), "{ending}");
                 if ending == "collect-fails" {
@@ -1992,6 +2136,11 @@ esac
                         "ok"
                     );
                 }
+            } else if ending == "stop-while-locked" {
+                // Its artifacts were asked for: nothing of the checkout is
+                // left, and nothing was collected.
+                assert!(!work.join("README").exists(), "{ending}");
+                assert!(!work.join("out").exists(), "{ending}");
             } else {
                 assert!(work.join("README").exists(), "{ending}");
             }
@@ -2000,7 +2149,7 @@ esac
 
     /// The script that packs `/work` packs the paths that exist and go
     /// through no link (a link at the end goes as a link), an empty archive
-    /// when there is none, and says when packing failed; with the system's
+    /// when there is none, and names none it could not write; with the system's
     /// `/bin/sh`, `tar`, and `dd`.
     #[cfg(unix)]
     #[test]
@@ -2059,13 +2208,108 @@ esac
                 ("./out/sub/x".to_string(), false),
             ]
         );
-        assert!(!io.join("a.tar.failed").exists());
+        assert!(!io.join("a.tar.part").exists());
         pack("e.tar", &["missing"]);
         let mut empty = tar::Archive::new(std::fs::File::open(io.join("e.tar")).unwrap());
         assert_eq!(empty.entries().unwrap().count(), 0);
-        std::fs::create_dir(io.join("d.tar")).unwrap();
+        // An archive that cannot be written gets no name.
+        std::fs::create_dir(io.join("d.tar.part")).unwrap();
         pack("d.tar", &["out/"]);
-        assert!(io.join("d.tar.failed").exists());
+        assert!(!io.join("d.tar").exists());
+    }
+
+    /// The collecting VM is removed once its script ends, and the host keeps
+    /// an archive only when it is there by its name: every archive is
+    /// flushed by the `dd` that writes it (`conv=fsync`) and named only once
+    /// it was packed whole, whatever failed (`tar`, whose status the pipeline
+    /// loses; `dd`; a mark); a failure of the script itself (a `/work` that is
+    /// not there, a mark it cannot remove) fails it. With the system's
+    /// `/bin/sh`, and a `tar` and a `dd` that fail on request (the `dd` noting
+    /// its arguments).
+    #[cfg(unix)]
+    #[test]
+    fn the_collect_script_flushes_and_fails_on_any_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let (work, io, bin) = (
+            dir.path().join("work"),
+            dir.path().join("io"),
+            dir.path().join("bin"),
+        );
+        for d in [&work.join("out"), &io, &bin] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(work.join("out/report.txt"), "x").unwrap();
+        let calls = dir.path().join("dd-calls");
+        write_script(
+            &bin.join("dd"),
+            &format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\n[ ! -e '{}' ] || {{ cat >/dev/null; exit 1; }}\nexec /bin/dd \"$@\"\n",
+                calls.display(),
+                dir.path().join("dd-fails").display()
+            ),
+        );
+        // A `tar` that fails midway on request.
+        write_script(
+            &bin.join("tar"),
+            &format!(
+                "#!/bin/sh\nif [ -e '{}' ]; then printf partial; exit 1; fi\nexec /usr/bin/tar \"$@\"\n",
+                dir.path().join("tar-fails").display()
+            ),
+        );
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+        let collect = |work: &Path, artifacts: &[&str], cached: &[&str]| {
+            let _ = std::fs::remove_file(&calls);
+            for name in [ARTIFACTS, CACHE_OUT] {
+                let _ = std::fs::remove_file(io.join(name));
+            }
+            std::process::Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    &collect_script(
+                        work.to_str().unwrap(),
+                        io.to_str().unwrap(),
+                        artifacts,
+                        cached,
+                    ),
+                ])
+                .env("PATH", &path)
+                .env("COPYFILE_DISABLE", "1")
+                .output()
+                .unwrap()
+                .status
+                .success()
+        };
+        // Both archives, the empty one included, are written and flushed.
+        assert!(collect(&work, &["out/"], &["missing"]));
+        let calls_of = || std::fs::read_to_string(&calls).unwrap();
+        assert_eq!(calls_of().lines().count(), 2, "{}", calls_of());
+        assert!(
+            calls_of().lines().all(|l| l.contains("conv=fsync")),
+            "{}",
+            calls_of()
+        );
+        let named = |name: &str| io.join(name).is_file();
+        assert!(named(ARTIFACTS) && named(CACHE_OUT));
+        // A `dd` that fails once it read all (`tar` succeeded), of the empty
+        // archive or one of paths, leaves neither, and the script goes on.
+        std::fs::write(dir.path().join("dd-fails"), "").unwrap();
+        assert!(collect(&work, &["missing"], &["out/"]));
+        assert!(!named(ARTIFACTS) && !named(CACHE_OUT));
+        std::fs::remove_file(dir.path().join("dd-fails")).unwrap();
+        // A `tar` that fails midway leaves no archive, though `dd` wrote
+        // what it got.
+        std::fs::write(dir.path().join("tar-fails"), "").unwrap();
+        assert!(collect(&work, &["out/"], &["out/"]));
+        assert!(!named(ARTIFACTS) && !named(CACHE_OUT));
+        std::fs::remove_file(dir.path().join("tar-fails")).unwrap();
+        // A mark that cannot be removed fails the script, and names nothing.
+        let mark = io.join(format!("{ARTIFACTS}.packed"));
+        std::fs::create_dir(&mark).unwrap();
+        assert!(!collect(&work, &["out/"], &[]));
+        assert!(!named(ARTIFACTS));
+        std::fs::remove_dir(&mark).unwrap();
+        // `/work` not there: nothing is packed from elsewhere.
+        assert!(!collect(&dir.path().join("gone"), &["out/"], &[]));
     }
 
     /// A pull, and a load's pin, name the version the tag now points to by

@@ -158,6 +158,7 @@ commands = [
   "test \"$(git describe --tags)\" = v-real",
   "test -z \"$(git remote)\"",
   "test \"$(id -u):$(id -g)\" = 1000:1000",
+  "test -z \"$(find /work ! -user 1000)\"",
   "echo secret > /tmp/s && chmod 0 /tmp/s && ! cat /tmp/s",
   "echo secret > s0 && chmod 0 s0 && ! cat s0",
   "grep -q '^/dev/[a-z]* /tmp ext4 ' /proc/mounts",
@@ -176,7 +177,8 @@ commands = ["echo before", "exit 3", "echo never"]
 name = "slow"
 image = "{IMAGE}"
 timeout_secs = 5
-commands = ["echo before-timeout", "sleep 600 & sleep 600"]
+commands = ["mkdir -p out && echo late > out/late.txt", "echo before-timeout", "sleep 600 & sleep 600"]
+artifacts = [{{name = "late", paths = ["out/"]}}]
 "#
     )
 }
@@ -434,6 +436,30 @@ async fn jobs_run_in_microvms_without_network_or_host_files() {
     let ran = chrono::DateTime::parse_from_rfc3339(job["finished_at"].as_str().unwrap()).unwrap()
         - chrono::DateTime::parse_from_rfc3339(job["started_at"].as_str().unwrap()).unwrap();
     assert!(ran.num_seconds() < 30, "the timeout stopped the job: {ran}");
+    // What it wrote just before is flushed and collected, though the job's
+    // own flush never ran.
+    assert_eq!(slow["artifact_names"], json!(["late"]), "{slow}");
+    let resp = s
+        .http
+        .get(format!(
+            "{}/api/v1{}/commits/{head}/artifacts/late",
+            s.url,
+            w.repo_path()
+        ))
+        .bearer_auth(&w.aiko)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let late = w.dir.path().join("late.zip");
+    std::fs::write(&late, resp.bytes().await.unwrap()).unwrap();
+    let content = Command::new("unzip")
+        .args(["-p"])
+        .arg(&late)
+        .arg("out/late.txt")
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&content.stdout), "late\n");
 
     // Nothing is left behind: no sandbox record, no /tmp volume, no VM
     // process.
