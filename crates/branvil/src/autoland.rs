@@ -162,7 +162,11 @@ async fn sweep_repo(app: &App, repo: &Repo, webhook_ok: &mut bool) -> AppResult<
         .read(move |r| {
             let mut candidates = Vec::new();
             for p in pulls::open_pulls(r, &r2)? {
-                if r2.auto_land && (r2.upstream.is_none() || p.upstream.is_none()) {
+                if r2.auto_land
+                    && (r2.upstream.is_none()
+                        || p.base != r2.default_branch
+                        || p.upstream.is_none())
+                {
                     candidates.push(p);
                 }
             }
@@ -184,7 +188,11 @@ async fn sweep_repo(app: &App, repo: &Repo, webhook_ok: &mut bool) -> AppResult<
         };
         let attempted_head = input.expected_head.clone();
         let attempted_base = input.expected_base.clone();
-        let (done, landed) = match repo.upstream {
+        let (done, landed) = match repo
+            .upstream
+            .as_ref()
+            .filter(|_| p.base == repo.default_branch)
+        {
             None => (
                 "merged",
                 pulls::merge_pull(app, repo, p.number, input, true).await,

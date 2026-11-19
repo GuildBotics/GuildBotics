@@ -21,7 +21,7 @@ function refusalOf(t: Translate, err: unknown, notReady: "merge.notMergeable" | 
   return errorText(err, t);
 }
 
-/** A repository without an upstream merges here (fast-forward). */
+/** Pull requests without an upstream publication merge here. */
 export function MergeCard({ pull, repo }: { pull: PullRequest; repo: Repository }) {
   const t = useT();
   const blocked = pull.landing?.next !== "owner_merge";
@@ -104,7 +104,7 @@ function PublishedState({ pull }: { pull: PullRequest }) {
 }
 
 /**
- * In a repository with an upstream, pull requests are merged on the host:
+ * Pull requests targeting the default branch of an upstream repository merge on the host:
  * this says why, shows exactly what publishing posts there and as whom, and
  * publishes.
  */

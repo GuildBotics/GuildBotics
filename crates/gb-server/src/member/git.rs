@@ -1250,6 +1250,14 @@ impl Workspace<'_> {
     /// The caller resolves a ticket or PR through the provider before passing
     /// its canonical repository and branch here.
     pub async fn prepare(&self, repository: &str, requested: &str) -> Result<Value> {
+        self.prepare_from(repository, requested, None).await
+    }
+    pub async fn prepare_from(
+        &self,
+        repository: &str,
+        requested: &str,
+        base: Option<&str>,
+    ) -> Result<Value> {
         let owner = self.owner()?;
         repository_path(repository)?;
         let _lock = gb_base::files::FileLock::hold(
@@ -1260,7 +1268,8 @@ impl Workspace<'_> {
         let origin = self.origin(repository).await?;
         origin.branch(requested).await?;
         let default = self.code()?.default_branch(repository).await?;
-        origin.branch(&default).await?;
+        let base = base.unwrap_or(&default);
+        origin.branch(base).await?;
         origin.fetch(self.code()?.git_credential().await?).await?;
         let refs = origin.refs(&["refs/remotes/origin/", "refs/tags/"]).await?;
         let public = origin
@@ -1371,7 +1380,7 @@ impl Workspace<'_> {
             let start = if refs.contains_key(&remote) {
                 remote
             } else {
-                format!("refs/remotes/origin/{default}")
+                format!("refs/remotes/origin/{base}")
             };
             self.git(
                 &path,
@@ -1433,7 +1442,7 @@ impl Workspace<'_> {
             .await?
             .text();
         Ok(
-            json!({"repository":repository,"repo_path":path,"branch":branch,"default_branch":default}),
+            json!({"repository":repository,"repo_path":path,"branch":branch,"default_branch":default,"base":base}),
         )
     }
     pub async fn commit(&self, path: &Path, message: &str) -> Result<Commit> {

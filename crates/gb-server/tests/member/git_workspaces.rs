@@ -1198,6 +1198,7 @@ async fn prepare_dispatch_resolves_ticket_and_fork_heads_and_rejects_invalid_anc
         .await
         .unwrap();
     assert_eq!(ticket.payload["branch"], format!("ticket/{key}"));
+    assert_eq!(ticket.payload["base"], "main");
     let path = PathBuf::from(ticket.payload["repo_path"].as_str().unwrap());
     f.stage(&path, "staged command body");
     let relative = path.file_name().unwrap().to_str().unwrap();
@@ -1634,4 +1635,96 @@ async fn initially_unknown_target_is_not_treated_as_unreserved_work() {
         f.prepare("other", "other").await.to_str().unwrap(),
         first["repo_path"]
     );
+}
+
+#[tokio::test]
+async fn prepare_from_feature_base_keeps_existing_work_and_reports_base() {
+    let f = Fixture::new().await;
+    f.stage(&f.seed, "feature content");
+    git(&f.seed, &["commit", "-qm", "feature"]);
+    let feature = git(&f.seed, &["rev-parse", "HEAD"]);
+    git(
+        &f.seed,
+        &["push", "-q", "origin", "HEAD:refs/heads/ticket/parent"],
+    );
+    let ws = f.workspace("child");
+    let result = ws
+        .prepare_from("acme/repo", "ticket/child", Some("ticket/parent"))
+        .await
+        .unwrap();
+    assert_eq!(result["base"], "ticket/parent");
+    let path = PathBuf::from(result["repo_path"].as_str().unwrap());
+    assert_eq!(git(&path, &["rev-parse", "HEAD"]), feature);
+    f.stage(&path, "keep my staged work");
+    let again = ws
+        .prepare_from("acme/repo", "ticket/child", Some("main"))
+        .await
+        .unwrap();
+    assert_eq!(again["repo_path"], result["repo_path"]);
+    assert_eq!(git(&path, &["show", ":readme"]), "keep my staged work");
+}
+
+#[tokio::test]
+async fn prepare_dispatch_selects_draft_parent_base() {
+    let f = Fixture::new().await;
+    let parent = f.services.ticket("parent").await;
+    let key = parent.rsplit('/').next().unwrap();
+    let branch = format!("ticket/{key}");
+    let child = f
+        .services
+        .fixture
+        .owner
+        .tickets_create_ticket(
+            support::REPO,
+            input(json!({"title":"child", "parent":parent})),
+        )
+        .await
+        .unwrap();
+    let head = f.services.fixture.commit(
+        support::REPO,
+        &branch,
+        Some(&f.services.main),
+        "feature.txt",
+        "parent content",
+    );
+    f.services
+        .fixture
+        .pull(
+            &f.services.fixture.owner,
+            support::REPO,
+            json!({"head":branch,"base":"main","title":"collect","draft":true}),
+        )
+        .await;
+    let roster = BTreeMap::new();
+    let w = f.workspace("collect-child");
+    let session = gb_server::member::session::Session {
+        person_id: "aiko",
+        person_type: "agent",
+        delegated_to: Some("aiko"),
+        workflow: true,
+        repository: gb_server::member::repository::Repository {
+            services: &f.services,
+            guard: &Current,
+            roster: &roster,
+        },
+        chat: None,
+        memory: None,
+        git: Some(w),
+        context: json!({}),
+        control: &NoRecord,
+        git_root: f.temp.path(),
+    };
+    let arguments = [
+        "git",
+        "prepare",
+        "--person",
+        "aiko",
+        "--issue-url",
+        &child.url,
+    ]
+    .map(str::to_string);
+    let result = session.execute(&arguments, "").await.unwrap().payload;
+    assert_eq!(result["base"], branch);
+    let path = PathBuf::from(result["repo_path"].as_str().unwrap());
+    assert_eq!(git(&path, &["rev-parse", "HEAD"]), head);
 }

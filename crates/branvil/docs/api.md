@@ -1267,6 +1267,11 @@ is polled when, and how conflicts are settled: `docs/architecture.md`,
   "Branvil's references on the host"), and `body` gets a line for each linked
   ticket that names an issue there (`Closes #12` for a link that closes,
   `Refs #12` otherwise).
+Pull requests targeting a nondefault branch merge inside Branvil, including in
+repositories with an upstream. They need no upstream author account and are
+not published automatically. A `closes` link closes tickets only on a merge
+into the default branch; feature-branch merges leave tickets open.
+
 - `POST /api/v1/repos/{repo}/pulls/{number}/publish` (owner)
   `{"expected_head", "expected_base"}` → pull request. The checks of a merge
   apply (`409 head_moved`, `base_moved`, `not_mergeable`), the base must be

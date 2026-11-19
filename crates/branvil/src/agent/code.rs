@@ -230,13 +230,52 @@ impl CodeAgent {
             })
         })
     }
+    /// Resolve the nearest ancestor collecting children via a draft to the default branch.
+    pub async fn ticket_base(&self, repository: &str, key: &str) -> Result<String, ServiceError> {
+        self.repository(repository)?;
+        let default = self.default_branch(repository).await?;
+        let m = self.member().await?;
+        let ticket = m
+            .tickets_get_ticket(repository, key)
+            .await
+            .map_err(|e| error(e, "tickets_get_ticket"))?;
+        let mut parent = ticket.parent;
+        while let Some(t) = parent {
+            if t.repository == repository {
+                let branch = format!("ticket/{}", t.key);
+                for url in self.open_pull_requests(repository, &branch).await? {
+                    let p = self.pull(&url).await?;
+                    if p["draft"] == true && p["base"] == default {
+                        return Ok(branch);
+                    }
+                }
+            }
+            self.repository(&t.repository)?;
+            parent = m
+                .tickets_get_ticket(&t.repository, &t.key)
+                .await
+                .map_err(|e| error(e, "tickets_get_ticket"))?
+                .parent;
+        }
+        Ok(default)
+    }
+
     pub fn create_pull_request(
         &self,
-        r: CreatePullRequest,
+        mut r: CreatePullRequest,
     ) -> ServiceFuture<'_, PullRequestCreated> {
         Box::pin(async move {
             self.fault("create_pull_request", &r.repository).await?;
             self.repository(&r.repository)?;
+            if r.base.is_empty() {
+                let prefix = format!("{}/{}/-/tickets/", self.data().base_url(), r.repository);
+                r.base =
+                    if let Some(key) = r.tickets.iter().find_map(|t| t.url.strip_prefix(&prefix)) {
+                        self.ticket_base(&r.repository, key).await?
+                    } else {
+                        self.default_branch(&r.repository).await?
+                    };
+            }
             let links = r.tickets;
             self.writable(&r.repository)?;
             let p=self.member().await?.pulls_create(&r.repository,decode(json!({"head":r.head,"base":r.base,"title":r.title,"body":r.body,"draft":r.draft,"tickets":links}))?).await.map_err(|e| error(e, "pulls_create"))?;

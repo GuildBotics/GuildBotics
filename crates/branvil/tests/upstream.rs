@@ -2000,3 +2000,87 @@ async fn a_failed_read_of_dependency_alerts_is_never_an_empty_list() {
         failed(st, &v, "unsupported");
     }
 }
+
+async fn feature_collection(auto: bool) {
+    let (w, gh) = followed().await;
+    let s = &w.server;
+    let parent_head = w.push_change("ticket/parent", "parent.txt", "parent");
+    let parent = w.open_pull("ticket/parent", json!([])).await;
+    let parent_url = format!("{}/pulls/{}", w.repo_path(), parent["number"]);
+    let (st, v) = s.patch(&parent_url, &w.owner, json!({"draft":true})).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let ticket = w.ticket("child").await;
+    let child_head = w.push_change("child", "child.txt", "child");
+    let (st, made) = s.post(&format!("{}/pulls", w.repo_path()), &w.aiko,
+        json!({"head":"child","base":"ticket/parent","title":"child","tickets":[{"url":ticket["url"],"closes":true}]})).await;
+    assert_eq!(st, StatusCode::CREATED, "{made}");
+    let p = &made["pull"];
+    let child_url = format!("{}/pulls/{}", w.repo_path(), p["number"]);
+    let repo = s.ok(&w.repo_path(), &w.owner).await;
+    let (st, v) = s.patch(&w.repo_path(), &w.owner, json!({"revision":repo["revision"],"auto_land":auto,"required_approvals":0,"hold_while_failing":true})).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    eventually("feature child pair checked", || async {
+        let p = s.ok(&child_url, &w.owner).await;
+        p["merged"] == true || p["landing"]["blockers"] == json!([])
+    })
+    .await;
+    if !auto {
+        let p = s.ok(&child_url, &w.owner).await;
+        assert_eq!(p["landing"]["next"], "owner_merge");
+        let (st, v) = s
+            .post(
+                &format!("{child_url}/merge"),
+                &w.owner,
+                json!({"expected_head":child_head,"expected_base":parent_head}),
+            )
+            .await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+    }
+    eventually("child merged internally", || async {
+        s.ok(&child_url, &w.owner).await["merged"] == true
+    })
+    .await;
+    assert!(gh.pulls(GH).is_empty());
+    let ticket = s
+        .ok(
+            &format!(
+                "{}/tickets/{}",
+                w.repo_path(),
+                ticket["key"].as_str().unwrap()
+            ),
+            &w.owner,
+        )
+        .await;
+    assert_eq!(ticket["state"], "open");
+    with_aiko_account(&w).await;
+    let (st, v) = s.patch(&parent_url, &w.owner, json!({"draft":false})).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    if !auto {
+        eventually("parent pair checked", || async {
+            s.ok(&parent_url, &w.owner).await["landing"]["blockers"] == json!([])
+        })
+        .await;
+        let (st, v) = publish(&w, parent["number"].as_u64().unwrap()).await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+    }
+    eventually("parent published", || async { !gh.pulls(GH).is_empty() }).await;
+    let p = s.ok(&parent_url, &w.owner).await;
+    gh.squash_merge(GH, p["upstream"]["number"].as_u64().unwrap());
+    refresh(&w).await;
+    assert_eq!(s.ok(&parent_url, &w.owner).await["merged"], true);
+    assert_eq!(
+        git_ok(
+            &w.server.data.join("repos/acme/demo.git"),
+            &["show", "main:child.txt"]
+        ),
+        "child"
+    );
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn feature_children_merge_locally_before_parent_publication() {
+    feature_collection(false).await;
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn feature_children_automerge_locally_before_parent_publication() {
+    feature_collection(true).await;
+}
