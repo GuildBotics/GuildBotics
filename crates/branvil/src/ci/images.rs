@@ -1,48 +1,9 @@
 //! Architecture-specific CI archives, owned by the Hub and served to runners.
 use crate::util;
-use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Image {
-    pub reference: String,
-    pub architecture: String,
-    pub digest: String,
-}
-
-pub fn architecture() -> &'static str {
-    match std::env::consts::ARCH {
-        "aarch64" => "arm64",
-        "x86_64" => "amd64",
-        a => a,
-    }
-}
-
-fn same_reference(a: &str, b: &str) -> bool {
-    match (
-        a.parse::<oci_spec::distribution::Reference>(),
-        b.parse::<oci_spec::distribution::Reference>(),
-    ) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => false,
-    }
-}
-
-impl Image {
-    pub fn supports(&self, reference: &str) -> bool {
-        same_reference(&self.reference, reference)
-            && !self.digest.is_empty()
-            && matches!(self.architecture.as_str(), "arm64" | "amd64")
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Archive {
-    pub images: Vec<Image>,
-    pub id: String,
-}
-
+pub use gb_runner::ci::images::{Archive, Image, architecture, same_reference};
 fn directory(root: &Path) -> PathBuf {
     root.join("ci/images")
 }

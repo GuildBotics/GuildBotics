@@ -815,6 +815,7 @@ dependencies = [
  "directories",
  "futures-util",
  "gb-base",
+ "gb-runner",
  "libc",
  "loopback-auth",
  "mime_guess",
@@ -2185,6 +2186,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "gb-runner"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.23.1",
+ "chrono",
+ "clap",
+ "crc32fast",
+ "directories",
+ "futures-util",
+ "gb-base",
+ "getrandom 0.4.3",
+ "libc",
+ "oci-spec 0.9.0",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tar",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "gb-server"
 version = "0.1.0"
 dependencies = [
@@ -2203,6 +2232,7 @@ dependencies = [
  "gb-integrations",
  "gb-member",
  "gb-observability",
+ "gb-runner",
  "gb-setup",
  "gb-wire",
  "gb-workspace",
@@ -2373,6 +2403,7 @@ dependencies = [
  "flate2",
  "gb-base",
  "gb-environment",
+ "gb-runner",
  "gb-server",
  "libc",
  "loopback-auth",

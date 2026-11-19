@@ -21,7 +21,7 @@ use crate::http::{P as Path, Q};
 use crate::model::{MemberKind, Repo};
 use crate::util;
 
-pub const LEASE_HEADER: &str = "x-branvil-lease";
+pub use gb_runner::ci::api::LEASE_HEADER;
 /// One log append request at most.
 const LOG_CHUNK_MAX: usize = 1 << 20;
 const MAX_ARTIFACTS_PER_ATTEMPT: usize = 16;

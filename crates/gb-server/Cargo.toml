@@ -12,6 +12,7 @@ publish = false
 default = ["server"]
 server = ["gb-environment/host", "dep:croner", "dep:rcgen", "dep:tokio-rustls", "dep:hyper", "dep:hyper-util", "dep:gb-integrations", "dep:branvil", "dep:gb-setup", "dep:mime_guess"]
 [dependencies]
+gb-runner={path="../gb-runner"}
 tower = { version = "0.5.3", features = ["util"] }
 croner = { version = "4.0.3", optional = true }
 shlex = "2.0.1"

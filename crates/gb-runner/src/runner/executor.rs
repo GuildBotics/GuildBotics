@@ -1634,24 +1634,7 @@ pub(crate) mod tests {
     /// descriptor of it open for writing here could pass into a process that
     /// another test forks meanwhile, and running the script would then fail
     /// with "text file busy".
-    pub(crate) fn write_script(path: &Path, body: &str) {
-        #[cfg(unix)]
-        {
-            use std::io::Write;
-            let mut child = std::process::Command::new("/bin/sh")
-                .args(["-c", "cat > \"$0\" && chmod 755 \"$0\""])
-                .arg(path)
-                .stdin(Stdio::piped())
-                .spawn()
-                .unwrap();
-            let mut stdin = child.stdin.take().unwrap();
-            stdin.write_all(body.as_bytes()).unwrap();
-            drop(stdin);
-            assert!(child.wait().unwrap().success());
-        }
-        #[cfg(not(unix))]
-        std::fs::write(path, body).unwrap();
-    }
+    pub use super::test_support::write_script;
 
     /// An msb whose cache holds `img:dev` as the digest in `$MSB_HOME/fake/tag`:
     /// `load` writes the archive's content there, `run` notes its arguments
@@ -2437,5 +2420,28 @@ esac
             Msb::Found(p) => assert_ne!(p, fake),
             Msb::Missing(m) => assert!(m.contains("not msb 0.6.17") || cfg!(windows), "{m}"),
         }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    use std::{path::Path, process::Stdio};
+    pub fn write_script(path: &Path, body: &str) {
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            let mut child = std::process::Command::new("/bin/sh")
+                .args(["-c", "cat > \"$0\" && chmod 755 \"$0\""])
+                .arg(path)
+                .stdin(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut stdin = child.stdin.take().unwrap();
+            stdin.write_all(body.as_bytes()).unwrap();
+            drop(stdin);
+            assert!(child.wait().unwrap().success());
+        }
+        #[cfg(not(unix))]
+        std::fs::write(path, body).unwrap();
     }
 }
