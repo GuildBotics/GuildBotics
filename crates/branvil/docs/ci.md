@@ -682,13 +682,17 @@ version and concurrency. The list also shows held attempts and images from
 default-branch pipelines missing from each runner's CPU inventory. A runner
 reports on the same cadence when it has no work or is at capacity (normally
 every two seconds). The Hub treats reports older than `ci.runner_absent_secs`
-as offline. A ready, connected runner keeps the CI warning clear even when
-other runners are offline.
+as offline and labels their data as the last report. A connected runner with a
+ready executor and the Hub build keeps the CI warning clear even when other
+runners are offline. If a connected runner has a different build and no runner
+can take work, the warning names the incompatible runner even with the
+automatic runner switched off.
 
 Select a runner under Settings → CI to save its job resources. The Hub writes
 the override to `[ci.runner_limits.<name>]` in its `branvil.toml` while
 preserving the rest of the file. Without an override, the Hub supplies its
-`[ci.executor]` defaults. Every successful claim supplies the resources for
+`[ci.executor]` defaults. The form shows whether it uses the defaults or
+values saved for the selected runner. Every successful claim supplies the resources for
 that attempt. Saving new values, including for an offline runner, affects the
 next claim and leaves running jobs with their original resources. Each machine
 continues to set its own `work_dir`; job resource values in a remote runner's

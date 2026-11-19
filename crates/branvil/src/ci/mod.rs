@@ -47,7 +47,7 @@ use crate::refs::RefChange;
 use crate::store::{self, Key, Rd, Store};
 use crate::util;
 use config::CiConfig;
-use gb_runner::ci::api::{ExecutorState, RunnerReport};
+use gb_runner::ci::api::RunnerReport;
 use queue::{Attempt, PipelineState, Registration};
 
 /// How many commits of the first-parent history `Ci::estimate` looks at.
@@ -944,12 +944,13 @@ impl Ci {
             .filter_map(|m| runners.get(&util::fold(&m.name)))
             .filter(|r| r.online(absent))
             .collect();
-        let (state, detail) = if let Some(until) = self.inner.stopping.get() {
+        let (state, detail, version_mismatch) = if let Some(until) = self.inner.stopping.get() {
             (
                 "stopping",
                 format!(
                     "Branvil is stopping (an update or a restart): it gives out no job and waits until the running ones finish, at most until {until}; queued jobs run after it starts again."
                 ),
+                None,
             )
         } else if live.is_empty() {
             (
@@ -958,18 +959,30 @@ impl Ci {
                     "No runner has contacted Branvil in the last {} s; queued jobs conclude startup_failure.",
                     absent.as_secs()
                 ),
+                None,
             )
-        } else if live
-            .iter()
-            .any(|r| r.report.executor_state == ExecutorState::Ready)
-        {
-            ("ready", format!("{} runner(s) connected.", live.len()))
+        } else if live.iter().any(|r| r.report.can_run()) {
+            (
+                "ready",
+                format!("{} runner(s) connected.", live.len()),
+                None,
+            )
+        } else if let Some(runner) = live.iter().find(|r| !r.report.matches_hub_version()) {
+            (
+                "executor_unavailable",
+                format!(
+                    "{} reported version {}, which differs from the Hub.",
+                    runner.name, runner.report.version
+                ),
+                Some(serde_json::json!({"name": runner.name, "version": runner.report.version})),
+            )
         } else {
             (
                 "executor_unavailable",
                 live.iter()
                     .find_map(|r| r.report.executor_detail.clone())
                     .unwrap_or_else(|| "The runner's executor is not usable.".into()),
+                None,
             )
         };
         let mut rows = Vec::new();
@@ -1000,25 +1013,28 @@ impl Ci {
                 }
                 _ => None,
             };
+            let (limits, limits_source) = self.inner.settings.runner_limits(&member.name);
             rows.push(serde_json::json!({
                 "name": member.name,
                 "connection": connection,
                 "last_seen_at": seen.map(|r| &r.last_seen_at),
                 "running_jobs": running.get(&key).copied().unwrap_or(0),
                 "version": report.map(|r| &r.version),
-                "version_matches": report.map(|r| r.version == gb_base::BUILD_VERSION),
+                "version_matches": report.map(RunnerReport::matches_hub_version),
                 "max_jobs": report.map(|r| r.max_jobs),
                 "executor": report.map(|r| &r.executor),
                 "executor_state": report.map(|r| r.executor_state),
                 "executor_detail": report.and_then(|r| r.executor_detail.as_ref()),
                 "architecture": report.map(|r| &r.architecture),
                 "missing_images": missing_images,
-                "limits": self.inner.settings.runner_limits(&member.name),
+                "limits": limits,
+                "limits_source": limits_source,
             }));
         }
         Ok(serde_json::json!({
             "state": state,
             "detail": detail,
+            "version_mismatch": version_mismatch,
             "mode": self.inner.settings.mode(),
             "runners": rows,
             "queue": {
@@ -1207,6 +1223,7 @@ mod verification_tests;
 mod tests {
     use super::*;
     use crate::ci::pipeline::JobDef;
+    use gb_runner::ci::api::ExecutorState;
 
     pub(super) fn setup() -> (tempfile::TempDir, Ci, Repo) {
         let dir = tempfile::tempdir().unwrap();

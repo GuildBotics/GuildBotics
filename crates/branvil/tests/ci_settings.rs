@@ -211,15 +211,6 @@ async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
         w.server.get("/runner/health", &w.owner).await.0,
         StatusCode::FORBIDDEN
     );
-    let (status, v) = w.server.put(path, &w.owner, limits.clone()).await;
-    assert_eq!(status, StatusCode::OK, "{v}");
-    assert_eq!(row(&v, "idle-runner")["limits"], limits);
-    assert_eq!(w.server.ok("/runner/health", &idle).await["max_jobs"], 3);
-    assert_eq!(
-        row(&settings(&w).await, "idle-runner")["connection"],
-        "never_seen"
-    );
-
     // Only an image for the reporting runner's CPU counts.
     let mut report = json!({
         "executor": "fixture", "executor_state": "ready", "version": "older-build",
@@ -242,6 +233,46 @@ async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
     assert_eq!(remote_row["missing_images"], json!([IMAGE]));
     assert_eq!(remote_row["running_jobs"], 0);
 
+    for info in [
+        v["runner"].clone(),
+        w.server.ok("/admin/diagnostics", &w.owner).await["runner"].clone(),
+    ] {
+        assert_eq!(info["state"], "executor_unavailable");
+        assert_eq!(
+            info["version_mismatch"],
+            json!({"name": "remote-runner", "version": "older-build"})
+        );
+        let detail = info["detail"].as_str().unwrap();
+        assert!(
+            detail.contains("remote-runner") && detail.contains("older-build"),
+            "{detail}"
+        );
+    }
+
+    // Explicit settings remain an override even when they equal the defaults.
+    let defaults = v["limits"].clone();
+    let (status, v) = w.server.put(path, &w.owner, defaults).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(row(&v, "idle-runner")["limits_source"], "runner");
+
+    let (status, v) = w.server.put(path, &w.owner, limits.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(row(&v, "idle-runner")["limits"], limits);
+    assert_eq!(row(&v, "idle-runner")["limits_source"], "runner");
+    assert_eq!(w.server.ok("/runner/health", &idle).await["max_jobs"], 3);
+    assert_eq!(
+        row(&settings(&w).await, "idle-runner")["connection"],
+        "never_seen"
+    );
+
+    // A usable runner takes precedence over a simultaneously online mismatch.
+    let mut peer = report.clone();
+    peer["accept"] = json!(false);
+    assert_eq!(
+        w.server.post("/runner/claim", &idle, peer).await.0,
+        StatusCode::NO_CONTENT
+    );
+
     report["version"] = json!(gb_base::BUILD_VERSION);
     report["images"][0]["architecture"] = json!("amd64");
     report["running_jobs"] = json!(1);
@@ -263,6 +294,9 @@ async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
     assert_eq!(remote_row["missing_images"], json!([]));
     assert_eq!(remote_row["running_jobs"], 1);
     assert_eq!(v["runner"]["state"], "ready");
+    assert!(v["runner"]["version_mismatch"].is_null());
+    assert_eq!(row(&v, "idle-runner")["connection"], "online");
+    assert_eq!(row(&v, "idle-runner")["version_matches"], false);
 
     let finish = format!(
         "/runner/attempts/{}/finish",
@@ -285,8 +319,10 @@ async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
     isolate(&mut w);
     let v = settings(&w).await;
     assert_eq!(row(&v, "remote-runner")["connection"], "never_seen");
+    assert_eq!(row(&v, "remote-runner")["limits_source"], "default");
     assert!(row(&v, "remote-runner")["version"].is_null());
     assert_eq!(row(&v, "idle-runner")["limits"], limits);
+    assert_eq!(row(&v, "idle-runner")["limits_source"], "runner");
     assert_eq!(w.server.ok("/runner/health", &idle).await["max_jobs"], 3);
 }
 

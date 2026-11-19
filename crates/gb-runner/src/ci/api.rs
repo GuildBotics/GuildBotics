@@ -26,8 +26,12 @@ pub struct RunnerReport {
 }
 
 impl RunnerReport {
+    pub fn matches_hub_version(&self) -> bool {
+        self.version == gb_base::BUILD_VERSION
+    }
+
     pub fn can_run(&self) -> bool {
-        self.version == gb_base::BUILD_VERSION && self.executor_state == ExecutorState::Ready
+        self.matches_hub_version() && self.executor_state == ExecutorState::Ready
     }
 }
 

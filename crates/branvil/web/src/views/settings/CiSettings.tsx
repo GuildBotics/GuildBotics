@@ -13,6 +13,7 @@ import { keys } from "../../query/keys";
 import { Link } from "../../router/Router";
 import { href } from "../../router/routes";
 
+const CONNECTION_TONE: Record<CiRunner["connection"], Tone> = { online: "success", offline: "warning", never_seen: "neutral" };
 const RUNNER_TONE: Record<Settings["runner"]["state"], Tone> = { ready: "success", no_runner: "warning", executor_unavailable: "danger", stopping: "warning" };
 
 /** An image's size as people read it (the cache holds images of hundreds of MiB to GiB). */
@@ -114,7 +115,7 @@ function Runner({ settings, selected, onSelect }: { settings: Settings; selected
         <Group gap="xs">
           <StateBadge tone={RUNNER_TONE[runner.state]}>{t(`ci.settings.state.${runner.state}`)}</StateBadge>
           <Text span size="sm">
-            {runner.detail}
+            {runner.version_mismatch ? t("ci.runnerVersionMismatch", runner.version_mismatch) : runner.detail}
           </Text>
         </Group>
         <Switch
@@ -150,40 +151,47 @@ function Runner({ settings, selected, onSelect }: { settings: Settings; selected
 
 function RunnerRow({ runner: r }: { runner: CiRunner }) {
   const t = useT();
+  const online = r.connection === "online";
+  const reportTone = (ok: boolean): Tone => online ? (ok ? "success" : "warning") : "neutral";
   return (
     <div role="listitem" className="setting-row">
       <Stack gap={4} className="setting-row-name">
         <Radio value={r.name} label={r.name} />
-        {r.last_seen_at && (
-          <Text size="xs" c="dimmed">
-            {t("ci.settings.lastSeen")} <Time value={r.last_seen_at} />
-          </Text>
-        )}
-        <Text size="xs" c="dimmed">
-          {r.max_jobs === null
-            ? t("ci.settings.active", { running: r.running_jobs })
-            : t("ci.settings.capacity", { running: r.running_jobs, max: r.max_jobs })}
-        </Text>
         <Group gap="xs">
-          <StateBadge tone={r.connection === "online" ? "success" : "neutral"}>
-            {t(`ci.settings.connection.${r.connection}`)}
-          </StateBadge>
-          {r.executor_state && (
-            <StateBadge tone={r.executor_state === "ready" ? "success" : "warning"}>
-              {r.executor} · {t(r.executor_state === "ready" ? "ci.settings.state.ready" : "ci.settings.state.executor_unavailable")}
-            </StateBadge>
-          )}
-          {r.version && (
-            <StateBadge tone={r.version_matches ? "success" : "warning"}>
-              {t(r.version_matches ? "ci.settings.versionMatches" : "ci.settings.versionMismatch", { version: r.version })}
-            </StateBadge>
-          )}
-        </Group>
-        {r.executor_detail && <Text size="xs" c="dimmed">{r.executor_detail}</Text>}
-        {!!r.missing_images?.length && (
-          <Text size="xs">
-            {t("ci.settings.runnerMissingImages", { cpu: r.architecture ?? "", images: r.missing_images.join(", ") })}
+          <StateBadge tone={CONNECTION_TONE[r.connection]}>{t(`ci.settings.connection.${r.connection}`)}</StateBadge>
+          <Text size="xs" c="dimmed">
+            {online && r.max_jobs !== null
+              ? t("ci.settings.capacity", { running: r.running_jobs, max: r.max_jobs })
+              : t("ci.settings.active", { running: r.running_jobs })}
           </Text>
+        </Group>
+        {r.last_seen_at && (
+          <Stack gap={4}>
+            <Text size="xs" c="dimmed">
+              {t(online ? "ci.settings.lastSeen" : "ci.settings.lastReport")} <Time value={r.last_seen_at} />
+            </Text>
+            <Group gap="xs">
+              {r.executor_state && (
+                <StateBadge tone={reportTone(r.executor_state === "ready")}>
+                  {r.executor} · {t(r.executor_state === "ready" ? "ci.settings.state.ready" : "ci.settings.state.executor_unavailable")}
+                </StateBadge>
+              )}
+              {r.version && (
+                <StateBadge tone={reportTone(r.version_matches === true)}>
+                  {t(r.version_matches ? "ci.settings.versionMatches" : "ci.settings.versionMismatch", { version: r.version })}
+                </StateBadge>
+              )}
+            </Group>
+            {!online && r.max_jobs !== null && (
+              <Text size="xs" c="dimmed">{t("ci.settings.reportedCapacity", { max: r.max_jobs })}</Text>
+            )}
+            {r.executor_detail && <Text size="xs" c="dimmed">{r.executor_detail}</Text>}
+            {!!r.missing_images?.length && (
+              <Text size="xs">
+                {t("ci.settings.runnerMissingImages", { cpu: r.architecture ?? "", images: r.missing_images.join(", ") })}
+              </Text>
+            )}
+          </Stack>
         )}
       </Stack>
     </div>
@@ -215,7 +223,10 @@ function Limits({ runner }: { runner: CiRunner }) {
   const filled = LIMIT_FIELDS.every((f) => form[f.key] !== "");
   return (
     <Section title={t("ci.settings.limits")} description={t("ci.settings.limitsHelp")}>
-      <Text size="sm" fw={600} mb="sm">{runner.name}</Text>
+      <Group gap="xs" mb="sm">
+        <Text size="sm" fw={600}>{runner.name}</Text>
+        <Text size="xs" c="dimmed">{t(`ci.settings.limitsSource.${runner.limits_source}`)}</Text>
+      </Group>
       <form
         aria-label={t("ci.settings.limits")}
         onSubmit={(e) => {

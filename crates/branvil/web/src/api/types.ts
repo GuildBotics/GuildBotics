@@ -476,10 +476,12 @@ export interface JobLog {
   truncated: boolean;
 }
 
+type RunnerVersionMismatch = { name: string; version: string };
+
 /** What `/admin/diagnostics` says that the warnings use; the rest is for people reading the API. */
 export interface Diagnostics {
   hub?: import("@guildbotics/ui/HubStatus").HubStatus | null;
-  runner?: { state: "ready" | "no_runner" | "executor_unavailable" | "stopping" | string; detail: string; mode: string };
+  runner?: { state: "ready" | "no_runner" | "executor_unavailable" | "stopping" | string; detail: string; mode: string; version_mismatch?: RunnerVersionMismatch | null };
   upstream?: { state: string; problems?: { repository: string; problem: string }[] };
 }
 
@@ -490,6 +492,7 @@ export interface CiSettings {
     mode: "auto" | "off";
     state: "ready" | "no_runner" | "executor_unavailable" | "stopping";
     detail: string;
+    version_mismatch?: RunnerVersionMismatch | null;
     runners: CiRunner[];
   };
   executor: {
@@ -525,6 +528,7 @@ export interface CiRunner {
   architecture: string | null;
   missing_images: string[] | null;
   limits: CiLimits;
+  limits_source: "default" | "runner";
 }
 
 export interface CiLimits {

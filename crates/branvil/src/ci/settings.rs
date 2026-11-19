@@ -62,6 +62,13 @@ pub struct Loaded {
     pub reference: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitsSource {
+    Default,
+    Runner,
+}
+
 pub struct Control {
     file: PathBuf,
     microsandbox: MicrosandboxConfig,
@@ -116,9 +123,12 @@ impl Control {
         Ok(())
     }
 
-    pub fn runner_limits(&self, name: &str) -> Limits {
-        let limits = self.limits.lock().unwrap();
-        limits.1.get(&util::fold(name)).copied().unwrap_or(limits.0)
+    pub fn runner_limits(&self, name: &str) -> (Limits, LimitsSource) {
+        let (defaults, overrides) = &*self.limits.lock().unwrap();
+        match overrides.get(&util::fold(name)) {
+            Some(limits) => (*limits, LimitsSource::Runner),
+            None => (*defaults, LimitsSource::Default),
+        }
     }
 
     /// Saves job resources without changing the snapshot of any held attempt.

@@ -30,17 +30,17 @@ const LIMITS = { max_cpus: 4, max_memory_mib: 4096, work_quota_mib: 16384, max_t
 const HUB_RUNNER: CiRunner = {
   name: "branvil-runner", connection: "online", last_seen_at: "2026-10-18T05:00:00.000Z",
   executor: "microsandbox", executor_state: "ready", executor_detail: null, architecture: "arm64",
-  version: "hub-build", version_matches: true, max_jobs: 1, running_jobs: 1, missing_images: [], limits: LIMITS,
+  version: "hub-build", version_matches: true, max_jobs: 1, running_jobs: 1, missing_images: [], limits: LIMITS, limits_source: "default",
 };
 const REMOTE_RUNNER: CiRunner = {
   ...HUB_RUNNER, name: "desktop-runner", connection: "offline", architecture: "amd64", version: "older-build",
   version_matches: false, running_jobs: 0, missing_images: ["debian:bookworm"],
-  limits: { ...LIMITS, max_cpus: 6, max_jobs: 2 },
+  limits: { ...LIMITS, max_cpus: 6, max_jobs: 2 }, limits_source: "runner",
 };
 const NEW_RUNNER: CiRunner = {
   name: "new-runner", connection: "never_seen", last_seen_at: null, executor: null, executor_state: null,
   executor_detail: null, architecture: null, version: null, version_matches: null, max_jobs: null, running_jobs: 0,
-  missing_images: null, limits: LIMITS,
+  missing_images: null, limits: LIMITS, limits_source: "default",
 };
 
 const CI = {
@@ -275,22 +275,48 @@ describe("CI settings", () => {
     expect(screen.getByRole("switch", { name: /^Run the runner on the Branvil machine/ })).not.toBeChecked();
   });
 
+  it("shows a version mismatch warning for the only online runner when the automatic runner is off", async () => {
+    const runner = {
+      ...CI.runner, mode: "off", state: "executor_unavailable", detail: "runner build differs",
+      version_mismatch: { name: REMOTE_RUNNER.name, version: REMOTE_RUNNER.version },
+      runners: [{ ...REMOTE_RUNNER, connection: "online" }],
+    };
+    fakeApi({
+      ...SHELL,
+      "GET /api/v1/admin/ci": json(200, { ...CI, runner }),
+      "GET /api/v1/admin/diagnostics": json(200, { runner }),
+    });
+    renderApp("/-/settings/ci");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("desktop-runner reported version older-build, which differs from the Hub.");
+  });
+
   it("shows runner reports and saves the selected offline runner's resources without a global warning", async () => {
-    const runner = { ...CI.runner, runners: [HUB_RUNNER, REMOTE_RUNNER, NEW_RUNNER] };
+    const offlineMatch = { ...HUB_RUNNER, name: "stopped-runner", connection: "offline" };
+    const runner = { ...CI.runner, runners: [HUB_RUNNER, REMOTE_RUNNER, NEW_RUNNER, offlineMatch] };
     const saved = { ...REMOTE_RUNNER, limits: { ...REMOTE_RUNNER.limits, max_cpus: 8 } };
     const path = "/api/v1/admin/ci/runners/desktop-runner/limits";
     const fake = fakeApi({
       ...SHELL,
       "GET /api/v1/admin/ci": json(200, { ...CI, runner }),
       "GET /api/v1/admin/diagnostics": json(200, { runner }),
-      [`PUT ${path}`]: json(200, { ...CI, runner: { ...runner, runners: [HUB_RUNNER, saved, NEW_RUNNER] } }),
+      [`PUT ${path}`]: json(200, { ...CI, runner: { ...runner, runners: [HUB_RUNNER, saved, NEW_RUNNER, offlineMatch] } }),
     });
     const user = userEvent.setup();
     renderApp("/-/settings/ci");
     const list = await screen.findByRole("list", { name: "Runners" });
-    expect(within(list).getByText("Hub version (hub-build)")).toBeInTheDocument();
-    expect(within(list).getByText("1 / 1 running attempts")).toBeInTheDocument();
-    expect(within(list).getByText("Contact lost")).toBeInTheDocument();
+    const row = (name: string) => within(within(list).getAllByRole("listitem").find((item) => within(item).queryByRole("radio", { name }))!);
+    const online = row(HUB_RUNNER.name);
+    const stopped = row(offlineMatch.name);
+    const tone = (label: HTMLElement) => label.closest<HTMLElement>(".mantine-Badge-root")?.style.getPropertyValue("--badge-bg");
+    expect(tone(online.getByText("Hub version (hub-build)"))).toContain("success");
+    expect(online.getByText("1 / 1 running attempts")).toBeInTheDocument();
+    for (const offline of [row(REMOTE_RUNNER.name), stopped]) {
+      expect(tone(offline.getByText("Contact lost"))).toContain("warning");
+      expect(tone(offline.getByText("microsandbox · Ready"))).toBe("var(--color-bg-hover)");
+      expect(offline.getByText("Last report")).toBeInTheDocument();
+    }
+    expect(tone(stopped.getByText("Hub version (hub-build)"))).toBe("var(--color-bg-hover)");
     expect(within(list).getByText("Version differs from the Hub (older-build)")).toBeInTheDocument();
     expect(within(list).getByText("Missing images for amd64: debian:bookworm")).toBeInTheDocument();
     expect(within(list).getByText("No contact since the Hub started")).toBeInTheDocument();
@@ -301,9 +327,11 @@ describe("CI settings", () => {
 
     const limits = () => screen.getByRole("form", { name: "Job resources" });
     expect(within(limits()).getByRole("textbox", { name: "CPUs" })).toHaveValue("4");
+    expect(screen.getByText("Hub defaults")).toBeInTheDocument();
     await user.click(within(list).getByRole("radio", { name: "desktop-runner" }));
     const cpus = within(limits()).getByRole("textbox", { name: "CPUs" });
     expect(cpus).toHaveValue("6");
+    expect(screen.getByText("Saved for this runner")).toBeInTheDocument();
     expect(within(limits()).getByRole("textbox", { name: "Parallel jobs" })).toHaveValue("2");
     await user.clear(cpus);
     await user.type(cpus, "8");

@@ -1454,10 +1454,11 @@ runner's (`[ci.microsandbox] home`).
                           "reads": {"queued": 0, "wait_us": {...}, "hold_us": {...}}}},
    "git": {"version": "git version 2.54.0", "repositories": 1},
    "runner": {"state": "ready", "detail": "1 runner(s) connected.", "mode": "off",
-              "runners": [{"name": "runner1", "connection": "online", "last_seen_at": "…",
+              "version_mismatch": null, "runners": [{"name": "runner1", "connection": "online", "last_seen_at": "…",
                            "executor": "microsandbox", "executor_state": "ready", "executor_detail": null,
                            "version": "…", "version_matches": true, "architecture": "arm64",
-                           "running_jobs": 1, "max_jobs": 1, "missing_images": null, "limits": {...}}],
+                           "running_jobs": 1, "max_jobs": 1, "missing_images": null, "limits": {...},
+                           "limits_source": "default"}],
               "queue": {"queued": 0, "in_progress": 1, "waiting_runs": 0, "limit": 256}},
    "upstream": {"state": "not_configured"}}
   ```
@@ -1476,18 +1477,23 @@ runner's (`[ci.microsandbox] home`).
   of two snapshots is the histogram of the requests in between
   (`docs/performance.md`). `runner.state` is
   `ready`, `no_runner` (no runner contacted the service within
-  `ci.runner_absent_secs`), `executor_unavailable` (the runners report their
-  executor unusable; `detail` says why), or `stopping` (the service got
+  `ci.runner_absent_secs`), `executor_unavailable` (no connected runner has
+  both a ready executor and the Hub build), or `stopping` (the service got
   SIGTERM: it gives out no job and waits for the running ones, `detail` says
   until when; `docs/ci.md`); `mode` is the `[ci] runner` setting. The list is
   built from runner members. A runner is `online` until
   `ci.runner_absent_secs` elapses without a report, `offline` after that or
   when the Hub stops its runner, and `never_seen` if it has not reported
   since the Hub started. A stopped runner retains its last report during the
-  current Hub process. Only online runners contribute to aggregate readiness.
+  current Hub process. Only online runners with a ready executor and the Hub
+  build make the aggregate state `ready`. When the state is `executor_unavailable`,
+  `detail` says why. If a connected runner reported a different build,
+  `version_mismatch` is its `{name, version}`; otherwise it is `null`.
   `running_jobs` is the number of attempts marked in progress for that member.
   `max_jobs` is the reported capacity and `limits` are the current effective
-  job resources. `missing_images` is computed only in Settings → CI.
+  job resources. `limits_source` is `default` for the Hub defaults or `runner`
+  when an override is saved, even if its values match the defaults.
+  `missing_images` is computed only in Settings → CI.
   `upstream` is `{"state": "not_configured"}` without
   repositories that have an upstream, otherwise
 

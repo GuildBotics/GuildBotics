@@ -358,9 +358,10 @@ fn stream_file(
 
 async fn runner_health(State(app): State<Shared>, c: Caller) -> R {
     require_runner(&c)?;
+    let (limits, _) = app.ci.settings().runner_limits(c.name());
     Ok(ok(gb_runner::ci::api::RunnerHealth {
         version: gb_base::BUILD_VERSION.into(),
-        max_jobs: Some(app.ci.settings().runner_limits(c.name()).max_jobs),
+        max_jobs: Some(limits.max_jobs),
     }))
 }
 
@@ -409,7 +410,7 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     report
         .images
         .retain(|i| i.architecture == report.architecture);
-    let limits = app.ci.settings().runner_limits(c.name());
+    let (limits, _) = app.ci.settings().runner_limits(c.name());
     let accept =
         report.accept && report.can_run() && report.running_jobs < limits.max_jobs as usize;
     let held = accept.then(|| report.images.clone());
