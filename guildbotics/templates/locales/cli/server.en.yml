@@ -22,3 +22,4 @@ en:
   runner_join_required: "Run guildbotics runner join first."
   runner_version_changed: "The Hub version changed. Restarting the runner after draining its attempts."
   runner_runtime_invalid: "Runner runtime integrity or version verification failed."
+  runner_join_unsupported: "Runner join supports Windows x86_64 only. On other platforms, run guildbotics runner with an explicit --token or BRANVIL_TOKEN."

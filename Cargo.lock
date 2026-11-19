@@ -2224,6 +2224,7 @@ dependencies = [
  "cap-fs-ext",
  "cap-std",
  "chrono",
+ "clap",
  "croner",
  "futures-util",
  "gb-base",

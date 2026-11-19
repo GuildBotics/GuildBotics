@@ -57,6 +57,10 @@ impl RunnerArgs {
     pub fn is_join(&self) -> bool {
         matches!(self.command, Some(RunnerCommand::Join))
     }
+    /// Only serving claims needs a runner credential; maintenance commands do not.
+    pub fn needs_token(&self) -> bool {
+        self.command.is_none() && self.token.is_none()
+    }
     pub fn default_token(mut self, token: Option<String>) -> Self {
         if self.token.is_none() {
             self.token = token;

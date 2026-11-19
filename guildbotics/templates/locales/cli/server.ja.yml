@@ -22,3 +22,4 @@ ja:
   runner_join_required: "先に guildbotics runner join を実行してください。"
   runner_version_changed: "Hub の版が変わりました。実行中の試行を終えたランナーを再起動します。"
   runner_runtime_invalid: "ランナーの runtime のハッシュまたは版の検証に失敗しました。"
+  runner_join_unsupported: "runner join は Windows x86_64 のみに対応しています。他の環境では --token または BRANVIL_TOKEN を明示して guildbotics runner を実行してください。"
