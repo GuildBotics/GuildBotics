@@ -1694,6 +1694,82 @@ fi
         }
     }
 
+    impl Fake {
+        async fn wait(&self, id: &str, mut cancel: watch::Receiver<bool>) -> Outcome {
+            self.waiting.fetch_add(1, Ordering::SeqCst);
+            let finish = Arc::new(tokio::sync::Notify::new());
+            if self.controlled {
+                self.finishes
+                    .lock()
+                    .unwrap()
+                    .insert(id.into(), finish.clone());
+            }
+            tokio::select! {
+                biased;
+                _ = cancel.wait_for(|stop| *stop) => {
+                    self.stopped.fetch_add(1, Ordering::SeqCst);
+                    Outcome::Cancelled
+                }
+                _ = finish.notified(), if self.controlled => Outcome::Exited(0),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn fake_wait_observes_cancellation_in_every_mode() {
+        use std::task::Poll;
+        for controlled in [false, true] {
+            for initial in [false, true] {
+                let fake = Fake {
+                    controlled,
+                    ..Fake::new()
+                };
+                let (send, recv) = watch::channel(initial);
+                let mut wait = Box::pin(fake.wait("attempt", recv));
+                if !initial {
+                    assert!(futures_util::poll!(&mut wait).is_pending());
+                    send.send(false).unwrap();
+                    assert!(futures_util::poll!(&mut wait).is_pending());
+                    send.send(true).unwrap();
+                }
+                // Even if both signals are ready, a stop must be visible.
+                if controlled && !initial {
+                    fake.finishes.lock().unwrap()["attempt"].notify_one();
+                }
+                assert!(matches!(
+                    futures_util::poll!(&mut wait),
+                    Poll::Ready(Outcome::Cancelled)
+                ));
+                assert_eq!(fake.stopped.load(Ordering::SeqCst), 1);
+                assert_eq!(fake.waiting.load(Ordering::SeqCst), 1);
+            }
+            let fake = Fake {
+                controlled,
+                ..Fake::new()
+            };
+            let (send, recv) = watch::channel(false);
+            drop(send);
+            assert!(matches!(
+                fake.wait("closed", recv).await,
+                Outcome::Cancelled
+            ));
+            assert_eq!(fake.stopped.load(Ordering::SeqCst), 1);
+        }
+        let fake = Fake {
+            controlled: true,
+            ..Fake::new()
+        };
+        let (_send, recv) = watch::channel(false);
+        let mut wait = Box::pin(fake.wait("finish", recv));
+        assert!(futures_util::poll!(&mut wait).is_pending());
+        fake.finishes.lock().unwrap()["finish"].notify_one();
+        assert!(matches!(
+            futures_util::poll!(&mut wait),
+            Poll::Ready(Outcome::Exited(0))
+        ));
+        assert_eq!(fake.stopped.load(Ordering::SeqCst), 0);
+    }
+
     /// The configuration digest the fake cache holds `image` as.
     fn digest_of(image: &str) -> String {
         format!(
@@ -1751,7 +1827,7 @@ fi
             &self,
             job: JobRun<'_>,
             log: mpsc::Sender<Vec<u8>>,
-            mut cancel: watch::Receiver<bool>,
+            cancel: watch::Receiver<bool>,
         ) -> Outcome {
             self.ran.lock().unwrap().push((
                 job.job.image.clone(),
@@ -1775,24 +1851,7 @@ fi
                         let _ = log.send(git(job.work, args).into_bytes()).await;
                     }
                     ["exit", code] => return Outcome::Exited(code.parse().unwrap()),
-                    ["wait"] => {
-                        self.waiting.fetch_add(1, Ordering::SeqCst);
-                        if self.controlled {
-                            let finish = Arc::new(tokio::sync::Notify::new());
-                            self.finishes
-                                .lock()
-                                .unwrap()
-                                .insert(job.attempt_id.into(), finish.clone());
-                            finish.notified().await;
-                            return Outcome::Exited(0);
-                        }
-                        loop {
-                            if cancel.changed().await.is_err() || *cancel.borrow() {
-                                self.stopped.fetch_add(1, Ordering::SeqCst);
-                                return Outcome::Cancelled;
-                            }
-                        }
-                    }
+                    ["wait"] => return self.wait(job.attempt_id, cancel).await,
                     _ => return Outcome::Exited(127),
                 }
             }
