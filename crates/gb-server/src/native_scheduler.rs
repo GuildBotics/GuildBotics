@@ -325,6 +325,59 @@ mod cycle_tests {
     use super::*;
     use serde_json::json;
 
+    /// A claimed check can precede the asynchronous creation of main's record.
+    async fn current_verification(read: impl AsyncFn() -> serde_json::Value) -> serde_json::Value {
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            loop {
+                let current = read().await;
+                if !current.is_null() {
+                    break current;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the main verification record was never created")
+    }
+
+    #[tokio::test]
+    async fn verification_reads_wait_for_record_creation() {
+        // Control both reads used by repair: before finish and while awaiting retry.
+        for number in [0, 1] {
+            let (requests, mut reads) = tokio::sync::mpsc::unbounded_channel();
+            let read = async || {
+                let (send, receive) = tokio::sync::oneshot::channel();
+                requests.send(send).unwrap();
+                receive.await.unwrap()
+            };
+            let waiting = async {
+                let current = current_verification(read).await;
+                assert_eq!(current["retry"]["number"].as_u64().unwrap(), number);
+            };
+            let create = async {
+                reads
+                    .recv()
+                    .await
+                    .unwrap()
+                    .send(serde_json::Value::Null)
+                    .unwrap();
+                // Creation stays withheld until the reader observes the absent record
+                // and asks again, so an immediate read cannot accidentally pass.
+                reads
+                    .recv()
+                    .await
+                    .unwrap()
+                    .send(json!({"retry":{"number":number}}))
+                    .unwrap();
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(waiting, create);
+            })
+            .await
+            .unwrap();
+        }
+    }
+
     struct Fixture {
         root: tempfile::TempDir,
         native: crate::member::native::Native,
@@ -481,9 +534,12 @@ mod cycle_tests {
                 .expect("the main check was never queued")
             };
             let verification = || async {
-                serde_json::to_value(owner.repos_verification("acme/demo").await.unwrap()).unwrap()
-                    ["current"]
-                    .clone()
+                current_verification(async || {
+                    serde_json::to_value(owner.repos_verification("acme/demo").await.unwrap())
+                        .unwrap()["current"]
+                        .clone()
+                })
+                .await
             };
             loop {
                 let attempt = claim().await;
