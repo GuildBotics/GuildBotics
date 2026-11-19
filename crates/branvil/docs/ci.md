@@ -702,21 +702,23 @@ Per job the runner:
    unpacked when a cached path goes through a symbolic link of the commit
    (it would be written through) or the archive does not unpack: `/work` is
    then the checkout alone, and the log says the job runs without the cache.
-   Every VM of the job flushes before its command ends (`sync`): the runner
-   removes a sandbox once its command ended, and what the guest has not
-   written to `/work` or `io` by then is lost (a lost `chown` leaves the
-   checkout unwritable to the job).
+   Every VM of the job flushes before its command ends: microsandbox stops
+   the VM when the command ends, and what the guest has not written to
+   `/work` or `io` by then can be lost (a lost `chown` left the checkout
+   unwritable to the job).
    The job:
    `msb run --name bv-job-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --cpus N --memory NM --user 1000:1000 --mount-named bv-work-<runner>-<attempt>:/work:kind=disk,size=SM --mount-dir <log>:/.branvil-log:uid=1000,gid=1000,quota=QM --mount-named bv-tmp-<runner>-<attempt>:/tmp:kind=disk,size=4G --workdir /work --max-duration <timeout+60>s --no-net <image> -- /bin/sh -c <script>`
    (`N` and `M` the runner's CPUs and memory, `S` the size of `/work`, `Q`
    `ci.executor.work_quota_mib`: what the job may write to the host);
-   the script first flushes when it exits (`trap sync EXIT`; a job stopped by
-   its timeout or a cancellation is not flushed), sends its stdout and stderr
+   the script first flushes when it exits (`trap sync EXIT`), sends its stdout and stderr
    to `/.branvil-log/out`, and sets `HOME` ("The job's environment"). The job's VM never has the
    `io` directory;
 4. streams that file to the log (read every 50 ms through the handle opened
    in step 2, so a link the job puts there is never followed), stops the VM
-   when the timeout passes or the service asks to cancel (killing `msb run`
+   when the timeout passes or the service asks to cancel (at the timeout,
+   after `msb exec <job's sandbox> -- sync`, as the artifacts are collected
+   from the disk: the job runs on while it flushes, for at most 30 s, and
+   `commands ran for` includes it; killing `msb run`
    ends the VM through its parent watchdog, so every process in it stops),
    keeps what the job wrote up to then, and removes its sandbox. Once the
    job's VM ended by exit or timeout, and the job declares artifacts or
@@ -726,8 +728,10 @@ Per job the runner:
    the artifacts and the cache may pack the same files) packs the artifacts' paths into
    `io/artifacts.tar` and the cached paths into `io/cache.tar`: those that
    exist and go through no symbolic link (one at the end goes as a link),
-   an empty archive when there is none, written in large blocks, then
-   flushes. An archive
+   an empty archive when there is none, written in large blocks and flushed
+   (`dd … conv=fsync`, so a write that does not reach `io` fails). A failure
+   that leaves no mark (the empty archive's write, a `/work` that is not
+   there) fails the VM (`set -e`). An archive
    whose packing failed (`<archive>.failed`), and both when the VM failed
    or was stopped, are dropped, as they may be cut short; a stop makes the
    attempt `cancelled`. It then removes
@@ -751,7 +755,10 @@ directory mounts read and write a file at a time across the VM's boundary,
 which on Windows made the small files of a build about 30 times slower than
 on the host (a Rust workspace's build passed its time limit), while a disk
 is as fast as the VM's own. What crosses the boundary is one archive at a
-time. The image needs `tar` and `chown` for this, besides `/bin/sh`.
+time. The image needs `/bin/sh`, `tar`, `chown`, `find`, `dd` (with `obs=`
+and `conv=fsync`), and `sync` for this, and `mkdir` when it gives the job's user no home it can write.
+Without `sync`, preparing `/work` fails for every job, so an image that ran
+jobs before needs it too.
 
 The log says how long each step took, so the time of a job can be read off
 it: how long the attempt waited in the queue (`queued for … s`, from its
