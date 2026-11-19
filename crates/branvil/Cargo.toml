@@ -11,13 +11,14 @@ publish = false
 autotests = false
 
 [features]
-test-support = ["dep:tempfile"]
+test-support = []
 
 [dependencies]
 regex = "1"
+oci-spec = { version = "0.9.0", default-features = false, features = ["distribution"] }
 gb-base = { path = "../gb-base" }
 unicode-casefold = "0.2"
-tempfile = { version = "3.27.0", optional = true }
+tempfile = "3.27.0"
 anyhow = "1"
 axum = { version = "0.8.9", features = ["macros"] }
 # RS256 for GitHub App JWTs; already in the tree as rustls' crypto provider.

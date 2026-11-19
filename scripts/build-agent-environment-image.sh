@@ -15,11 +15,10 @@
 # dist/agent-environment). The archive for this device's architecture is
 # loaded here with `guildbotics environment image load`, and into the CI
 # runner of the workspace's code host with `guildbotics environment image
-# load-ci` (CI jobs run on the same image, named by its tag alone, so the
-# runner's cache decides the version they get; run this on the machine the
-# runner runs on); the declaration is then given every architecture's digest
-# with `guildbotics environment image declare`, so the other devices only
-# have to load their archive (the path to copy is printed at the end).
+# load-ci`. Every CPU archive is saved by the Hub and distributed to runners
+# of that CPU; only the native one enters the Hub runner cache. The shared
+# environment declaration receives every architecture's digest so other
+# interactive devices can load the matching archive.
 # Devices of another architecture run with the image they last loaded, and
 # say so, until they load the new archive.
 #
@@ -76,6 +75,7 @@ for platform in ${platforms//,/ }; do
     archive="${archive_base}-${arch}.tar"
     "${builder}" save --output "${archive}" "${reference}"
     echo "saved ${archive} (${arch} ${digest})"
+    cli image load-ci "${archive}"
     declare_args+=(--digest "${arch}=${digest}")
     if [ "${arch}" = "${device_arch}" ]; then
         native_archive="${archive}"
@@ -86,7 +86,6 @@ done
 
 if [ -n "${native_archive}" ]; then
     cli image load "${native_archive}"
-    cli image load-ci "${native_archive}"
 fi
 cli image declare "${reference}" "${declare_args[@]}"
 

@@ -82,7 +82,7 @@ pub(super) async fn reused_and_gates(
                 base,
                 "/runner/claim",
                 runner,
-                json!({"executor":"microsandbox","executor_state":"ready"}),
+                json!({"executor":"microsandbox","executor_state":"ready", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","2".repeat(64))}]}),
             )
             .await;
             assert_eq!(attempt["sha"], same);

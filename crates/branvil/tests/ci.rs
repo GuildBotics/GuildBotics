@@ -1116,7 +1116,7 @@ impl Runner {
             .http
             .post(self.at("/claim"))
             .bearer_auth(&self.token)
-            .json(&json!({"executor": "test", "executor_state": "ready"}))
+            .json(&json!({"executor": "test", "executor_state": "ready", "images":[{"reference":IMAGE,"architecture":"arm64","digest":format!("sha256:{}","2".repeat(64))}]}))
             .send()
             .await
             .unwrap();
@@ -2299,8 +2299,8 @@ async fn the_automatic_runner_starting_again_queues_the_jobs_its_predecessor_hel
     let runner = Runner::new(&w, "branvil-runner").await;
     let held = running_test_and_queued_lint(&w, &runner).await;
     set_ci_config(&w, &[("runner", "auto".into())]);
-    // A home of its own: no msb, so the new automatic runner concludes what
-    // it claims as startup failures.
+    // A home of its own: without msb the automatic runner leaves work queued
+    // for a ready runner instead of taking incompatible attempts.
     let home = w.dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
     w.restart(&[("HOME", home.to_str().unwrap())]);
@@ -2320,6 +2320,13 @@ async fn the_automatic_runner_starting_again_queues_the_jobs_its_predecessor_hel
         details.contains("automatic runner stopped") && details.contains("in its place"),
         "{old}"
     );
+    let ready = Runner::new(&w, "ready-runner").await;
+    let first = ready.next_claim().await;
+    assert_eq!(first["job"]["name"], "test");
+    assert_eq!(ready.finish(&first, "success").await.0, 200);
+    let second = ready.next_claim().await;
+    assert_eq!(second["job"]["name"], "lint");
+    assert_eq!(ready.finish(&second, "success").await.0, 200);
     // Its next attempt was taken before lint, queued after it.
     let sha = held["sha"].as_str().unwrap().to_string();
     let checks_url = format!("{}/commits/{sha}/checks", w.repo_path());

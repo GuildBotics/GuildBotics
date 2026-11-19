@@ -17,6 +17,7 @@ pub mod admin;
 pub mod api;
 pub mod config;
 pub mod files;
+pub mod images;
 pub mod narrow;
 pub mod notify;
 mod order;
@@ -38,7 +39,7 @@ use serde::Serialize;
 
 use crate::app::App;
 use crate::config::Layout;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::events::Events;
 use crate::git::{Git, ZERO_SHA};
 use crate::model::Repo;
@@ -146,6 +147,7 @@ pub struct RunnerSeen {
     pub executor: String,
     pub executor_state: String,
     pub executor_detail: Option<String>,
+    pub images: Vec<images::Image>,
     #[serde(skip)]
     seen: Option<Instant>,
 }
@@ -769,7 +771,48 @@ impl Ci {
             let changed = self
                 .inner
                 .store
-                .write(move |w| queue::fail_queued(w, &before, &details, &now))
+                .write(move |w| {
+                    queue::fail_unavailable(w, &before, &now, |a| {
+                        Some(format!(
+                            "{details}; missing image {} for CPU arm64 or amd64",
+                            a.job.image
+                        ))
+                    })
+                })
+                .await?;
+            self.publish(&changed);
+        }
+        if self.inner.started.elapsed() >= Duration::from_secs(absent) {
+            let available: Vec<images::Image> = self
+                .inner
+                .runners
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|r| {
+                    r.seen
+                        .is_some_and(|s| s.elapsed() <= Duration::from_secs(absent))
+                        && r.executor_state == "ready"
+                })
+                .flat_map(|r| r.images.clone())
+                .collect();
+            let available =
+                images::current(&self.inner.layout.root, available).map_err(AppError::internal)?;
+            let now = util::now();
+            let before = queue::earlier(&now, absent);
+            let changed = self
+                .inner
+                .store
+                .write(move |w| {
+                    queue::fail_unavailable(w, &before, &now, |a| {
+                        (!available.iter().any(|i| i.supports(&a.job.image))).then(|| {
+                            format!(
+                                "No CI runner holds image {} for a supported CPU (arm64 or amd64)",
+                                a.job.image
+                            )
+                        })
+                    })
+                })
                 .await?;
             self.publish(&changed);
         }
@@ -855,6 +898,7 @@ impl Ci {
                 executor: String::new(),
                 executor_state: "unknown".into(),
                 executor_detail: None,
+                images: Vec::new(),
                 seen: None,
             });
         entry.last_seen_at = util::now();
@@ -863,6 +907,18 @@ impl Ci {
             entry.executor = executor;
             entry.executor_state = state;
             entry.executor_detail = detail;
+        }
+    }
+
+    pub fn runner_images(&self, name: &str, images: Vec<images::Image>) {
+        if let Some(r) = self
+            .inner
+            .runners
+            .lock()
+            .unwrap()
+            .get_mut(&util::fold(name))
+        {
+            r.images = images;
         }
     }
 
@@ -1152,6 +1208,65 @@ mod tests {
             timeout_secs: None,
             artifacts: vec![],
             cache: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_images_expire_even_while_an_incompatible_runner_is_online() {
+        for matching in [false, true] {
+            let (_dir, mut ci, _) = setup();
+            Arc::get_mut(&mut ci.inner).unwrap().started =
+                Instant::now() - Duration::from_secs(121);
+            ci.inner
+                .store
+                .write(|w| {
+                    queue::register(
+                        w,
+                        Registration {
+                            order: Vec::new(),
+                            inputs: Default::default(),
+                            selection: None,
+                            repo: "repo_1".into(),
+                            repo_path: "acme/demo".into(),
+                            sha: "sha".into(),
+                            tree: None,
+                            branch: "feature".into(),
+                            protected: false,
+                            network: false,
+                            pipeline: PipelineState::Jobs {
+                                jobs: vec![job("test")],
+                            },
+                        },
+                        10,
+                        "2026-01-01T00:00:00Z",
+                    )?;
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            ci.saw_runner("r", Some(("test".into(), "ready".into(), None)));
+            ci.runner_images(
+                "r",
+                vec![images::Image {
+                    reference: if matching { "alpine" } else { "other" }.into(),
+                    architecture: "amd64".into(),
+                    digest: "sha256:test".into(),
+                }],
+            );
+            ci.sweep().await.unwrap();
+            let attempts = ci
+                .inner
+                .store
+                .read(|r| queue::attempts_of(r, "repo_1", "sha"))
+                .await
+                .unwrap();
+            if matching {
+                assert_eq!(attempts[0].status, "queued");
+            } else {
+                assert_eq!(attempts[0].conclusion.as_deref(), Some("startup_failure"));
+                let details = attempts[0].details.as_deref().unwrap();
+                assert!(details.contains("alpine") && details.contains("amd64"));
+            }
         }
     }
 

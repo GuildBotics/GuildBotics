@@ -12,6 +12,22 @@ git push ─▶ guildbotics server start ─ register run (pipeline from the com
                  └──────────────────────────────────────────────── guildbotics runner ─ msb run ─▶ microVM
 ```
 
+## Images on runners of different CPUs
+
+Before claiming work, a runner reads the Hub's archive catalog for its own CPU
+(`arm64` or `amd64`), downloads missing or changed versions, and loads them under
+its image-cache lock. Equal configuration digests cause no download or load.
+Claims advertise locally held tags, CPU architectures, and configuration digests.
+The Hub hands out only compatible work. A missing image on every live runner
+ends the queued attempt as `startup_failure` after `runner_absent_secs`, with the
+missing tag and CPU in its details. Automatic retries wait for a compatible runner.
+
+Settings → CI and `guildbotics environment image load-ci <archive>` accept archives
+for either CPU. The Hub retains the archives under its data directory; only native
+images enter its own runner cache. `scripts/build-agent-environment-image.sh` sends
+every built architecture to the Hub. Registry images are pulled on each runner
+with `guildbotics runner pull <tag>`; jobs themselves never pull.
+
 ## Default-branch verification
 
 The default branch is verified serially per repository, separately from ordinary
@@ -178,7 +194,7 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   or with that limit when it gives none.
 - A pipeline names an image by its tag; which version runs is the image the
   runner's cache holds under that tag. The runner never pulls during a job
-  (pull policy `never`): images enter the runner's cache only through
+  (pull policy `never`): images enter the runner's cache through the Hub archive sync,
   `guildbotics runner pull` or Settings → CI (pull a tag from a registry, or load
   a `docker save` / OCI archive from a file on the Branvil machine). To move
   the jobs to a new version, pull or load the same tag again; nothing in the
@@ -452,10 +468,10 @@ No runner, no executor:
   retry that waits until a runner claims it; this wait does not exhaust the
   retry budget. Other checks require a manual retry; cache refreshes explain
   that a later check can request another refresh.
-- A runner whose executor is unusable still claims attempts and concludes each
-  `startup_failure` with the reason (for example "No usable msb 0.6.17
-  found …"), so the problem is visible on the checks. Nothing ever runs on the
-  host instead.
+- A runner whose executor is unusable advertises no images and leaves attempts
+  for other ready runners. When no ready runner has an attempt's image, the same
+  timeout concludes it `startup_failure`, naming the missing image and CPU.
+  Executor failure details remain visible in runner diagnostics.
 
 Cancel and retry: `POST …/jobs/{id}/cancel` concludes a queued attempt
 `cancelled` at once and asks a running one to stop; `POST …/jobs/{id}/retry`

@@ -254,9 +254,95 @@ impl Api {
         Self::check(resp).await?.json().await.map_err(Self::net)
     }
 
-    pub async fn claim(&self, executor: &str, health: &Health) -> Result<Option<Claim>, ApiError> {
+    /// Reconcile only this CPU's Hub archives, comparing configuration digests.
+    pub async fn sync_images(&self, ms: &Microsandbox) -> Result<(), ApiError> {
+        use crate::ci::images::{Archive, architecture};
+        use tokio::io::AsyncWriteExt;
+        let resp = self
+            .http
+            .get(self.at(&format!("/runner/images?architecture={}", architecture())))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(Self::net)?;
+        let archives: Vec<Archive> = Self::check(resp).await?.json().await.map_err(Self::net)?;
+        let _lock = ms.lock_images(true, || {}).await.map_err(ApiError::Other)?;
+        for archive in archives {
+            let mut needed = false;
+            for image in &archive.images {
+                if image.architecture == architecture()
+                    && ms
+                        .inspect(&image.reference)
+                        .await
+                        .map_err(ApiError::Other)?
+                        .is_none_or(|i| i.config_digest != image.digest)
+                {
+                    needed = true;
+                }
+            }
+            if !needed {
+                continue;
+            }
+            std::fs::create_dir_all(ms.home()).map_err(|e| ApiError::Other(e.to_string()))?;
+            let temp = tempfile::NamedTempFile::new_in(ms.home())
+                .map_err(|e| ApiError::Other(e.to_string()))?;
+            let mut file = tokio::fs::File::create(temp.path())
+                .await
+                .map_err(|e| ApiError::Other(e.to_string()))?;
+            let mut resp = Self::check(
+                self.http
+                    .get(self.at(&format!("/runner/images/{}", archive.id)))
+                    .bearer_auth(&self.token)
+                    .send()
+                    .await
+                    .map_err(Self::net)?,
+            )
+            .await?;
+            use sha2::{Digest, Sha256};
+            let mut hash = Sha256::new();
+            while let Some(bytes) = resp.chunk().await.map_err(Self::net)? {
+                hash.update(&bytes);
+                file.write_all(&bytes)
+                    .await
+                    .map_err(|e| ApiError::Other(e.to_string()))?;
+            }
+            file.flush()
+                .await
+                .map_err(|e| ApiError::Other(e.to_string()))?;
+            drop(file);
+            if crate::util::hex(&hash.finalize()) != archive.id {
+                return Err(ApiError::Other("CI archive digest mismatch".into()));
+            }
+            for image in &archive.images {
+                ms.load_as(temp.path(), &image.reference)
+                    .await
+                    .map_err(ApiError::Other)?;
+                let held = ms
+                    .inspect(&image.reference)
+                    .await
+                    .map_err(ApiError::Other)?;
+                if held.is_none_or(|i| i.config_digest != image.digest) {
+                    return Err(ApiError::Other(format!(
+                        "Loaded image {} has an unexpected digest",
+                        image.reference
+                    )));
+                }
+                ms.pin(&image.reference, Some(temp.path())).await;
+            }
+            ms.collect().await;
+        }
+        Ok(())
+    }
+
+    pub async fn claim(
+        &self,
+        executor: &str,
+        health: &Health,
+        images: &[crate::ci::images::Image],
+    ) -> Result<Option<Claim>, ApiError> {
         let body = serde_json::json!({
             "executor": executor,
+            "images": images,
             "executor_state": if health.ready { "ready" } else { "unavailable" },
             "executor_detail": health.detail,
         });
@@ -643,7 +729,12 @@ impl Runner {
     /// Claims an attempt, telling the service how the executor is.
     async fn claim<E: Executor>(&self, executor: &E) -> Result<Option<(Claim, Health)>, ApiError> {
         let health = executor.health().await;
-        let claim = self.api.claim(executor.name(), &health).await?;
+        let images = if health.ready {
+            executor.inventory(&self.api).await?
+        } else {
+            Vec::new()
+        };
+        let claim = self.api.claim(executor.name(), &health, &images).await?;
         Ok(claim.map(|c| (c, health)))
     }
 
@@ -1238,6 +1329,55 @@ mod tests {
     use executor::ImageLock;
     use std::sync::atomic::AtomicBool;
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hub_archives_follow_cpu_and_digest_without_reloading_equal_versions() {
+        use crate::ci::images;
+        let s = service("").await;
+        let native = images::architecture();
+        let foreign = if native == "arm64" { "amd64" } else { "arm64" };
+        let archive = images::tests::docker(native, "1");
+        let saved = images::save(&s.app.layout.root, archive.path()).unwrap();
+        images::save(
+            &s.app.layout.root,
+            images::tests::docker(foreign, "1").path(),
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let msb = dir.path().join("msb");
+        let digest = &saved.images[0].digest;
+        executor::tests::write_script(
+            &msb,
+            &format!(
+                r#"#!/bin/sh
+case "$1 $2" in
+"load --quiet") echo loaded >> "$MSB_HOME/loads"; echo '{digest}' > "$MSB_HOME/digest" ;;
+"image inspect") [ -f "$MSB_HOME/digest" ] || exit 1; printf '{{"reference":"%s","digest":"sha256:manifest","config":{{"digest":"%s"}}}}' "$5" "$(cat "$MSB_HOME/digest")" ;;
+"image list") echo '[]' ;;
+esac
+"#
+            ),
+        );
+        let ms = Microsandbox::new(executor::Msb::Found(msb), dir.path().join("cache"), "test");
+        let api = Api::new(&s.url, &s.runner_token);
+        api.sync_images(&ms).await.unwrap();
+        let blob = images::path(&s.app.layout.root, &saved.id).unwrap();
+        std::fs::remove_file(&blob).unwrap();
+        // Equal digests work even when the archive cannot be fetched.
+        api.sync_images(&ms).await.unwrap();
+        std::fs::copy(archive.path(), &blob).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(ms.home().join("loads")).unwrap(),
+            "loaded\n"
+        );
+        std::fs::write(ms.home().join("digest"), "sha256:old").unwrap();
+        api.sync_images(&ms).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(ms.home().join("loads")).unwrap(),
+            "loaded\nloaded\n"
+        );
+    }
+
     /// What a run got: (image, cpus, memory MiB, timeout s, work quota MiB).
     type Ran = (String, u32, u64, u64, u64);
 
@@ -1276,6 +1416,13 @@ mod tests {
     }
 
     impl Executor for Fake {
+        async fn inventory(&self, _api: &Api) -> Result<Vec<crate::ci::images::Image>, ApiError> {
+            Ok(vec![crate::ci::images::Image {
+                reference: "alpine".into(),
+                architecture: "arm64".into(),
+                digest: "sha256:test".into(),
+            }])
+        }
         fn name(&self) -> &'static str {
             "fake"
         }
@@ -1641,9 +1788,17 @@ mod tests {
                 .expect("the attempt finished")
             }
         };
-        let first = settled(sha).await;
-        assert_eq!(first.conclusion.as_deref(), Some("startup_failure"));
-        assert!(first.details.as_deref().unwrap().contains("not found"));
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if s.app.ci.diagnostics().await["state"] == "executor_unavailable" {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(result_of(&s, &sha).await.status, "queued");
         // Install atomically, as the embedding host does. No VM is started.
         let staged = s.dir.path().join("msb-staged");
         executor::tests::write_script(
@@ -1655,7 +1810,12 @@ case "$1" in
 doctor) [ ! -f "$MSB_HOME/doctor-fails" ] ;;
 remove) exit 0 ;;
 volume) echo '[]' ;;
-image) printf '{"reference":"alpine","digest":"sha256:m","config":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}' ;;
+image)
+  if [ "$2" = list ]; then
+    echo '[{"reference":"alpine","digest":"sha256:m"}]'
+  else
+    printf '{"reference":"alpine","digest":"sha256:m","config":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}'
+  fi ;;
 run)
   prev=''
   for arg in "$@"; do
@@ -1674,23 +1834,37 @@ esac
             std::fs::write(home.join("doctor-fails"), "").unwrap();
         }
         std::fs::rename(staged, &msb).unwrap();
-        let expected = if doctor_fails {
-            "startup_failure"
+        if doctor_fails {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if std::fs::read_to_string(msb.with_extension("calls"))
+                        .unwrap_or_default()
+                        .lines()
+                        .any(|l| l == "doctor")
+                    {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(result_of(&s, &sha).await.status, "queued");
         } else {
-            "success"
-        };
-        let next_sha = empty_main(&s, "runtime installed").await;
-        let next = settled(next_sha).await;
-        assert_eq!(next.conclusion.as_deref(), Some(expected), "{next:?}");
+            assert_eq!(
+                settled(sha.clone()).await.conclusion.as_deref(),
+                Some("success")
+            );
+        }
         assert_eq!(home.join("ran").is_file(), !doctor_fails);
         assert!(!serving.is_finished(), "the same runner is still serving");
-        // Exercise another job and idle polls within either health TTL.
-        // Neither resolution nor doctor should run again, even when unready.
-        let another_sha = empty_main(&s, "runtime still ready").await;
-        assert_eq!(
-            settled(another_sha).await.conclusion.as_deref(),
-            Some(expected)
-        );
+        if !doctor_fails {
+            let another_sha = empty_main(&s, "runtime still ready").await;
+            assert_eq!(
+                settled(another_sha).await.conclusion.as_deref(),
+                Some("success")
+            );
+        }
         tokio::time::sleep(Duration::from_secs(5)).await;
         let calls = std::fs::read_to_string(msb.with_extension("calls")).unwrap();
         assert_eq!(
@@ -2616,7 +2790,7 @@ esac
         );
         fake.hold_images.store(false, Ordering::SeqCst);
 
-        // An unusable executor: the job concludes startup_failure with why.
+        // An unusable executor does not take a job away from a ready runner.
         fake.ready.store(false, Ordering::SeqCst);
         let resp = http
             .post(format!("{url}/api/v1/repos/acme%2Fdemo/jobs/{id}/retry"))
@@ -2625,11 +2799,10 @@ esac
             .await
             .unwrap();
         assert_eq!(resp.status(), 200);
-        assert!(runner.once(&fake).await.unwrap());
+        assert!(!runner.once(&fake).await.unwrap());
         let ok = checks().await.into_iter().find(|c| c.name == "ok").unwrap();
         assert_eq!(ok.attempt, Some(2));
-        assert_eq!(ok.conclusion.as_deref(), Some("startup_failure"));
-        assert!(ok.details.as_deref().unwrap().contains("switched off"));
+        assert_eq!(ok.status, "queued");
         let diag = app.ci.diagnostics().await;
         assert_eq!(diag["state"], "executor_unavailable", "{diag}");
         assert!(!runner.once(&fake).await.unwrap(), "nothing left");

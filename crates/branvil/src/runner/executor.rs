@@ -150,6 +150,10 @@ pub struct ImageLock {
 
 pub trait Executor: Send + Sync {
     fn name(&self) -> &'static str;
+    fn inventory(
+        &self,
+        api: &super::Api,
+    ) -> impl Future<Output = Result<Vec<crate::ci::images::Image>, super::ApiError>> + Send;
     /// Whether runtime resolution failed and should be retried before a claim.
     /// Health failures of an accepted runtime keep its existing cache.
     fn needs_resolution(&self) -> bool {
@@ -497,6 +501,19 @@ impl Microsandbox {
             "load",
             self.output_within(&["load", "--quiet", "--input", &path], IMAGE_TRANSFER)
                 .await?,
+        )
+    }
+
+    /// Load one configuration under exactly the requested tag, without moving its other aliases.
+    pub async fn load_as(&self, archive: &Path, reference: &str) -> Result<(), String> {
+        let path = archive.to_string_lossy();
+        self.finish(
+            "load",
+            self.output_within(
+                &["load", "--quiet", "--input", &path, "--tag", reference],
+                IMAGE_TRANSFER,
+            )
+            .await?,
         )
     }
 
@@ -862,6 +879,24 @@ impl Executor for Microsandbox {
 
     fn name(&self) -> &'static str {
         "microsandbox"
+    }
+
+    async fn inventory(
+        &self,
+        api: &super::Api,
+    ) -> Result<Vec<crate::ci::images::Image>, super::ApiError> {
+        api.sync_images(self).await?;
+        Ok(self
+            .images()
+            .await
+            .map_err(super::ApiError::Other)?
+            .into_iter()
+            .map(|i| crate::ci::images::Image {
+                reference: i.reference,
+                digest: i.config_digest,
+                architecture: crate::ci::images::architecture().into(),
+            })
+            .collect())
     }
 
     async fn health(&self) -> Health {
