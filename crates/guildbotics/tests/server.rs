@@ -1946,7 +1946,7 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
                     .http
                     .post(format!("{url}/api/v1/runner/claim"))
                     .bearer_auth(runner.trim())
-                    .json(&json!({"executor": "test", "executor_state": "ready", "architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","a".repeat(64))}]}))
+                    .json(&json!({"executor": "test", "executor_state": "ready", "version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true, "architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","a".repeat(64))}]}))
                     .send()
                     .await
                     .unwrap();
@@ -1975,7 +1975,7 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
             .http
             .post(format!("{url}/api/v1/runner/claim"))
             .bearer_auth(runner.trim())
-            .json(&json!({"executor": "test", "executor_state": "ready", "architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","a".repeat(64))}]}))
+            .json(&json!({"executor": "test", "executor_state": "ready", "version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true, "architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","a".repeat(64))}]}))
             .send()
             .await
             .unwrap();
@@ -2064,7 +2064,7 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
             .http
             .post(format!("{url}/api/v1/runner/claim"))
             .bearer_auth(runner.trim())
-            .json(&json!({"executor": "test", "executor_state": "ready", "architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","a".repeat(64))}]}))
+            .json(&json!({"executor": "test", "executor_state": "ready", "version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true, "architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","a".repeat(64))}]}))
             .send()
             .await
             .unwrap();

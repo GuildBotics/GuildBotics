@@ -19,7 +19,7 @@ use clap::{Args, Subcommand};
 use serde::Deserialize;
 use tokio::sync::{mpsc, watch};
 
-use crate::ci::config::ExecutorConfig;
+use crate::ci::api::{ExecutionLimits, ExecutorState, RunnerHealth, RunnerReport};
 use crate::ci::pipeline::JobDef;
 use crate::ci::queue::{Basis, ResultInfo, Reuse};
 use executor::{Executor, Health, JobRun, Microsandbox, Outcome};
@@ -33,13 +33,15 @@ pub struct RunnerArgs {
     /// Per-job work directories and the dependency cache [default: ci.executor.work_dir of the configuration, else ~/.branvil/runner]
     #[arg(long)]
     work_dir: Option<PathBuf>,
+    #[arg(skip)]
+    default_work_dir: Option<PathBuf>,
     /// Base URL of the server [default: the server on this machine]
     #[arg(long, env = "BRANVIL_URL")]
     url: Option<String>,
     /// The runner's token
     #[arg(long, env = "BRANVIL_TOKEN", hide_env_values = true)]
     token: Option<String>,
-    /// Configuration file whose limits apply to every job, read again before each [default: the one of the data directory]
+    /// Configuration file for this machine [default: the one of the data directory]
     #[arg(long)]
     config: Option<PathBuf>,
     /// Data directory of the configuration [default: the server's]
@@ -49,9 +51,7 @@ pub struct RunnerArgs {
 
 impl RunnerArgs {
     pub fn default_work(mut self, path: PathBuf) -> Self {
-        if self.work_dir.is_none() {
-            self.work_dir = Some(path);
-        }
+        self.default_work_dir = Some(path);
         self
     }
     pub fn is_join(&self) -> bool {
@@ -80,13 +80,19 @@ pub async fn main(
 ) -> anyhow::Result<u8> {
     let data_dir = args.data_dir.unwrap_or(data_dir);
     // A configuration named explicitly (the supervised runner gets the
-    // service's) has to be read: its limits apply to every job.
+    // service's) has to be read for its machine settings.
     let config = match &args.config {
         Some(file) => Some(crate::config::Config::load(Some(file), &data_dir)?),
         None => crate::config::Config::load(None, &data_dir).ok(),
     };
     let url = args.url.unwrap_or(url);
-    let settings = Settings::new(url, args.token, args.work_dir, config.as_ref())?;
+    let settings = Settings::new(
+        url,
+        args.token,
+        args.work_dir,
+        config.as_ref(),
+        args.default_work_dir,
+    )?;
     match args.command {
         Some(RunnerCommand::Join) => bail!("Join requires the GuildBotics client"),
         None => run(settings).await.map(|_| 0),
@@ -131,10 +137,6 @@ pub struct Settings {
     pub url: String,
     pub token: Option<String>,
     pub work_dir: PathBuf,
-    pub executor: ExecutorConfig,
-    /// The configuration file and data directory the limits are read from
-    /// again before every claim, while the file exists.
-    pub config: Option<(PathBuf, PathBuf)>,
     pub msb_path: Option<PathBuf>,
     pub msb_home: PathBuf,
 }
@@ -145,13 +147,15 @@ impl Settings {
         token: Option<String>,
         work_dir: Option<PathBuf>,
         config: Option<&crate::config::Config>,
+        default_work_dir: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
         let ci = config.map(|c| c.ci.clone()).unwrap_or_default();
         Ok(Self {
             url: crate::config::normalize_base_url(&url)?,
             token,
             work_dir: work_dir
-                .or(ci.executor.work_dir.clone())
+                .or(ci.executor.work_dir)
+                .or(default_work_dir)
                 .unwrap_or_else(|| executor::branvil_home().join("runner")),
             msb_path: ci.microsandbox.msb_path.clone(),
             msb_home: ci
@@ -159,8 +163,6 @@ impl Settings {
                 .home
                 .clone()
                 .unwrap_or_else(|| executor::branvil_home().join("msb-home")),
-            executor: ci.executor,
-            config: config.map(|c| (c.file.clone(), c.data_dir.clone())),
         })
     }
 
@@ -216,6 +218,8 @@ impl std::fmt::Display for ApiError {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Claim {
+    #[serde(flatten)]
+    pub execution: ExecutionLimits,
     pub attempt_id: String,
     pub lease: String,
     pub lease_secs: u64,
@@ -268,21 +272,18 @@ impl Api {
         ApiError::Other(format!("Branvil is not reachable: {e}"))
     }
 
-    pub async fn current_version(&self) -> Result<bool, ApiError> {
+    pub async fn health(&self) -> Result<RunnerHealth, ApiError> {
         let reply = Self::check(
             self.http
                 .get(self.at("/runner/health"))
                 .bearer_auth(&self.token)
+                .timeout(Duration::from_secs(10))
                 .send()
                 .await
                 .map_err(Self::net)?,
         )
         .await?;
-        let body: serde_json::Value = reply.json().await.map_err(Self::net)?;
-        let version = body["version"]
-            .as_str()
-            .ok_or_else(|| ApiError::Other("Missing Hub version".into()))?;
-        Ok(version == gb_base::BUILD_VERSION)
+        reply.json().await.map_err(Self::net)
     }
 
     pub async fn me(&self) -> Result<serde_json::Value, ApiError> {
@@ -407,26 +408,13 @@ impl Api {
         }
     }
 
-    pub async fn claim(
-        &self,
-        executor: &str,
-        health: &Health,
-        images: &[crate::ci::images::Image],
-        accept: bool,
-    ) -> Result<Option<Claim>, ApiError> {
-        let body = serde_json::json!({
-            "executor": executor,
-            "architecture": crate::ci::images::architecture(),
-            "images": images,
-            "accept": accept,
-            "executor_state": if health.ready { "ready" } else { "unavailable" },
-            "executor_detail": health.detail,
-        });
+    async fn claim(&self, report: &RunnerReport) -> Result<Option<Claim>, ApiError> {
         let resp = self
             .http
             .post(self.at("/runner/claim"))
             .bearer_auth(&self.token)
-            .json(&body)
+            .json(report)
+            .timeout(Duration::from_secs(10))
             .send()
             .await
             .map_err(Self::net)?;
@@ -680,12 +668,7 @@ pub async fn run(settings: Settings) -> anyhow::Result<()> {
             settings.work_dir.display()
         );
     }
-    let runner = Runner::new(
-        api,
-        settings.work_dir.clone(),
-        settings.config.clone(),
-        settings.executor.clone(),
-    );
+    let runner = Runner::new(api, settings.work_dir.clone());
     tracing::info!(
         "runner {name} serving {} (work directory {})",
         settings.url,
@@ -709,56 +692,23 @@ impl std::error::Error for VersionChanged {}
 pub struct Runner {
     pub api: Api,
     pub work_dir: PathBuf,
-    /// Where `limits` are read from again before every claim, so that new
-    /// limits apply to the next job and leave the running ones alone.
-    config: Option<(PathBuf, PathBuf)>,
-    /// The limits last read, and why the file last could not be read (said
-    /// once, not at every claim).
-    limits: Mutex<(ExecutorConfig, Option<String>)>,
     cache: Arc<workspace::Cache>,
     sync_detail: Mutex<Option<String>>,
 }
 
 impl Runner {
-    pub fn new(
-        api: Api,
-        work_dir: PathBuf,
-        config: Option<(PathBuf, PathBuf)>,
-        limits: ExecutorConfig,
-    ) -> Self {
+    pub fn new(api: Api, work_dir: PathBuf) -> Self {
         Self {
             cache: Arc::new(workspace::Cache::new(work_dir.join("cache"))),
             sync_detail: Mutex::new(None),
             api,
             work_dir,
-            config,
-            limits: Mutex::new((limits, None)),
         }
     }
 
-    /// The limits for the next job: the configuration file's as it reads
-    /// now (the last ones read when it cannot be read).
     #[cfg(feature = "test-support")]
     pub fn test_cache(&self) -> &workspace::Cache {
         &self.cache
-    }
-
-    fn limits(&self) -> ExecutorConfig {
-        let mut last = self.limits.lock().unwrap();
-        let (limits, problem) = &mut *last;
-        if let Some((file, data_dir)) = self.config.as_ref().filter(|(f, _)| f.is_file()) {
-            match crate::config::Config::load(Some(file), data_dir) {
-                Ok(c) => (*limits, *problem) = (c.ci.executor, None),
-                Err(e) => {
-                    let e = format!("{e:#}");
-                    if problem.as_ref() != Some(&e) {
-                        tracing::warn!("keeping the runner's limits: {e}");
-                    }
-                    *problem = Some(e);
-                }
-            }
-        }
-        limits.clone()
     }
 
     /// Sweeps leftovers, then claims attempts and runs up to `max_jobs` of
@@ -782,56 +732,56 @@ impl Runner {
         let mut backoff = 1;
         let mut version_changed = false;
         'claiming: loop {
-            match self.api.current_version().await {
-                Ok(true) => {}
-                Ok(false) => {
-                    version_changed = true;
-                    break 'claiming;
-                }
-                Err(ApiError::Unauthorized) => break 'claiming,
-                Err(e) => {
-                    tracing::warn!("{e}");
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    continue;
-                }
-            }
-            let limits = self.limits();
             let mut wait = Duration::from_secs(2);
-            if syncing.is_empty() && Instant::now() >= next_sync && current.health().await.ready {
-                if self.sync_detail.lock().unwrap().is_none() {
-                    *self.sync_detail.lock().unwrap() =
-                        Some("CI image synchronization in progress".into());
-                }
-                let (runner, executor) = (self.clone(), current.clone());
-                syncing.spawn(async move { executor.synchronize(&runner.api).await });
-            }
-            if running.len() >= limits.max_jobs as usize
-                && let Err(ApiError::Unauthorized) = self.claim(&*current, false).await
-            {
-                break 'claiming;
-            }
-            if running.len() < limits.max_jobs as usize {
-                // Retry unresolved runtimes only. An accepted runtime retains
-                // both its ready and unavailable health cache across claims.
+            let result = async {
+                let hub = self.api.health().await?;
+                version_changed = hub.version != gb_base::BUILD_VERSION;
+                let Some(max_jobs) = hub.max_jobs else {
+                    if version_changed {
+                        return Ok(None);
+                    }
+                    return Err(ApiError::Other("Hub did not report runner capacity".into()));
+                };
+                // Retry only unresolved runtimes, retaining the health cache
+                // of a runtime that has already been resolved.
                 if current.needs_resolution() {
                     current = executor();
                 }
-                match self.claim(&*current, true).await {
-                    Ok(Some((claim, health))) => {
-                        backoff = 1;
-                        let (runner, executor) = (self.clone(), current.clone());
-                        running.spawn(async move {
-                            runner.run(&*executor, &health, claim, &limits).await
-                        });
-                        continue;
+                if !version_changed
+                    && syncing.is_empty()
+                    && Instant::now() >= next_sync
+                    && current.health().await.ready
+                {
+                    if self.sync_detail.lock().unwrap().is_none() {
+                        *self.sync_detail.lock().unwrap() =
+                            Some("CI image synchronization in progress".into());
                     }
-                    Ok(None) => backoff = 1,
-                    Err(ApiError::Unauthorized) => break 'claiming,
-                    Err(e) => {
-                        tracing::warn!("{e}");
-                        wait = Duration::from_secs(backoff);
-                        backoff = (backoff * 2).min(30);
-                    }
+                    let (runner, executor) = (self.clone(), current.clone());
+                    syncing.spawn(async move { executor.synchronize(&runner.api).await });
+                }
+                self.claim(&*current, !version_changed, max_jobs, running.len())
+                    .await
+            }
+            .await;
+            if version_changed {
+                if let Err(e) = result {
+                    tracing::warn!("could not report the runner version: {e}");
+                }
+                break 'claiming;
+            }
+            match result {
+                Ok(Some((claim, health))) => {
+                    backoff = 1;
+                    let (runner, executor) = (self.clone(), current.clone());
+                    running.spawn(async move { runner.run(&*executor, &health, claim).await });
+                    continue;
+                }
+                Ok(None) => backoff = 1,
+                Err(ApiError::Unauthorized) => break 'claiming,
+                Err(e) => {
+                    tracing::warn!("{e}");
+                    wait = Duration::from_secs(backoff);
+                    backoff = (backoff * 2).min(30);
                 }
             }
             tokio::select! {
@@ -868,6 +818,8 @@ impl Runner {
         &self,
         executor: &E,
         accept: bool,
+        max_jobs: u32,
+        running_jobs: usize,
     ) -> Result<Option<(Claim, Health)>, ApiError> {
         let mut health = executor.health().await;
         let images = if health.ready {
@@ -900,7 +852,21 @@ impl Runner {
         }
         let claim = self
             .api
-            .claim(executor.name(), &health, &images, accept)
+            .claim(&RunnerReport {
+                version: gb_base::BUILD_VERSION.into(),
+                max_jobs,
+                architecture: crate::ci::images::architecture().into(),
+                executor: executor.name().into(),
+                executor_state: if health.ready {
+                    ExecutorState::Ready
+                } else {
+                    ExecutorState::Unavailable
+                },
+                executor_detail: health.detail.clone(),
+                images,
+                accept,
+                running_jobs,
+            })
             .await?;
         Ok(claim.map(|c| (c, health)))
     }
@@ -908,21 +874,26 @@ impl Runner {
     /// Claims and runs at most one attempt. Returns whether there was one.
     #[cfg(any(test, feature = "test-support"))]
     pub async fn once<E: Executor>(&self, executor: &E) -> Result<bool, ApiError> {
-        let limits = self.limits();
-        let Some((claim, health)) = self.claim(executor, true).await? else {
+        let hub = self.api.health().await?;
+        let max_jobs = hub
+            .max_jobs
+            .ok_or_else(|| ApiError::Other("Hub did not report runner capacity".into()))?;
+        let Some((claim, health)) = self
+            .claim(executor, hub.version == gb_base::BUILD_VERSION, max_jobs, 0)
+            .await?
+        else {
             return Ok(false);
         };
-        self.run(executor, &health, claim, &limits).await?;
+        self.run(executor, &health, claim).await?;
         Ok(true)
     }
 
-    /// Runs a claimed attempt with `limits` and removes its directory.
+    /// Runs a claimed attempt with its Hub-provided resources and removes its directory.
     async fn run<E: Executor>(
         &self,
         executor: &E,
         health: &Health,
         claim: Claim,
-        limits: &ExecutorConfig,
     ) -> Result<(), ApiError> {
         tracing::info!(
             "attempt {} ({} #{} of {} {})",
@@ -932,7 +903,7 @@ impl Runner {
             claim.repo,
             claim.sha
         );
-        let result = self.attempt(executor, health, &claim, limits).await;
+        let result = self.attempt(executor, health, &claim).await;
         let _ = std::fs::remove_dir_all(self.job_dir(&claim));
         match result {
             Err(ApiError::Lost) => {
@@ -955,7 +926,6 @@ impl Runner {
         executor: &E,
         health: &Health,
         c: &Claim,
-        limits: &ExecutorConfig,
     ) -> Result<(), ApiError> {
         let (cancel_tx, cancel_rx) = watch::channel(false);
         let lost = Arc::new(AtomicBool::new(false));
@@ -972,7 +942,7 @@ impl Runner {
             log_rx,
         ));
         let result = self
-            .work(executor, health, c, limits, log_tx, cancel_rx, &lost)
+            .work(executor, health, c, log_tx, cancel_rx, &lost)
             .await;
         let _ = uploader.await;
         beat.abort();
@@ -992,7 +962,6 @@ impl Runner {
         executor: &E,
         health: &Health,
         c: &Claim,
-        limits: &ExecutorConfig,
         log: mpsc::Sender<Vec<u8>>,
         cancel: watch::Receiver<bool>,
         lost: &AtomicBool,
@@ -1016,6 +985,7 @@ impl Runner {
             );
         }
         let job = &c.job;
+        let limits = &c.execution.limits;
         let (cpus, memory_mib) = (limits.max_cpus, limits.max_memory_mib);
         let max = limits.max_timeout_secs;
         let timeout_secs = job.timeout_secs.map_or(max, |t| t.min(max));
@@ -1301,7 +1271,7 @@ impl Runner {
                 && !job.artifacts.is_empty()
             {
                 let collecting = Instant::now();
-                let mut budget = limits.artifacts_max_mib << 20;
+                let mut budget = c.execution.artifacts_max_mib << 20;
                 for a in &job.artifacts {
                     let mut notes = Vec::new();
                     let packed = workspace::pack(&work, a, &mut budget, &mut notes);
@@ -1486,15 +1456,56 @@ pub(crate) fn pass_in_child(test: &str, env: &[(&str, &std::ffi::OsStr)]) {
 }
 
 #[cfg(test)]
-mod version_tests {
+mod tests {
     use super::*;
+
+    #[test]
+    fn machine_work_dir_precedes_the_clients_default() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("branvil.toml");
+        std::fs::write(&file, "[ci.executor]\nwork_dir = 'local'\n").unwrap();
+        let config = crate::config::Config::load(Some(&file), root.path()).unwrap();
+        for (flag, configured, expected) in [
+            (Some("flag"), Some(&config), "flag"),
+            (None, Some(&config), "local"),
+            (None, None, "default"),
+        ] {
+            let settings = Settings::new(
+                "http://127.0.0.1:7878".into(),
+                None,
+                flag.map(PathBuf::from),
+                configured,
+                Some(PathBuf::from("default")),
+            )
+            .unwrap();
+            assert_eq!(settings.work_dir, PathBuf::from(expected));
+        }
+    }
     #[tokio::test]
     async fn mismatch_stops_without_claiming() {
-        use axum::{Json, Router, routing::get};
-        let app = Router::new().route(
-            "/api/v1/runner/health",
-            get(|| async { Json(serde_json::json!({"version":"different-build"})) }),
-        );
+        use axum::{
+            Json, Router,
+            http::StatusCode,
+            routing::{get, post},
+        };
+        let (reported, mut reports) = mpsc::channel(1);
+        let app = Router::new()
+            .route(
+                "/api/v1/runner/health",
+                get(|| async {
+                    Json(RunnerHealth {
+                        version: "different-build".into(),
+                        max_jobs: Some(2),
+                    })
+                }),
+            )
+            .route(
+                "/api/v1/runner/claim",
+                post(move |Json(report): Json<RunnerReport>| async move {
+                    reported.send(report).await.unwrap();
+                    StatusCode::NO_CONTENT
+                }),
+            );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -1502,8 +1513,6 @@ mod version_tests {
         let runner = Arc::new(Runner::new(
             Api::new(&url, "fixture"),
             temp.path().join("work"),
-            None,
-            ExecutorConfig::default(),
         ));
         let home = temp.path().join("msb");
         let result = runner
@@ -1516,6 +1525,10 @@ mod version_tests {
             })
             .await;
         assert!(result.unwrap_err().is::<VersionChanged>());
+        let report = reports.try_recv().unwrap();
+        assert_eq!(report.version, gb_base::BUILD_VERSION);
+        assert_eq!(report.max_jobs, 2);
+        assert!(!report.accept);
         server.abort();
     }
 }

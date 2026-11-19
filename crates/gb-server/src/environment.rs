@@ -1337,19 +1337,26 @@ mod tests {
         .await;
     }
 
+    fn usage_cached_before(requested: std::time::Instant) -> super::ToolUsage {
+        let slot = super::ToolUsage::default();
+        {
+            let mut reading = slot.reading.lock().unwrap();
+            reading.complete(Ok(serde_json::json!({"account":"old"})));
+            reading.checked = Some(requested - std::time::Duration::from_secs(1));
+        }
+        slot
+    }
+
     #[tokio::test]
     async fn usage_readers_share_refresh_and_cached_readers_do_not_wait() {
-        let slot = super::ToolUsage::default();
-        slot.reading
-            .lock()
-            .unwrap()
-            .complete(Ok(serde_json::json!({"account":"old"})));
+        let requested = std::time::Instant::now();
+        let slot = usage_cached_before(requested);
         let (release, released) = tokio::sync::oneshot::channel();
         let first = slot.read(
             "claude",
             "trace-1",
             true,
-            std::time::Instant::now(),
+            requested,
             || true,
             || async {
                 released.await.unwrap();
@@ -1362,7 +1369,7 @@ mod tests {
             "claude",
             "trace-1",
             true,
-            std::time::Instant::now(),
+            requested,
             || true,
             || async { panic!("concurrent refresh must reuse the running probe") },
         );
@@ -1404,17 +1411,14 @@ mod tests {
 
     #[tokio::test]
     async fn lost_credentials_clear_reading_and_retire_the_running_probe() {
-        let slot = super::ToolUsage::default();
-        slot.reading
-            .lock()
-            .unwrap()
-            .complete(Ok(serde_json::json!({"account":"old"})));
+        let requested = std::time::Instant::now();
+        let slot = usage_cached_before(requested);
         let (release, released) = tokio::sync::oneshot::channel();
         let probe = slot.read(
             "claude",
             "trace-1",
             true,
-            std::time::Instant::now(),
+            requested,
             || true,
             || async {
                 released.await.unwrap();

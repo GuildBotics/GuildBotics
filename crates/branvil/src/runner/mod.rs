@@ -9,7 +9,6 @@ mod integration {
 
     use tokio::sync::{mpsc, watch};
 
-    use crate::ci::config::ExecutorConfig;
     use executor::{Executor, Health, JobRun, Microsandbox, Outcome};
 
     #[cfg(test)]
@@ -211,8 +210,6 @@ fi
                 let runner = Arc::new(Runner::new(
                     Api::new(&s.url, &s.runner_token),
                     s.dir.path().join("runner"),
-                    None,
-                    ExecutorConfig::default(),
                 ));
                 let running = tokio::spawn(runner.serve({
                     let fake = fake.clone();
@@ -396,7 +393,7 @@ fi
                     detail: None,
                     images: vec![crate::ci::images::Image {
                         reference: "alpine".into(),
-                        architecture: "arm64".into(),
+                        architecture: crate::ci::images::architecture().into(),
                         digest: "sha256:test".into(),
                     }],
                 })
@@ -749,8 +746,6 @@ fi
                 url: s.url.clone(),
                 token: Some(s.runner_token.clone()),
                 work_dir: s.dir.path().join("runner"),
-                executor: ExecutorConfig::default(),
-                config: None,
                 msb_path: Some(msb.clone()),
                 msb_home: home.clone(),
             };
@@ -877,8 +872,6 @@ esac
             let runner = Runner::new(
                 Api::new(&s.url, &s.runner_token),
                 s.dir.path().join("runner"),
-                None,
-                ExecutorConfig::default(),
             );
             let fake = Fake::new();
             let first_sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
@@ -943,8 +936,6 @@ esac
             let runner = Runner::new(
                 Api::new(&s.url, &s.runner_token),
                 s.dir.path().join("runner"),
-                None,
-                ExecutorConfig::default(),
             );
             let fake = Fake::new();
             let first_sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
@@ -1043,8 +1034,6 @@ esac
             let runner = Runner::new(
                 Api::new(&s.url, &s.runner_token),
                 s.dir.path().join("runner"),
-                None,
-                ExecutorConfig::default(),
             );
             let fake = Fake::new();
             let first_sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
@@ -1108,8 +1097,6 @@ esac
             let runner = Runner::new(
                 Api::new(&s.url, &s.runner_token),
                 s.dir.path().join("runner"),
-                None,
-                ExecutorConfig::default(),
             );
             let fake = Fake::new();
             runner.once(&fake).await.unwrap();
@@ -1248,12 +1235,7 @@ esac
             "[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write target/out built\"]\ncache = { paths = [\"target\"] }\n",
         )
         .await;
-            let runner = Runner::new(
-                Api::new(&url, &runner_token),
-                dir.path().join("runner"),
-                None,
-                ExecutorConfig::default(),
-            );
+            let runner = Runner::new(Api::new(&url, &runner_token), dir.path().join("runner"));
             let fake = Fake::new();
             let log_of = |sha: String| {
                 let (app, repo) = (app.clone(), repo.clone());
@@ -1333,7 +1315,7 @@ esac
         }
 
         /// Up to `max_jobs` attempts run at once, each to its own end. The
-        /// runner reads the limit from its configuration before every claim, so
+        /// runner receives the limit from the Hub on every claim, so
         /// a new limit applies to the next claim and stops no running job.
         #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn the_runner_runs_up_to_max_jobs_attempts_at_once() {
@@ -1355,19 +1337,22 @@ esac
                 repo,
                 bare,
             } = service_with_lease(&pipeline, None, 60).await;
-            let config = dir.path().join("runner.toml");
-            let max_jobs = |n: u32| {
-                let staged = config.with_extension("new");
-                std::fs::write(&staged, format!("[ci.executor]\nmax_jobs = {n}\n")).unwrap();
-                std::fs::rename(staged, &config).unwrap();
+            let max_jobs = |n| {
+                let app = app.clone();
+                async move {
+                    let limits = crate::ci::config::JobLimits {
+                        max_jobs: n,
+                        ..app.ci.settings().limits()
+                    };
+                    app.ci
+                        .settings()
+                        .set_limits(Some("runner1"), limits)
+                        .await
+                        .unwrap();
+                }
             };
-            max_jobs(2);
-            let runner = Runner::new(
-                Api::new(&url, &runner_token),
-                dir.path().join("runner"),
-                Some((config.clone(), dir.path().to_path_buf())),
-                ExecutorConfig::default(),
-            );
+            max_jobs(2).await;
+            let runner = Runner::new(Api::new(&url, &runner_token), dir.path().join("runner"));
             // This tests scheduling, not heartbeat frequency. A three-second
             // lease can expire under CI contention and this fixture has no reaper.
             // Complete jobs explicitly; cancellation delivery is tested separately.
@@ -1480,7 +1465,7 @@ esac
             let running: Vec<_> = seen.iter().filter(|c| c.1 == "in_progress").collect();
             // With the limit lowered to one, the end of one job leaves the other
             // running and the last queued.
-            max_jobs(1);
+            max_jobs(1).await;
             cancel(running[0].3.clone()).await;
             settle("lowered limit after cancellation", |s| {
                 count(s, "cancelled") == 2 && count(s, "in_progress") == 1
@@ -1497,7 +1482,7 @@ esac
                 "{seen:?}"
             );
             // Raised again, the last starts next to it.
-            max_jobs(2);
+            max_jobs(2).await;
             let seen = settle("raised limit starts last job", |s| {
                 count(s, "in_progress") == 2 && count(s, "cancelled") == 2
             })
@@ -1517,14 +1502,19 @@ esac
         async fn a_refused_token_lets_the_running_jobs_end_first() {
             let pipeline = "[[jobs]]\nname = \"a\"\nimage = \"alpine\"\ncommands = [\"wait\"]\n\n[[jobs]]\nname = \"b\"\nimage = \"alpine\"\ncommands = [\"wait\"]\n";
             let s = service(pipeline).await;
+            let limits = crate::ci::config::JobLimits {
+                max_jobs: 2,
+                ..s.app.ci.settings().limits()
+            };
+            s.app
+                .ci
+                .settings()
+                .set_limits(Some("runner1"), limits)
+                .await
+                .unwrap();
             let runner = Runner::new(
                 Api::new(&s.url, &s.runner_token),
                 s.dir.path().join("runner"),
-                None,
-                ExecutorConfig {
-                    max_jobs: 2,
-                    ..ExecutorConfig::default()
-                },
             );
             let fake = Arc::new(Fake::new());
             let serving = tokio::spawn(Arc::new(runner).serve({
@@ -1577,16 +1567,21 @@ esac
                 }),
             )
             .await;
+            let limits = crate::ci::config::JobLimits {
+                // Leave capacity for another claim to observe the refusal
+                // while all three source requests remain held.
+                max_jobs: 4,
+                ..s.app.ci.settings().limits()
+            };
+            s.app
+                .ci
+                .settings()
+                .set_limits(Some("runner1"), limits)
+                .await
+                .unwrap();
             let runner = Arc::new(Runner::new(
                 Api::new(&s.url, &s.runner_token),
                 s.dir.path().join("runner"),
-                None,
-                ExecutorConfig {
-                    // Leave capacity for another claim to observe the refusal
-                    // while all three source requests remain held.
-                    max_jobs: 4,
-                    ..ExecutorConfig::default()
-                },
             ));
             let fake = Arc::new(Fake::new());
             let serving = tokio::spawn(runner.clone().serve({
@@ -1664,18 +1659,19 @@ esac
         )
         .await;
 
-            let runner = Runner::new(
-                Api::new(&url, &runner_token),
-                dir.path().join("runner"),
-                None,
-                ExecutorConfig {
-                    max_cpus: 3,
-                    max_memory_mib: 2048,
-                    work_quota_mib: 8192,
-                    max_timeout_secs: 100,
-                    ..ExecutorConfig::default()
-                },
-            );
+            let limits = crate::ci::config::JobLimits {
+                max_cpus: 3,
+                max_memory_mib: 2048,
+                work_quota_mib: 8192,
+                max_timeout_secs: 100,
+                ..app.ci.settings().limits()
+            };
+            app.ci
+                .settings()
+                .set_limits(Some("runner1"), limits)
+                .await
+                .unwrap();
+            let runner = Runner::new(Api::new(&url, &runner_token), dir.path().join("runner"));
             let fake = Fake::new();
             let job = |id: &str| {
                 let (http, url, owner, id) =
@@ -1859,7 +1855,9 @@ esac
                     "job":{"name":"test", "image":"alpine", "commands":["true"], "paths":[],
                         "timeout_secs":null, "artifacts":[], "cache":null, "verified_sha":declared},
                     "verified_sha":verified, "cache_scope":"protected", "network":false,
-                    "queued_secs":0, "reuse":null
+                    "queued_secs":0, "reuse":null,
+                    "limits": crate::ci::config::JobLimits::from(&crate::ci::config::ExecutorConfig::default()),
+                    "artifacts_max_mib":64
                 }))
                 .unwrap();
                     let env = job_environment(&c);

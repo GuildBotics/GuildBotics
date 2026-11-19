@@ -1,7 +1,7 @@
 //! `[ci] runner = "auto"`: the server starts one `guildbotics runner` child
 //! (the same executable, a separate process) and restarts it when it exits. The
 //! mode and the limits the child reads can change while the service runs
-//! (Settings → CI, `settings.rs`): the child reads the limits again before
+//! (Settings → CI, `settings.rs`): the child receives its limits from the Hub on
 //! every claim, so only the mode stops it. The child authenticates as the runner
 //! member `branvil-runner` with a token minted at each start (the previous
 //! automatic token is revoked), passed through the environment, never the
@@ -157,7 +157,7 @@ async fn wait(desired: &mut tokio::sync::watch::Receiver<RunnerMode>, secs: u64)
 /// After the child was killed: the microVMs of the jobs it ran are removed
 /// (the child could not), and the diagnostics stop counting it.
 async fn stopped(app: &Shared) {
-    app.ci.forget_runner(AUTO_RUNNER);
+    app.ci.runner_stopped(AUTO_RUNNER);
     app.ci
         .settings()
         .microsandbox(AUTO_RUNNER)

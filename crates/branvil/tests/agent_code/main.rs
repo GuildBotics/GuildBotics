@@ -129,7 +129,7 @@ async fn next_claim(base: &str, runner: &str) -> Value {
             let response = client
                 .post(format!("{base}/api/v1/runner/claim"))
                 .bearer_auth(runner)
-                .json(&json!({"executor":"microsandbox","executor_state":"ready","architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","2".repeat(64))}]}))
+                .json(&json!({"executor":"microsandbox","executor_state":"ready","version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true,"architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","2".repeat(64))}]}))
                 .send()
                 .await
                 .unwrap();

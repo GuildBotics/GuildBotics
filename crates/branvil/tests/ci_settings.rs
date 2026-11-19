@@ -5,7 +5,7 @@
 //! repositories, and
 //! image operations refuse what is not an image reference or a regular file.
 
-use crate::common;
+use crate::{ci::eventually, common};
 
 use common::*;
 use reqwest::StatusCode;
@@ -149,21 +149,191 @@ async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
         .await;
     assert_eq!(st, StatusCode::OK, "{v}");
     assert_eq!(v["runner"]["mode"], "off");
-    // The stopped runner is forgotten at once, not counted for minutes.
-    assert_eq!(v["runner"]["runners"], json!([]), "{v}");
-    assert_eq!(v["runner"]["state"], "no_runner");
+    // The supervisor stops it asynchronously. Its last report stays in the list.
+    eventually("runner stopped", || {
+        let w = &w;
+        async move {
+            let v = settings(w).await;
+            v["runner"]["state"] == "no_runner"
+                && row(&v, "branvil-runner")["connection"] == "offline"
+        }
+    })
+    .await;
     let diagnostics = w.server.ok("/admin/diagnostics", &w.owner).await;
     assert_eq!(diagnostics["runner"]["mode"], "off");
+}
+
+fn row<'a>(view: &'a Value, name: &str) -> &'a Value {
+    view["runner"]["runners"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == name)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
+    let mut w = World::new().await;
+    std::fs::write(
+        w.server.data.join("branvil.toml"),
+        "[ci.executor]\nmax_cpus = 6\n",
+    )
+    .unwrap();
+    isolate(&mut w);
+    let remote = w.server.member(&w.owner, "remote-runner", "runner").await;
+    let idle = w.server.member(&w.owner, "idle-runner", "runner").await;
+    land_pipeline(&w).await;
+
+    let v = settings(&w).await;
+    assert_eq!(v["runner"]["runners"].as_array().unwrap().len(), 2);
+    let idle_row = row(&v, "idle-runner");
+    assert_eq!(idle_row["connection"], "never_seen");
+    assert!(idle_row["last_seen_at"].is_null());
+    assert_eq!(idle_row["limits"]["max_cpus"], 6);
+
+    let path = "/admin/ci/runners/idle-runner/limits";
+    let limits = json!({"max_cpus": 8, "max_memory_mib": 8192, "work_quota_mib": 32768, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 3});
+    for token in [&w.aiko, &remote] {
+        assert_eq!(
+            w.server.put(path, token, limits.clone()).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    assert_eq!(
+        w.server
+            .put("/admin/ci/runners/aiko/limits", &w.owner, limits.clone())
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        w.server.get("/runner/health", &w.owner).await.0,
+        StatusCode::FORBIDDEN
+    );
+    // Only an image for the reporting runner's CPU counts.
+    let mut report = json!({
+        "executor": "fixture", "executor_state": "ready", "version": "older-build",
+        "max_jobs": 1, "running_jobs": 0, "accept": true, "architecture": "amd64",
+        "images": [{"reference": IMAGE, "architecture": "arm64", "digest": format!("sha256:{}", "a".repeat(64))}]
+    });
+    assert_eq!(
+        w.server
+            .post("/runner/claim", &remote, report.clone())
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    let v = settings(&w).await;
+    let remote_row = row(&v, "remote-runner");
+    assert_eq!(remote_row["connection"], "online");
+    assert!(remote_row["last_seen_at"].is_string());
+    assert_eq!(remote_row["executor_state"], "ready");
+    assert_eq!(remote_row["version_matches"], false);
+    assert_eq!(remote_row["missing_images"], json!([IMAGE]));
+    assert_eq!(remote_row["running_jobs"], 0);
+
+    for info in [
+        v["runner"].clone(),
+        w.server.ok("/admin/diagnostics", &w.owner).await["runner"].clone(),
+    ] {
+        assert_eq!(info["state"], "executor_unavailable");
+        assert_eq!(
+            info["version_mismatch"],
+            json!({"name": "remote-runner", "version": "older-build"})
+        );
+        let detail = info["detail"].as_str().unwrap();
+        assert!(
+            detail.contains("remote-runner") && detail.contains("older-build"),
+            "{detail}"
+        );
+    }
+
+    // Explicit settings remain an override even when they equal the defaults.
+    let defaults = v["limits"].clone();
+    let (status, v) = w.server.put(path, &w.owner, defaults).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(row(&v, "idle-runner")["limits_source"], "runner");
+
+    let (status, v) = w.server.put(path, &w.owner, limits.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(row(&v, "idle-runner")["limits"], limits);
+    assert_eq!(row(&v, "idle-runner")["limits_source"], "runner");
+    assert_eq!(w.server.ok("/runner/health", &idle).await["max_jobs"], 3);
+    assert_eq!(
+        row(&settings(&w).await, "idle-runner")["connection"],
+        "never_seen"
+    );
+
+    // A usable runner takes precedence over a simultaneously online mismatch.
+    let mut peer = report.clone();
+    peer["accept"] = json!(false);
+    assert_eq!(
+        w.server.post("/runner/claim", &idle, peer).await.0,
+        StatusCode::NO_CONTENT
+    );
+
+    report["version"] = json!(gb_base::BUILD_VERSION);
+    report["images"][0]["architecture"] = json!("amd64");
+    report["running_jobs"] = json!(1);
+    assert_eq!(
+        w.server
+            .post("/runner/claim", &remote, report.clone())
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    report["running_jobs"] = json!(0);
+    let (status, claim) = w.server.post("/runner/claim", &remote, report).await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    assert_eq!(claim["limits"]["max_cpus"], 6);
+    assert_eq!(claim["limits"]["max_jobs"], 1);
+    let v = settings(&w).await;
+    let remote_row = row(&v, "remote-runner");
+    assert_eq!(remote_row["version_matches"], true);
+    assert_eq!(remote_row["missing_images"], json!([]));
+    assert_eq!(remote_row["running_jobs"], 1);
+    assert_eq!(v["runner"]["state"], "ready");
+    assert!(v["runner"]["version_mismatch"].is_null());
+    assert_eq!(row(&v, "idle-runner")["connection"], "online");
+    assert_eq!(row(&v, "idle-runner")["version_matches"], false);
+
+    let finish = format!(
+        "/runner/attempts/{}/finish",
+        claim["attempt_id"].as_str().unwrap()
+    );
+    let (status, result) = w
+        .server
+        .post(
+            &finish,
+            &remote,
+            json!({
+                "lease": claim["lease"], "conclusion": "success", "details": "finished",
+                "image_digest": format!("sha256:{}", "a".repeat(64)),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(row(&settings(&w).await, "remote-runner")["running_jobs"], 0);
+
+    isolate(&mut w);
+    let v = settings(&w).await;
+    assert_eq!(row(&v, "remote-runner")["connection"], "never_seen");
+    assert_eq!(row(&v, "remote-runner")["limits_source"], "default");
+    assert!(row(&v, "remote-runner")["version"].is_null());
+    assert_eq!(row(&v, "idle-runner")["limits"], limits);
+    assert_eq!(row(&v, "idle-runner")["limits_source"], "runner");
+    assert_eq!(w.server.ok("/runner/health", &idle).await["max_jobs"], 3);
 }
 
 /// Waits until the supervised runner has contacted the service.
 async fn runner_connected(w: &World) {
     for _ in 0..300 {
         let v = settings(w).await;
-        if v["runner"]["runners"]
-            .as_array()
-            .is_some_and(|r| r.iter().any(|r| r["name"] == "branvil-runner"))
-        {
+        if v["runner"]["runners"].as_array().is_some_and(|r| {
+            r.iter()
+                .any(|r| r["name"] == "branvil-runner" && r["connection"] == "online")
+        }) {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;

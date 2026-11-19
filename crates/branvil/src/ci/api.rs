@@ -357,17 +357,20 @@ fn stream_file(
 // ---------------------------------------------------------------- runner API
 
 async fn runner_health(State(app): State<Shared>, c: Caller) -> R {
-    require_runner(&app, &c)?;
-    Ok(ok(serde_json::json!({"version":gb_base::BUILD_VERSION})))
+    require_runner(&c)?;
+    let (limits, _) = app.ci.settings().runner_limits(c.name());
+    Ok(ok(gb_runner::ci::api::RunnerHealth {
+        version: gb_base::BUILD_VERSION.into(),
+        max_jobs: Some(limits.max_jobs),
+    }))
 }
 
-fn require_runner(app: &Shared, c: &Caller) -> AppResult<()> {
+fn require_runner(c: &Caller) -> AppResult<()> {
     if c.member.kind != MemberKind::Runner {
         return Err(AppError::forbidden(
             "The runner API needs a token of a runner member (`guildbotics runner register`).",
         ));
     }
-    app.ci.saw_runner(c.name(), None);
     Ok(())
 }
 
@@ -380,24 +383,10 @@ fn lease_of(headers: &HeaderMap) -> AppResult<String> {
         .ok_or_else(|| AppError::invalid("The X-Branvil-Lease header is required."))
 }
 
-#[derive(Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-struct ClaimInput {
-    architecture: String,
-    #[serde(default = "accept_work")]
-    accept: bool,
-    images: Vec<super::images::Image>,
-    #[serde(default)]
-    executor: String,
-    /// `ready` or `unavailable`.
-    #[serde(default)]
-    executor_state: Option<String>,
-    #[serde(default)]
-    executor_detail: Option<String>,
-}
-
 #[derive(Serialize)]
 pub struct ClaimView {
+    #[serde(flatten)]
+    pub execution: gb_runner::ci::api::ExecutionLimits,
     pub attempt_id: String,
     pub purpose: queue::Purpose,
     pub lease: String,
@@ -415,29 +404,21 @@ pub struct ClaimView {
     pub reuse: Option<queue::Reuse>,
 }
 
-fn accept_work() -> bool {
-    true
-}
-
 async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) -> R {
-    require_runner(&app, &c)?;
-    let mut input: ClaimInput = json(&body)?;
-    if input.executor_state.as_deref() == Some("unavailable") {
-        input.images.clear();
-    }
-    let images =
-        super::images::current(&app.layout.root, input.images).map_err(AppError::internal)?;
-    app.ci.report_runner(
-        c.name(),
-        &input.executor,
-        input.executor_state.as_deref().unwrap_or("ready"),
-        input.executor_detail,
-        &input.architecture,
-        images.clone(),
-    );
-    if !input.accept {
+    require_runner(&c)?;
+    let mut report: gb_runner::ci::api::RunnerReport = json(&body)?;
+    report
+        .images
+        .retain(|i| i.architecture == report.architecture);
+    let (limits, _) = app.ci.settings().runner_limits(c.name());
+    let accept =
+        report.accept && report.can_run() && report.running_jobs < limits.max_jobs as usize;
+    let held = accept.then(|| report.images.clone());
+    app.ci.report_runner(c.name(), report);
+    let Some(held) = held else {
         return Ok(StatusCode::NO_CONTENT.into_response());
-    }
+    };
+    let images = super::images::current(&app.layout.root, held).map_err(AppError::internal)?;
     let (runner, lease_secs, now) = (
         c.name().to_string(),
         app.ci.config().lease_secs,
@@ -462,6 +443,10 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     let a = &cl.attempt;
     app.events.publish("check", &a.repo_path, a.sha.clone());
     Ok(ok(ClaimView {
+        execution: gb_runner::ci::api::ExecutionLimits {
+            limits,
+            artifacts_max_mib: app.ci.config().executor.artifacts_max_mib,
+        },
         attempt_id: a.id.clone(),
         purpose: a.purpose,
         lease: cl.lease.clone(),
@@ -481,7 +466,7 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
 }
 
 async fn images(State(app): State<Shared>, c: Caller, Q(q): Q) -> R {
-    require_runner(&app, &c)?;
+    require_runner(&c)?;
     let archives = super::images::list(&app.layout.root).map_err(AppError::internal)?;
     Ok(ok(archives
         .into_iter()
@@ -493,7 +478,7 @@ async fn images(State(app): State<Shared>, c: Caller, Q(q): Q) -> R {
         .collect::<Vec<_>>()))
 }
 async fn image_archive(State(app): State<Shared>, c: Caller, Path(id): Path<String>) -> R {
-    require_runner(&app, &c)?;
+    require_runner(&c)?;
     let path =
         super::images::path(&app.layout.root, &id).map_err(|e| AppError::invalid(e.to_string()))?;
     let file = tokio::fs::File::open(path)
@@ -530,7 +515,7 @@ async fn source(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> R {
-    require_runner(&app, &c)?;
+    require_runner(&c)?;
     let a = leased(&app, &id, &lease_of(&headers)?).await?;
     let dir = app.git.repo_dir(&a.repo_path);
     let merged = format!("--merged={}", a.sha);
@@ -635,7 +620,7 @@ async fn heartbeat(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> R {
-    require_runner(&app, &c)?;
+    require_runner(&c)?;
     let input: LeaseInput = json(&body)?;
     if !valid_attempt_id(&id) {
         return Err(AppError::conflict(format!(
@@ -660,7 +645,7 @@ async fn log_append(
     headers: HeaderMap,
     body: Body,
 ) -> R {
-    require_runner(&app, &c)?;
+    require_runner(&c)?;
     let a = leased(&app, &id, &lease_of(&headers)?).await?;
     let bytes = axum::body::to_bytes(body, LOG_CHUNK_MAX)
         .await
@@ -680,7 +665,7 @@ async fn artifact_put(
     headers: HeaderMap,
     body: Body,
 ) -> R {
-    require_runner(&app, &c)?;
+    require_runner(&c)?;
     let lease = lease_of(&headers)?;
     let a = leased(&app, &id, &lease).await?;
     if !util::valid_name(&name) {
@@ -788,7 +773,7 @@ async fn finish(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> R {
-    require_runner(&app, &c)?;
+    require_runner(&c)?;
     let input: FinishInput = json(&body)?;
     if !valid_attempt_id(&id) {
         return Err(AppError::conflict(format!(

@@ -100,7 +100,7 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   `BRANVIL_VERIFIED_SHA` (the latest verified commit at claim, or empty). No tokens, no host variables. See "The job's
   environment" for `/work`, the user, and `/tmp`.
 - Jobs of one run are queued together; a runner runs queued jobs, of any
-  run, up to `ci.executor.max_jobs` at once, each in a microVM of its own
+  run, up to the runner's configured `max_jobs` at once, each in a microVM of its own
   (there are no dependencies between jobs).
   Admission assigns sequence numbers within a run in this order:
   failures in the previous run, jobs without a result, then successes (including
@@ -645,14 +645,15 @@ Git of its machine).
 
 ### Join a Windows runner
 
-Install the GuildBotics client and keep SSH forwarding to the Hub running first.
+Install the GuildBotics client and [set up SSH forwarding to the Hub](../../../docs/branvil_integration.en.md#set-up-ssh-forwarding-on-another-machine) first.
 Run `guildbotics runner join` and approve **CI runner** access in the browser.
 The command verifies and installs msb 0.6.17, stores the runner credential in the
 OS keychain, and registers a per-user login task. It never prints the credential.
 Joining again replaces the previous credential for that device. Work is kept
 under the machine's GuildBotics directory, outside the Windows temporary directory.
 The runner checks `/api/v1/runner/health` before claims. A changed Hub version
-stops new claims, drains running attempts, and exits so the task restarts it;
+is reported without requesting work. The runner drains running attempts and
+exits so the task restarts it;
 the client updater installs the matching Hub build before it resumes.
 
 ### Manual runner maintenance
@@ -672,25 +673,39 @@ Or let the service supervise one: `[ci] runner = "auto"` in `branvil.toml`
 makes the server start `guildbotics runner` as a child (member
 `branvil-runner`, a token minted at every start and passed through the
 environment; the previous automatic token is revoked) and restart it when it
-exits. The child reads the service's configuration file for its
-`[ci.executor]` and `[ci.microsandbox]` settings.
+exits. The child reads its work directory (`[ci.executor] work_dir`) and
+microsandbox settings (`[ci.microsandbox]`) from the service configuration.
 
-The owner changes the mode and the job resources under Settings → CI
-(`docs/api.md`, "CI settings") without restarting the service: they are
-written to `branvil.toml` (the rest of the file is kept as it is), switching
-the mode off stops the child, and the runner reads the limits from the file
-again before every claim, so new limits apply from the next job it starts and
-the running jobs keep theirs (a runner started by hand reads its own
-configuration file the same way). Stopping or restarting the child interrupts
-the attempts it is running, which are queued once more (see "Leases and
-interruptions"); the service then removes the microVMs the child left. The
-child refuses to start when it cannot read the configuration file. The image
-cache Settings → CI
-manages is the supervised runner's (`[ci.microsandbox] home`); a runner
-started by hand on another machine keeps its own, filled with
-`guildbotics runner pull`. A runner started by hand is upgraded together with
-the service: the runner API carries the job definition and the image digest
-in this version's shapes.
+Settings → CI shows every runner member, including those that have not reported
+since the Hub started. Reports contain the last contact time, executor state,
+version and concurrency. The list also shows held attempts and images from
+default-branch pipelines missing from each runner's CPU inventory. A runner
+reports on the same cadence when it has no work or is at capacity (normally
+every two seconds). The Hub treats reports older than `ci.runner_absent_secs`
+as offline and labels their data as the last report. A connected runner with a
+ready executor and the Hub build keeps the CI warning clear even when other
+runners are offline. If a connected runner has a different build and no runner
+can take work, the warning names the incompatible runner even with the
+automatic runner switched off.
+
+Select a runner under Settings → CI to save its job resources. The Hub writes
+the override to `[ci.runner_limits.<name>]` in its `branvil.toml` while
+preserving the rest of the file. Without an override, the Hub supplies its
+`[ci.executor]` defaults. The form shows whether it uses the defaults or
+values saved for the selected runner. Every successful claim supplies the resources for
+that attempt. Saving new values, including for an offline runner, affects the
+next claim and leaves running jobs with their original resources. Each machine
+continues to set its own `work_dir`; job resource values in a remote runner's
+local file are no longer used.
+
+Switching the supervised runner off stops its child. Stopping or restarting
+the child interrupts the attempts it is running, which are queued once more
+(see "Leases and interruptions"); the service removes the microVMs it left.
+The image cache Settings → CI manages is the supervised runner's
+(`[ci.microsandbox] home`). Another machine can synchronize CPU-specific Hub
+images or fill its own cache with `guildbotics runner pull`. Upgrade manually
+started runners together with the Hub, as their runner API shares the build's
+job and image formats.
 
 Per job the runner:
 
@@ -878,7 +893,7 @@ reports itself unavailable without it, as without `msb`).
   executor, the runner's CPUs, memory, and time limit, the image's digest on
   the attempt and in the log, a work directory that is a checkout of the
   commit with the tags it reaches and no remote, up to `max_jobs` jobs at
-  once with the limit read before every claim, a refused token that
+  once with the limit supplied by the Hub at claim, a refused token that
   lets the running jobs end before the runner stops (synchronized on the
   executor's `wait`, separately from held source requests that return 401
   and clean up without starting the executor), and a cache that only

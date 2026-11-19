@@ -2,7 +2,7 @@
 //! runner, and the runner's executor settings (read by `guildbotics runner` when it
 //! runs with the same configuration).
 
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +41,7 @@ pub struct CiConfig {
     /// Logs and artifacts of attempts finished longer ago are deleted.
     pub retention_days: u64,
     pub executor: ExecutorConfig,
+    pub runner_limits: BTreeMap<String, JobLimits>,
     pub microsandbox: MicrosandboxConfig,
 }
 
@@ -56,6 +57,7 @@ impl Default for CiConfig {
             artifact_max_mib: 64,
             retention_days: 30,
             executor: ExecutorConfig::default(),
+            runner_limits: BTreeMap::new(),
             microsandbox: MicrosandboxConfig::default(),
         }
     }
@@ -97,6 +99,31 @@ impl Default for ExecutorConfig {
             max_timeout_secs: 3600,
             cache_max_mib: 2048,
             artifacts_max_mib: 64,
+        }
+    }
+}
+
+/// Job resources sent by the Hub, independent of where the runner works.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct JobLimits {
+    pub max_cpus: u32,
+    pub max_memory_mib: u64,
+    pub work_quota_mib: u64,
+    pub max_timeout_secs: u64,
+    pub cache_max_mib: u64,
+    pub max_jobs: u32,
+}
+
+impl From<&ExecutorConfig> for JobLimits {
+    fn from(config: &ExecutorConfig) -> Self {
+        Self {
+            max_cpus: config.max_cpus,
+            max_memory_mib: config.max_memory_mib,
+            work_quota_mib: config.work_quota_mib,
+            max_timeout_secs: config.max_timeout_secs,
+            cache_max_mib: config.cache_max_mib,
+            max_jobs: config.max_jobs,
         }
     }
 }
