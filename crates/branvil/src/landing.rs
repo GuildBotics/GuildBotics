@@ -58,6 +58,7 @@ pub(crate) fn next(
     head: &str,
     blockers: &[LandingReason],
 ) -> (String, Option<String>) {
+    let local = repo.upstream.is_none() || p.base != repo.default_branch;
     let x = published(repo, p);
     let detail = x.and_then(|x| x.error.clone());
     let (next, detail) = if x.is_some_and(|x| x.state == "merged") {
@@ -73,7 +74,7 @@ pub(crate) fn next(
         ("host_closed", detail)
     } else if !blockers.is_empty() {
         ("conditions", None)
-    } else if repo.upstream.is_some()
+    } else if !local
         && (!repo.auto_land && p.upstream.is_none()
             || p.upstream.is_some() && x.is_none()
             || x.is_some_and(|x| x.stopped.is_some()))
@@ -82,12 +83,9 @@ pub(crate) fn next(
             "owner_publish",
             x.and_then(|x| x.stopped.clone()).or(detail),
         )
-    } else if repo.auto_land
-        && e.error.is_some()
-        && (repo.upstream.is_none() || p.upstream.is_none())
-    {
+    } else if repo.auto_land && e.error.is_some() && (local || p.upstream.is_none()) {
         ("owner_fix_auto", e.error.clone())
-    } else if repo.upstream.is_none() {
+    } else if local {
         (
             if repo.auto_land {
                 "auto_merge"
@@ -209,7 +207,9 @@ pub async fn blockers(
             "The head adds nothing to the base.",
         ));
     }
-    if let Some(up) = &repo.upstream {
+    if let Some(up) = &repo.upstream
+        && p.base == repo.default_branch
+    {
         let (author, provider) = (p.author.clone(), up.provider.clone());
         let account = app
             .store
@@ -220,7 +220,7 @@ pub async fn blockers(
                     .any(|a| a.provider == provider))
             })
             .await?;
-        if p.base != repo.default_branch || !account {
+        if !account {
             out.push(reason(
                 "publish_requirements",
                 "Publishing requires the default base and an author account on the host.",
@@ -650,7 +650,11 @@ mod tests {
             },
         });
         assert_eq!(n(&r, &p, &e, &f, &[]), "owner_publish");
+        p.base = "ticket/parent".into();
+        assert_eq!(n(&r, &p, &e, &f, &[]), "owner_merge");
         r.auto_land = true;
+        assert_eq!(n(&r, &p, &e, &f, &[]), "auto_merge");
+        p.base = "main".into();
         assert_eq!(n(&r, &p, &e, &f, &[]), "publishing");
         e.error = Some("failed".into());
         assert_eq!(n(&r, &p, &e, &f, &[]), "owner_fix_auto");

@@ -420,7 +420,19 @@ impl Session<'_> {
                 } else {
                     (p.text("repo").into(), p.text("branch").into(), "branch")
                 };
-                let mut result = git.prepare(&repository, &branch).await?;
+                let base = if mode == "issue" {
+                    Some(
+                        r.services
+                            .code()?
+                            .ticket_base(&repository, branch.strip_prefix("ticket/").unwrap())
+                            .await?,
+                    )
+                } else {
+                    None
+                };
+                let mut result = git
+                    .prepare_from(&repository, &branch, base.as_deref())
+                    .await?;
                 result["issue_url"] = p.text("issue-url").into();
                 result["pr_url"] = p.text("pr-url").into();
                 result["mode"] = mode.into();

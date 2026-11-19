@@ -18,3 +18,4 @@ ja:
 
   stopped: 組み込みの Branvil サービスは停止しています。
   start_failed: 組み込みの Branvil サービスを起動できませんでした。
+  ambiguous_base: "同じ head の open PR が複数あります。--base で対象を選んでください。"

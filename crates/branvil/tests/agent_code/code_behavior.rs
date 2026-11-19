@@ -912,3 +912,117 @@ async fn outside_scope_pull_requests_are_not_patrolled() {
     );
     context.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ticket_base_uses_nearest_draft_ancestor_and_create_reports_it() {
+    let context = Context::with_repository(REPOSITORY).await;
+    let f = Fixture::new(&context).await;
+    let root = f.ticket("root", false, None).await;
+    let parent = f.ticket("parent", false, Some(root.clone())).await;
+    let child = f.ticket("child", false, Some(parent.clone())).await;
+    let key = |url: &str| url.rsplit('/').next().unwrap().to_string();
+    let root_branch = format!("ticket/{}", key(&root));
+    let parent_branch = format!("ticket/{}", key(&parent));
+    let child_branch = format!("ticket/{}", key(&child));
+    let head = f.git.commit(&f.base, "feature.txt", "feature");
+    for branch in [&root_branch, &parent_branch, &child_branch] {
+        f.git.push(&f.remote, &head, branch, "owner", f.owner_token);
+    }
+    assert_eq!(
+        f.code.ticket_base(REPOSITORY, &key(&child)).await.unwrap(),
+        "main"
+    );
+    let root_pr = f
+        .owner
+        .pulls_create(
+            REPOSITORY,
+            input(json!({"head":root_branch,"base":"main","title":"collect root","draft":true})),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        f.code.ticket_base(REPOSITORY, &key(&child)).await.unwrap(),
+        root_branch
+    );
+    // A ready PR is not a collection signal.
+    let parent_pr = f
+        .owner
+        .pulls_create(
+            REPOSITORY,
+            input(json!({"head":parent_branch,"base":"main","title":"parent","draft":false})),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        f.code.ticket_base(REPOSITORY, &key(&child)).await.unwrap(),
+        root_branch
+    );
+    f.owner
+        .pulls_update(
+            REPOSITORY,
+            parent_pr.pull.number,
+            input(json!({"draft":true})),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        f.code.ticket_base(REPOSITORY, &key(&child)).await.unwrap(),
+        parent_branch
+    );
+    let request = |base: &str| CreatePullRequest {
+        repository: REPOSITORY.into(),
+        head: child_branch.clone(),
+        base: base.into(),
+        title: "child".into(),
+        body: String::new(),
+        draft: false,
+        tickets: vec![TicketLink {
+            url: child.clone(),
+            closes: false,
+        }],
+    };
+    let made = f.code.create_pull_request(request("")).await.unwrap();
+    assert_eq!(made.written.view.base, parent_branch);
+    f.owner
+        .pulls_update(
+            REPOSITORY,
+            parent_pr.pull.number,
+            input(json!({"draft":false})),
+        )
+        .await
+        .unwrap();
+    let ready_reuse = f.code.create_pull_request(request("")).await.unwrap();
+    assert!(!ready_reuse.created);
+    assert_eq!(ready_reuse.written.view.number, made.written.view.number);
+    f.owner
+        .pulls_set_open(REPOSITORY, parent_pr.pull.number, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.code.ticket_base(REPOSITORY, &key(&child)).await.unwrap(),
+        root_branch
+    );
+    f.owner
+        .pulls_update(
+            REPOSITORY,
+            root_pr.pull.number,
+            input(json!({"draft":false})),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        f.code.ticket_base(REPOSITORY, &key(&child)).await.unwrap(),
+        "main"
+    );
+    let reused = f.code.create_pull_request(request("")).await.unwrap();
+    assert!(!reused.created);
+    assert_eq!(reused.written.view.number, made.written.view.number);
+    assert_eq!(reused.written.view.base, parent_branch);
+    let explicit = f.code.create_pull_request(request("main")).await.unwrap();
+    assert_eq!(explicit.written.view.base, "main");
+    assert_eq!(
+        f.code.create_pull_request(request("")).await.err().unwrap(),
+        ::branvil::agent::diagnostic("integrations.branvil.api.ambiguous_base", [])
+    );
+    context.stop().await;
+}

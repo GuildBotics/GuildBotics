@@ -595,6 +595,19 @@ describe("pull request review", () => {
     },
     revision: 1,
   };
+
+ it("merges feature-base pulls locally in an upstream repository", async () => {
+  fakeApi(pullRoutes({
+    [`GET ${P}`]: json(200, pull({ base: "ticket/parent", landing: landing({ next: "owner_merge" }) })),
+    "GET /api/v1/repos/acme/demo": json(200, { ...UPSTREAM_REPOSITORY, required_checks: [], required_approvals: 0 }),
+    [`POST ${P}/merge`]: json(200, pull({ base: "ticket/parent", state: "closed", merged: true })),
+  }));
+  renderApp("/acme/demo/-/pulls/3", "en");
+  const button = await screen.findByRole("button", { name: dictionaries.en["merge.submit"] });
+  expect(button).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "Publish to GitHub" })).not.toBeInTheDocument();
+ });
+
   const UPSTREAM_REPO = json(200, UPSTREAM_REPOSITORY);
   const PREVIEW = {
     host: "GitHub",

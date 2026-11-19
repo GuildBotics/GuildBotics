@@ -24,9 +24,10 @@ export const useMissingChecks = (pull: PullRequest, required: string[]): string[
 export type Stop = "conditions" | "host" | "merge" | "base";
 export type Mark = "now" | "turn" | "failed";
 export function whereabouts(pull: PullRequest, repo: Repository, personNeeded: boolean): { stops: Stop[]; at: Stop; mark: Mark } {
-  const stops: Stop[] = repo.upstream ? ["conditions", "host", "merge", "base"] : ["conditions", "merge", "base"];
+  const publishes = repo.upstream && pull.base === repo.default_branch;
+  const stops: Stop[] = publishes ? ["conditions", "host", "merge", "base"] : ["conditions", "merge", "base"];
   const next = pull.landing?.next ?? "conditions";
-  const at = next.includes("following") ? "base" : ["owner_merge_host", "owner_merge", "auto_merge"].includes(next) ? "merge" : next === "conditions" ? "conditions" : repo.upstream ? "host" : "merge";
+  const at = next.includes("following") ? "base" : ["owner_merge_host", "owner_merge", "auto_merge"].includes(next) ? "merge" : next === "conditions" ? "conditions" : publishes ? "host" : "merge";
   return { stops, at, mark: next.startsWith("owner_fix") || next === "host_closed" ? "failed" : next.startsWith("owner_") || personNeeded ? "turn" : "now" };
 }
 const stopIcons = { conditions: ListChecks, host: Cloud, merge: GitMerge, base: GitBranch };

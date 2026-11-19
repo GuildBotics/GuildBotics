@@ -7,7 +7,7 @@ import { MantineProvider } from "@mantine/core";
 import { describe, expect, it } from "vitest";
 import type { Check, Landing, LandingNext, Repository } from "../api/types";
 import { dictionaries, I18nProvider } from "../i18n";
-import { JourneyBadge, LandingJourney } from "../views/pull/LandingStatus";
+import { JourneyBadge, LandingJourney, whereabouts } from "../views/pull/LandingStatus";
 import { fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 import { BASE, HEAD, landing, pull } from "./fixtures";
 
@@ -198,4 +198,8 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", lang => {
     expect(screen.queryByRole("button",{ name: /Resume landing|検問の列に戻す/ })).not.toBeInTheDocument();
   });
 
+});
+
+it("omits the host step for a feature-base pull", () => {
+  expect(whereabouts(pull({ base: "ticket/parent", landing: landing({ next: "owner_merge" }) }), REPO, false)).toEqual({ stops: ["conditions", "merge", "base"], at: "merge", mark: "turn" });
 });

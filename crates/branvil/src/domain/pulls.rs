@@ -2059,15 +2059,17 @@ async fn merge_locked(
         let id = repo_id.to_string();
         app.store.read(move |r| repo_by_id(r, &id)).await?
     };
-    if let Some(up) = &repo.upstream {
+    let r2 = repo.clone();
+    let p = app.store.read(move |r| load_pull(r, &r2, number)).await?;
+    if let Some(up) = &repo.upstream
+        && p.base == repo.default_branch
+    {
         return Err(not_mergeable(format!(
             "{} merges on {}; publish !{number} instead.",
             repo.path,
             app.upstream.host_name(&up.provider)
         )));
     }
-    let r2 = repo.clone();
-    let p = app.store.read(move |r| load_pull(r, &r2, number)).await?;
     let (head, base) = check_landable(app, &repo, &p, &input, auto).await?;
     let dir = app.git.repo_dir(&repo.path);
     let commit = app
@@ -2252,7 +2254,7 @@ pub fn mark_merged(
     let mut left: Vec<_> = p
         .tickets
         .iter()
-        .filter(|l| l.closes)
+        .filter(|l| l.closes && p.base == repo.default_branch)
         .filter_map(|l| l.local.clone())
         .collect();
     loop {

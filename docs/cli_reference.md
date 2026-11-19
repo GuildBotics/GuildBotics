@@ -1009,13 +1009,13 @@ Read, open, update, comment on, and review pull requests, react to their comment
 Usage: guildbotics member pr [OPTIONS]
   artifact  CI artifact operations.
   comment  Comment on a PR conversation.
-  create  Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes every one of them; --closes-issue refuses a ticket kept outside this code host, which a merge cannot close.
+  create  Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR into the default branch closes every one of them; --closes-issue refuses a ticket kept outside this code host, which a merge cannot close.
   reaction  Reactions to pull request comments and reviews.
   read  Read one bounded page of a PR's resource: pull_requests, pull_request_comments (conversation comments), pull_request_reviews, pull_request_files, pull_request_threads (each with all of its comments), or pull_request_readiness. Collections accept page_size (1-100). Readiness accepts failed_logs (boolean) and log_tail_bytes (1-65536, default 65536). Results contain the items and continuation; reuse identical conditions for the next page. HTTP methods, headers, and GraphQL are not accepted.
   reply  Reply to an inline review thread.
   review  Submit a review verdict as a review on the head the member read (`head_sha` of the PR's read); a conversation comment does not consume a review request or make the member a reviewer. When the head has moved, nothing is written: read the new commits, then submit again on the new head.
   review-comment  Create a new inline review comment on a diff line of the head the member read; when the head has moved, read the new commits and comment again.
-  update  Change a PR's body, title, or ticket links. --issue-url replaces all links with those tickets; --closes-issue closes all of them on merge and --refs-issue only refers (the default). --drop-issue-links removes all links without requiring a body. Without either option, body replacement preserves existing ticket links and ignores new managed link lines in the body.
+  update  Change a PR's body, title, or ticket links. --issue-url replaces all links with those tickets; --closes-issue closes all of them on merge into the default branch and --refs-issue only refers (the default). --drop-issue-links removes all links without requiring a body. Without either option, body replacement preserves existing ticket links and ignores new managed link lines in the body.
   --help  Print help
 ```
 
@@ -1060,7 +1060,7 @@ Usage: guildbotics member pr comment [OPTIONS]
 ### guildbotics member pr create
 
 ```text
-Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR closes every one of them; --closes-issue refuses a ticket kept outside this code host, which a merge cannot close.
+Open a PR, or return the existing open PR for the same head and base branches. --issue-url, which may be repeated, links each ticket in the PR body as a reference, or with --closes-issue so that merging the PR into the default branch closes every one of them; --closes-issue refuses a ticket kept outside this code host, which a merge cannot close.
 
 Usage: guildbotics member pr create [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
@@ -1170,7 +1170,7 @@ Usage: guildbotics member pr review-comment [OPTIONS]
 ### guildbotics member pr update
 
 ```text
-Change a PR's body, title, or ticket links. --issue-url replaces all links with those tickets; --closes-issue closes all of them on merge and --refs-issue only refers (the default). --drop-issue-links removes all links without requiring a body. Without either option, body replacement preserves existing ticket links and ignores new managed link lines in the body.
+Change a PR's body, title, or ticket links. --issue-url replaces all links with those tickets; --closes-issue closes all of them on merge into the default branch and --refs-issue only refers (the default). --drop-issue-links removes all links without requiring a body. Without either option, body replacement preserves existing ticket links and ignores new managed link lines in the body.
 
 Usage: guildbotics member pr update [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]

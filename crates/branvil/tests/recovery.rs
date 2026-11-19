@@ -334,7 +334,11 @@ async fn the_next_start_waits_for_the_git_a_stopped_service_left_running() {
             .server
             .ok(&format!("/repos/{}/tickets/1", encode(REPO)), &w.aiko)
             .await;
-        assert_eq!(ticket["state"], "closed", "{branch}");
+        assert_eq!(
+            ticket["state"],
+            if branch == "main" { "closed" } else { "open" },
+            "{branch}"
+        );
         assert_eq!(pending_ops(&w).await, 0);
         let bare = w.server.data.join("repos/acme/demo.git");
         assert!(!bare.join(format!("{refname}.lock")).exists());

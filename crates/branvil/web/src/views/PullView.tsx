@@ -141,7 +141,7 @@ export function PullView({ repo, number, openJob }: { repo: string; number: numb
       <ChecksCard repo={repo} pull={pr} requiredChecks={repository.data?.required_checks ?? []} onOpen={(c) => setCheck(drawerTarget(c))} />
 
       {pr.state === "open" &&
-        (repository.data?.upstream ? (
+        (repository.data?.upstream && pr.base === repository.data.default_branch ? (
           <PublishCard pull={pr} repo={repository.data} upstream={repository.data.upstream} />
         ) : repository.data ? (
           <MergeCard pull={pr} repo={repository.data} />
