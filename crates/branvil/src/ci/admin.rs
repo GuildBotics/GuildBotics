@@ -7,20 +7,20 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Path as RoutePath, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
-use super::config::RunnerMode;
+use super::config::{JobLimits as Limits, RunnerMode};
 use super::pipeline::valid_image;
-use super::settings::{Limits, Loaded};
+use super::settings::Loaded;
 use super::supervise::AUTO_RUNNER;
 use crate::app::Shared;
 use crate::auth::Caller;
 use crate::error::{AppError, AppResult};
 use crate::http::J;
-use crate::model::Repo;
+use crate::model::{Member, MemberKind, Repo};
 use crate::runner::executor::{ImageInfo, Microsandbox, Msb};
 use crate::store::{self, Rd};
 
@@ -111,6 +111,7 @@ async fn view(app: &Shared) -> AppResult<View> {
             });
         }
     }
+    let required_images: Vec<_> = uses.keys().cloned().collect();
     let mut images = ImagesView {
         error: None,
         cached: Vec::new(),
@@ -146,7 +147,7 @@ async fn view(app: &Shared) -> AppResult<View> {
         });
     }
     Ok(View {
-        runner: app.ci.diagnostics().await,
+        runner: app.ci.runner_diagnostics(Some(&required_images)).await?,
         executor: ExecutorView {
             msb,
             problem,
@@ -197,7 +198,28 @@ async fn put_limits(
     J(input): J<Limits>,
 ) -> AppResult<Response> {
     c.require_owner()?;
-    app.ci.settings().set_limits(input).await?;
+    app.ci.settings().set_limits(None, input).await?;
+    Ok(axum::Json(view(&app).await?).into_response())
+}
+
+async fn put_runner_limits(
+    State(app): State<Shared>,
+    c: Caller,
+    RoutePath(name): RoutePath<String>,
+    J(input): J<Limits>,
+) -> AppResult<Response> {
+    c.require_owner()?;
+    let member = app
+        .store
+        .read(move |r| r.get::<Member>(store::MEMBERS, &Member::key(&name)))
+        .await?;
+    let member = member
+        .filter(|m| m.kind == MemberKind::Runner)
+        .ok_or_else(|| AppError::not_found("Runner member not found."))?;
+    app.ci
+        .settings()
+        .set_limits(Some(&member.name), input)
+        .await?;
     Ok(axum::Json(view(&app).await?).into_response())
 }
 
@@ -446,6 +468,7 @@ loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
     ("/admin/ci", (get, get_settings, OwnerSession)),
     ("/admin/ci/runner", (put, put_runner, OwnerSession)),
     ("/admin/ci/limits", (put, put_limits, OwnerSession)),
+    ("/admin/ci/runners/{name}/limits", (put, put_runner_limits, OwnerSession)),
     ("/admin/ci/images/pull", (post, pull, OwnerSession)),
     ("/admin/ci/images/load", (post, load, OwnerSession)),
 );

@@ -1108,15 +1108,22 @@ one class, available reusable results precede other attempts, with `seq` as the
 tie-breaker. See [CI scheduling](ci.md) for the classification rules. Running
 attempts are not interrupted by changes in class.
 
-- `POST /claim` `{"architecture":"arm64"|"amd64", "accept"?:true|false, "executor": "microsandbox", "executor_state": "ready"|"unavailable", "executor_detail"?: "...", "images":[{"reference":"tag", "architecture":"arm64"|"amd64", "digest":"sha256:..."}]}`
-  → `204` (nothing queued, or the service is stopping: see "Stopping the
-  service" in `docs/ci.md`) or
-  `{"attempt_id","purpose","lease","expires_at","lease_secs","repo","sha","attempt","verified_sha":"<latest verified sha>"|null,"job":{"verified_sha":false,"name","image","commands","paths","timeout_secs"|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_scope":"protected"|"branch:<name>"|"probe","network":false,"queued_secs","reuse"}`.
-  `timeout_secs` is `null` when the pipeline gives none; the runner applies its
-  own CPUs, memory, and time limit. `cache_scope` is `protected` for a run a
-  protected branch asked for, the only runs that save the dependency cache
-  (`docs/ci.md`). `queued_secs` is how long the attempt
-  waited in the queue (from its registration to this claim).
+- `GET /health` → `{"version","max_jobs"}`, the Hub build and the authenticated
+  runner's effective concurrency. The runner checks for a version change before
+  it claims.
+- `POST /claim` `{"architecture":"arm64"|"amd64","version","max_jobs","running_jobs","accept":true|false,"executor":"microsandbox","executor_state":"ready"|"unavailable","executor_detail"?:"...","images":[{"reference":"tag","architecture":"arm64"|"amd64","digest":"sha256:..."}]}`
+  records a report even when there is no work or `accept` is false. The
+  runner reports its build, the concurrency it read, and the number of locally
+  held attempts, including when idle or at capacity. The Hub returns `204`
+  when the runner did not ask for work, the version differs, the executor is
+  unavailable, the Hub's current concurrency has been reached, no compatible
+  attempt is queued, or the service is stopping. Otherwise it returns:
+  `{"attempt_id","purpose","lease","expires_at","lease_secs","repo","sha","attempt","verified_sha":"<latest verified sha>"|null,"job":{"verified_sha":false,"name","image","commands","paths","timeout_secs"|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_scope":"protected"|"branch:<name>"|"probe","network":false,"queued_secs","reuse","limits","artifacts_max_mib"}`.
+  `limits` contains the effective job resources for this attempt (see
+  [CI settings](#ci-settings)). `timeout_secs` is `null` when the pipeline
+  gives none. `cache_scope` is `protected` for a run a protected branch asked
+  for, the only runs that save the dependency cache (`docs/ci.md`).
+  `queued_secs` is how long the attempt waited in the queue.
   `purpose` is `check`, `cache_refresh`, or `probe`; refreshes always execute with
   protected scope and `reuse: null`.
   `reuse` is `null` or `{"attempt_id","sha","image_digest","cache_key","basis"}`
@@ -1377,7 +1384,11 @@ runner's (`[ci.microsandbox] home`).
    "repositories": [{"path": "acme/demo", "ci_network": false}]}
   ```
 
-  `runner` is the diagnostics' runner section (below). `executor.msb` is the
+  `runner` includes the diagnostics' runner section (below). Each row adds a
+  `missing_images` array of tags named by default-branch pipelines without a
+  matching image in the runner's last reported inventory for its CPU. The
+  field is `null` before the first report. Top-level `limits` are the Hub
+  defaults from `[ci.executor]`. `executor.msb` is the
   msb the runner would use (`null` with the reason in `problem`). `cached` are
   the images of the cache; `reference` is the tag a pipeline writes as
   `image` (`docs/ci.md`), and `digest` the configuration digest of the
@@ -1397,7 +1408,12 @@ runner's (`[ci.microsandbox] home`).
   the restored cache; `max_timeout_secs` is the time limit of
   a job that gives no `timeout_secs` and caps one that does; the runner runs up
   to `max_jobs` jobs at once. The runner applies them from its next claim; the
-  jobs it is running keep theirs.
+  jobs it is running keep theirs. This endpoint updates the Hub defaults.
+- `PUT /api/v1/admin/ci/runners/{name}/limits` (owner) takes the same six
+  fields and returns the settings. It saves an override under
+  `[ci.runner_limits.<name>]` for the named runner member, including members
+  that have never reported. An unknown name or a member of another kind returns
+  `404`. Each runner without an override uses the Hub defaults.
 - `POST /api/v1/admin/ci/images/pull` (owner) `{"reference"}` → `202` with the
   settings, `operation` running; `400 invalid` for a reference that is not
   `[registry/]name[:tag]` (pipelines name an image by its tag, so a digest
@@ -1438,8 +1454,10 @@ runner's (`[ci.microsandbox] home`).
                           "reads": {"queued": 0, "wait_us": {...}, "hold_us": {...}}}},
    "git": {"version": "git version 2.54.0", "repositories": 1},
    "runner": {"state": "ready", "detail": "1 runner(s) connected.", "mode": "off",
-              "runners": [{"name": "runner1", "last_seen_at": "…", "executor": "microsandbox",
-                           "executor_state": "ready", "executor_detail": null}],
+              "runners": [{"name": "runner1", "connection": "online", "last_seen_at": "…",
+                           "executor": "microsandbox", "executor_state": "ready", "executor_detail": null,
+                           "version": "…", "version_matches": true, "architecture": "arm64",
+                           "running_jobs": 1, "max_jobs": 1, "missing_images": null, "limits": {...}}],
               "queue": {"queued": 0, "in_progress": 1, "waiting_runs": 0, "limit": 256}},
    "upstream": {"state": "not_configured"}}
   ```
@@ -1461,7 +1479,16 @@ runner's (`[ci.microsandbox] home`).
   `ci.runner_absent_secs`), `executor_unavailable` (the runners report their
   executor unusable; `detail` says why), or `stopping` (the service got
   SIGTERM: it gives out no job and waits for the running ones, `detail` says
-  until when; `docs/ci.md`); `mode` is the `[ci] runner` setting. `upstream` is `{"state": "not_configured"}` without
+  until when; `docs/ci.md`); `mode` is the `[ci] runner` setting. The list is
+  built from runner members. A runner is `online` until
+  `ci.runner_absent_secs` elapses without a report, `offline` after that or
+  when the Hub stops its runner, and `never_seen` if it has not reported
+  since the Hub started. A stopped runner retains its last report during the
+  current Hub process. Only online runners contribute to aggregate readiness.
+  `running_jobs` is the number of attempts marked in progress for that member.
+  `max_jobs` is the reported capacity and `limits` are the current effective
+  job resources. `missing_images` is computed only in Settings → CI.
+  `upstream` is `{"state": "not_configured"}` without
   repositories that have an upstream, otherwise
 
   ```json
@@ -1562,7 +1589,3 @@ Undetermined and abandoned searches produce no hint.
 
 
 Embedded hosts may attach a device-local Hub status callback through `DataApi::attach_hub_status`. Diagnostics returns its result as `hub` (`null` for standalone Branvil): `current` and `target` versions (`sha`, `subject`, nullable `url`) and nullable `operation` (`kind`, `phase`, `since`, `commit`, `waiting`). Branvil supplies `operation.waiting.ci_jobs` from its own queue. `hub_status_changed` events invalidate diagnostics. This state is never persisted.
-
-`GET /api/v1/runner/health` requires a runner credential and returns the Hub
-`version`. Runners compare it before claiming work and drain before restarting
-when the build changes.

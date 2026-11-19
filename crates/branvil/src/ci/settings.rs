@@ -2,72 +2,47 @@
 //! runs the runner, the limits the runner puts on every job, and the
 //! runner's image cache. The first two are `branvil.toml` settings: they are
 //! written there (keeping the rest of the file as it is) and applied at once,
-//! without restarting the service; the supervised runner reads the limits
-//! from the same file before every claim (`supervise.rs`). The image cache is the one of the
+//! without restarting the service; the runner API reads the current limits
+//! for each claim. The image cache is the one of the
 //! supervised runner, on this machine (`[ci.microsandbox] home`); a runner
 //! started by hand elsewhere keeps its own, managed with `guildbotics runner pull`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::sync::watch;
 
-use super::config::{CiConfig, MicrosandboxConfig, RunnerMode};
+use super::config::{CiConfig, JobLimits as Limits, MicrosandboxConfig, RunnerMode};
 use crate::error::{AppError, AppResult};
 use crate::runner::executor::{self, Microsandbox};
 use crate::util;
 
-/// The limits the GUI edits (`[ci.executor]`).
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Limits {
-    pub max_cpus: u32,
-    pub max_memory_mib: u64,
-    pub work_quota_mib: u64,
-    pub max_timeout_secs: u64,
-    pub cache_max_mib: u64,
-    pub max_jobs: u32,
-}
-
-impl Limits {
-    fn of(ci: &CiConfig) -> Self {
-        Self {
-            max_cpus: ci.executor.max_cpus,
-            max_memory_mib: ci.executor.max_memory_mib,
-            work_quota_mib: ci.executor.work_quota_mib,
-            max_timeout_secs: ci.executor.max_timeout_secs,
-            cache_max_mib: ci.executor.cache_max_mib,
-            max_jobs: ci.executor.max_jobs,
-        }
+/// The time limit has the range of a pipeline's `timeout_secs`, so that
+/// any value a pipeline gives can be the job's own.
+fn check(limits: Limits) -> AppResult<()> {
+    let out =
+        |what: &str, range: &str| Err(AppError::invalid(format!("{what} must be within {range}.")));
+    if !(1..=64).contains(&limits.max_cpus) {
+        return out("max_cpus", "1–64");
     }
-
-    /// The time limit has the range of a pipeline's `timeout_secs`, so that
-    /// any value a pipeline gives can be the job's own.
-    fn check(&self) -> AppResult<()> {
-        let out = |what: &str, range: &str| {
-            Err(AppError::invalid(format!("{what} must be within {range}.")))
-        };
-        if !(1..=64).contains(&self.max_cpus) {
-            return out("max_cpus", "1–64");
-        }
-        if !(128..=65536).contains(&self.max_memory_mib) {
-            return out("max_memory_mib", "128–65536");
-        }
-        if !(1024..=1 << 20).contains(&self.work_quota_mib) {
-            return out("work_quota_mib", "1024–1048576");
-        }
-        if !(1..=86400).contains(&self.max_timeout_secs) {
-            return out("max_timeout_secs", "1–86400");
-        }
-        if self.cache_max_mib > 1 << 20 {
-            return out("cache_max_mib", "0–1048576");
-        }
-        if !(1..=64).contains(&self.max_jobs) {
-            return out("max_jobs", "1–64");
-        }
-        Ok(())
+    if !(128..=65536).contains(&limits.max_memory_mib) {
+        return out("max_memory_mib", "128–65536");
     }
+    if !(1024..=1 << 20).contains(&limits.work_quota_mib) {
+        return out("work_quota_mib", "1024–1048576");
+    }
+    if !(1..=86400).contains(&limits.max_timeout_secs) {
+        return out("max_timeout_secs", "1–86400");
+    }
+    if limits.cache_max_mib > 1 << 20 {
+        return out("cache_max_mib", "0–1048576");
+    }
+    if !(1..=64).contains(&limits.max_jobs) {
+        return out("max_jobs", "1–64");
+    }
+    Ok(())
 }
 
 /// One pull or load of an image into the cache, the latest kept.
@@ -92,7 +67,7 @@ pub struct Control {
     microsandbox: MicrosandboxConfig,
     /// The mode the supervisor follows.
     mode: watch::Sender<RunnerMode>,
-    limits: Mutex<Limits>,
+    limits: Mutex<(Limits, BTreeMap<String, Limits>)>,
     operation: Mutex<Option<Operation>>,
     /// Serializes the writes of the configuration file.
     writing: tokio::sync::Mutex<()>,
@@ -104,7 +79,7 @@ impl Control {
             file,
             microsandbox: ci.microsandbox.clone(),
             mode: watch::Sender::new(ci.runner),
-            limits: Mutex::new(Limits::of(ci)),
+            limits: Mutex::new((Limits::from(&ci.executor), ci.runner_limits.clone())),
             operation: Mutex::new(None),
             writing: tokio::sync::Mutex::new(()),
         }
@@ -119,7 +94,7 @@ impl Control {
     }
 
     pub fn limits(&self) -> Limits {
-        *self.limits.lock().unwrap()
+        self.limits.lock().unwrap().0
     }
 
     /// Saves the mode and starts or stops the supervised runner. The mode
@@ -141,15 +116,26 @@ impl Control {
         Ok(())
     }
 
-    /// Saves the limits; the runner applies them from its next claim, and
-    /// the jobs it runs keep theirs.
-    pub async fn set_limits(&self, limits: Limits) -> AppResult<()> {
-        limits.check()?;
+    pub fn runner_limits(&self, name: &str) -> Limits {
+        let limits = self.limits.lock().unwrap();
+        limits.1.get(&util::fold(name)).copied().unwrap_or(limits.0)
+    }
+
+    /// Saves job resources without changing the snapshot of any held attempt.
+    pub async fn set_limits(&self, runner: Option<&str>, limits: Limits) -> AppResult<()> {
+        check(limits)?;
         let _w = self.writing.lock().await;
-        if self.limits() == limits {
-            return Ok(());
-        }
-        self.persist(&["ci", "executor"], |t| {
+        let name = runner.map(util::fold);
+        let path = {
+            let state = self.limits.lock().unwrap();
+            match &name {
+                Some(name) if state.1.get(name) == Some(&limits) => return Ok(()),
+                Some(name) => vec!["ci", "runner_limits", name],
+                None if state.0 == limits => return Ok(()),
+                None => vec!["ci", "executor"],
+            }
+        };
+        self.persist(&path, |t| {
             set(t, "max_cpus", i64::from(limits.max_cpus));
             set(t, "max_jobs", i64::from(limits.max_jobs));
             for (key, v) in [
@@ -162,7 +148,12 @@ impl Control {
             }
         })
         .await?;
-        *self.limits.lock().unwrap() = limits;
+        let mut state = self.limits.lock().unwrap();
+        if let Some(name) = name {
+            state.1.insert(name, limits);
+        } else {
+            state.0 = limits;
+        }
         Ok(())
     }
 
@@ -329,7 +320,7 @@ mod tests {
         let control = Control::new(file.clone(), &CiConfig::default());
         let mut seen = control.subscribe();
         control.set_mode(RunnerMode::Auto).await.unwrap();
-        control.set_limits(limits()).await.unwrap();
+        control.set_limits(None, limits()).await.unwrap();
         let text = std::fs::read_to_string(&file).unwrap();
         assert!(
             text.contains("# Branvil") && text.contains("# who runs jobs"),
@@ -350,10 +341,13 @@ mod tests {
         // New limits do not stop the runner: it reads them before its next
         // claim, and the jobs it runs keep theirs.
         control
-            .set_limits(Limits {
-                max_jobs: 2,
-                ..limits()
-            })
+            .set_limits(
+                None,
+                Limits {
+                    max_jobs: 2,
+                    ..limits()
+                },
+            )
             .await
             .unwrap();
         assert!(!seen.has_changed().unwrap(), "a running job would stop");
@@ -367,14 +361,14 @@ mod tests {
         let seen = control.subscribe();
         control.set_mode(RunnerMode::Off).await.unwrap();
         control
-            .set_limits(Limits::of(&CiConfig::default()))
+            .set_limits(None, Limits::from(&CiConfig::default().executor))
             .await
             .unwrap();
         assert!(!seen.has_changed().unwrap(), "a running job would stop");
         assert!(!file.exists());
-        control.set_limits(limits()).await.unwrap();
+        control.set_limits(None, limits()).await.unwrap();
         std::fs::remove_file(&file).unwrap();
-        control.set_limits(limits()).await.unwrap();
+        control.set_limits(None, limits()).await.unwrap();
         assert!(!file.exists(), "the limits in effect are not written again");
     }
 
@@ -390,7 +384,7 @@ mod tests {
             std::fs::write(&file, text).unwrap();
             let control = Control::new(file.clone(), &CiConfig::default());
             control.set_mode(RunnerMode::Auto).await.unwrap();
-            control.set_limits(limits()).await.unwrap();
+            control.set_limits(None, limits()).await.unwrap();
             let parsed: crate::config::ConfigFile =
                 toml::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
             assert_eq!(parsed.ci.runner, RunnerMode::Auto, "{text}");
@@ -458,7 +452,10 @@ mod tests {
     async fn the_work_quota_is_16_gib_by_default() {
         let parsed: crate::config::ConfigFile = toml::from_str("[ci.executor]\n").unwrap();
         assert_eq!(parsed.ci.executor.work_quota_mib, 16384);
-        assert_eq!(Limits::of(&CiConfig::default()).work_quota_mib, 16384);
+        assert_eq!(
+            Limits::from(&CiConfig::default().executor).work_quota_mib,
+            16384
+        );
         let dir = tempfile::tempdir().unwrap();
         let control = Control::new(dir.path().join("branvil.toml"), &CiConfig::default());
         for quota in [1024, 1 << 20] {
@@ -466,7 +463,7 @@ mod tests {
                 work_quota_mib: quota,
                 ..limits()
             };
-            control.set_limits(limits).await.unwrap();
+            control.set_limits(None, limits).await.unwrap();
             assert_eq!(control.limits(), limits);
         }
     }
@@ -506,11 +503,14 @@ mod tests {
                 ..limits()
             },
         ] {
-            let e = control.set_limits(bad).await.unwrap_err();
+            let e = control.set_limits(None, bad).await.unwrap_err();
             assert_eq!(e.code, "invalid", "{bad:?}");
         }
         assert!(!file.exists());
-        assert_eq!(control.limits(), Limits::of(&CiConfig::default()));
+        assert_eq!(
+            control.limits(),
+            Limits::from(&CiConfig::default().executor)
+        );
     }
 
     #[tokio::test]

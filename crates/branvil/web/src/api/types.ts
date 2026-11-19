@@ -513,10 +513,18 @@ export interface CiSettings {
 
 export interface CiRunner {
   name: string;
-  last_seen_at: string;
-  executor: string;
-  executor_state: string;
+  connection: "online" | "offline" | "never_seen";
+  last_seen_at: string | null;
+  running_jobs: number;
+  version: string | null;
+  version_matches: boolean | null;
+  max_jobs: number | null;
+  executor: string | null;
+  executor_state: "ready" | "unavailable" | null;
   executor_detail: string | null;
+  architecture: string | null;
+  missing_images: string[] | null;
+  limits: CiLimits;
 }
 
 export interface CiLimits {

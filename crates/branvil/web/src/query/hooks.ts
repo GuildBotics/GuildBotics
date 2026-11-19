@@ -105,7 +105,7 @@ export const useDiagnostics = () =>
 /** The notification webhook; polled, since how its last send went has no events. */
 export const useWebhook = () => useQuery({ queryKey: keys.webhook(), queryFn: () => api.admin.webhook(), refetchInterval: 30_000 });
 
-/** The CI settings; polled while an image operation runs (it has no events). */
+/** The CI settings; polled to refresh runner reports and image operations. */
 export const useCiSettings = () =>
   useQuery({
     queryKey: keys.ci(),
@@ -114,7 +114,7 @@ export const useCiSettings = () =>
     refetchInterval: (query) => {
       const s = query.state.data;
       if (s?.operation?.state === "running") return 2_000;
-      return s?.runner.mode === "auto" && s.runner.state !== "ready" ? 3_000 : false;
+      return s?.runner.mode === "auto" && s.runner.state !== "ready" ? 3_000 : 30_000;
     },
   });
 

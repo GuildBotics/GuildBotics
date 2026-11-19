@@ -1,10 +1,10 @@
-import { Alert, Button, Card, CopyButton, Group, Loader, Modal, NumberInput, Radio, SimpleGrid, Stack, Switch, Text, TextInput } from "@mantine/core";
+import { Alert, Anchor, Button, Card, CopyButton, Group, Loader, Modal, NumberInput, Radio, SimpleGrid, Stack, Switch, Text, TextInput } from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, FolderGit2, Plus, TriangleAlert } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { isApiError } from "../../api/client";
 import * as api from "../../api/endpoints";
-import type { CachedImage, CiLimits, CiSettings as Settings, ImageOperation, MissingImage } from "../../api/types";
+import type { CachedImage, CiLimits, CiRunner, CiSettings as Settings, ImageOperation, MissingImage } from "../../api/types";
 import { ErrorMessage, Loading, Notice, Refusal, StateBadge, Time, type Tone } from "../../components/common";
 import { PanelHeader } from "../../components/PanelHeader";
 import { useT, type MessageKey } from "../../i18n";
@@ -36,6 +36,9 @@ function useCiChange<V>(change: (value: V) => Promise<Settings>) {
 export function CiSettings() {
   const t = useT();
   const ci = useCiSettings();
+  const [selected, setSelected] = useState<string | null>(null);
+  const runners = ci.data?.runner.runners ?? [];
+  const runner = runners.find((r) => r.name === selected) ?? runners[0];
   return (
     <Card p="lg">
       <PanelHeader title={t("ci.settings.title")} description={t("ci.settings.help")} />
@@ -45,7 +48,7 @@ export function CiSettings() {
         <ErrorMessage error={ci.error} />
       ) : (
         <Stack gap="md">
-          <Runner settings={ci.data} />
+          <Runner settings={ci.data} selected={runner?.name ?? ""} onSelect={setSelected} />
           <Section title={t("ci.settings.executor")}>
             <dl>
               <dt>{t("ci.settings.msb")}</dt>
@@ -64,7 +67,7 @@ export function CiSettings() {
               </dd>
             </dl>
           </Section>
-          <Limits limits={ci.data.limits} />
+          {runner && <Limits key={runner.name} runner={runner} />}
           <Images settings={ci.data} />
           <Section title={t("ci.settings.network")} description={t("ci.settings.networkHelp")}>
             {ci.data.repositories.length === 0 ? (
@@ -101,7 +104,7 @@ function Section({ title, description, action, children }: { title: string; desc
   );
 }
 
-function Runner({ settings }: { settings: Settings }) {
+function Runner({ settings, selected, onSelect }: { settings: Settings; selected: string; onSelect: (name: string) => void }) {
   const t = useT();
   const { runner } = settings;
   const setMode = useCiChange(api.admin.setRunner);
@@ -127,29 +130,63 @@ function Runner({ settings }: { settings: Settings }) {
             {t("ci.settings.noRunners")}
           </Text>
         ) : (
-          <Stack gap={6} role="list" aria-label={t("ci.settings.runners")}>
-            {runner.runners.map((r) => (
-              <div key={r.name} role="listitem" className="setting-row">
-                <Text span size="sm" className="setting-row-name">
-                  <strong>{r.name}</strong>{" "}
-                  <Text span size="xs" c="dimmed">
-                    {t("ci.settings.lastSeen")} <Time value={r.last_seen_at} />
-                  </Text>
-                  {r.executor_detail && (
-                    <Text size="xs" c="dimmed">
-                      {r.executor_detail}
-                    </Text>
-                  )}
-                </Text>
-                <StateBadge tone={r.executor_state === "ready" ? "success" : "warning"}>
-                  {r.executor} {r.executor_state}
-                </StateBadge>
-              </div>
-            ))}
-          </Stack>
+          <Radio.Group aria-label={t("ci.settings.runners")} value={selected} onChange={onSelect}>
+            <Stack gap={6} role="list" aria-label={t("ci.settings.runners")}>
+              {runner.runners.map((r) => <RunnerRow key={r.name} runner={r} />)}
+            </Stack>
+          </Radio.Group>
         )}
+        <Text size="sm">
+          <Anchor href={t("ci.settings.forwardingUrl")} target="_blank" rel="noreferrer">
+            {t("ci.settings.forwarding")}
+          </Anchor>
+          {" · "}
+          <code>guildbotics runner join</code>
+        </Text>
       </Stack>
     </Section>
+  );
+}
+
+function RunnerRow({ runner: r }: { runner: CiRunner }) {
+  const t = useT();
+  return (
+    <div role="listitem" className="setting-row">
+      <Stack gap={4} className="setting-row-name">
+        <Radio value={r.name} label={r.name} />
+        {r.last_seen_at && (
+          <Text size="xs" c="dimmed">
+            {t("ci.settings.lastSeen")} <Time value={r.last_seen_at} />
+          </Text>
+        )}
+        <Text size="xs" c="dimmed">
+          {r.max_jobs === null
+            ? t("ci.settings.active", { running: r.running_jobs })
+            : t("ci.settings.capacity", { running: r.running_jobs, max: r.max_jobs })}
+        </Text>
+        <Group gap="xs">
+          <StateBadge tone={r.connection === "online" ? "success" : "neutral"}>
+            {t(`ci.settings.connection.${r.connection}`)}
+          </StateBadge>
+          {r.executor_state && (
+            <StateBadge tone={r.executor_state === "ready" ? "success" : "warning"}>
+              {r.executor} · {t(r.executor_state === "ready" ? "ci.settings.state.ready" : "ci.settings.state.executor_unavailable")}
+            </StateBadge>
+          )}
+          {r.version && (
+            <StateBadge tone={r.version_matches ? "success" : "warning"}>
+              {t(r.version_matches ? "ci.settings.versionMatches" : "ci.settings.versionMismatch", { version: r.version })}
+            </StateBadge>
+          )}
+        </Group>
+        {r.executor_detail && <Text size="xs" c="dimmed">{r.executor_detail}</Text>}
+        {!!r.missing_images?.length && (
+          <Text size="xs">
+            {t("ci.settings.runnerMissingImages", { cpu: r.architecture ?? "", images: r.missing_images.join(", ") })}
+          </Text>
+        )}
+      </Stack>
+    </div>
   );
 }
 
@@ -164,8 +201,9 @@ const LIMIT_FIELDS: { key: keyof CiLimits; label: MessageKey; min: number; max: 
   { key: "max_jobs", label: "ci.settings.maxJobs", min: 1, max: 64 },
 ];
 
-function Limits({ limits }: { limits: CiLimits }) {
+function Limits({ runner }: { runner: CiRunner }) {
   const t = useT();
+  const { limits } = runner;
   const [form, setForm] = useState<LimitsForm>(limits);
   // Saved limits that change (another tab, a restart) replace the form's.
   const [shown, setShown] = useState(limits);
@@ -173,10 +211,11 @@ function Limits({ limits }: { limits: CiLimits }) {
     setShown(limits);
     setForm(limits);
   }
-  const save = useCiChange(api.admin.setLimits);
+  const save = useCiChange((value: CiLimits) => api.admin.setRunnerLimits(runner.name, value));
   const filled = LIMIT_FIELDS.every((f) => form[f.key] !== "");
   return (
     <Section title={t("ci.settings.limits")} description={t("ci.settings.limitsHelp")}>
+      <Text size="sm" fw={600} mb="sm">{runner.name}</Text>
       <form
         aria-label={t("ci.settings.limits")}
         onSubmit={(e) => {

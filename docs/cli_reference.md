@@ -1871,7 +1871,7 @@ Options:
           [env: BRANVIL_TOKEN]
 
       --config <CONFIG>
-          Configuration file whose limits apply to every job, read again before each [default: the one of the data directory]
+          Configuration file for this machine [default: the one of the data directory]
 
       --data-dir <DATA_DIR>
           Data directory of the configuration [default: the server's]

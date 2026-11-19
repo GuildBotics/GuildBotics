@@ -42,11 +42,12 @@ use crate::config::Layout;
 use crate::error::{AppError, AppResult};
 use crate::events::Events;
 use crate::git::{Git, ZERO_SHA};
-use crate::model::Repo;
+use crate::model::{Member, MemberKind, Repo};
 use crate::refs::RefChange;
 use crate::store::{self, Key, Rd, Store};
 use crate::util;
 use config::CiConfig;
+use gb_runner::ci::api::{ExecutorState, RunnerReport};
 use queue::{Attempt, PipelineState, Registration};
 
 /// How many commits of the first-parent history `Ci::estimate` looks at.
@@ -140,17 +141,19 @@ pub struct Checks {
 
 /// What the service last heard from a runner (kept in memory: a restarted
 /// service learns it again from the runner's next request).
-#[derive(Serialize, Clone, Debug)]
-pub struct RunnerSeen {
-    pub name: String,
-    pub last_seen_at: String,
-    pub executor: String,
-    pub executor_state: String,
-    pub executor_detail: Option<String>,
-    pub images: Vec<images::Image>,
-    pub architecture: String,
-    #[serde(skip)]
-    seen: Option<Instant>,
+#[derive(Clone, Debug)]
+struct RunnerSeen {
+    name: String,
+    last_seen_at: String,
+    report: RunnerReport,
+    seen: Instant,
+    stopped: bool,
+}
+
+impl RunnerSeen {
+    fn online(&self, absent: Duration) -> bool {
+        !self.stopped && self.seen.elapsed() <= absent
+    }
 }
 
 #[derive(Clone)]
@@ -755,7 +758,7 @@ impl Ci {
             (
                 runners
                     .values()
-                    .filter_map(|r| r.seen)
+                    .map(|r| r.seen)
                     .max()
                     .unwrap_or(self.inner.started)
                     .max(self.inner.started),
@@ -790,16 +793,13 @@ impl Ci {
                 .lock()
                 .unwrap()
                 .values()
-                .filter(|r| {
-                    r.seen
-                        .is_some_and(|s| s.elapsed() <= Duration::from_secs(absent))
-                })
+                .filter(|r| r.online(Duration::from_secs(absent)))
                 .cloned()
                 .collect();
             let available = live
                 .iter()
-                .filter(|r| r.executor_state == "ready")
-                .flat_map(|r| r.images.clone())
+                .filter(|r| r.report.can_run())
+                .flat_map(|r| r.report.images.clone())
                 .collect();
             let available =
                 images::current(&self.inner.layout.root, available).map_err(AppError::internal)?;
@@ -812,8 +812,8 @@ impl Ci {
                     queue::fail_unavailable(w, &before, &now, |a| {
                         (!available.iter().any(|i| i.supports(&a.job.image))).then(|| {
                             let reasons = live.iter().map(|r| format!("runner {} (CPU {}): {}", r.name,
-                                if r.architecture.is_empty() { "not reported" } else { &r.architecture },
-                                r.executor_detail.as_deref().unwrap_or(if r.executor_state == "ready" {"image not cached"} else {"executor unavailable"}))).collect::<Vec<_>>().join("; ");
+                                &r.report.architecture,
+                                r.report.executor_detail.as_deref().unwrap_or(if r.report.can_run() {"image not cached"} else {"runner version or executor unavailable"}))).collect::<Vec<_>>().join("; ");
                             format!("No ready CI runner can execute image {}: {reasons}. Check runner diagnostics for executor/synchronization failures. Register this CPU's archive under Settings → CI or `guildbotics environment image load-ci`, or for registry images run `guildbotics runner pull {}` on that runner", a.job.image, a.job.image)
                         })
                     })
@@ -887,74 +887,62 @@ impl Ci {
         Ok(0)
     }
 
-    /// Forgets a runner that was stopped, so the diagnostics stop counting it.
-    pub fn forget_runner(&self, name: &str) {
-        self.inner.runners.lock().unwrap().remove(&util::fold(name));
-    }
-
-    /// Notes a runner request (for diagnostics and the no-runner rule).
-    pub fn saw_runner(&self, name: &str, executor: Option<(String, String, Option<String>)>) {
-        let mut runners = self.inner.runners.lock().unwrap();
-        let entry = runners
-            .entry(util::fold(name))
-            .or_insert_with(|| RunnerSeen {
-                name: name.to_string(),
-                last_seen_at: String::new(),
-                executor: String::new(),
-                executor_state: "unknown".into(),
-                executor_detail: None,
-                images: Vec::new(),
-                architecture: String::new(),
-                seen: None,
-            });
-        entry.last_seen_at = util::now();
-        entry.seen = Some(Instant::now());
-        if let Some((executor, state, detail)) = executor {
-            entry.executor = executor;
-            entry.executor_state = state;
-            entry.executor_detail = detail;
-        }
-    }
-
-    pub fn report_runner(
-        &self,
-        name: &str,
-        executor: &str,
-        state: &str,
-        detail: Option<String>,
-        architecture: &str,
-        images: Vec<images::Image>,
-    ) {
-        if let Some(r) = self
+    /// Keeps the last report after the supervisor stops the local runner.
+    pub fn runner_stopped(&self, name: &str) {
+        if let Some(runner) = self
             .inner
             .runners
             .lock()
             .unwrap()
             .get_mut(&util::fold(name))
         {
-            r.executor = executor.into();
-            r.executor_state = state.into();
-            r.executor_detail = detail;
-            r.architecture = architecture.into();
-            r.images = images;
+            runner.stopped = true;
         }
+    }
+
+    pub fn report_runner(&self, name: &str, report: RunnerReport) {
+        self.inner.runners.lock().unwrap().insert(
+            util::fold(name),
+            RunnerSeen {
+                name: name.to_string(),
+                last_seen_at: util::now(),
+                report,
+                seen: Instant::now(),
+                stopped: false,
+            },
+        );
     }
 
     /// Diagnostics section for `GET /api/v1/admin/diagnostics`.
     pub async fn diagnostics(&self) -> serde_json::Value {
-        let counts = self.inner.store.read(queue::counts).await;
-        let runners: Vec<RunnerSeen> = self
+        match self.runner_diagnostics(None).await {
+            Ok(view) => view,
+            Err(e) => serde_json::json!({"error": e.message}),
+        }
+    }
+
+    pub(super) async fn runner_diagnostics(
+        &self,
+        required_images: Option<&[String]>,
+    ) -> AppResult<serde_json::Value> {
+        let (members, running, (queued, in_progress, waiting)) = self
             .inner
-            .runners
-            .lock()
-            .unwrap()
-            .values()
-            .cloned()
-            .collect();
+            .store
+            .read(|r| {
+                let members: Vec<Member> = r.prefix_all(store::MEMBERS, &[])?;
+                Ok((members, queue::running_by_runner(r)?, queue::counts(r)?))
+            })
+            .await?;
+        let runners = self.inner.runners.lock().unwrap().clone();
         let absent = Duration::from_secs(self.inner.config.runner_absent_secs);
-        let live: Vec<&RunnerSeen> = runners
+        let members: Vec<_> = members
             .iter()
-            .filter(|r| r.seen.is_some_and(|s| s.elapsed() <= absent))
+            .filter(|m| m.kind == MemberKind::Runner)
+            .collect();
+        let live: Vec<_> = members
+            .iter()
+            .filter_map(|m| runners.get(&util::fold(&m.name)))
+            .filter(|r| r.online(absent))
             .collect();
         let (state, detail) = if let Some(until) = self.inner.stopping.get() {
             (
@@ -971,30 +959,73 @@ impl Ci {
                     absent.as_secs()
                 ),
             )
-        } else if live.iter().any(|r| r.executor_state == "ready") {
+        } else if live
+            .iter()
+            .any(|r| r.report.executor_state == ExecutorState::Ready)
+        {
             ("ready", format!("{} runner(s) connected.", live.len()))
         } else {
             (
                 "executor_unavailable",
                 live.iter()
-                    .find_map(|r| r.executor_detail.clone())
+                    .find_map(|r| r.report.executor_detail.clone())
                     .unwrap_or_else(|| "The runner's executor is not usable.".into()),
             )
         };
-        let queue = match counts {
-            Ok((queued, running, waiting)) => serde_json::json!({
-                "queued": queued, "in_progress": running, "waiting_runs": waiting,
-                "limit": self.inner.config.queue_max,
-            }),
-            Err(e) => serde_json::json!({"error": e.message}),
-        };
-        serde_json::json!({
+        let mut rows = Vec::new();
+        for member in members {
+            let key = util::fold(&member.name);
+            let seen = runners.get(&key);
+            let report = seen.map(|r| &r.report);
+            let connection = match seen {
+                Some(r) if r.online(absent) => "online",
+                Some(_) => "offline",
+                None => "never_seen",
+            };
+            let missing_images = match (required_images, report) {
+                (Some(required), Some(report)) => {
+                    let held = images::current(&self.inner.layout.root, report.images.clone())
+                        .map_err(AppError::internal)?;
+                    Some(
+                        required
+                            .iter()
+                            .filter(|reference| {
+                                !held.iter().any(|image| {
+                                    image.architecture == report.architecture
+                                        && image.supports(reference)
+                                })
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                _ => None,
+            };
+            rows.push(serde_json::json!({
+                "name": member.name,
+                "connection": connection,
+                "last_seen_at": seen.map(|r| &r.last_seen_at),
+                "running_jobs": running.get(&key).copied().unwrap_or(0),
+                "version": report.map(|r| &r.version),
+                "version_matches": report.map(|r| r.version == gb_base::BUILD_VERSION),
+                "max_jobs": report.map(|r| r.max_jobs),
+                "executor": report.map(|r| &r.executor),
+                "executor_state": report.map(|r| r.executor_state),
+                "executor_detail": report.and_then(|r| r.executor_detail.as_ref()),
+                "architecture": report.map(|r| &r.architecture),
+                "missing_images": missing_images,
+                "limits": self.inner.settings.runner_limits(&member.name),
+            }));
+        }
+        Ok(serde_json::json!({
             "state": state,
             "detail": detail,
             "mode": self.inner.settings.mode(),
-            "runners": runners,
-            "queue": queue,
-        })
+            "runners": rows,
+            "queue": {
+                "queued": queued, "in_progress": in_progress, "waiting_runs": waiting,
+                "limit": self.inner.config.queue_max,
+            },
+        }))
     }
 
     /// Starts the periodic work: sweep every 5 s, reconcile every minute,
@@ -1230,6 +1261,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expired_runner_reports_stay_in_the_list_without_affecting_readiness() {
+        let (_dir, ci, _) = setup();
+        use crate::domain::members::{NewMember, insert_member};
+        ci.inner
+            .store
+            .write(|w| {
+                for name in ["expired", "ready", "silent"] {
+                    insert_member(
+                        w,
+                        &NewMember {
+                            name: name.into(),
+                            kind: MemberKind::Runner,
+                            display_name: None,
+                        },
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let report = RunnerReport {
+            executor: "fixture".into(),
+            executor_state: ExecutorState::Ready,
+            executor_detail: None,
+            architecture: "arm64".into(),
+            images: Vec::new(),
+            version: gb_base::BUILD_VERSION.into(),
+            max_jobs: 2,
+            accept: false,
+            running_jobs: 0,
+        };
+        ci.report_runner("expired", report.clone());
+        ci.inner
+            .runners
+            .lock()
+            .unwrap()
+            .get_mut("expired")
+            .unwrap()
+            .seen -= Duration::from_secs(ci.config().runner_absent_secs + 1);
+        let view = ci.diagnostics().await;
+        assert_eq!(view["state"], "no_runner");
+        assert_eq!(view["runners"][0]["name"], "expired");
+        assert_eq!(view["runners"][0]["connection"], "offline");
+        assert!(view["runners"][0]["last_seen_at"].is_string());
+        ci.report_runner("ready", report);
+        let view = ci.diagnostics().await;
+        assert_eq!(view["state"], "ready");
+        assert_eq!(view["runners"][0]["connection"], "offline");
+        assert_eq!(view["runners"][1]["connection"], "online");
+        assert_eq!(view["runners"][2]["connection"], "never_seen");
+    }
+
+    #[tokio::test]
     async fn missing_images_expire_even_while_an_incompatible_runner_is_online() {
         for case in ["missing", "ready", "unavailable", "sync"] {
             let matching = case == "ready";
@@ -1263,26 +1347,31 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            ci.saw_runner("r", Some(("test".into(), "ready".into(), None)));
             ci.report_runner(
                 "r",
-                "test",
-                if case == "unavailable" {
-                    "unavailable"
-                } else {
-                    "ready"
-                },
-                match case {
-                    "unavailable" => Some("msb was not found".into()),
-                    "sync" => Some("image synchronization failed: disk full".into()),
-                    _ => None,
-                },
-                "amd64",
-                vec![images::Image {
-                    reference: if matching { "alpine" } else { "other" }.into(),
+                RunnerReport {
+                    executor: "test".into(),
+                    executor_state: if case == "unavailable" {
+                        ExecutorState::Unavailable
+                    } else {
+                        ExecutorState::Ready
+                    },
+                    executor_detail: match case {
+                        "unavailable" => Some("msb was not found".into()),
+                        "sync" => Some("image synchronization failed: disk full".into()),
+                        _ => None,
+                    },
                     architecture: "amd64".into(),
-                    digest: "sha256:test".into(),
-                }],
+                    images: vec![images::Image {
+                        reference: if matching { "alpine" } else { "other" }.into(),
+                        architecture: "amd64".into(),
+                        digest: "sha256:test".into(),
+                    }],
+                    version: gb_base::BUILD_VERSION.into(),
+                    max_jobs: 1,
+                    accept: true,
+                    running_jobs: 0,
+                },
             );
             ci.sweep().await.unwrap();
             let attempts = ci

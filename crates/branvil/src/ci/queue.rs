@@ -1626,6 +1626,16 @@ fn active(r: &impl Rd) -> AppResult<Vec<Attempt>> {
     Ok(out)
 }
 
+pub fn running_by_runner(r: &impl Rd) -> AppResult<BTreeMap<String, usize>> {
+    let mut counts = BTreeMap::new();
+    for attempt in active(r)? {
+        if let Some(name) = attempt.runner {
+            *counts.entry(crate::util::fold(&name)).or_default() += 1;
+        }
+    }
+    Ok(counts)
+}
+
 /// Cache work must not hold up a restart. Called after claims are disabled.
 pub fn interrupt_refreshes(w: &Wtx, now: &str) -> AppResult<Vec<(String, String)>> {
     let mut changed = Vec::new();

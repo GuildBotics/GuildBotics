@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { CiSettings } from "../api/types";
+import type { CiRunner, CiSettings } from "../api/types";
 import { apiError, fakeApi, json, ME, renderApp, SESSION } from "../test/fakeApi";
 
 const page = (items: unknown[]) => json(200, { items, next_cursor: null });
@@ -26,15 +26,32 @@ const CACHED = {
   ],
 };
 
+const LIMITS = { max_cpus: 4, max_memory_mib: 4096, work_quota_mib: 16384, max_timeout_secs: 3600, cache_max_mib: 2048, max_jobs: 1 };
+const HUB_RUNNER: CiRunner = {
+  name: "branvil-runner", connection: "online", last_seen_at: "2026-10-18T05:00:00.000Z",
+  executor: "microsandbox", executor_state: "ready", executor_detail: null, architecture: "arm64",
+  version: "hub-build", version_matches: true, max_jobs: 1, running_jobs: 1, missing_images: [], limits: LIMITS,
+};
+const REMOTE_RUNNER: CiRunner = {
+  ...HUB_RUNNER, name: "desktop-runner", connection: "offline", architecture: "amd64", version: "older-build",
+  version_matches: false, running_jobs: 0, missing_images: ["debian:bookworm"],
+  limits: { ...LIMITS, max_cpus: 6, max_jobs: 2 },
+};
+const NEW_RUNNER: CiRunner = {
+  name: "new-runner", connection: "never_seen", last_seen_at: null, executor: null, executor_state: null,
+  executor_detail: null, architecture: null, version: null, version_matches: null, max_jobs: null, running_jobs: 0,
+  missing_images: null, limits: LIMITS,
+};
+
 const CI = {
   runner: {
     mode: "auto",
     state: "ready",
     detail: "1 runner(s) connected.",
-    runners: [{ name: "branvil-runner", last_seen_at: "2026-10-18T05:00:00.000Z", executor: "microsandbox", executor_state: "ready", executor_detail: null }],
+    runners: [HUB_RUNNER],
   },
   executor: { msb: "/Users/u/.guildbotics/data/msb/bin/msb", problem: null, home: "/Users/u/.branvil/msb-home" },
-  limits: { max_cpus: 4, max_memory_mib: 4096, work_quota_mib: 16384, max_timeout_secs: 3600, cache_max_mib: 2048, max_jobs: 1 },
+  limits: LIMITS,
   images: { error: null, cached: [CACHED], missing: [] },
   operation: null,
   repositories: [
@@ -60,7 +77,7 @@ describe("CI settings", () => {
     expect(within(runner).getByText("Ready")).toBeInTheDocument();
     expect(within(runner).getByText("1 runner(s) connected.")).toBeInTheDocument();
     expect(within(runner).getByRole("switch", { name: /^Run the runner on the Branvil machine/ })).toBeChecked();
-    expect(within(within(runner).getByRole("list", { name: "Connected runners" })).getByText("branvil-runner")).toBeInTheDocument();
+    expect(within(within(runner).getByRole("list", { name: "Runners" })).getByText("branvil-runner")).toBeInTheDocument();
 
     const executor = screen.getByRole("region", { name: "Executor" });
     expect(within(executor).getByText("/Users/u/.guildbotics/data/msb/bin/msb")).toBeInTheDocument();
@@ -243,41 +260,58 @@ describe("CI settings", () => {
     expect(screen.getByRole("switch", { name: /^Network for jobs/ })).not.toBeChecked();
   });
 
-  it("turns the runner off and saves the job limits as numbers", async () => {
+  it("turns the automatic runner off and keeps its last report", async () => {
+    const stopped = { ...CI.runner, mode: "off", state: "no_runner", detail: "No runner.", runners: [{ ...HUB_RUNNER, connection: "offline" }] };
     const fake = fakeApi({
       ...SHELL,
       "GET /api/v1/admin/ci": json(200, CI),
-      "PUT /api/v1/admin/ci/runner": json(200, { ...CI, runner: { ...CI.runner, mode: "off", state: "no_runner", detail: "No runner.", runners: [] } }),
-      "PUT /api/v1/admin/ci/limits": json(200, { ...CI, limits: { ...CI.limits, max_cpus: 8 } }),
+      "PUT /api/v1/admin/ci/runner": json(200, { ...CI, runner: stopped }),
     });
     const user = userEvent.setup();
     renderApp("/-/settings/ci");
     await user.click(await screen.findByRole("switch", { name: /^Run the runner on the Branvil machine/ }));
-    await waitFor(() => expect(fake.calls("PUT", "/api/v1/admin/ci/runner")).toHaveLength(1));
+    expect(await screen.findByText("Contact lost")).toBeInTheDocument();
     expect(fake.calls("PUT", "/api/v1/admin/ci/runner")[0]?.body).toEqual({ mode: "off" });
-    expect(await screen.findByText("No runner is connected.")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: /^Run the runner on the Branvil machine/ })).not.toBeChecked();
+  });
 
-    const limits = screen.getByRole("form", { name: "Job resources" });
-    expect(
-      screen.getByText(
-        "Every job runs with these CPUs and this memory, in a microVM of its own. Up to the number of parallel jobs run at once, using that many times the CPUs and memory. Work directory space is what a job may write to /work beyond the checkout and the restored cache. The time limit caps a pipeline's timeout_secs and is the limit of a job that gives none. Saved values apply from the next job the runner starts (running jobs go on).",
-      ),
-    ).toBeInTheDocument();
-    const cpus = within(limits).getByRole("textbox", { name: "CPUs" });
+  it("shows runner reports and saves the selected offline runner's resources without a global warning", async () => {
+    const runner = { ...CI.runner, runners: [HUB_RUNNER, REMOTE_RUNNER, NEW_RUNNER] };
+    const saved = { ...REMOTE_RUNNER, limits: { ...REMOTE_RUNNER.limits, max_cpus: 8 } };
+    const path = "/api/v1/admin/ci/runners/desktop-runner/limits";
+    const fake = fakeApi({
+      ...SHELL,
+      "GET /api/v1/admin/ci": json(200, { ...CI, runner }),
+      "GET /api/v1/admin/diagnostics": json(200, { runner }),
+      [`PUT ${path}`]: json(200, { ...CI, runner: { ...runner, runners: [HUB_RUNNER, saved, NEW_RUNNER] } }),
+    });
+    const user = userEvent.setup();
+    renderApp("/-/settings/ci");
+    const list = await screen.findByRole("list", { name: "Runners" });
+    expect(within(list).getByText("Hub version (hub-build)")).toBeInTheDocument();
+    expect(within(list).getByText("1 / 1 running attempts")).toBeInTheDocument();
+    expect(within(list).getByText("Contact lost")).toBeInTheDocument();
+    expect(within(list).getByText("Version differs from the Hub (older-build)")).toBeInTheDocument();
+    expect(within(list).getByText("Missing images for amd64: debian:bookworm")).toBeInTheDocument();
+    expect(within(list).getByText("No contact since the Hub started")).toBeInTheDocument();
+    await waitFor(() => expect(fake.calls("GET", "/api/v1/admin/diagnostics")).toHaveLength(1));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("guildbotics runner join")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Set up SSH forwarding before joining" })).toHaveAttribute("href");
+
+    const limits = () => screen.getByRole("form", { name: "Job resources" });
+    expect(within(limits()).getByRole("textbox", { name: "CPUs" })).toHaveValue("4");
+    await user.click(within(list).getByRole("radio", { name: "desktop-runner" }));
+    const cpus = within(limits()).getByRole("textbox", { name: "CPUs" });
+    expect(cpus).toHaveValue("6");
+    expect(within(limits()).getByRole("textbox", { name: "Parallel jobs" })).toHaveValue("2");
     await user.clear(cpus);
     await user.type(cpus, "8");
-    const quota = within(limits).getByRole("textbox", { name: "Work directory space (MiB)" });
-    expect(quota).toHaveValue("16384");
-    await user.clear(quota);
-    await user.type(quota, "32768");
-    const jobs = within(limits).getByRole("textbox", { name: "Parallel jobs" });
-    await user.clear(jobs);
-    await user.type(jobs, "2");
-    await user.click(within(limits).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(fake.calls("PUT", "/api/v1/admin/ci/limits")).toHaveLength(1));
-    expect(fake.calls("PUT", "/api/v1/admin/ci/limits")[0]?.body).toEqual({ max_cpus: 8, max_memory_mib: 4096, work_quota_mib: 32768, max_timeout_secs: 3600, cache_max_mib: 2048, max_jobs: 2 });
-    expect(await within(limits).findByText("Saved.")).toBeInTheDocument();
+    await user.click(within(limits()).getByRole("button", { name: "Save" }));
+    expect(await within(limits()).findByText("Saved.")).toBeInTheDocument();
+    expect(fake.calls("PUT", path)[0]?.body).toEqual(saved.limits);
+    await user.click(within(list).getByRole("radio", { name: "new-runner" }));
+    expect(within(limits()).getByRole("textbox", { name: "CPUs" })).toHaveValue("4");
   });
 
   it("follows a runner switched on until it reports", async () => {
