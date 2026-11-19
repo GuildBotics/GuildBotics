@@ -1640,6 +1640,11 @@
         "help": "Run outcome."
       },
       {
+        "spelling": "--work-remains",
+        "flag": true,
+        "help": "Ticket work remains after this run (done ticket work only); resume after linked PRs merge."
+      },
+      {
         "spelling": "--content-file",
         "path": "content"
       },

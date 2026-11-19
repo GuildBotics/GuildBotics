@@ -589,6 +589,7 @@ mod tests {
             scheduler.add("aiko".into(), engine.clone(), vec![], routines);
             let settings = Settings {
                 event_queue: false,
+                routine_interval_minutes: 10,
                 ..Default::default()
             };
             scheduler.tick("aiko", &settings, at(0)).await;
@@ -735,6 +736,7 @@ mod tests {
         );
         let settings = Settings {
             event_queue: false,
+            routine_interval_minutes: 10,
             ..Default::default()
         };
         scheduler.tick("aiko", &settings, at(0)).await;
@@ -821,13 +823,13 @@ mod tests {
             chrono::DateTime::parse_from_rfc3339(heartbeat[0]["next_routine_at"].as_str().unwrap())
                 .unwrap();
         assert_eq!(last.naive_local(), at(2));
-        assert_eq!(next - last, Duration::minutes(10));
+        assert_eq!(next - last, Duration::minutes(3));
         assert_eq!(
-            scheduler.tick("aiko", &settings, at(10)).await,
+            scheduler.tick("aiko", &settings, at(4)).await,
             Outcome::Deferred
         );
         assert_eq!(
-            scheduler.tick("aiko", &settings, at(12)).await,
+            scheduler.tick("aiko", &settings, at(5)).await,
             Outcome::Succeeded
         );
         assert_eq!(

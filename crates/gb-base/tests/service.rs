@@ -25,6 +25,8 @@ fn rate_limit_reset_requires_an_explicit_zone_and_preserves_unknown_holds() {
 fn statuses_suppress_work_and_only_failures_and_rate_limits_hold_selection() {
     let now = "2026-11-04T12:00:00Z".parse().unwrap();
     for reason in [
+        "completed",
+        "work_remaining",
         "failed",
         "rate_limited",
         "review_limit",

@@ -863,3 +863,180 @@ async fn repair_report_only_runs_require_a_current_open_repair_pr() {
     }
     services.stop().await;
 }
+
+#[tokio::test]
+async fn ticket_completion_records_work_outcome_with_run_identity() {
+    for (remains, link) in [
+        (false, "none"),
+        (true, "none"),
+        (true, "open"),
+        (true, "merged"),
+        (true, "closed"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
+        let redactor = Redactor::default();
+        seed_kind(&writes, &workspace, &redactor, "ticket");
+        let services = support::Embedded::new().await;
+        let ticket = services.ticket("Outcome").await;
+        if link != "none" {
+            let pull = services.pull("feature", true, &[&ticket]).await;
+            if link == "merged" {
+                let view = services.code.pull_view(&pull).await.unwrap();
+                services
+                    .fixture
+                    .merge(support::REPO, view.number, &view.head_sha, &view.base_sha)
+                    .await;
+            } else if link == "closed" {
+                services.close_pull(&pull).await;
+            }
+        }
+        let roster = BTreeMap::new();
+        let repository = Repository {
+            services: &services,
+            guard: &Current,
+            roster: &roster,
+        };
+        let mut c = control(&workspace, &writes, &repository, &redactor, &Receives, &[]);
+        c.identity.work_kind = "ticket";
+        c.identity.work_identity = &ticket;
+        c.identity.subject_type = "ticket";
+        c.identity.subject_id = &ticket;
+        let mut args = vec![
+            "task",
+            "complete",
+            "--person",
+            "aiko",
+            "--status",
+            "done",
+            "--content-stdin",
+        ];
+        if remains {
+            args.push("--work-remains");
+        }
+        let command = parsed(&args);
+        // An outcome marker cannot replace the run's required write evidence.
+        assert!(c.command(&command, "summary").await.is_err());
+        assert!(
+            TicketAgent::read(&services.code, Resource::TicketComments, &ticket, None, "")
+                .await
+                .unwrap()
+                .items()
+                .is_empty()
+        );
+        c.record("ticket comment", false, &json!({"target":{"url":ticket}}))
+            .unwrap();
+        let result = c.command(&command, "summary").await;
+        if remains && link != "open" {
+            assert!(matches!(
+                result,
+                Err(MemberError::Capability(
+                    "capabilities.task_runs.work_remains_open_pr"
+                ))
+            ));
+            assert!(
+                TicketAgent::read(&services.code, Resource::TicketComments, &ticket, None, "")
+                    .await
+                    .unwrap()
+                    .items()
+                    .is_empty()
+            );
+            assert!(
+                RunStore::open(&workspace)
+                    .read("run")
+                    .unwrap()
+                    .unwrap()
+                    .result
+                    .is_none()
+            );
+            services.stop().await;
+            continue;
+        }
+        let result = result.unwrap();
+        assert_eq!(result["status"], "done");
+        let notices =
+            TicketAgent::read(&services.code, Resource::TicketComments, &ticket, None, "")
+                .await
+                .unwrap();
+        let status = &notices.items()[0]["meta"];
+        assert_eq!(
+            status["reason"],
+            if remains {
+                "work_remaining"
+            } else {
+                "completed"
+            }
+        );
+        assert_eq!(status["person_id"], "aiko");
+        assert_eq!(status["work_identity"], ticket);
+        let record = RunStore::open(&workspace).read("run").unwrap().unwrap();
+        assert!(
+            record
+                .provider_evidence
+                .iter()
+                .any(|e| e["type"] == "ticket_work" && e["payload"]["status"] == *status)
+        );
+        services.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn remaining_work_flag_rejects_other_work_and_waiting_outcomes() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
+    let redactor = Redactor::default();
+    seed(&writes, &workspace, &redactor);
+    let services = Unused;
+    let roster = BTreeMap::new();
+    let repository = Repository {
+        services: &services,
+        guard: &Current,
+        roster: &roster,
+    };
+    let c = control(&workspace, &writes, &repository, &redactor, &Receives, &[]);
+    for status in ["done", "asking", "blocked"] {
+        let p = parsed(&[
+            "task",
+            "complete",
+            "--person",
+            "aiko",
+            "--status",
+            status,
+            "--work-remains",
+            "--content-stdin",
+        ]);
+        assert!(matches!(
+            c.command(&p, "summary").await,
+            Err(MemberError::Capability(
+                "capabilities.task_runs.work_remains_status"
+            ))
+        ));
+    }
+}
+
+#[tokio::test]
+async fn remaining_work_admission_reads_all_link_pages_and_propagates_failures() {
+    use gb_server::member::repository::has_open_linked_pull;
+    let services = support::Embedded::new().await;
+    let ticket = services.ticket("Pagination").await;
+    // The first 30 linked pulls fill a page, but none authorizes admission.
+    for index in 0..30 {
+        let pull = services
+            .pull(&format!("closed-{index}"), false, &[&ticket])
+            .await;
+        services.close_pull(&pull).await;
+    }
+    assert!(!has_open_linked_pull(&services.code, &ticket).await.unwrap());
+    let pull = services.pull("open", false, &[&ticket]).await;
+    assert!(has_open_linked_pull(&services.code, &ticket).await.unwrap());
+    services.close_pull(&pull).await;
+    let unrelated = services.pull("unrelated", false, &[]).await;
+    assert!(!has_open_linked_pull(&services.code, &ticket).await.unwrap());
+    services.code.faults.fail("read", ServiceError::Unsupported);
+    assert!(has_open_linked_pull(&services.code, &ticket).await.is_err());
+    services.code.faults.clear();
+    services.close_pull(&unrelated).await;
+    services.stop().await;
+}

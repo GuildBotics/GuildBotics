@@ -95,6 +95,7 @@
     "--until",
     "--url",
     "--waiting-for",
+    "--work-remains",
     "--workspace",
     "--workspace-mode"
   ],
