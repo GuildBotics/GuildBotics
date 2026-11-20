@@ -1268,8 +1268,11 @@ pub fn claim_images(
         let Some(image) = images.iter().find(|i| i.supports(&a.job.image)) else {
             continue;
         };
-        if let Some(reuse) = reuse.filter(|source| source.image_digest == image.digest) {
-            let claim = claim_selected(w, runner, lease_secs, now, a, Some(reuse), None)?;
+        if reuse
+            .as_ref()
+            .is_some_and(|source| source.image_digest == image.digest)
+        {
+            let claim = claim_selected(w, runner, lease_secs, now, a, reuse, None)?;
             return Ok((Some(claim), waiting));
         }
         let key = (a.repo.clone(), a.job.name.clone());
@@ -1287,12 +1290,8 @@ pub fn claim_images(
             reserved_memory_mib: estimate,
         };
         let need = Resources::from(allocation);
-        if let Some((total, remaining, available)) = budget {
-            let free = remaining.minus(reserve);
-            let short = need.minus(Resources {
-                memory: free.memory.min(available),
-                ..free
-            });
+        if let Some((total, free)) = budget {
+            let short = need.minus(free.minus(reserve));
             if short != Resources::default() {
                 waiting.get_or_insert_with(|| ResourceWait {
                     attempt_id: a.id.clone(),
@@ -1307,17 +1306,13 @@ pub fn claim_images(
                 continue;
             }
         }
-        let claim = claim_selected(w, runner, lease_secs, now, a, None, Some(allocation))?;
+        let claim = claim_selected(w, runner, lease_secs, now, a, reuse, Some(allocation))?;
         return Ok((Some(claim), waiting));
     }
     Ok((None, waiting))
 }
 
-fn capacity(
-    machine: Machine,
-    limits: JobLimits,
-    running: &[Attempt],
-) -> (Resources, Resources, u64) {
+fn capacity(machine: Machine, limits: JobLimits, running: &[Attempt]) -> (Resources, Resources) {
     let logical_cpus = u64::from(machine.logical_cpus);
     let cpus = match limits.cpu_multiplier_percent {
         0 => logical_cpus.max(u64::from(limits.max_cpus) * u64::from(limits.max_jobs)),
@@ -1335,10 +1330,14 @@ fn capacity(
         .iter()
         .filter_map(|a| a.allocation)
         .fold(Resources::default(), |used, a| used.plus(a.into()));
+    let free = total.minus(used);
+    let available = machine.available_memory_mib.saturating_sub(reserve);
     (
         total,
-        total.minus(used),
-        machine.available_memory_mib.saturating_sub(reserve),
+        Resources {
+            memory: free.memory.min(available),
+            ..free
+        },
     )
 }
 
@@ -2121,7 +2120,13 @@ mod tests {
                 ("heavy", 0, 2500)
             );
 
-            let (light, _) = take("busy-large", machine(9000, 3500))?;
+            let (temporarily_blocked, _) = take("busy-large", machine(9000, 3500))?;
+            assert!(
+                temporarily_blocked.is_none(),
+                "starting light would consume the head's OS memory reserve"
+            );
+
+            let (light, _) = take("small-machine", machine(5500, 3500))?;
             let light = light.unwrap().attempt;
             assert_eq!(light.job.name, "light");
             assert_eq!(light.allocation.unwrap().reserved_memory_mib, 3000);

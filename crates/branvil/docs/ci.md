@@ -711,8 +711,9 @@ held attempts from the machine's capacity. The next attempt must also fit in
 currently available memory after the reserve. The CPU budget is logical CPUs
 times the configured percentage. The automatic value (0) allows at least the
 runner's configured concurrency at its VM size. A later attempt can go ahead
-only if it leaves room for the first blocked attempt that could fit on that
-machine. Settings → CI shows the resource shortfall by runner for queued work.
+only if it leaves room in both budgets for the first blocked attempt that
+could fit on that machine. Settings → CI shows the resource shortfall by
+runner for queued work.
 
 Switching the supervised runner off stops its child. Stopping or restarting
 the child interrupts the attempts it is running, which are queued once more
