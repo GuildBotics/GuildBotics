@@ -417,6 +417,7 @@ export interface Check {
   conclusion: CheckConclusion;
   attempt_id?: string;
   attempt?: number;
+  runner: string | null;
   details_url?: string;
   details?: string;
   artifact_names?: string[];
@@ -460,6 +461,7 @@ export interface Job {
   id: string;
   job: string;
   attempt: number;
+  runner: string | null;
   sha: string;
   status: CheckStatus;
   conclusion: CheckConclusion;

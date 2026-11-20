@@ -923,7 +923,7 @@ head directly replaces the host branch after checking the same conditions.
   "head_sha": "...", "base_sha": "...", "behind_by": 0, "conflicts": [],
   "checks": [
     {"name": "test", "status": "completed", "conclusion": "success",
-     "attempt_id": "att_01JA...", "attempt": 1,
+     "attempt_id": "att_01JA...", "attempt": 1, "runner": "runner-west",
      "details_url": "http://127.0.0.1:7878/acme/demo/-/jobs/att_01JA...",
      "artifact_names": ["report"],
      "started_at": "2026-10-24T09:50:00.000Z", "finished_at": "2026-10-24T09:53:12.000Z"}
@@ -969,6 +969,9 @@ head directly replaces the host branch after checking the same conditions.
 - `details` (optional on every check) explains a conclusion or a state: the
   failing exit code, "Superseded: …", "Interrupted: …", "No CI runner has
   contacted Branvil …", the executor's reason for `startup_failure`.
+- `runner` is the member name of the runner that claimed the check's
+  attempt. It is `null` for unclaimed attempts, including service skips, and
+  for checks without a Branvil attempt, including placeholders and upstream checks.
 - A check of a Branvil attempt has `started_at` once a runner claimed it and
   `finished_at` once it concluded (the GUI shows how long it ran, or has run
   so far). While it is `in_progress`, `expected_secs` is how long the same job
@@ -1043,9 +1046,11 @@ is not the full sha of a commit of the repository.
 ### CI attempts
 
 - `GET /api/v1/repos/{repo}/jobs/{attempt_id}` →
-  `{"id","purpose","cache_refresh","url","repository","job","attempt","sha","image_digest","reused_from","status","conclusion","path_skip","details","cancel_requested","created_at","started_at","finished_at","artifact_names","log_bytes"}`.
+  `{"id","purpose","cache_refresh","url","repository","job","attempt","runner","sha","image_digest","reused_from","status","conclusion","path_skip","details","cancel_requested","created_at","started_at","finished_at","artifact_names","log_bytes"}`.
   `path_skip` has the same shape as on checks and is `null` for an attempt
   that was not skipped by the service's path selection.
+  `runner` is the member name of the runner that claimed this attempt, or
+  `null` if it was never claimed. Each retry has its own runner.
   `image_digest` is the configuration digest (`sha256:…`) of the image the
   job ran on, as its runner reported it; `null` when the job did not get that
   far. `purpose` is `check`, `cache_refresh`, or `probe`. `cache_refresh` is the ID of

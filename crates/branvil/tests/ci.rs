@@ -101,6 +101,7 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
     let slow = check(&report, "slow");
     assert_eq!(slow["conclusion"], "skipped");
     assert_eq!(slow["path_skip"]["reason"], "post_merge");
+    assert_eq!(slow.get("runner"), Some(&Value::Null));
     let log = w
         .server
         .ok(
@@ -135,6 +136,59 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
     }
     seen.sort();
     assert_eq!(seen, ["slow"]);
+}
+
+#[tokio::test]
+async fn job_and_check_responses_identify_the_runner_that_claimed_each_attempt() {
+    let w = World::new().await;
+    set_required(&w, &["test", "lint"]).await;
+    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
+    let head = w.push_change("feature", ".branvil/ci.toml", &pipeline(&["test", "lint"]));
+    let commit_url = format!("{}/commits/{head}/checks", w.repo_path());
+    let unregistered = w.server.ok(&commit_url, &w.aiko).await;
+    assert_eq!(unregistered["run_registered"], false);
+    let placeholder = check(&unregistered, "test");
+    assert_eq!(placeholder.get("runner"), Some(&Value::Null));
+    assert!(placeholder.get("attempt_id").is_none());
+
+    let p = w.open_pull("feature", json!([])).await;
+    let n = p["number"].as_u64().unwrap();
+    let before = checks(&w, n).await;
+    let job_url = |check: &Value| {
+        format!(
+            "{}/jobs/{}",
+            w.repo_path(),
+            check["attempt_id"].as_str().unwrap()
+        )
+    };
+    for name in ["test", "lint"] {
+        let queued = check(&before, name);
+        assert_eq!(queued["status"], "queued");
+        assert_eq!(queued.get("runner"), Some(&Value::Null));
+        let attempt = w.server.ok(&job_url(queued), &w.aiko).await;
+        assert_eq!(attempt.get("runner"), Some(&Value::Null));
+    }
+
+    let linux = Runner::new(&w, "linux-runner").await;
+    let windows = Runner::new(&w, "windows-runner").await;
+    let finished = linux.next_claim().await;
+    assert_eq!(linux.finish(&finished, "success").await.0, 200);
+    let running = windows.next_claim().await;
+    let pull_checks = checks(&w, n).await;
+    let commit_checks = w.server.ok(&commit_url, &w.aiko).await;
+    for (claim, name, status) in [
+        (finished, "linux-runner", "completed"),
+        (running, "windows-runner", "in_progress"),
+    ] {
+        let job = claim["job"]["name"].as_str().unwrap();
+        let projected = check(&pull_checks, job);
+        assert_eq!(projected["attempt_id"], claim["attempt_id"]);
+        assert_eq!(projected["status"], status);
+        assert_eq!(projected["runner"], name);
+        assert_eq!(check(&commit_checks, job)["runner"], name);
+        let attempt = w.server.ok(&job_url(projected), &w.aiko).await;
+        assert_eq!(attempt["runner"], name);
+    }
 }
 
 #[tokio::test]
@@ -2355,6 +2409,14 @@ async fn the_automatic_runner_starting_again_queues_the_jobs_its_predecessor_hel
     };
     let ((test_attempt, test_id), (_, lint_id)) = (started("test"), started("lint"));
     assert_eq!(test_attempt, 2);
+    assert_eq!(test_id, first["attempt_id"].as_str().unwrap());
+    assert_eq!(check(&list, "test")["runner"], "ready-runner");
+    let rerun = w
+        .server
+        .ok(&format!("{}/jobs/{test_id}", w.repo_path()), &w.aiko)
+        .await;
+    assert_eq!(rerun["runner"], "ready-runner");
+    assert_eq!(w.server.ok(&url, &w.aiko).await["runner"], "branvil-runner");
     let at = |id: String| {
         let w = &w;
         async move {

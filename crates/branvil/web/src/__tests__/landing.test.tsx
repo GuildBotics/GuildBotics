@@ -111,9 +111,9 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", lang => {
   });
   it.each([true, false])("shows server-unmet successes and skips as checking (journey=%s)", journey => {
     const checks: Check[] = [
-      { name: "success", status: "completed", conclusion: "success" },
-      { name: "reused", status: "completed", conclusion: "success", reused_from: { attempt_id: "previous", sha: BASE, url: "/previous", basis: "paths" } },
-      ...(["paths", "post_merge"] as const).map(reason => ({ name: reason, status: "completed" as const, conclusion: "skipped" as const, path_skip: { reason, paths: [], bases: [] } })),
+      { name: "success", status: "completed", conclusion: "success", runner: null },
+      { name: "reused", status: "completed", conclusion: "success", runner: null, reused_from: { attempt_id: "previous", sha: BASE, url: "/previous", basis: "paths" } },
+      ...(["paths", "post_merge"] as const).map(reason => ({ name: reason, status: "completed" as const, conclusion: "skipped" as const, runner: null, path_skip: { reason, paths: [], bases: [] } })),
     ];
     const blockers = [{ code: "head_checks", message: "Server detail", jobs: checks.map(c => c.name), files: [] }];
     component("conditions", blockers, journey, REPO, checks);
