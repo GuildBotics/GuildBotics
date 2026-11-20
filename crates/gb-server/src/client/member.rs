@@ -6,6 +6,7 @@ use std::{
 
 use gb_observability::redaction::Redactor;
 use serde_json::{Value, json};
+use tracing::{Instrument, info_span};
 
 use super::{OwnerClient, checked};
 use crate::{
@@ -21,7 +22,9 @@ const MAX_CONTENT: usize = 2 << 20;
 pub async fn run(mut arguments: Vec<String>) -> anyhow::Result<u8> {
     let language = super::language().await;
     let data = gb_base::home::data()?;
-    let (owner, local) = super::cli_server(&data, language).await?;
+    let (owner, local) = super::cli_server(&data, language)
+        .instrument(info_span!(target: "member_timing", "connect"))
+        .await?;
     let explicit = workspace_argument(&mut arguments, language)?;
     let workspace_id = if local {
         let workspace = selected_workspace(&data, explicit, language)?;
@@ -46,13 +49,15 @@ pub async fn run(mut arguments: Vec<String>) -> anyhow::Result<u8> {
         .request(reqwest::Method::GET, "/member/redaction-keys")
         .timeout(super::TIMEOUT)
         .send()
+        .instrument(info_span!(target: "member_timing", "redaction_keys"))
         .await?;
     let names: Vec<String> = checked(response).await?.json().await?;
     let redact = redactor(names);
     let original = arguments;
     let (interactive_host, interactive_thread_key) = interactive_context();
     let mut request = MemberRequest {
-        version: crate::member_protocol::binary_version()?,
+        version: info_span!(target: "member_timing", "version")
+            .in_scope(crate::member_protocol::binary_version)?,
         workspace_id,
         arguments: redacted(&redact, &original),
         stdin: String::new(),
@@ -113,8 +118,14 @@ pub async fn run(mut arguments: Vec<String>) -> anyhow::Result<u8> {
     if download {
         request.arguments.extend(["--format".into(), "json".into()]);
     }
-    let response = client.post("/member/run", &request).await?;
-    let (mut result, mut response) = client.header(response).await?;
+    let response = client
+        .post("/member/run", &request)
+        .instrument(info_span!(target: "member_timing", "run_headers"))
+        .await?;
+    let (mut result, mut response) = client
+        .header(response)
+        .instrument(info_span!(target: "member_timing", "run_result"))
+        .await?;
     let bytes = client
         .payload(
             &mut response,
@@ -382,6 +393,7 @@ impl Client {
         }
     }
 
+    #[tracing::instrument(target = "member_timing", name = "plan", skip_all)]
     async fn describe(&self, request: &MemberRequest) -> anyhow::Result<Reply> {
         let response = self.post("/member/plan", request).await?;
         let (result, mut response) = self.header(response).await?;

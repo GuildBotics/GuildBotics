@@ -174,6 +174,7 @@ impl MemberRequest {
         Ok(())
     }
 }
+#[tracing::instrument(target = "member_timing", name = "run", skip_all)]
 pub(crate) async fn execute(
     State(api): State<Shared>,
     headers: HeaderMap,
@@ -181,6 +182,7 @@ pub(crate) async fn execute(
 ) -> Response {
     start(api, headers, body, false, None).await
 }
+#[tracing::instrument(target = "member_timing", name = "plan", skip_all)]
 pub(crate) async fn describe(
     State(api): State<Shared>,
     headers: HeaderMap,

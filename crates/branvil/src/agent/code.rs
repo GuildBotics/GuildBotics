@@ -1,6 +1,8 @@
 use super::code_patrol::{array, fold};
 use super::*;
 use crate::api::{pulls, tickets};
+use tracing::{Instrument, info_span};
+
 impl CodeAgent {
     pub fn commit_url_for(api: &crate::api::DataApi, repo: &str, sha: &str) -> String {
         format!("{}/{repo}/-/commits/{sha}", api.base_url())
@@ -665,6 +667,7 @@ impl CodeAgent {
             content,
         })
     }
+    #[tracing::instrument(target = "member_timing", name = "readiness", skip_all)]
     async fn pull_readiness(
         &self,
         url: &str,
@@ -678,6 +681,7 @@ impl CodeAgent {
         let m = self.member().await?;
         let report = m
             .pulls_checks(&repo, number(&key)?)
+            .instrument(info_span!(target: "member_timing", "checks"))
             .await
             .map_err(|e| error(e, "pulls_checks"))?;
         let mut failed = Vec::new();
@@ -713,6 +717,7 @@ impl CodeAgent {
                     let id = c.attempt_id.as_deref().ok_or(ServiceError::InvalidResult)?;
                     let v = m
                         .job_log(&repo, id, bytes as u64)
+                        .instrument(info_span!(target: "member_timing", "job_log"))
                         .await
                         .map_err(|e| error(e, "job_log"))?;
                     let log = text(&v, "log").to_string();
@@ -732,10 +737,12 @@ impl CodeAgent {
         }
         let activity = m
             .pulls_activity(&repo, number(&key)?)
+            .instrument(info_span!(target: "member_timing", "activity"))
             .await
             .map_err(|e| error(e, "pulls_activity"))?;
         let current = m
             .pulls_get(&repo, number(&key)?)
+            .instrument(info_span!(target: "member_timing", "pull"))
             .await
             .map_err(|e| error(e, "pulls_get"))?;
         self.readiness_result(

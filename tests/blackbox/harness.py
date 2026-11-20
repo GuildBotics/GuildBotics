@@ -9,6 +9,7 @@ import shlex
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -40,10 +41,13 @@ class Stack:
     def config_dir(self) -> str:
         return str(self.workspace / ".guildbotics/config")
 
-    def cli(self, *arguments: str, content=None, cwd=None, timeout=30):
+    def cli(self, *arguments: str, content=None, cwd=None, timeout=30, timings=False):
         command = os.environ["GUILDBOTICS_BLACKBOX_CLI"]
         if arguments[:1] == ("member",):
             command = os.environ.get("GUILDBOTICS_BLACKBOX_MEMBER_CLI", command)
+        offset = self.log.stat().st_size if timings else None
+        started = time.monotonic()
+        cpu = _child_cpu_seconds()
         try:
             result = subprocess.run(
                 [*shlex.split(command), *arguments],
@@ -56,22 +60,63 @@ class Stack:
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired as exc:
-            raise AssertionError(f"Timed out{self._server_log()}") from exc
+            elapsed = time.monotonic() - started
+            if offset is not None:
+                stderr = (exc.stderr or b"").decode("utf-8", errors="replace")
+                self._report_timings(
+                    offset, elapsed, _child_cpu_seconds() - cpu, stderr
+                )
+            raise AssertionError(
+                f"Timed out after {elapsed:.3f}s{self._server_log()}"
+            ) from exc
+        if offset is not None:
+            self._report_timings(
+                offset,
+                time.monotonic() - started,
+                _child_cpu_seconds() - cpu,
+                result.stderr,
+            )
         assert result.returncode == 0, f"{result.stderr}{self._server_log()}"
         return result.stdout
+
+    def _report_timings(
+        self, offset: int, wall: float, cpu: float, stderr: str
+    ) -> None:
+        with self.log.open("rb") as log:
+            log.seek(offset)
+            server = log.read().decode("utf-8", errors="replace")
+        print(f"readiness wall={wall:.3f}s cli_cpu={cpu:.3f}s", file=sys.stderr)
+        for side, output in (("client", stderr), ("server", server)):
+            for line in output.splitlines():
+                if " member_timing: " in line:
+                    print(f"{side} {line}", file=sys.stderr)
 
     def _server_log(self) -> str:
         """The server's own log names the cause the CLI reports only as an error."""
         tail = self.log.read_bytes()[-4000:].decode("utf-8", errors="replace")
         return f"\n--- server log ---\n{tail}"
 
-    def member(self, *arguments: str, content: str | None = None, cwd=None):
+    def member(
+        self, *arguments: str, content: str | None = None, cwd=None, timings=False
+    ):
         options = ["--person", PERSON, "--format", "json"]
         if content is not None:
             options.append("--content-stdin")
         return json.loads(
-            self.cli("member", *arguments, *options, content=content, cwd=cwd)
+            self.cli(
+                "member",
+                *arguments,
+                *options,
+                content=content,
+                cwd=cwd,
+                timings=timings,
+            )
         )
+
+
+def _child_cpu_seconds() -> float:
+    times = os.times()
+    return times.children_user + times.children_system
 
 
 def _yaml(path: Path, value: dict) -> None:
@@ -155,6 +200,7 @@ def _environment(root: Path, workspace: Path, home: Path, port: int) -> dict[str
         GIT_ALLOW_PROTOCOL="file:http",
         GUILDBOTICS_BROWSER_TEST_BRANVIL="1",
         GUILDBOTICS_BLACKBOX_CONTROL="1",
+        GUILDBOTICS_BLACKBOX_TIMINGS="1",
         BRANVIL_DATA_DIR=str(home / "branvil"),
         HTTP_PROXY="http://127.0.0.1:1",
         HTTPS_PROXY="http://127.0.0.1:1",

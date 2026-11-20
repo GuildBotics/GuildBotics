@@ -28,13 +28,21 @@ async fn main() -> anyhow::Result<()> {
     {
         std::process::exit(i32::from(branvil::git_hook(name).await));
     }
+    if std::env::var_os("GUILDBOTICS_BLACKBOX_TIMINGS").is_some() {
+        use tracing_subscriber::fmt::format::FmtSpan;
+        tracing_subscriber::fmt()
+            .with_env_filter("member_timing=info")
+            .with_ansi(false)
+            .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
+            .with_writer(std::io::stderr)
+            .init();
+    }
     if !arguments.is_empty() {
         anyhow::ensure!(
             arguments[0] == "member",
             "unsupported test launcher command"
         );
-        // The member handshake compares executable hashes. Use the production
-        // member client in this binary so both ends retain the real check.
+        // Use the production member client, including its version handshake.
         std::process::exit(i32::from(
             gb_server::client::member::run(arguments[1..].to_vec()).await?,
         ));

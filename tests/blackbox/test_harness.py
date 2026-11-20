@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from tests.blackbox.environment import EnvironmentSource
-from tests.blackbox.harness import _environment, running_stack
+from tests.blackbox.harness import Stack, _environment, running_stack
 
 
 def test_server_fixture_runs_without_cli(tmp_path, monkeypatch):
@@ -49,6 +49,32 @@ def test_server_fixture_requires_a_server_command(tmp_path, monkeypatch):
     monkeypatch.setenv("GUILDBOTICS_BLACKBOX_CLI", "cli-command")
     with pytest.raises(pytest.skip.Exception, match="server command"):
         next(conftest.server_stack.__wrapped__(tmp_path))
+
+
+def test_cli_timeout_keeps_the_started_phase_without_server_log(
+    tmp_path, monkeypatch, capsys
+):
+    log = tmp_path / "server.log"
+    log.touch()
+    stack = Stack(tmp_path, {}, None, None, log)
+    monkeypatch.setenv("GUILDBOTICS_BLACKBOX_CLI", "cli-command")
+
+    def timeout(args, **kwargs):
+        raise subprocess.TimeoutExpired(
+            args,
+            kwargs["timeout"],
+            stderr=b"timestamp INFO plan: member_timing: new\nunrelated stderr\n",
+        )
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    with pytest.raises(AssertionError, match="Timed out after"):
+        stack.cli(timings=True)
+
+    stderr = capsys.readouterr().err
+    assert "readiness wall=" in stderr
+    assert "cli_cpu=" in stderr
+    assert "client timestamp INFO plan: member_timing: new" in stderr
+    assert "unrelated stderr" not in stderr
 
 
 def test_blackbox_sources_do_not_import_guildbotics():
