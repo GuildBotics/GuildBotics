@@ -1002,18 +1002,17 @@ async fn redaction_keys(State(api): State<Shared>, headers: HeaderMap) -> Respon
     }
 }
 
-fn release_bytes(api: &Api, target: &str) -> anyhow::Result<Vec<u8>> {
-    crate::client_release::load(&api.data, gb_base::BUILD_VERSION, target)
-}
-
 async fn client_manifest(
     State(api): State<Shared>,
     headers: HeaderMap,
     axum::extract::Path(target): axum::extract::Path<String>,
 ) -> Response {
-    match release_bytes(&api, &target) {
-        Ok(bytes) => Json(json!({"version": gb_base::BUILD_VERSION, "target": target, "sha256": crate::client_release::digest(&bytes)})).into_response(),
-        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"message": crate::i18n::t(i18n::language(headers.get(LANGUAGE_HEADER).and_then(|v| v.to_str().ok()).unwrap_or("en")), "cli.server.update_unavailable", &[])}))).into_response(),
+    let release = crate::client_release::target(&target).and_then(|target| {
+        crate::client_release::load(&api.data, gb_base::BUILD_VERSION, target).ok()
+    });
+    match release {
+        Some(bytes) => Json(json!({"version": gb_base::BUILD_VERSION, "target": target, "sha256": crate::client_release::digest(&bytes)})).into_response(),
+        None => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"message": crate::i18n::t(i18n::language(headers.get(LANGUAGE_HEADER).and_then(|v| v.to_str().ok()).unwrap_or("en")), "cli.server.update_unavailable", &[])}))).into_response(),
     }
 }
 
@@ -1021,13 +1020,16 @@ async fn client_binary(
     State(api): State<Shared>,
     axum::extract::Path(target): axum::extract::Path<String>,
 ) -> Response {
-    match release_bytes(&api, &target) {
+    let Some(target) = crate::client_release::target(&target) else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match crate::client_release::load(&api.data, gb_base::BUILD_VERSION, target) {
         Ok(bytes) => (
             [
-                ("content-type", "application/octet-stream"),
+                ("content-type", "application/octet-stream".to_owned()),
                 (
                     "content-disposition",
-                    "attachment; filename=\"guildbotics.exe\"",
+                    format!("attachment; filename=\"{}\"", target.binary),
                 ),
             ],
             bytes,
@@ -1351,15 +1353,20 @@ mod tests {
                 .body(axum::body::Body::empty())
                 .unwrap()
         };
-        let target = crate::client_release::TARGET;
+        use crate::client_release::{self, LINUX, TARGETS, WINDOWS};
+        let target = WINDOWS.triple;
         let unavailable = app.clone().oneshot(request(target)).await.unwrap();
         assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
         let message = axum::body::to_bytes(unavailable.into_body(), 4096)
             .await
             .unwrap();
         assert!(String::from_utf8_lossy(&message).contains("まだありません"));
-        crate::client_release::store(root.path(), gb_base::BUILD_VERSION, b"verified client")
-            .unwrap();
+        client_release::publish(
+            root.path(),
+            gb_base::BUILD_VERSION,
+            TARGETS.map(|target| (target, target.artifact.as_bytes().to_vec())),
+        )
+        .unwrap();
         let manifest = app.clone().oneshot(request(target)).await.unwrap();
         assert_eq!(manifest.status(), StatusCode::OK);
         let body = axum::body::to_bytes(manifest.into_body(), 4096)
@@ -1384,6 +1391,7 @@ mod tests {
             StatusCode::OK
         );
         let binary = app
+            .clone()
             .oneshot(request(&format!("{target}/binary")))
             .await
             .unwrap();
@@ -1396,7 +1404,29 @@ mod tests {
             .await
             .unwrap();
         crate::client_release::verify(&bytes, manifest["sha256"].as_str().unwrap()).unwrap();
-        assert_eq!(bytes.as_ref(), b"verified client");
+        assert_eq!(bytes.as_ref(), WINDOWS.artifact.as_bytes());
+
+        let binary = app
+            .clone()
+            .oneshot(request(&format!("{}/binary", LINUX.triple)))
+            .await
+            .unwrap();
+        assert_eq!(binary.status(), StatusCode::OK);
+        assert_eq!(
+            binary.headers()["content-disposition"],
+            "attachment; filename=\"guildbotics\""
+        );
+        let bytes = axum::body::to_bytes(binary.into_body(), 4096)
+            .await
+            .unwrap();
+        assert_eq!(bytes.as_ref(), LINUX.artifact.as_bytes());
+        let manifest = app.oneshot(request(LINUX.triple)).await.unwrap();
+        let body = axum::body::to_bytes(manifest.into_body(), 4096)
+            .await
+            .unwrap();
+        let manifest: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(manifest["target"], LINUX.triple);
+        client_release::verify(&bytes, manifest["sha256"].as_str().unwrap()).unwrap();
     }
 
     #[tokio::test]

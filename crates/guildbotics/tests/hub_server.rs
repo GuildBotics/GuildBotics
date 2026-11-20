@@ -1134,7 +1134,7 @@ impl Hub {
 }
 
 #[test]
-fn auto_update_ignores_unverified_main_and_waits_past_a_manual_build() {
+fn auto_update_ignores_unverified_main_and_installs_latest_verified() {
     let hub = Hub::new();
     hub.install();
     hub.auto_candidate();
@@ -1160,12 +1160,12 @@ fn auto_update_ignores_unverified_main_and_waits_past_a_manual_build() {
     hub.verified(&[&verified]);
     hub.run("auto-once", None, true);
     hub.assert_runs_signed("new");
-    // A manual build ahead of the verified mark waits without notifying.
-    hub.git(&["merge", "--ff-only", "origin/main"]);
-    hub.run("update", None, true);
+    // The unverified tip still does not cause another update.
     hub.verified(&[]);
     hub.run("auto-once", None, true);
+    hub.assert_runs_signed("new");
     assert!(!hub.root().join("notifications").exists());
+    hub.git(&["merge", "--ff-only", "origin/main"]);
     hub.commit("later");
     hub.git(&["push", "origin", "main"]);
     hub.git(&["reset", "--hard", "HEAD^"]);
@@ -2204,7 +2204,7 @@ fn update_uses_the_installed_identity_root_instead_of_the_shells_selection() {
 }
 
 #[test]
-fn automatic_updates_wait_for_client_artifacts_but_manual_updates_continue() {
+fn automatic_and_manual_updates_wait_for_client_artifacts() {
     let hub = Hub::new();
     hub.install();
     let old = hub.installed_build();
@@ -2225,9 +2225,12 @@ fn automatic_updates_wait_for_client_artifacts_but_manual_updates_continue() {
     hub.commit("newer");
     hub.mark("missing-clients");
     let before = hub.installed_build();
-    let out = hub.run("update", None, true);
-    assert_ne!(hub.installed_build(), before);
+    let out = hub.run("update", None, false);
+    assert_eq!(hub.installed_build(), before);
     assert!(text(&out).contains("Client distribution is unavailable"));
+    fs::remove_file(hub.root().join("missing-clients")).unwrap();
+    hub.run("update", None, true);
+    assert_ne!(hub.installed_build(), before);
 }
 
 #[test]

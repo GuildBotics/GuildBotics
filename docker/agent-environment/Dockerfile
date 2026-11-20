@@ -73,6 +73,9 @@ RUN apt-get update \
         pkg-config \
         libssl-dev \
         libcap-ng-dev \
+    && if [ "$(dpkg --print-architecture)" = arm64 ]; then \
+        apt-get install -y --no-install-recommends gcc-x86-64-linux-gnu libc6-dev-amd64-cross; \
+    fi \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -114,7 +117,11 @@ RUN rustup target add --toolchain "${RUST_VERSION}" x86_64-pc-windows-gnu \
     && rustup target list --toolchain "${RUST_VERSION}" --installed \
         | grep -Fx x86_64-pc-windows-gnu \
     && x86_64-w64-mingw32-gcc --version \
-    && x86_64-w64-mingw32-ld --version
+    && x86_64-w64-mingw32-ld --version \
+    && if [ "$(uname -m)" != x86_64 ]; then \
+        rustup target add --toolchain "${RUST_VERSION}" x86_64-unknown-linux-gnu \
+        && x86_64-linux-gnu-gcc --version; \
+    fi
 
 # cargo-nextest, which runs each test in a process of its own, for the CI's
 # Rust test jobs. On PATH rather than under CARGO_HOME: the jobs point

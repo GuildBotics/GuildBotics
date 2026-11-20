@@ -59,7 +59,11 @@ git merge --ff-only <確認済みのコミットのSHA>
 scripts/hub-server.sh update
 ```
 
-確認済みでないコミットも手動で入れられます。そのあとの自動更新は、そのコミットより先の確認済みのコミットを待ちます。
+更新は Branvil の main で確認済みのコミットを対象とし、同じコミットの
+`client-windows` と `client-linux` の成果物を照合してから切り替えます。
+事前にリポジトリ設定 → CI のマージ後専用ジョブへ `client-linux` を追加します。
+arm64 でこのジョブを引き取るランナーでは、x86_64 GNU のクロスツールチェーンを
+含む `guildbotics/agent-environment:dev` をロードします。
 
 1. `update` は更新するコミットから画面と実行ファイルを作り、インストール時に記録した識別で署名します。現在のサーバーは稼働を続けます。
 2. 現行ビルドの `server hub-data backup` で、稼働中のサーバーからGuildBoticsの記録とコードホストのデータを退避します。新ビルドの `server hub-data restore` でその退避を別のディレクトリへ復元し、写しに `server hub-data upgrade`（検査を含む）を実行します。

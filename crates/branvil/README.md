@@ -117,9 +117,9 @@ Notes:
 
 ## CI runners
 
-For a Windows runner on another machine, install the client and persistent SSH
+For a Windows or Linux runner on another machine, install the client and persistent SSH
 forwarding first, then run `guildbotics runner join` and approve runner access.
-See [Join a Windows runner](docs/ci.md#join-a-windows-runner).
+See [Join a Windows or Linux runner](docs/ci.md#join-a-windows-or-linux-runner).
 
 ## Development
 

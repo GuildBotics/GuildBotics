@@ -79,6 +79,37 @@ async fn post_merge_settings_validate_the_result_atomically_and_require_owner() 
 
 #[tokio::test]
 async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
+    let mut config: toml::Table =
+        toml::from_str(include_str!("../../../.branvil/ci.toml")).unwrap();
+    let jobs = config["jobs"].as_array_mut().unwrap();
+    jobs.retain(|job| job["name"].as_str() == Some("client-linux"));
+    assert_eq!(jobs.len(), 1);
+    assert!(
+        jobs[0]["commands"][0]
+            .as_str()
+            .unwrap()
+            .contains("--no-default-features --target x86_64-unknown-linux-gnu --release")
+    );
+    assert_eq!(
+        jobs[0]["artifacts"][0]["name"].as_str(),
+        Some("client-linux")
+    );
+    assert_eq!(
+        jobs[0]["artifacts"][0]["paths"].as_array().unwrap(),
+        &[
+            "client-release/guildbotics",
+            "client-release/sha256",
+            "client-release/commit"
+        ]
+        .map(|path| toml::Value::String(path.into()))
+    );
+    // The scripted runner advertises the fixture image; it does not execute commands.
+    jobs[0]["image"] = toml::Value::String(IMAGE.into());
+    let pipeline = format!(
+        "{}\n{}",
+        pipeline(&["fast"]),
+        toml::to_string(&config).unwrap()
+    );
     let w = World::new().await;
     std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
     let runner = Runner::new(&w, "post-merge-runner").await;
@@ -88,13 +119,13 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
             .patch(
                 &w.repo_path(),
                 &w.owner,
-                json!({"revision":repo["revision"],"post_merge_jobs":["slow"]})
+                json!({"revision":repo["revision"],"post_merge_jobs":["client-linux"]})
             )
             .await
             .0,
         200
     );
-    let head = w.push_change("feature", ".branvil/ci.toml", &pipeline(&["slow", "fast"]));
+    let head = w.push_change("feature", ".branvil/ci.toml", &pipeline);
     let commit_checks = w
         .server
         .ok(
@@ -109,17 +140,17 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
     assert_eq!(fast["job"]["name"], "fast");
     runner.finish(&fast, "success").await;
     let report = checks(&w, n).await;
-    let slow = check(&report, "slow");
-    assert_eq!(slow["conclusion"], "skipped");
-    assert_eq!(slow["path_skip"]["reason"], "post_merge");
-    assert_eq!(slow.get("runner"), Some(&Value::Null));
+    let release = check(&report, "client-linux");
+    assert_eq!(release["conclusion"], "skipped");
+    assert_eq!(release["path_skip"]["reason"], "post_merge");
+    assert_eq!(release.get("runner"), Some(&Value::Null));
     let log = w
         .server
         .ok(
             &format!(
                 "{}/jobs/{}/log",
                 w.repo_path(),
-                slow["attempt_id"].as_str().unwrap()
+                release["attempt_id"].as_str().unwrap()
             ),
             &w.owner,
         )
@@ -137,16 +168,11 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
         )
         .await;
     assert_eq!(status, 200, "{result}");
-    let mut seen = Vec::new();
-    for _ in 0..1 {
-        let c = runner.next_claim().await;
-        assert_eq!(c["sha"], head);
-        assert!(!(c["job"]["name"] == "slow" && c["reuse"].is_object()));
-        seen.push(c["job"]["name"].as_str().unwrap().to_owned());
-        runner.finish(&c, "success").await;
-    }
-    seen.sort();
-    assert_eq!(seen, ["slow"]);
+    let release = runner.next_claim().await;
+    assert_eq!(release["sha"], head);
+    assert_eq!(release["job"]["name"], "client-linux");
+    assert!(!release["reuse"].is_object());
+    runner.finish(&release, "success").await;
 }
 
 #[tokio::test]

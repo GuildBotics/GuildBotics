@@ -83,10 +83,20 @@ Uninstall the old GuildBotics Desktop application first. Keep human checkouts an
 
 1. Set up SSH forwarding with `scripts/hub-forward.ps1` as described below.
 2. On the Hub, run `guildbotics open --print` and open its entry link in the Windows browser.
-3. In Settings → This machine, download `guildbotics.exe` from the Windows client card. The browser session authorizes the download of the Hub's current build.
+3. In Settings → This machine, download `guildbotics.exe` using the Windows x86_64 button. The browser session authorizes the download of the Hub's current build.
 4. In PowerShell, run `./guildbotics.exe install`. This installs the managed CLI in `~/.guildbotics/bin`, adds PATH, reports each AI tool's skill status, and configures human Git with the managed CLI's credential helper for the forwarded Hub origin. Open a new terminal after PATH changes. Resolve any warning about an earlier CLI on PATH.
 5. The client-only installer lists existing registered workspaces' `.guildbotics` directories, the identity root, and exact keychain entries. Only typing `DELETE` removes them. Enter or EOF keeps them. General files and checkouts, human Git tokens (`GuildBotics/branvil-git`), consent tokens (`guildbotics-server`), device ID, managed CLI and SSH forwarding remain.
 6. Run `guildbotics connect` and approve this machine in the browser. Re-run `guildbotics install` to check or refresh skills; user-edited skills are preserved. Subsequent CLI calls update to the Hub's build automatically.
+
+## Install the Linux client
+
+1. Set up the SSH forwarding user service below on the Linux x86_64 desktop.
+2. On the Hub, run `guildbotics open --print` and open the entry link in the Linux browser.
+3. In Settings → This machine, download `guildbotics` using the Linux x86_64 button.
+4. From the download directory, run `chmod +x guildbotics` and `./guildbotics install`.
+   Put the installed `~/.guildbotics/bin` on PATH if the installer prompts you to.
+5. Run `guildbotics connect` and approve the client in the browser. Subsequent CLI
+   calls update to the Hub's build automatically.
 
 ## Set up SSH forwarding on another machine
 
@@ -322,8 +332,15 @@ patrol. Without an explicit lane, a ticket with a parent or blockers starts in
 ## Join another machine as a CI runner
 
 Keep SSH forwarding running and install/connect the GuildBotics client first.
-On Windows x86_64 run `guildbotics runner join`, then approve CI runner access
-in the browser. The token stays in the OS keychain. The per-user scheduled task
-starts at login and restarts the runner after a failure or Hub version change.
-Rejoining revokes that device's previous runner token. The runtime is downloaded
-from the pinned microsandbox release and verified with SHA-256 and `msb --version`.
+On Windows x86_64 or a Linux x86_64 desktop, run `guildbotics runner join` and
+approve CI runner access in the browser. Linux requires glibc 2.36 or later, Git,
+the libcap-ng runtime, an unlocked Secret Service keyring, and read/write access
+to `/dev/kvm`. Keep the `hub-forward.service` user service running.
+
+The token stays in the OS credential store. A Windows scheduled task or a
+systemd user service starts at login and restarts the runner after it exits.
+When the Hub changes version, the restarted client updates before requesting work.
+On Linux, use `systemctl --user status guildbotics-runner-7878.service` with the
+forwarded port to check the service. Rejoining revokes that device's previous
+runner token. The runtime is downloaded from the pinned microsandbox release
+and verified with SHA-256 and `msb --version`.
