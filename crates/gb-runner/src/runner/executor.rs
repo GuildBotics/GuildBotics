@@ -936,7 +936,8 @@ struct Restore {
 /// (`.git` included) be at or below a symbolic link of the entry (unpacking
 /// would write through it, wherever it points: [`MEMBERS`] and the entry's
 /// links, both as raw bytes and whatever their number, meet in `awk`; a
-/// `find` that fails, which then prints no last `/`, counts as a link), or
+/// `find` that fails, which then prints no last `/`, and a link whose name
+/// holds a newline, which a line cannot carry, count as links there), or
 /// should the checkout not unpack
 /// over them, it stops there and [`CACHE_DROPPED`] says so: the runner then prepares a new, empty disk without the entry. The
 /// entry's other links stay; a cached path through a link of the commit gets
@@ -961,7 +962,7 @@ fn prepare_script(work: &str, io: &str, restore: Option<&Restore>) -> String {
         };
         // Every component of every member against the entry's links.
         let below = format!(
-            "(cd {work} && awk 'BEGIN {{ f = \"find . -type l && echo /\"; while ((f | getline l) > 0) {{ if (l == \"/\") done = 1; sub(/^\\.\\//, \"\", l); link[l] = 1 }} if (!done) bad = 1 }} {{ n = split($0, c, \"/\"); q = \"\"; for (i = 1; i <= n; i++) {{ if (c[i] == \"\") continue; q = (q == \"\") ? c[i] : (q \"/\" c[i]); if (q in link) bad = 1 }} }} END {{ exit bad }}' {io}/{MEMBERS})"
+            "(cd {work} && nl=$(printf '\\nx') && nl=${{nl%x}} && [ -z \"$(find . -type l -name \"*$nl*\")\" ] && awk 'BEGIN {{ f = \"find . -type l && echo /\"; while ((f | getline l) > 0) {{ if (l == \"/\") done = 1; sub(/^\\.\\//, \"\", l); link[l] = 1 }} if (!done) bad = 1 }} {{ n = split($0, c, \"/\"); q = \"\"; for (i = 1; i <= n; i++) {{ if (c[i] == \"\") continue; q = (q == \"\") ? c[i] : (q \"/\" c[i]); if (q in link) bad = 1 }} }} END {{ exit bad }}' {io}/{MEMBERS})"
         );
         s.push_str(&format!(
             "grown() {{ {grown}; }}\nif ! grown || ! {below} || ! {unpack}; then\n  echo dropped >{io}/{CACHE_DROPPED}\n  exit 0\nfi\n"
@@ -3426,6 +3427,9 @@ esac
             std::os::unix::fs::symlink("../target", work.join(".git/hooks")).unwrap();
             // Links whose names `tar -t` would escape, and one where the
             // commit has a directory member.
+            if name == "newline-link" {
+                std::os::unix::fs::symlink("/tmp", work.join("p\nq")).unwrap();
+            }
             for link in ["build/日本", "a\\b", "deps/module"] {
                 let at = work.join(link);
                 std::fs::create_dir_all(at.parent().unwrap()).unwrap();
@@ -3516,6 +3520,7 @@ esac
             ("through-backslash", true, Some("a\\b/x")),
             ("at-a-link", true, Some("deps/module/")),
             ("no-find", true, None),
+            ("newline-link", true, None),
         ] {
             if name == "failing" {
                 std::fs::write(dir.path().join("resize-fails"), "").unwrap();

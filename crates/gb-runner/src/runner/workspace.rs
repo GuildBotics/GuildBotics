@@ -88,12 +88,20 @@ pub async fn checkout(
 
 /// Writes the names of the members of the archive `tar` to `into`, one per
 /// line, as the bytes of their headers (`tar -t` escapes some): what
-/// unpacking it creates.
+/// unpacking it creates. A name that holds a newline, which a line cannot
+/// carry, fails it.
 pub fn list_members(tar: &Path, into: &Path) -> io::Result<()> {
     let mut out = io::BufWriter::new(fs::File::create(into)?);
     let mut archive = tar::Archive::new(io::BufReader::new(fs::File::open(tar)?));
     for entry in archive.entries()? {
-        io::Write::write_all(&mut out, &entry?.path_bytes())?;
+        let entry = entry?;
+        let name = entry.path_bytes();
+        if name.contains(&b'\n') {
+            return Err(io::Error::other(
+                "a name in the checkout holds a newline, which the list of its members cannot carry",
+            ));
+        }
+        io::Write::write_all(&mut out, &name)?;
         io::Write::write_all(&mut out, b"\n")?;
     }
     io::Write::flush(&mut out)
@@ -886,6 +894,30 @@ mod tests {
         assert!(!tree.exists() && !archive.exists() && !aside.exists());
         assert!(cache.restore("new", &d.join("new.raw")).unwrap().is_some());
         assert_eq!(fs::read(d.join("new.raw")).unwrap(), b"new");
+    }
+
+    /// The members are listed one per line, as their headers' bytes; a name
+    /// with a newline is refused rather than read as two.
+    #[test]
+    fn members_are_listed_as_their_bytes_or_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let (archive, list) = (dir.path().join("c.tar"), dir.path().join("members"));
+        let pack = |names: &[&[u8]]| {
+            let mut tar = tar::Builder::new(Vec::new());
+            for name in names {
+                let mut h = tar::Header::new_gnu();
+                h.set_size(0);
+                h.as_old_mut().name[..name.len()].copy_from_slice(name);
+                h.set_cksum();
+                tar.append(&h, &b""[..]).unwrap();
+            }
+            fs::write(&archive, tar.into_inner().unwrap()).unwrap();
+        };
+        pack(&["日本/a".as_bytes(), b"a\\b"]);
+        list_members(&archive, &list).unwrap();
+        assert_eq!(fs::read(&list).unwrap(), "日本/a\na\\b\n".as_bytes());
+        pack(&[b"a\nb/x"]);
+        assert!(list_members(&archive, &list).is_err());
     }
 
     /// The commit's links come from its index, byte for byte: a link the
