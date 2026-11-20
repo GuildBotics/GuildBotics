@@ -88,8 +88,6 @@ pub struct Check {
     pub artifact_names: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reused_from: Option<ReusedFrom>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_refresh: Option<String>,
     /// When its attempt started and finished.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
@@ -271,24 +269,13 @@ impl Ci {
             attempt: Some(a.number),
             runner: a.runner.clone(),
             details_url: Some(self.job_url(&a.repo_path, &a.id)),
-            details: a
-                .cache_refresh
-                .as_ref()
-                .map(|id| {
-                    format!(
-                        "Reused the result of {}; cache refresh: {}",
-                        self.job_url(&a.repo_path, &source.id),
-                        self.job_url(&a.repo_path, id)
-                    )
-                })
-                .or_else(|| a.display_details()),
+            details: a.display_details(),
             artifact_names: if source.files_pruned {
                 Vec::new()
             } else {
                 source.artifacts.iter().map(|x| x.name.clone()).collect()
             },
             reused_from: self.reused_from(a, result),
-            cache_refresh: a.cache_refresh.clone(),
             started_at: a.started_at.clone(),
             finished_at: a.finished_at.clone(),
             expected_secs: None,
@@ -835,7 +822,7 @@ impl Ci {
     }
 
     /// The first part of a stop (SIGTERM, an update): gives out no more jobs
-    /// and interrupts cache refreshes immediately. It waits for checks, at most
+    /// and waits for running checks, at most
     /// `ci.stop_wait_secs`. The checks
     /// still running then are interrupted and queued again in their place,
     /// ahead of the jobs queued meanwhile (which run after the next start);
@@ -848,14 +835,7 @@ impl Ci {
         // The first count is a write, so it comes after every claim that did
         // not see the service stopping; no claim succeeds after it.
         let store = &self.inner.store;
-        let now = util::now();
-        let (changed, mut running) = store
-            .write(move |w| {
-                let changed = queue::interrupt_refreshes(w, &now)?;
-                Ok((changed, queue::counts(w)?.1))
-            })
-            .await?;
-        self.publish(&changed);
+        let mut running = store.write(|w| Ok(queue::counts(w)?.1)).await?;
         let mut told = 0;
         while running > 0 {
             if Instant::now() >= deadline {
@@ -1681,7 +1661,7 @@ mod tests {
                         ..Default::default()
                     };
                     let done =
-                        queue::finish(w, &c.attempt.id, &c.lease, "success", None, info, 1, now)?;
+                        queue::finish(w, &c.attempt.id, &c.lease, "success", None, info, now)?;
                     source = Some(done.id);
                 }
                 queue::register(w, reg("busy", "main"), 1, now)?;
@@ -1694,114 +1674,6 @@ mod tests {
         let report = ci.head_checks(&repo, "head").await.unwrap();
         assert_eq!(report.checks[0].status, "queued", "{:?}", report.checks[0]);
         assert!(report.checks[0].reused_from.is_none());
-    }
-
-    #[tokio::test]
-    async fn stopping_interrupts_cache_work_immediately_and_preserves_checks() {
-        let (_d, ci, repo) = setup();
-        let now = util::now();
-        let id = repo.id.clone();
-        let path = repo.path.clone();
-        let n = now.clone();
-        let (check_id, refresh_id, lease) = ci
-            .inner
-            .store
-            .write(move |w| {
-                let mut cached = job("test");
-                cached.cache = Some(pipeline::CacheDef {
-                    paths: vec!["target".into()],
-                    key_files: vec![],
-                });
-                let reg = |sha: &str| Registration {
-                    order: Vec::new(),
-                    inputs: Default::default(),
-                    selection: None,
-                    repo: id.clone(),
-                    repo_path: path.clone(),
-                    sha: sha.into(),
-                    tree: Some("tree".into()),
-                    branch: "main".into(),
-                    protected: true,
-                    pipeline: PipelineState::Jobs {
-                        jobs: vec![cached.clone()],
-                    },
-                    network: false,
-                };
-                let digest = format!("sha256:{}", "a".repeat(64));
-                queue::register(w, reg("source"), 10, &n)?;
-                let c = queue::claim(w, "r", 60, &n)?.unwrap();
-                let source = queue::finish(
-                    w,
-                    &c.attempt.id,
-                    &c.lease,
-                    "success",
-                    None,
-                    queue::ResultInfo {
-                        image_digest: Some(digest.clone()),
-                        cache_key: Some("a".repeat(64)),
-                        ..Default::default()
-                    },
-                    10,
-                    &n,
-                )?;
-                queue::register(w, reg("s1"), 10, &n)?;
-                let c = queue::claim(w, "r", 60, &n)?.unwrap();
-                let success = queue::finish(
-                    w,
-                    &c.attempt.id,
-                    &c.lease,
-                    "success",
-                    None,
-                    queue::ResultInfo {
-                        image_digest: Some(digest),
-                        reused_from: Some(source.id),
-                        refresh_cache: true,
-                        ..Default::default()
-                    },
-                    10,
-                    &n,
-                )?;
-                let refresh = queue::claim(w, "r", 60, &n)?.unwrap();
-                assert_eq!(success.cache_refresh.as_ref(), Some(&refresh.attempt.id));
-                Ok((success.id, refresh.attempt.id, refresh.lease))
-            })
-            .await
-            .unwrap();
-        assert!(
-            ci.head_checks(&repo, "s1")
-                .await
-                .unwrap()
-                .checks
-                .iter()
-                .all(Check::succeeded)
-        );
-        let stopped = tokio::time::timeout(Duration::from_millis(500), ci.stop(false))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            stopped, 0,
-            "routine cache interruption is not a check timeout"
-        );
-        assert!(ci.stopping());
-        assert_eq!(
-            ci.head_checks(&repo, "s1").await.unwrap().checks[0]
-                .attempt_id
-                .as_deref(),
-            Some(check_id.as_str())
-        );
-        ci.inner
-            .store
-            .read(move |r| {
-                assert!(queue::leased(r, &refresh_id, &lease, &now).is_err());
-                let attempts = queue::attempts_of(r, &repo.id, "s1")?;
-                let queued = attempts.iter().find(|a| a.status == "queued").unwrap();
-                assert_eq!(queued.purpose, queue::Purpose::CacheRefresh);
-                assert!(queued.after_interrupt);
-                Ok(())
-            })
-            .await
-            .unwrap();
     }
 
     /// A service over `ci`'s store, for tests that register through `App`.
@@ -2146,7 +2018,6 @@ mod tests {
                     "success",
                     None,
                     queue::ResultInfo::default(),
-                    10,
                     &now,
                 )
             })
@@ -2335,7 +2206,6 @@ mod tests {
                         "success",
                         None,
                         queue::ResultInfo::default(),
-                        1,
                         &util::now(),
                     )
                 })
@@ -2397,7 +2267,6 @@ mod tests {
                         "success",
                         None,
                         queue::ResultInfo::default(),
-                        1,
                         &util::now(),
                     )
                 })
@@ -2486,7 +2355,6 @@ mod tests {
                                 conclusion,
                                 None,
                                 queue::ResultInfo::default(),
-                                0,
                                 &util::now(),
                             )
                         })

@@ -55,9 +55,6 @@ struct Classifier {
 }
 
 pub fn class_of(r: &impl Rd, attempt: &queue::Attempt) -> AppResult<Priority> {
-    if attempt.purpose == queue::Purpose::CacheRefresh {
-        return Ok(Priority::reason(Class::Last, "cache refresh"));
-    }
     if attempt.purpose == queue::Purpose::Probe {
         return Ok(Priority::new(Class::Landing));
     }
@@ -73,9 +70,6 @@ impl Snapshot {
     }
 
     pub(crate) fn class_of(&mut self, r: &impl Rd, a: &queue::Attempt) -> AppResult<Priority> {
-        if a.purpose == queue::Purpose::CacheRefresh {
-            return Ok(Priority::reason(Class::Last, "cache refresh"));
-        }
         if a.purpose == queue::Purpose::Probe {
             return Ok(Priority::new(Class::Landing));
         }

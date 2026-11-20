@@ -2243,6 +2243,13 @@ pub fn mark_merged(
         crate::landing::current(w, &repo.id, number)?.map(|e| e.head_sha)
     }
     .or_else(|| Some(merge_sha.to_string()));
+    if repo.is_protected(&p.base)
+        && let Some(head) = &p.merged_head
+        && let Some(mut run) = crate::ci::queue::get_run(w, &repo.id, head)?
+    {
+        run.cache_landed_at.get_or_insert_with(|| now.clone());
+        crate::ci::queue::put_run(w, &run)?;
+    }
     crate::landing::mark_merged(w, &repo.id, number)?;
     p.merged_base = merged_base;
     p.updated_at = now.clone();

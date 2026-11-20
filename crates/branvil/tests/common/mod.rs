@@ -811,22 +811,16 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
 }
 
 /// Recreates the immediately preceding schema in a stopped database.
-pub fn as_schema_37(db: &Path) {
+pub fn as_schema_38(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
-            *v = json!(37);
+            *v = json!(38);
         }
     });
-    edit_records(db, "ci_attempts", |v| {
-        let attempt = v.as_object_mut().unwrap();
-        attempt.remove("allocation");
-        attempt.remove("peak_memory_mib");
+    edit_records(db, "ci_attempts", |v| v["cache_refresh"] = Value::Null);
+    edit_records(db, "ci_runs", |v| {
+        v.as_object_mut().unwrap().remove("cache_landed_at");
     });
-    let memory: redb::TableDefinition<&[u8], &[u8]> = redb::TableDefinition::new("ix_ci_memory");
-    let database = redb::Database::open(db).unwrap();
-    let txn = database.begin_write().unwrap();
-    assert!(txn.delete_table(memory).unwrap());
-    txn.commit().unwrap();
 }
 
 /// Every table of a database, by name, as raw keys and values.

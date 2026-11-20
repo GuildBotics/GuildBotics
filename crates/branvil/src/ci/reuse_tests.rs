@@ -41,7 +41,6 @@ fn run(w: &Wtx, reg: Registration, conclusion: &str, now: &str) -> AppResult<Att
         conclusion,
         None,
         info(None),
-        10,
         now,
     )
 }
@@ -67,7 +66,6 @@ fn reuse(w: &Wtx, c: &Claimed, source: &str, now: &str) -> AppResult<Attempt> {
         "success",
         None,
         info(Some(source)),
-        10,
         now,
     )
 }
@@ -106,7 +104,6 @@ fn any_purpose_supplies_a_source_but_only_actual_kept_successes_of_the_same_job(
     for case in [
         "other_pull",
         "protected",
-        "refresh",
         "definition",
         "network",
         "pruned",
@@ -126,7 +123,6 @@ fn any_purpose_supplies_a_source_but_only_actual_kept_successes_of_the_same_job(
             let first = run(w, source, "success", T0)?;
             let mut changed = first.clone();
             match case {
-                "refresh" => changed.purpose = Purpose::CacheRefresh,
                 "pruned" => changed.files_pruned = true,
                 _ => {}
             }
@@ -203,16 +199,7 @@ fn without_inputs_or_paths_or_on_protected_and_gate_runs_only_the_tree_counts() 
             {
                 jobs[0].paths.clear();
             }
-            let done = finish(
-                w,
-                &c.attempt.id,
-                &c.lease,
-                "success",
-                None,
-                info(None),
-                10,
-                T1,
-            )?;
+            let done = finish(w, &c.attempt.id, &c.lease, "success", None, info(None), T1)?;
             let c = offer(w, same, T2)?;
             assert_eq!(offered(&c), Some((done.id.as_str(), Basis::Tree)), "{case}");
             Ok(())
@@ -249,16 +236,7 @@ fn a_protected_branch_runs_a_paths_reused_job_of_its_commit_again() {
         assert_eq!((c.attempt.sha.as_str(), c.attempt.number), ("h2", 2));
         assert_eq!(c.attempt.cache_scope, "protected");
         assert_eq!(offered(&c), None, "another tree is not reused");
-        let done = finish(
-            w,
-            &c.attempt.id,
-            &c.lease,
-            "success",
-            None,
-            info(None),
-            10,
-            T2,
-        )?;
+        let done = finish(w, &c.attempt.id, &c.lease, "success", None, info(None), T2)?;
         let current = current_attempts(w, "repo_1", "h2", std::slice::from_ref(&done.job))?;
         assert_eq!(current[0].id, done.id);
         assert_ne!(current[0].id, reused.id);

@@ -202,7 +202,7 @@ it once the cause is fixed).
 
 Version 18 → 19 (`src/upgrade.rs`): CI attempts gain automatic-retry lineage,
 runner-wait state, and the delivery time of their recovery notice. Existing
-attempts keep their purpose, result, logs, and cache-refresh associations and
+attempts keep their results and logs and
 start without automatic-retry metadata or pending recovery notices. The
 upgrade rebuilds indexes. It does not schedule retries of historical failures.
 

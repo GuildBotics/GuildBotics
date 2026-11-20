@@ -133,6 +133,8 @@ pub struct Run {
     pub superseded_by: Option<String>,
     /// Protected branches that asked for this run, retained when they move.
     pub protected_branches: Vec<String>,
+    /// The time this exact head was incorporated into a protected branch.
+    pub cache_landed_at: Option<String>,
     /// The input digest of every job of the pipeline with paths, by job
     /// name, as of the latest registration (`Ci::job_inputs`).
     pub inputs: BTreeMap<String, String>,
@@ -162,8 +164,8 @@ pub struct ArtifactMeta {
 #[serde(rename_all = "snake_case")]
 pub enum Purpose {
     Check,
-    CacheRefresh,
     Probe,
+    Historical,
 }
 
 /// An automatic retry belongs to the first failed attempt's retry budget.
@@ -180,8 +182,6 @@ pub struct Attempt {
     pub path_skip: Option<PathSkip>,
     pub id: String,
     pub purpose: Purpose,
-    /// The refresh requested by this reused check, including an existing one.
-    pub cache_refresh: Option<String>,
     pub auto_retry: Option<AutoRetry>,
     /// An absence retry stays queued until a runner claims it.
     pub wait_for_runner: bool,
@@ -196,8 +196,7 @@ pub struct Attempt {
     pub peak_memory_mib: Option<u64>,
     /// The actual execution whose result this attempt reused, reported at finish.
     pub reused_from: Option<String>,
-    /// The computed dependency-cache key; while a refresh is unfinished,
-    /// the key whose save it was requested to refresh.
+    /// The computed dependency-cache key of an execution.
     pub cache_key: Option<String>,
     /// Manual and automatic retries (including interruption requeues) must execute.
     pub allow_reuse: bool,
@@ -289,9 +288,7 @@ impl Attempt {
         match self.purpose {
             Purpose::Check => "retry the job",
             Purpose::Probe => "the narrowing schedules the next probe",
-            Purpose::CacheRefresh => {
-                "no manual retry is needed; a later check will request a new refresh if needed"
-            }
+            Purpose::Historical => "the attempt is historical",
         }
         .into()
     }
@@ -350,16 +347,6 @@ pub fn attempt_index(a: &Attempt) -> Vec<IxEntry> {
             .bytes(),
         value: a.id.as_bytes().to_vec(),
     }];
-    if a.purpose == Purpose::CacheRefresh
-        && a.status != "completed"
-        && let Some(key) = &a.cache_key
-    {
-        out.push(IxEntry {
-            table: store::IX_CI_REFRESH,
-            key: Key::new().s(&a.repo).s(&a.job.name).s(key).bytes(),
-            value: a.id.as_bytes().to_vec(),
-        });
-    }
     if a.status == "completed"
         && a.conclusion.as_deref() == Some("success")
         && a.reused_from.is_none()
@@ -467,6 +454,93 @@ pub fn get_attempt(r: &impl Rd, id: &str) -> AppResult<Option<Attempt>> {
     r.get(store::CI_ATTEMPTS, &Attempt::key(id))
 }
 
+pub(crate) fn keeps_cache(r: &impl Rd, a: &Attempt) -> AppResult<bool> {
+    if a.job.cache.is_none() || a.purpose != Purpose::Check {
+        return Ok(false);
+    }
+    if a.cache_scope == "protected" {
+        return Ok(true);
+    }
+    let Some(run) = get_run(r, &a.repo, &a.sha)? else {
+        return Ok(false);
+    };
+    Ok(run.cache_landed_at.is_some() || cache_head(r, &run)?)
+}
+
+fn cache_head(r: &impl Rd, run: &Run) -> AppResult<bool> {
+    let Some(repo) =
+        r.get::<crate::model::Repo>(store::REPOS, &crate::model::Repo::key(&run.repo))?
+    else {
+        return Ok(false);
+    };
+    for branch in &run.branches {
+        let reference = format!("refs/heads/{branch}");
+        let tip: Option<String> =
+            r.get(store::REFS, &Key::new().s(&run.repo).s(&reference).bytes())?;
+        if tip.as_deref() != Some(&run.sha) {
+            continue;
+        }
+        for (_, value) in r.prefix_raw(
+            store::IX_OPEN_PULLS,
+            &Key::new().s(&run.repo).s(branch).bytes(),
+            None,
+            usize::MAX,
+        )? {
+            let number = String::from_utf8_lossy(&value)
+                .parse()
+                .map_err(AppError::internal)?;
+            let key = crate::model::Pull::key(&run.repo, number);
+            if let Some(pull) = r.get::<crate::model::Pull>(store::PULLS, &key)?
+                && repo.is_protected(&pull.base)
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+pub(crate) fn cache_decision(
+    r: &impl Rd,
+    runner: &str,
+    id: &str,
+) -> AppResult<gb_runner::ci::api::CacheDecision> {
+    use gb_runner::ci::api::CacheDecision::{Discard, Keep, Publish};
+    let Some(a) = get_attempt(r, id)? else {
+        return Ok(Discard);
+    };
+    if a.runner
+        .as_deref()
+        .is_none_or(|name| util::fold(name) != util::fold(runner))
+        || a.purpose != Purpose::Check
+        || a.job.cache.is_none()
+    {
+        return Ok(Discard);
+    }
+    if a.status == "in_progress" {
+        return Ok(Keep);
+    }
+    if a.conclusion.as_deref() != Some("success")
+        || a.reused_from.is_some()
+        || a.cache_key.is_none()
+    {
+        return Ok(Discard);
+    }
+    let Some(run) = get_run(r, &a.repo, &a.sha)? else {
+        return Ok(Discard);
+    };
+    let at = if a.cache_scope == "protected" {
+        a.finished_at.as_deref()
+    } else {
+        run.cache_landed_at.as_deref()
+    };
+    if let Some(at) = at {
+        let at = chrono::DateTime::parse_from_rfc3339(at).map_err(AppError::internal)?;
+        return Ok(Publish(at.to_utc()));
+    }
+    Ok(if cache_head(r, &run)? { Keep } else { Discard })
+}
+
 /// Every attempt of a commit, in (job, number) order.
 pub fn attempts_of(r: &impl Rd, repo: &str, sha: &str) -> AppResult<Vec<Attempt>> {
     let prefix = Key::new().s(repo).s(sha).bytes();
@@ -503,11 +577,8 @@ pub fn current_attempts(
 
 /// The jobs of `run`'s pipeline that have no current attempt, or whose
 /// current attempt ended because the commit was replaced, and, once a
-/// protected branch wants the commit (a fast-forward merge), the jobs with a
-/// dependency cache whose current attempt ran for a pull request (only a
-/// protected branch's run saves the cache) and the jobs whose current
-/// attempt reused another tree's result by the contents of paths (a
-/// protected branch's check is an actual run): they run again as one.
+/// protected branch wants the commit (a fast-forward merge), the jobs whose
+/// current attempt reused another tree's result by the contents of paths.
 pub(super) fn jobs_to_run(r: &impl Rd, run: &Run) -> AppResult<Vec<JobDef>> {
     let PipelineState::Jobs { jobs } = &run.pipeline else {
         return Ok(Vec::new());
@@ -526,10 +597,6 @@ pub(super) fn jobs_to_run(r: &impl Rd, run: &Run) -> AppResult<Vec<JobDef>> {
                     && a.cache_scope != "protected")
                     || a.superseded
                     || a.path_skip.is_some()
-                    || (protected
-                        && j.cache.is_some()
-                        && a.status != "queued"
-                        && a.cache_scope != "protected")
                     || ((protected || repair) && source_of(r, a)?.basis == Some(Basis::Paths))
             }
         };
@@ -552,6 +619,7 @@ fn next_number(r: &impl Rd, repo: &str, sha: &str, job: &str) -> AppResult<u64> 
 }
 
 /// Queued attempts, up to `limit`.
+#[cfg(test)]
 pub fn pending_count(r: &impl Rd, limit: usize) -> AppResult<usize> {
     Ok(r.prefix_raw(store::IX_CI_PENDING, &[], None, limit)?.len())
 }
@@ -619,7 +687,6 @@ fn new_job(
         path_skip: None,
         id: util::new_id("att"),
         purpose: Purpose::Check,
-        cache_refresh: None,
         auto_retry: None,
         wait_for_runner: false,
         repo: repo.into(),
@@ -699,6 +766,7 @@ pub fn register(w: &Wtx, reg: Registration, queue_max: usize, now: &str) -> AppR
             }
             if reg.protected {
                 run.cache_scope = scope;
+                run.cache_landed_at.get_or_insert_with(|| now.to_owned());
                 if !run.protected_branches.contains(&reg.branch) {
                     run.protected_branches.push(reg.branch.clone());
                 }
@@ -731,6 +799,7 @@ pub fn register(w: &Wtx, reg: Registration, queue_max: usize, now: &str) -> AppR
             } else {
                 vec![]
             },
+            cache_landed_at: reg.protected.then(|| now.to_owned()),
             branches: vec![reg.branch],
             pipeline: reg.pipeline,
             cache_scope: scope,
@@ -785,19 +854,6 @@ pub fn register(w: &Wtx, reg: Registration, queue_max: usize, now: &str) -> AppR
     }
     let queued = !run.waiting && {
         let todo = jobs_to_run(w, &run)?;
-        // A pull request's job still running stops: its protected branch's
-        // runs instead.
-        for a in current_attempts(w, &run.repo, &run.sha, &todo)? {
-            if a.status == "in_progress" && !a.superseded && a.cache_scope != "protected" {
-                stop(
-                    w,
-                    &a,
-                    "Stopped: it runs again as a protected branch's job, which saves the cache.",
-                    false,
-                    now,
-                )?;
-            }
-        }
         admit_jobs(w, &mut run, &todo, &reg.order, reg.network, queue_max, now)?
     };
     let changed = old.as_ref() != Some(&run);
@@ -1137,7 +1193,6 @@ fn reuse_candidate(a: &Attempt, sources: &[Attempt]) -> Option<Reuse> {
             attempt_id: source.id.clone(),
             sha: source.sha.clone(),
             image_digest: source.image_digest.clone().unwrap(),
-            cache_key: source.cache_key.clone(),
             basis: basis(a),
         })
 }
@@ -1453,7 +1508,6 @@ pub fn heartbeat(w: &Wtx, id: &str, lease: &str, lease_secs: u64, now: &str) -> 
 
 /// Concludes a leased attempt with the runner's result. A cancellation that
 /// was requested wins over the reported conclusion.
-#[allow(clippy::too_many_arguments)]
 pub fn finish(
     w: &Wtx,
     id: &str,
@@ -1461,7 +1515,6 @@ pub fn finish(
     conclusion: &str,
     details: Option<String>,
     info: ResultInfo,
-    queue_max: usize,
     now: &str,
 ) -> AppResult<Attempt> {
     if !CONCLUSIONS.contains(&conclusion) && conclusion != "deferred" {
@@ -1502,14 +1555,6 @@ pub fn finish(
             "cache_key must be a SHA-256 key of a job with a cache.",
         ));
     }
-    if info.refresh_cache
-        && (info.reused_from.is_none() || a.cache_scope != "protected" || a.job.cache.is_none())
-    {
-        return Err(AppError::invalid(
-            "refresh_cache requires a reused protected cache job.",
-        ));
-    }
-    let mut refresh_key = None;
     let mut rerun = None;
     if let Some(id) = &info.reused_from {
         let source = get_attempt(w, id)?.ok_or_else(|| AppError::invalid("No reuse source."))?;
@@ -1521,9 +1566,6 @@ pub fn finish(
             return Err(AppError::invalid(
                 "The reuse source must be a successful execution of the same tree (or contents of paths), job, network, and image.",
             ));
-        }
-        if info.refresh_cache {
-            refresh_key = source.cache_key.clone();
         }
         // A protected branch came to want the commit after the claim: its
         // check must be an actual run or a reuse of the same tree.
@@ -1564,9 +1606,6 @@ pub fn finish(
     } else {
         conclude(&mut a, conclusion, details, now);
         a.reused_from = info.reused_from;
-        if let Some(key) = refresh_key {
-            a.cache_refresh = enqueue_refresh(w, &a, &key, queue_max, now)?;
-        }
     }
     let next = if matches!(a.conclusion.as_deref(), Some("failure" | "timed_out")) {
         prepare_auto_retry(w, &a, false, now)?
@@ -1627,38 +1666,6 @@ fn prepare_auto_retry(
     Ok(Some(next))
 }
 
-/// One unfinished refresh per repository, job name, and cache key. Refreshes
-/// use the same bounded queue as checks, but never make a run wait for room.
-fn enqueue_refresh(
-    w: &Wtx,
-    check: &Attempt,
-    key: &str,
-    queue_max: usize,
-    now: &str,
-) -> AppResult<Option<String>> {
-    let prefix = Key::new().s(&check.repo).s(&check.job.name).s(key).bytes();
-    if let Some((_, id)) = w
-        .prefix_raw(store::IX_CI_REFRESH, &prefix, None, 1)?
-        .into_iter()
-        .next()
-    {
-        return Ok(Some(String::from_utf8_lossy(&id).into_owned()));
-    }
-    if pending_count(w, queue_max + 1)? >= queue_max {
-        return Ok(None);
-    }
-    let run = get_run(w, &check.repo, &check.sha)?
-        .ok_or_else(|| AppError::internal("attempt without a run"))?;
-    let mut a = new_attempt(w, &run, &check.job, check.network, now)?;
-    a.purpose = Purpose::CacheRefresh;
-    a.cache_scope = "protected".into();
-    a.cache_key = Some(key.into());
-    a.allow_reuse = false;
-    let id = a.id.clone();
-    put_attempt(w, None, &a)?;
-    Ok(Some(id))
-}
-
 /// Records an uploaded artifact (the file is already in place).
 pub fn add_artifact(
     w: &Wtx,
@@ -1699,11 +1706,9 @@ pub fn retry(w: &Wtx, id: &str, queue_max: usize, now: &str) -> AppResult<Attemp
     let old =
         get_attempt(w, id)?.ok_or_else(|| AppError::not_found(format!("No CI attempt {id}.")))?;
     if old.purpose != Purpose::Check {
-        return Err(AppError::conflict(match old.purpose {
-            Purpose::CacheRefresh => "Cache refresh attempts cannot be manually retried.",
-            Purpose::Probe => "Probe attempts cannot be manually retried.",
-            Purpose::Check => unreachable!(),
-        }));
+        return Err(AppError::conflict(
+            "Only check attempts can be manually retried.",
+        ));
     }
     if old.status != "completed" {
         return Err(AppError::conflict(format!(
@@ -1832,18 +1837,6 @@ pub fn running_by_runner(r: &impl Rd) -> AppResult<BTreeMap<String, usize>> {
         }
     }
     Ok(counts)
-}
-
-/// Cache work must not hold up a restart. Called after claims are disabled.
-pub fn interrupt_refreshes(w: &Wtx, now: &str) -> AppResult<Vec<(String, String)>> {
-    let mut changed = Vec::new();
-    for a in active(w)? {
-        if a.purpose == Purpose::CacheRefresh {
-            interrupt(w, &a, "Branvil stopped during cache refresh", now)?;
-            changed.push((a.repo_path, a.sha));
-        }
-    }
-    Ok(changed)
 }
 
 /// Requeue the same work at its original position without carrying runner state.
@@ -2088,7 +2081,6 @@ mod tests {
                         peak_memory_mib: Some(peak),
                         ..Default::default()
                     },
-                    10,
                     T1,
                 )?;
             }
@@ -2202,7 +2194,6 @@ mod tests {
                     image_digest: Some(image.digest.clone()),
                     ..Default::default()
                 },
-                10,
                 T0,
             )?;
             let mut next = reg("same-tree", "another", &["test"]);
@@ -2233,7 +2224,6 @@ mod tests {
                 "deferred",
                 None,
                 ResultInfo::default(),
-                10,
                 T0,
             )?;
             assert_eq!(pending.status, "queued");
@@ -2334,7 +2324,6 @@ mod tests {
                         if n % 2 == 0 { "timed_out" } else { "failure" },
                         Some("exit 1".into()),
                         ResultInfo::default(),
-                        1,
                         T0,
                     )?;
                     let current = latest_attempts(w, "repo_1", "sha")?.remove(0);
@@ -2379,7 +2368,6 @@ mod tests {
         for case in [
             "pr",
             "optional",
-            "refresh",
             "startup",
             "cancelled",
             "skipped",
@@ -2399,11 +2387,6 @@ mod tests {
                 };
                 register(w, reg("sha", branch, &[name]), 10, T0)?;
                 let c = claim(w, "r", 60, T0)?.unwrap();
-                if case == "refresh" {
-                    let mut a = c.attempt.clone();
-                    a.purpose = Purpose::CacheRefresh;
-                    put_attempt(w, Some(&c.attempt), &a)?;
-                }
                 match case {
                     "cancel_request" => {
                         cancel(w, &c.attempt.id, "owner", T0)?;
@@ -2430,7 +2413,6 @@ mod tests {
                     conclusion,
                     None,
                     ResultInfo::default(),
-                    10,
                     T0,
                 )?;
                 assert_eq!(
@@ -2579,7 +2561,6 @@ mod tests {
                 "success",
                 None,
                 ResultInfo::default(),
-                10,
                 T2,
             )?;
             let manual = retry(w, &success.id, 10, T2)?;
@@ -2592,7 +2573,6 @@ mod tests {
                 "failure",
                 None,
                 ResultInfo::default(),
-                10,
                 T2,
             )?;
             let auto = latest_attempts(w, "repo_1", "sha")?.remove(0);
@@ -2654,7 +2634,6 @@ mod tests {
                         "failure",
                         None,
                         ResultInfo::default(),
-                        0,
                         T1,
                     )?;
                 }
@@ -2923,7 +2902,6 @@ mod tests {
                     image_digest: Some(DIGEST.into()),
                     ..Default::default()
                 },
-                10,
                 now,
             )
         })
@@ -2958,291 +2936,55 @@ mod tests {
                     cache_key: Some(CACHE_KEY.into()),
                     ..Default::default()
                 },
-                10,
                 T1,
             )
         })
         .unwrap()
     }
 
-    fn refresh_check(w: &Wtx, source: &Attempt, sha: &str, max: usize) -> AppResult<Attempt> {
-        register(w, cached(sha), 10, T1)?;
-        // Choose this check even while older refresh work waits.
-        let a = latest_attempts(w, "repo_1", sha)?.pop().unwrap();
-        let mut selected = a.clone();
-        selected.seq = 0;
-        put_attempt(w, Some(&a), &selected)?;
-        let c = claim(w, "runner", 60, T1)?.unwrap();
-        assert_eq!(c.attempt.id, a.id);
-        finish(
-            w,
-            &c.attempt.id,
-            &c.lease,
-            "success",
-            None,
-            ResultInfo {
-                image_digest: Some(DIGEST.into()),
-                reused_from: Some(source.id.clone()),
-                refresh_cache: true,
-                ..Default::default()
-            },
-            max,
-            T1,
-        )
-    }
-
     #[test]
-    fn refresh_is_not_a_check_and_is_deduplicated_while_queued_and_running() {
-        let (_d, s) = store();
-        let source = cached_source(&s);
-        s.write_sync(|w| {
-            let first = refresh_check(w, &source, "s1", 10)?;
-            let id = first.cache_refresh.clone().unwrap();
-            let second = refresh_check(w, &source, "s2", 10)?;
-            assert_eq!(second.cache_refresh.as_ref(), Some(&id));
-            let refresh = claim(w, "runner", 60, T1)?.unwrap();
-            assert_eq!(refresh.attempt.id, id);
-            assert_eq!(refresh.attempt.purpose, Purpose::CacheRefresh);
-            assert!(refresh.reuse.is_none());
-            let third = refresh_check(w, &source, "s3", 10)?;
-            assert_eq!(third.cache_refresh.as_ref(), Some(&id));
-            branch_left(w, "repo_1", "s1", "main", "s2", T1)?;
-            assert!(!get_attempt(w, &id)?.unwrap().cancel_requested);
-            for sha in ["s1", "s2", "s3"] {
-                let checks = latest_attempts(w, "repo_1", sha)?;
-                assert_eq!(checks.len(), 1);
-                assert_eq!(checks[0].conclusion.as_deref(), Some("success"));
-            }
-            finish(
-                w,
-                &id,
-                &refresh.lease,
-                "failure",
-                None,
-                ResultInfo::default(),
-                10,
-                T1,
-            )?;
-            assert_eq!(latest_attempts(w, "repo_1", "s1")?[0].id, first.id);
-            assert!(
-                w.prefix_raw(store::IX_CI_REFRESH, &[], None, 10)?
-                    .is_empty()
-            );
-            let fourth = refresh_check(w, &source, "s4", 10)?;
-            assert_ne!(fourth.cache_refresh, Some(id));
-            assert!(crate::model::index_problems(w)?.is_empty());
-            Ok(())
-        })
-        .unwrap();
-    }
-
-    #[test]
-    fn refresh_queue_full_and_cancelled_check_do_not_block_success_or_enqueue() {
-        let (_d, s) = store();
-        let source = cached_source(&s);
-        s.write_sync(|w| {
-            let check = refresh_check(w, &source, "s1", 0)?;
-            assert!(check.cache_refresh.is_none());
-            assert_eq!(check.conclusion.as_deref(), Some("success"));
-            assert!(!get_run(w, "repo_1", "s1")?.unwrap().waiting);
-            register(w, cached("s2"), 10, T1)?;
-            let c = claim(w, "runner", 60, T1)?.unwrap();
-            branch_left(w, "repo_1", "s2", "main", "s3", T1)?;
-            let cancelled = finish(
-                w,
-                &c.attempt.id,
-                &c.lease,
-                "success",
-                None,
-                ResultInfo {
-                    image_digest: Some(DIGEST.into()),
-                    reused_from: Some(source.id),
-                    refresh_cache: true,
-                    ..Default::default()
-                },
-                10,
-                T1,
-            )?;
-            assert_eq!(cancelled.conclusion.as_deref(), Some("cancelled"));
-            assert!(cancelled.cache_refresh.is_none());
-            assert_eq!(pending_count(w, 10)?, 0);
-            Ok(())
-        })
-        .unwrap();
-    }
-
-    #[test]
-    fn refresh_survives_departure_and_interrupt_and_its_success_is_reusable() {
-        for stop in [false, true] {
-            let (_d, s) = store();
-            let source = cached_source(&s);
-            s.write_sync(|w| {
-                let check = refresh_check(w, &source, "s1", 10)?;
-                let id = check.cache_refresh.unwrap();
-                branch_left(w, "repo_1", "s1", "main", "s2", T1)?;
-                assert_eq!(get_attempt(w, &id)?.unwrap().status, "queued");
-                let c = claim(w, "runner", 60, T1)?.unwrap();
-                if stop {
-                    interrupt_refreshes(w, T1)?;
-                } else {
-                    expire(w, T2)?;
+    fn previous_schema_keeps_old_executions_and_stops_queued_cache_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = crate::config::Layout::new(dir.path());
+        let path = layout.db();
+        let db = Store::open(&path, 1 << 20, 1).unwrap();
+        let source = cached_source(&db);
+        let pending = db
+            .write_sync(|w| {
+                register(w, cached("pending"), 10, T1)?;
+                let pending = attempts_of(w, &source.repo, "pending")?.remove(0);
+                for a in [&source, &pending] {
+                    let mut record = serde_json::to_value(a).map_err(AppError::internal)?;
+                    record["purpose"] = "cache_refresh".into();
+                    record["cache_refresh"] = serde_json::Value::Null;
+                    w.put(store::CI_ATTEMPTS, &Attempt::key(&a.id), &record)?;
                 }
-                assert!(
-                    finish(
-                        w,
-                        &id,
-                        &c.lease,
-                        "success",
-                        None,
-                        ResultInfo::default(),
-                        10,
-                        T2
-                    )
-                    .is_err()
-                );
-                let next = claim(w, "runner", 600, T2)?.unwrap();
-                assert_eq!(next.attempt.purpose, Purpose::CacheRefresh);
-                assert_eq!(next.attempt.cache_key.as_deref(), Some(CACHE_KEY));
-                assert_eq!(next.attempt.cache_scope, "protected");
-                assert!(next.reuse.is_none());
-                let success = finish(
-                    w,
-                    &next.attempt.id,
-                    &next.lease,
-                    "success",
-                    None,
-                    ResultInfo {
-                        image_digest: Some(DIGEST.into()),
-                        cache_key: Some(CACHE_KEY.into()),
-                        ..Default::default()
-                    },
-                    10,
-                    T3,
+                w.put(
+                    store::META,
+                    &Key::new().s("schema_version").bytes(),
+                    &crate::upgrade::FROM,
                 )?;
-                register(w, cached("s3"), 10, T3)?;
-                assert_eq!(
-                    claim(w, "runner", 60, T3)?
-                        .unwrap()
-                        .reuse
-                        .unwrap()
-                        .attempt_id,
-                    success.id
-                );
-                assert_eq!(
-                    latest_attempts(w, "repo_1", "s1")?[0].conclusion.as_deref(),
-                    Some("success")
-                );
-
-                Ok(())
+                Ok(pending)
             })
             .unwrap();
-        }
-    }
-
-    #[test]
-    fn recovery_guidance_matches_the_purpose_and_refresh_can_be_requested_again() {
-        for purpose in [Purpose::Check, Purpose::CacheRefresh] {
-            for cause in ["lease", "stop", "no_runner"] {
-                let (_d, s) = store();
-                let source = cached_source(&s);
-                s.write_sync(|w| {
-                    let id = if purpose == Purpose::CacheRefresh {
-                        refresh_check(w, &source, "s1", 10)?.cache_refresh.unwrap()
-                    } else {
-                        register(w, cached("s1"), 10, T1)?;
-                        latest_attempts(w, "repo_1", "s1")?.pop().unwrap().id
-                    };
-                    let final_id = if cause == "no_runner" {
-                        fail_queued(w, T2, "Start the runner", T2)?;
-                        id
-                    } else {
-                        claim(w, "runner", 60, T1)?.unwrap();
-                        if cause == "lease" {
-                            expire(w, T2)?;
-                        } else {
-                            interrupt_running(w, None, "service stopped", T2)?;
-                        }
-                        let again = claim(w, "runner", 60, T2)?.unwrap();
-                        if cause == "lease" {
-                            expire(w, T3)?;
-                        } else {
-                            interrupt_running(w, None, "service stopped", T3)?;
-                        }
-                        again.attempt.id
-                    };
-                    let ended = get_attempt(w, &final_id)?.unwrap();
-                    let details = ended.details.unwrap();
-                    assert_eq!(ended.purpose, purpose);
-                    assert_eq!(ended.status, "completed");
-                    if purpose == Purpose::Check {
-                        assert!(details.contains("retry the job"), "{cause}: {details}");
-                        assert_eq!(retry(w, &final_id, 10, T3)?.purpose, Purpose::Check);
-                    } else {
-                        assert!(!details.contains("retry the job"), "{cause}: {details}");
-                        assert!(
-                            details.contains("no manual retry is needed"),
-                            "{cause}: {details}"
-                        );
-                        assert!(details.contains("later check"), "{cause}: {details}");
-                        assert!(
-                            w.prefix_raw(store::IX_CI_REFRESH, &[], None, 10)?
-                                .is_empty()
-                        );
-                        let fresh = refresh_check(w, &source, "s2", 10)?.cache_refresh.unwrap();
-                        assert_ne!(fresh, final_id);
-                        assert_eq!(
-                            get_attempt(w, &fresh)?.unwrap().purpose,
-                            Purpose::CacheRefresh
-                        );
-                    }
-                    Ok(())
-                })
-                .unwrap();
-            }
-        }
-    }
-
-    #[test]
-    fn refresh_retry_is_explicitly_refused_in_every_state() {
-        for state in ["queued", "in_progress", "completed"] {
-            let (_d, s) = store();
-            let source = cached_source(&s);
-            s.write_sync(|w| {
-                let check = refresh_check(w, &source, "s1", 10)?;
-                let id = check.cache_refresh.unwrap();
-                if state != "queued" {
-                    let c = claim(w, "runner", 60, T1)?.unwrap();
-                    if state == "completed" {
-                        finish(
-                            w,
-                            &id,
-                            &c.lease,
-                            "failure",
-                            None,
-                            ResultInfo::default(),
-                            10,
-                            T1,
-                        )?;
-                    }
-                }
-                let refused = retry(w, &id, 0, T1).unwrap_err();
-                assert_eq!(refused.code, "conflict");
-                assert_eq!(
-                    refused.message,
-                    "Cache refresh attempts cannot be manually retried."
-                );
-                if state == "completed" {
-                    let next = retry(w, &check.id, 10, T1)?;
-                    assert_eq!(next.purpose, Purpose::Check);
-                    assert_eq!(
-                        next.number, 3,
-                        "check and refresh share the job's numbering"
-                    );
-                }
-                Ok(())
-            })
-            .unwrap();
-        }
+        drop(db);
+        assert!(store::check_version(&path).is_err());
+        let changed = crate::upgrade::upgrade(&layout).unwrap().unwrap();
+        assert!(changed.copy.is_file());
+        let db = Store::open(&path, 1 << 20, 1).unwrap();
+        db.read_sync(|r| {
+            let mut completed = get_attempt(r, &source.id)?.unwrap();
+            assert_eq!(completed.purpose, Purpose::Historical);
+            completed.purpose = source.purpose;
+            assert_eq!(completed, source);
+            let retired = get_attempt(r, &pending.id)?.unwrap();
+            assert_eq!(retired.purpose, Purpose::Historical);
+            assert_eq!(retired.conclusion.as_deref(), Some("cancelled"));
+            assert_eq!(pending_count(r, 10)?, 0);
+            assert!(crate::model::index_problems(r)?.is_empty());
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -3330,7 +3072,7 @@ mod tests {
     }
 
     #[test]
-    fn claims_carry_the_runs_input_digest_of_their_job_for_every_purpose() {
+    fn claims_carry_the_runs_input_digest_of_their_job() {
         let (_d, s) = store();
         s.write_sync(|w| {
             let mut reg = reg("s1", "main", &["test", "plain"]);
@@ -3347,26 +3089,6 @@ mod tests {
                     ("test".to_string(), Some("d1".to_string())),
                 ])
             );
-            Ok(())
-        })
-        .unwrap();
-        let source = cached_source(&s);
-        s.write_sync(|w| {
-            let check = refresh_check(w, &source, "s2", 10)?;
-            register(
-                w,
-                Registration {
-                    order: Vec::new(),
-                    inputs: BTreeMap::from([("test".to_string(), "d2".to_string())]),
-                    ..cached("s2")
-                },
-                10,
-                T1,
-            )?;
-            let refresh = claim(w, "runner", 60, T1)?.unwrap().attempt;
-            assert_eq!(Some(refresh.id), check.cache_refresh);
-            assert_eq!(refresh.purpose, Purpose::CacheRefresh);
-            assert_eq!(refresh.inputs.as_deref(), Some("d2"));
             Ok(())
         })
         .unwrap();
@@ -3393,7 +3115,7 @@ mod tests {
                     image_digest: Some(DIGEST.into()),
                     ..Default::default()
                 };
-                let done = finish(w, &c.attempt.id, &c.lease, conclusion, None, info, 10, T0)?;
+                let done = finish(w, &c.attempt.id, &c.lease, conclusion, None, info, T0)?;
                 if case == "pruned" {
                     mark_pruned(w, &done.id)?;
                 }
@@ -3417,7 +3139,7 @@ mod tests {
                         reused_from: Some(done.id.clone()),
                         ..Default::default()
                     };
-                    finish(w, &c.attempt.id, &c.lease, "success", None, info, 10, T1)?;
+                    finish(w, &c.attempt.id, &c.lease, "success", None, info, T1)?;
                     assert_eq!(by_inputs(w)?, found);
                 }
                 Ok(())
@@ -3441,11 +3163,10 @@ mod tests {
                 reused_from: Some(second.id.clone()),
                 cache_key: None,
                 peak_memory_mib: None,
-                refresh_cache: false,
             };
             let mut invalid = info.clone();
             invalid.image_digest = None;
-            assert!(finish(w, &c.attempt.id, &c.lease, "success", None, invalid, 10, T2).is_err());
+            assert!(finish(w, &c.attempt.id, &c.lease, "success", None, invalid, T2).is_err());
             assert!(
                 finish(
                     w,
@@ -3454,12 +3175,11 @@ mod tests {
                     "failure",
                     None,
                     info.clone(),
-                    10,
                     T2
                 )
                 .is_err()
             );
-            let done = finish(w, &c.attempt.id, &c.lease, "success", None, info, 10, T2)?;
+            let done = finish(w, &c.attempt.id, &c.lease, "success", None, info, T2)?;
             assert_eq!(done.reused_from.as_deref(), Some(second.id.as_str()));
             register(w, same_tree("s4"), 10, T3)?;
             let next = claim(w, "r", 60, T3)?.unwrap();
@@ -3501,9 +3221,7 @@ mod tests {
                     reused_from: Some(source.id.clone()),
                     cache_key: None,
                     peak_memory_mib: None,
-                    refresh_cache: false,
                 },
-                10,
                 T1,
             )?;
             assert_eq!(done.reused_from.as_deref(), Some(source.id.as_str()));
@@ -3532,7 +3250,6 @@ mod tests {
                     image_digest: Some(DIGEST.into()),
                     ..Default::default()
                 },
-                10,
                 T1,
             )?;
             admit_waiting(w, 1, &BTreeMap::new(), T1)?;
@@ -3561,9 +3278,8 @@ mod tests {
                 reused_from: Some(source.id.clone()),
                 cache_key: None,
                 peak_memory_mib: None,
-                refresh_cache: false,
             };
-            assert!(finish(w, &c.attempt.id, &c.lease, "success", None, info, 10, T1).is_err());
+            assert!(finish(w, &c.attempt.id, &c.lease, "success", None, info, T1).is_err());
             expire(w, T2)?;
             let next = claim(w, "r", 60, T2)?.unwrap();
             assert!(!next.attempt.allow_reuse && next.reuse.is_none());
@@ -3588,7 +3304,6 @@ mod tests {
                             "failure",
                             None,
                             ResultInfo::default(),
-                            10,
                             T0,
                         )?;
                         if departure_first {
@@ -3624,10 +3339,8 @@ mod tests {
         }
     }
 
-    /// A fast-forward merge: main comes to want a commit whose jobs ran for
-    /// the pull request. The jobs with a cache run again, once, as main's.
     #[test]
-    fn a_protected_branch_runs_the_cached_jobs_of_a_pull_requests_commit_again() {
+    fn a_fast_forward_lands_the_cached_head_without_queuing_another_attempt() {
         let (_d, s) = store();
         let mut pr = reg("s1", "feature", &["build", "lint"]);
         let PipelineState::Jobs { jobs } = &mut pr.pipeline else {
@@ -3654,7 +3367,6 @@ mod tests {
                         cache_key: c.attempt.job.cache.as_ref().map(|_| CACHE_KEY.into()),
                         ..Default::default()
                     },
-                    10,
                     T1,
                 )
             })
@@ -3667,20 +3379,23 @@ mod tests {
             ..reg("s1", "main", &[])
         };
         assert!(s.write_sync(|w| register(w, merged(), 10, T2)).unwrap());
-        let c = s.write_sync(|w| claim(w, "r", 60, T2)).unwrap().unwrap();
-        assert_eq!(
-            (c.attempt.job.name.as_str(), c.attempt.number),
-            ("build", 2)
-        );
-        assert_eq!(c.attempt.cache_scope, "protected");
-        assert!(
-            c.reuse.is_some(),
-            "a fast-forward merge may reuse the same commit's completed PR execution"
-        );
-        assert!(
-            s.write_sync(|w| claim(w, "r", 60, T2)).unwrap().is_none(),
-            "lint has no cache"
-        );
+        s.read_sync(|r| {
+            use gb_runner::ci::api::CacheDecision;
+            let attempts = attempts_of(r, "repo_1", "s1")?;
+            assert_eq!(attempts.len(), 2);
+            let build = attempts.iter().find(|a| a.job.name == "build").unwrap();
+            assert!(matches!(
+                cache_decision(r, "r", &build.id)?,
+                CacheDecision::Publish(_)
+            ));
+            assert!(matches!(
+                cache_decision(r, "other", &build.id)?,
+                CacheDecision::Discard
+            ));
+            Ok(())
+        })
+        .unwrap();
+        assert!(s.write_sync(|w| claim(w, "r", 60, T2)).unwrap().is_none());
         // Registered again (the reconciler), nothing more runs.
         s.write_sync(|w| register(w, merged(), 10, T3)).unwrap();
         assert!(s.write_sync(|w| claim(w, "r", 60, T3)).unwrap().is_none());
@@ -3725,7 +3440,6 @@ mod tests {
                 "success",
                 None,
                 ResultInfo::default(),
-                10,
                 T1,
             )
         });
@@ -3741,7 +3455,6 @@ mod tests {
                     image_digest: Some("sha256:x".into()),
                     ..Default::default()
                 },
-                10,
                 T1,
             )
         });
@@ -3758,7 +3471,6 @@ mod tests {
                         image_digest: Some(DIGEST.into()),
                         ..Default::default()
                     },
-                    10,
                     T1,
                 )
             })
@@ -3774,7 +3486,6 @@ mod tests {
                 "success",
                 None,
                 ResultInfo::default(),
-                10,
                 T1,
             )
         });
@@ -3811,7 +3522,6 @@ mod tests {
                 "success",
                 None,
                 ResultInfo::default(),
-                10,
                 T2,
             )
         });
@@ -3905,7 +3615,6 @@ mod tests {
                     "success",
                     None,
                     ResultInfo::default(),
-                    10,
                     T1,
                 )
             })
@@ -4042,7 +3751,6 @@ mod tests {
                 "failure",
                 None,
                 ResultInfo::default(),
-                10,
                 T2,
             )
         })
@@ -4108,7 +3816,6 @@ mod tests {
                 "success",
                 None,
                 ResultInfo::default(),
-                10,
                 T0,
             )
         })
@@ -4154,7 +3861,6 @@ mod tests {
                     "success",
                     None,
                     ResultInfo::default(),
-                    10,
                     T0,
                 )
             })
@@ -4311,7 +4017,6 @@ mod tests {
                 "failure",
                 None,
                 ResultInfo::default(),
-                0,
                 T1,
             )?;
             let next = latest_attempts(w, "repo_1", "sha")?.remove(0);
@@ -4347,7 +4052,6 @@ mod tests {
                             "failure",
                             None,
                             ResultInfo::default(),
-                            1,
                             T1,
                         )?;
                         last = Some(c.attempt.id);
@@ -4407,7 +4111,6 @@ mod tests {
                 "success",
                 None,
                 ResultInfo::default(),
-                10,
                 T0,
             )?;
             let before = current_attempts(w, "repo_1", "base", &[job("test")])?;
@@ -4429,7 +4132,6 @@ mod tests {
                     image_digest: Some(DIGEST.into()),
                     ..Default::default()
                 },
-                10,
                 T0,
             )?;
             assert_eq!(
@@ -4459,7 +4161,6 @@ mod tests {
                 "failure",
                 None,
                 ResultInfo::default(),
-                10,
                 T0,
             )?;
             assert!(claim(w, "r", 60, T0)?.is_none());
@@ -4493,7 +4194,6 @@ mod tests {
                 "success",
                 None,
                 ResultInfo::default(),
-                10,
                 T0,
             )?;
             probe(w, &repo, "base", &jobs[0], 10, T0)?.unwrap();
@@ -4510,7 +4210,6 @@ mod tests {
                     image_digest: Some(DIGEST.into()),
                     ..Default::default()
                 },
-                10,
                 T0,
             )?;
             let indexed = by_inputs(w)?;
@@ -4537,7 +4236,6 @@ mod tests {
                     image_digest: Some(DIGEST.into()),
                     ..Default::default()
                 },
-                10,
                 T0,
             )?;
             assert_eq!(by_inputs(w)?, indexed);

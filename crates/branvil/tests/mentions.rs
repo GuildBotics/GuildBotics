@@ -253,7 +253,7 @@ async fn upgrade_preserves_resolved_mentions_and_their_index() {
     let before = w.server.ok(&query(), &w.aiko).await;
     w.server.stop();
     let db = w.server.data.join("branvil.redb");
-    as_schema_37(&db);
+    as_schema_38(&db);
     let old = tables(&db);
     for (command, expected) in [("upgrade", 0), ("check", 0), ("upgrade", 0)] {
         let out = branvil_command()

@@ -9,7 +9,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use crate::ci::pipeline::{ArtifactDef, CacheDef, JobDef, check_relative};
 
@@ -427,8 +427,7 @@ pub fn pack(
 // ---------------------------------------------------------------- cache
 
 /// The cache key of a job: repository, job, the configuration digest of the
-/// image it runs on (a new version of a tag does not reuse what the previous
-/// one built), the user it runs as (the files keep the owner the VM saw),
+/// image it runs on, the user it runs as (the files keep the owner the VM saw),
 /// the runner's work quota (a job's `/work` is no smaller than the entry's
 /// image, so a changed quota takes a new entry), cached paths, and the
 /// content of the key files.
@@ -482,19 +481,22 @@ fn tree_size(path: &Path) -> u64 {
 const USED: &str = ".branvil-used";
 const SAVED: &str = ".branvil-saved";
 const OWNER: &str = ".branvil-owner";
+const KEY: &str = ".branvil-key";
+const PENDING: &str = ".pending";
 /// The bytes of data the file system of an entry's image holds, as the VM
 /// that kept its cached paths measured them.
 const DATA: &str = ".branvil-data";
 /// The disk image an entry holds: a job's `/work` that kept only the cached
 /// paths.
 const IMAGE: &str = "disk.raw";
-pub const CACHE_REFRESH_SECS: u64 = 24 * 60 * 60;
 
-/// The repository and job whose cache generations share an eviction priority.
+/// Cache generations are interchangeable only within this group.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct CacheOwner {
     pub repo: String,
     pub job: String,
+    pub user: u32,
+    pub paths: Vec<String>,
 }
 
 fn record_use(entry: &Path, used: SystemTime) -> io::Result<()> {
@@ -513,16 +515,6 @@ pub struct Cache {
 }
 
 impl Cache {
-    /// Age of the last complete save, independent of reads. Older entries
-    /// without a save marker need a fresh execution before they can be reused.
-    pub fn saved_age(&self, key: &str, now: SystemTime) -> io::Result<Option<Duration>> {
-        let _reading = self.lock.read().unwrap_or_else(|e| e.into_inner());
-        match fs::metadata(self.root.join(key).join(SAVED)) {
-            Ok(meta) => Ok(now.duration_since(meta.modified()?).ok()),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
@@ -541,7 +533,12 @@ impl Cache {
         for e in entries.flatten() {
             let path = e.path();
             let aside = e.file_name().to_string_lossy().starts_with('.');
-            if path.is_dir() && (aside || !path.join(IMAGE).is_file()) {
+            if e.file_name() == PENDING {
+                continue;
+            }
+            if path.is_dir()
+                && (aside || !path.join(IMAGE).is_file() || entry_owner(&path).is_none())
+            {
                 fs::remove_dir_all(&path)?;
             }
         }
@@ -556,28 +553,130 @@ impl Cache {
     /// such entry.
     pub fn restore(&self, key: &str, into: &Path) -> io::Result<Option<u64>> {
         let _reading = self.lock.read().unwrap_or_else(|e| e.into_inner());
-        let entry = self.root.join(key);
-        let image = entry.join(IMAGE);
-        if !fs::symlink_metadata(&image).is_ok_and(|m| m.is_file()) {
-            return Ok(None);
-        }
-        super::disk::copy(&image, into)?;
-        record_use(&entry, SystemTime::now())?;
-        let data = fs::read_to_string(entry.join(DATA))
-            .ok()
-            .and_then(|d| d.trim().parse::<u64>().ok());
-        match data {
-            Some(data) => Ok(Some(data)),
-            None => super::disk::allocated(into).map(Some),
-        }
+        restore_entry(&self.root.join(key), into)
     }
 
-    /// Saves `image`, the disk image of a successful job's `/work` that kept
-    /// only the cached paths, whose file system holds `data` bytes, as the
-    /// entry of `key` (moved, not copied, where both are on one file system),
-    /// then removes superseded generations before current entries beyond
-    /// `max_bytes`. Returns the bytes the image takes.
-    pub fn save(
+    /// Try the exact key first, then the newest published image of the group.
+    pub fn restore_generation(
+        &self,
+        key: &str,
+        owner: &CacheOwner,
+        into: &Path,
+    ) -> io::Result<Option<(String, u64)>> {
+        let _reading = self.lock.read().unwrap_or_else(|e| e.into_inner());
+        let exact = self.root.join(key);
+        if entry_owner(&exact).as_ref() == Some(owner)
+            && let Some(size) = restore_entry(&exact, into)?
+        {
+            return Ok(Some((key.into(), size)));
+        }
+        let latest = dirs(&self.root)?
+            .into_iter()
+            .filter(|p| {
+                p != &exact && entry_owner(p).as_ref() == Some(owner) && p.join(IMAGE).is_file()
+            })
+            .filter_map(|p| Some((saved_at(&p)?, p)))
+            .max();
+        let Some((_, entry)) = latest else {
+            return Ok(None);
+        };
+        let generation = entry
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        Ok(restore_entry(&entry, into)?.map(|size| (generation, size)))
+    }
+
+    /// Put aside a successful execution before reporting it to the Hub.
+    /// Staging competes only with other pending images for available space.
+    pub fn stage(
+        &self,
+        attempt: &str,
+        key: &str,
+        owner: &CacheOwner,
+        (image, data): (&Path, u64),
+        max_bytes: u64,
+    ) -> io::Result<bool> {
+        if data > max_bytes {
+            return Ok(false);
+        }
+        let pending = self.root.join(PENDING);
+        fs::create_dir_all(&pending)?;
+        let tmp = tempfile::Builder::new()
+            .prefix(".stage-")
+            .tempdir_in(&self.root)?;
+        write_entry(tmp.path(), owner, image, data)?;
+        fs::write(tmp.path().join(KEY), key)?;
+        record_use(tmp.path(), SystemTime::now())?;
+        let _writing = self.lock.write().unwrap_or_else(|e| e.into_inner());
+        let entry = pending.join(attempt);
+        fs::rename(tmp.path(), &entry)?;
+        self.evict_pending(max_bytes)?;
+        Ok(entry.is_dir())
+    }
+
+    pub fn pending(&self) -> io::Result<Vec<String>> {
+        let _reading = self.lock.read().unwrap_or_else(|e| e.into_inner());
+        Ok(dirs(&self.root.join(PENDING))?
+            .into_iter()
+            .filter_map(|path| path.file_name()?.to_str().map(str::to_owned))
+            .collect())
+    }
+
+    /// Publish with the Hub's timestamp so a delayed decision cannot
+    /// replace a more recent save of the same key. Missing images are fine.
+    pub fn settle(
+        &self,
+        attempt: &str,
+        publish: Option<SystemTime>,
+        max_bytes: u64,
+    ) -> io::Result<()> {
+        let _writing = self.lock.write().unwrap_or_else(|e| e.into_inner());
+        let pending = self.root.join(PENDING).join(attempt);
+        if !pending.is_dir() {
+            return Ok(());
+        }
+        if let Some(at) = publish {
+            let key = fs::read_to_string(pending.join(KEY))?;
+            let entry = self.root.join(key);
+            if saved_at(&entry).is_none_or(|saved| saved < at) {
+                fs::File::create(pending.join(SAVED))?.set_modified(at)?;
+                record_use(&pending, SystemTime::now())?;
+                if entry.is_dir() {
+                    fs::remove_dir_all(&entry)?;
+                }
+                fs::rename(&pending, &entry)?;
+                self.evict_pending(max_bytes)?;
+                let budget = max_bytes
+                    .saturating_sub(entry_size(&entry))
+                    .max(entry_size(&entry));
+                evict(&self.root, budget, &entry)?;
+                return self.evict_pending(max_bytes);
+            }
+        }
+        fs::remove_dir_all(pending)
+    }
+
+    /// Keep staging from evicting any published generation.
+    fn evict_pending(&self, max_bytes: u64) -> io::Result<()> {
+        let used = |path: &PathBuf| entry_size(path);
+        let published = dirs(&self.root)?.iter().map(used).sum::<u64>();
+        let mut pending = dirs(&self.root.join(PENDING))?;
+        pending.sort_by_key(|p| (last_use(p), p.clone()));
+        let mut pending_bytes = pending.iter().map(used).sum::<u64>();
+        for path in pending {
+            if pending_bytes <= max_bytes.saturating_sub(published) {
+                break;
+            }
+            pending_bytes -= entry_size(&path);
+            fs::remove_dir_all(path)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn save(
         &self,
         key: &str,
         owner: &CacheOwner,
@@ -587,6 +686,7 @@ impl Cache {
         self.save_with_clock(key, owner, (image, data), max_bytes, SystemTime::now)
     }
 
+    #[cfg(test)]
     fn save_with_clock(
         &self,
         key: &str,
@@ -596,37 +696,87 @@ impl Cache {
         now: impl FnOnce() -> SystemTime,
     ) -> io::Result<u64> {
         fs::create_dir_all(&self.root)?;
-        // Put aside without the lock (a copy can be the long part), then in
-        // place under it.
-        let tmp = self
-            .root
-            .join(format!(".{key}.{}", crate::util::random_secret::<6>()));
-        let saved = (|| {
-            if !fs::symlink_metadata(image).is_ok_and(|m| m.is_file()) {
-                return Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("{} is missing", image.display()),
-                ));
-            }
-            fs::create_dir_all(&tmp)?;
-            super::disk::place(image, &tmp.join(IMAGE))?;
-            let total = super::disk::allocated(&tmp.join(IMAGE))?;
-            fs::write(tmp.join(DATA), data.to_string())?;
-            fs::write(tmp.join(OWNER), serde_json::to_vec(owner)?)?;
-            let saved_at = now();
-            record_use(&tmp, saved_at)?;
-            fs::File::create(tmp.join(SAVED))?.set_modified(saved_at)?;
-            let _writing = self.lock.write().unwrap_or_else(|e| e.into_inner());
-            let entry = self.root.join(key);
-            let _ = fs::remove_dir_all(&entry);
-            fs::rename(&tmp, &entry)?;
-            evict(&self.root, max_bytes, &entry)?;
-            Ok(total)
-        })();
-        if saved.is_err() {
-            let _ = fs::remove_dir_all(&tmp);
+        let tmp = tempfile::Builder::new()
+            .prefix(".stage-")
+            .tempdir_in(&self.root)?;
+        write_entry(tmp.path(), owner, image, data)?;
+        let allocated = super::disk::allocated(&tmp.path().join(IMAGE))?;
+        let saved_at = now();
+        record_use(tmp.path(), saved_at)?;
+        fs::File::create(tmp.path().join(SAVED))?.set_modified(saved_at)?;
+        let _writing = self.lock.write().unwrap_or_else(|e| e.into_inner());
+        let entry = self.root.join(key);
+        let _ = fs::remove_dir_all(&entry);
+        fs::rename(tmp.path(), &entry)?;
+        evict(&self.root, max_bytes, &entry)?;
+        Ok(allocated)
+    }
+}
+
+fn dirs(root: &Path) -> io::Result<Vec<PathBuf>> {
+    let listed = match fs::read_dir(root) {
+        Ok(listed) => listed,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut dirs = Vec::new();
+    for item in listed {
+        let item = item?;
+        if !item.file_name().to_string_lossy().starts_with('.') && item.file_type()?.is_dir() {
+            dirs.push(item.path());
         }
-        saved
+    }
+    Ok(dirs)
+}
+
+fn write_entry(entry: &Path, owner: &CacheOwner, image: &Path, data: u64) -> io::Result<()> {
+    if !fs::symlink_metadata(image).is_ok_and(|m| m.is_file()) {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{} is missing", image.display()),
+        ));
+    }
+    super::disk::place(image, &entry.join(IMAGE))?;
+    fs::write(entry.join(DATA), data.to_string())?;
+    fs::write(entry.join(OWNER), serde_json::to_vec(owner)?)
+}
+
+fn entry_owner(entry: &Path) -> Option<CacheOwner> {
+    serde_json::from_slice(&fs::read(entry.join(OWNER)).ok()?).ok()
+}
+
+fn entry_data(entry: &Path) -> Option<u64> {
+    fs::read_to_string(entry.join(DATA))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+fn entry_size(entry: &Path) -> u64 {
+    entry_data(entry).unwrap_or_else(|| tree_size(entry))
+}
+
+fn saved_at(entry: &Path) -> Option<SystemTime> {
+    fs::metadata(entry.join(SAVED)).ok()?.modified().ok()
+}
+
+fn last_use(entry: &Path) -> SystemTime {
+    fs::metadata(entry.join(USED))
+        .and_then(|m| m.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+fn restore_entry(entry: &Path, into: &Path) -> io::Result<Option<u64>> {
+    let image = entry.join(IMAGE);
+    if !fs::symlink_metadata(&image).is_ok_and(|m| m.is_file()) {
+        return Ok(None);
+    }
+    super::disk::copy(&image, into)?;
+    record_use(entry, SystemTime::now())?;
+    match entry_data(entry) {
+        Some(data) => Ok(Some(data)),
+        None => super::disk::allocated(into).map(Some),
     }
 }
 
@@ -644,35 +794,27 @@ fn evict(cache_root: &Path, max_bytes: u64, saved_entry: &Path) -> io::Result<()
         if e.file_name().to_string_lossy().starts_with('.') {
             continue;
         }
-        let Some(owner) = fs::read(path.join(OWNER))
-            .ok()
-            .and_then(|data| serde_json::from_slice::<CacheOwner>(&data).ok())
-        else {
+        let Some(owner) = entry_owner(&path) else {
             // Missing, unreadable, or invalid records cannot be grouped.
             // Remove the entry even below budget so it cannot stall eviction.
             fs::remove_dir_all(&path)?;
             continue;
         };
-        if let Ok(saved) = fs::metadata(path.join(SAVED)).and_then(|m| m.modified()) {
-            // saved_at is recorded before the write lock: the save that just
-            // acquired it wins over even a later timestamp in its group.
-            let candidate = (path == saved_entry, saved, path.clone());
+        if let Some(saved) = saved_at(&path) {
+            let candidate = (saved, path.clone());
             let active = current.entry(owner.clone()).or_insert(candidate.clone());
             if candidate > *active {
                 *active = candidate;
             }
         }
-        let used = fs::metadata(path.join(USED))
-            .and_then(|m| m.modified())
-            .unwrap_or(SystemTime::UNIX_EPOCH);
         entries.push(Entry {
             owner,
-            used,
-            size: tree_size(&path),
+            used: last_use(&path),
+            size: entry_size(&path),
             path,
         });
     }
-    let is_current = |e: &Entry| current.get(&e.owner).is_some_and(|v| v.2 == e.path);
+    let is_current = |e: &Entry| current.get(&e.owner).is_some_and(|v| v.1 == e.path);
     // Exhaust superseded generations before evicting any current entry.
     // A save is the latest use when timestamps tie (e.g. on a coarse
     // filesystem). Other ties are broken by key, independently of size.
@@ -698,11 +840,101 @@ fn evict(cache_root: &Path, max_bytes: u64, saved_entry: &Path) -> io::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn pending_images_cannot_be_restored_and_are_evicted_before_saved_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path().join("cache"));
+        let owner = owner("repo", "job");
+        let image = dir.path().join("image");
+        let restored = dir.path().join("restored");
+        fs::write(&image, b"merged").unwrap();
+        cache
+            .stage("att_1", "first", &owner, (&image, 10), 20)
+            .unwrap();
+        assert!(
+            cache
+                .restore_generation("first", &owner, &restored)
+                .unwrap()
+                .is_none()
+        );
+        cache
+            .settle("att_1", Some(SystemTime::UNIX_EPOCH), 20)
+            .unwrap();
+        fs::write(&image, b"unmerged").unwrap();
+        cache
+            .stage("att_2", "second", &owner, (&image, 11), 20)
+            .unwrap();
+        assert!(cache.pending().unwrap().is_empty());
+        let generation = cache
+            .restore_generation("second", &owner, &restored)
+            .unwrap()
+            .unwrap();
+        assert_eq!(generation, ("first".into(), 10));
+        assert_eq!(fs::read(restored).unwrap(), b"merged");
+    }
+
+    #[test]
+    fn cache_lookup_prefers_exact_then_latest_compatible_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path().join("cache"));
+        let work = dir.path();
+        let owner = owner("repo", "job");
+        let time = |n| SystemTime::UNIX_EPOCH + Duration::from_secs(n);
+        for (attempt, key, at) in [("a", "old", 1), ("b", "new", 2), ("c", "retired", 3)] {
+            let image = packed(work, key.as_bytes());
+            assert!(
+                cache
+                    .stage(attempt, key, &owner, (&image, 10), 100)
+                    .unwrap()
+            );
+            cache
+                .settle(attempt, (at != 3).then(|| time(at)), 100)
+                .unwrap();
+        }
+        let restore = |key: &str, owner: &CacheOwner| {
+            let into = dir.path().join(format!("lookup-{key}"));
+            cache
+                .restore_generation(key, owner, &into)
+                .unwrap()
+                .map(|(key, bytes)| {
+                    assert_eq!(fs::read(&into).unwrap(), key.as_bytes());
+                    fs::remove_file(into).unwrap();
+                    (key, bytes)
+                })
+        };
+        assert_eq!(restore("old", &owner), Some(("old".into(), 10)));
+        assert_eq!(restore("missing", &owner), Some(("new".into(), 10)));
+        assert_eq!(restore("retired", &owner), Some(("new".into(), 10)));
+        for incompatible in [
+            CacheOwner {
+                user: owner.user + 1,
+                ..owner.clone()
+            },
+            CacheOwner {
+                paths: vec!["other".into()],
+                ..owner.clone()
+            },
+            CacheOwner {
+                repo: "other".into(),
+                ..owner.clone()
+            },
+            CacheOwner {
+                job: "other".into(),
+                ..owner.clone()
+            },
+        ] {
+            assert_eq!(restore("old", &incompatible), None);
+        }
+    }
 
     fn owner(repo: &str, job: &str) -> CacheOwner {
         CacheOwner {
             repo: repo.into(),
             job: job.into(),
+            user: super::super::executor::JOB_USER_ID,
+            paths: vec!["target".into()],
         }
     }
 
@@ -824,48 +1056,6 @@ mod tests {
         readers.join().unwrap();
     }
 
-    #[test]
-    fn cache_save_age_tracks_complete_saves_and_survives_restore_and_eviction() {
-        let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
-        let cache = Cache::new(d.join("cache"));
-        let saved = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-        assert_eq!(cache.saved_age("k", saved).unwrap(), None);
-        cache
-            .save_taken_with_clock("k", &owner("r", "j"), &packed(d, b"x"), 1 << 20, || saved)
-            .unwrap();
-        let now = saved + Duration::from_secs(CACHE_REFRESH_SECS);
-        assert_eq!(
-            cache.saved_age("k", now).unwrap(),
-            Some(Duration::from_secs(CACHE_REFRESH_SECS))
-        );
-        cache.restore("k", &d.join("restored.raw")).unwrap();
-        assert_eq!(
-            cache.saved_age("k", now).unwrap(),
-            Some(Duration::from_secs(CACHE_REFRESH_SECS))
-        );
-        assert_eq!(
-            cache
-                .saved_age("k", saved - Duration::from_secs(1))
-                .unwrap(),
-            None,
-            "a future timestamp is not a fresh save"
-        );
-        // A cache written before save timestamps were recorded needs a new save.
-        fs::remove_file(cache.root.join("k").join(SAVED)).unwrap();
-        assert_eq!(cache.saved_age("k", now).unwrap(), None);
-        cache
-            .save_taken_with_clock("k", &owner("r", "j"), &packed(d, b"x"), 0, || now)
-            .unwrap();
-        assert_eq!(
-            cache.saved_age("k", now).unwrap(),
-            None,
-            "evicted entries have no save"
-        );
-    }
-
-    /// The entries of earlier forms (a tree of the cached paths, an archive
-    /// of them) are never restored, and the runner removes them.
     #[test]
     fn cache_entries_of_an_earlier_form_are_not_restored_and_are_removed() {
         let dir = tempfile::tempdir().unwrap();
@@ -1337,7 +1527,7 @@ mod tests {
             // Restoring an old generation makes it newer by use than the other
             // group's only entry. Plain LRU would evict that current entry.
             record_use(&store.root.join("k1"), time(3)).unwrap();
-            let budget = tree_size(&store.root.join("k1")) + tree_size(&store.root.join("other"));
+            let budget = entry_size(&store.root.join("k1")) + entry_size(&store.root.join("other"));
             store
                 .save_taken_with_clock("k2", &first, &packed(d, b"object"), budget, || time(4))
                 .unwrap();
@@ -1368,7 +1558,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_save_is_current_even_when_another_generation_has_a_later_save_time() {
+    fn a_delayed_save_does_not_evict_a_newer_generation() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
         let store = Cache::new(d.join("cache"));
@@ -1379,12 +1569,12 @@ mod tests {
                 time(20)
             })
             .unwrap();
-        let budget = tree_size(&store.root.join("later"));
+        let budget = entry_size(&store.root.join("later"));
         store
             .save_taken_with_clock("saved", &owner, &packed(d, b"object"), budget, || time(10))
             .unwrap();
-        assert!(!store.root.join("later").exists());
-        assert!(store.root.join("saved").exists());
+        assert!(store.root.join("later").exists());
+        assert!(!store.root.join("saved").exists());
     }
 
     #[test]
@@ -1523,7 +1713,10 @@ mod tests {
             fs::create_dir(&entry).unwrap();
             fs::write(entry.join("data"), b"object").unwrap();
             mark_owner(&entry, "r", job);
-            mark_saved(&entry, SystemTime::UNIX_EPOCH);
+            mark_saved(
+                &entry,
+                SystemTime::UNIX_EPOCH + Duration::from_secs(u64::from(key == "new")),
+            );
             record_use(&entry, SystemTime::UNIX_EPOCH + Duration::from_secs(used)).unwrap();
         }
         evict(root, tree_size(&root.join("new")), &root.join("new")).unwrap();
@@ -1578,10 +1771,7 @@ mod tests {
         // Fix the restored entry's use time so the test never depends on
         // how far the wall clock advances between restore and save.
         let restored_at = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
-        fs::File::open(root.join("z-old").join(USED))
-            .unwrap()
-            .set_modified(restored_at)
-            .unwrap();
+        record_use(&root.join("z-old"), restored_at).unwrap();
 
         // Simulate a coarse clock: the save has exactly the restore's
         // timestamp, and its key sorts before the restored entry's key.
@@ -1591,7 +1781,7 @@ mod tests {
                     "a-new",
                     &owner("r", "new"),
                     &packed(d, b"object"),
-                    tree_size(&root.join("z-old")),
+                    entry_size(&root.join("z-old")),
                     || restored_at
                 )
                 .unwrap(),

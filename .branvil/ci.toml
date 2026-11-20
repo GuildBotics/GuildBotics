@@ -27,13 +27,10 @@
 # Every job that builds with Cargo empties the image's RUSTC_WRAPPER: the jobs
 # build without sccache, which only the members' commands use, until ticket
 # #123's measurements decide otherwise.
-# Use the toolchain, rather than Cargo.lock, for the Rust cache keys for now:
-# workspace crate additions change the lockfile before the protected branch
-# can save that key, leaving PR heads without dependencies to restore.
-# Cargo still resolves the locked dependencies and rebuilds touched crates.
-# The current runner refreshes protected-branch caches after 24 hours; changing
-# the toolchain starts a new generation. Ticket #120 will restore lockfile keys
-# when the runner can restore from a recent generation and retain verification caches.
+# Cargo.lock selects the exact Rust cache generation. On a miss, use the
+# latest published generation of that job. Cargo rebuilds changed dependencies.
+# Cache publication happens after the head is merged into a protected branch.
+# After successful verification, remove the workspace artifacts Cargo will rebuild.
 
 [[jobs]]
 name = "test"
@@ -123,9 +120,11 @@ commands = [
   "find crates -exec touch -c {} +",
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo clippy --locked --workspace --all-targets -- -D warnings",
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo clippy --locked -p guildbotics --no-default-features --target x86_64-pc-windows-gnu -- -D warnings",
+  "CARGO_HOME=/work/.ci/cargo-home cargo clean --workspace --offline --locked --target x86_64-pc-windows-gnu",
+  "CARGO_HOME=/work/.ci/cargo-home cargo clean --workspace --offline --locked",
 ]
 timeout_secs = 1800
-cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
+cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
 
 [[jobs]]
 name = "rust-test"
@@ -158,10 +157,11 @@ commands = [
   "find crates -exec touch -c {} +",
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked --profile ci --workspace --exclude branvil --exclude loopback-auth",
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked -p guildbotics --no-default-features --test main",
+  "CARGO_HOME=/work/.ci/cargo-home cargo clean --workspace --offline --locked",
 ]
 artifacts = [{ name = "rust-test-results", paths = ["target/nextest/ci/junit.xml"] }]
 timeout_secs = 1800
-cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
+cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
 
 [[jobs]]
 name = "rust-test-branvil"
@@ -180,10 +180,11 @@ image = "guildbotics/agent-environment:dev"
 commands = [
   "find crates -exec touch -c {} +",
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked --profile ci -p branvil -p loopback-auth --features branvil/test-support",
+  "CARGO_HOME=/work/.ci/cargo-home cargo clean --workspace --offline --locked",
 ]
 artifacts = [{ name = "test-results", paths = ["target/nextest/ci/junit.xml"] }]
 timeout_secs = 1800
-cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
+cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
 
 # Drive the public command line and its HTTP server with the same Rust binary.
 [[jobs]]
@@ -194,6 +195,7 @@ commands = ['''
 set -eu
 export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0
 uv sync --extra test
+find crates -exec touch -c {} +
 cargo build --locked -p gb-server --example browser-test-server
 cargo build --locked -p gb-environment --example worktree-transfer
 cargo build --locked -p guildbotics
@@ -202,10 +204,11 @@ export GUILDBOTICS_BLACKBOX_CLI="$PWD/target/debug/guildbotics"
 export GUILDBOTICS_BLACKBOX_MEMBER_CLI="$PWD/target/debug/examples/browser-test-server"
 export GUILDBOTICS_BLACKBOX_SERVER="$PWD/target/debug/examples/browser-test-server"
 uv run --no-sync python -m pytest -rP --junitxml=.ci/blackbox-junit.xml -o junit_logging=system-err tests/blackbox/test_member.py tests/blackbox/test_code_host.py tests/blackbox/test_current_git.py tests/blackbox/test_config_service.py tests/blackbox/test_harness.py tests/blackbox/test_golden.py tests/integration/test_worktree_transfer.py
+cargo clean --workspace --offline --locked
 ''']
 artifacts = [{ name = "test-results", paths = [".ci/blackbox-junit.xml"] }]
 timeout_secs = 1800
-cache = { paths = [".ci/cargo-home/registry", "target", ".ci/uv"], key_files = ["rust-toolchain.toml", "uv.lock"] }
+cache = { paths = [".ci/cargo-home/registry", "target", ".ci/uv"], key_files = ["Cargo.lock", "uv.lock"] }
 
 # Duplicated Rust code, by the same jscpd as desktop's `npm run duplicates`.
 [[jobs]]
@@ -242,7 +245,8 @@ mkdir -p client-release
 cp target/x86_64-pc-windows-gnu/release/guildbotics.exe client-release/guildbotics.exe
 sha256sum client-release/guildbotics.exe | cut -d ' ' -f 1 > client-release/sha256
 git rev-parse HEAD > client-release/commit
+cargo clean --workspace --offline --locked --target x86_64-pc-windows-gnu --release
 ''']
 artifacts = [{ name = "client-windows", paths = ["client-release/guildbotics.exe", "client-release/sha256", "client-release/commit"] }]
 timeout_secs = 1800
-cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-toolchain.toml"] }
+cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }

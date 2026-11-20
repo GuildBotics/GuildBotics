@@ -373,9 +373,7 @@ pub async fn check(
                         image_digest: Some(format!("sha256:{}", "2".repeat(64))),
                         reused_from: None,
                         cache_key: None,
-                        refresh_cache: false,
                     },
-                    queue_max,
                     &now,
                 )?;
             }
