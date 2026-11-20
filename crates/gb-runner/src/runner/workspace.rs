@@ -414,6 +414,9 @@ fn tree_size(path: &Path) -> u64 {
 const USED: &str = ".branvil-used";
 const SAVED: &str = ".branvil-saved";
 const OWNER: &str = ".branvil-owner";
+/// The bytes of data the file system of an entry's image holds, as the VM
+/// that kept its cached paths measured them.
+const DATA: &str = ".branvil-data";
 /// The disk image an entry holds: a job's `/work` that kept only the cached
 /// paths.
 const IMAGE: &str = "disk.raw";
@@ -480,8 +483,9 @@ impl Cache {
     /// Puts a copy of the disk image of `key`'s entry at `into`, a path of
     /// the host that no VM mounts, for the job's `/work` to start from: the
     /// job writes to that copy only (a clone shares the entry's blocks until
-    /// it is written). Returns the bytes of data it holds, or none when there
-    /// is no such entry.
+    /// it is written). Returns the bytes of data its file system holds (what
+    /// the copy takes when the entry does not say), or none when there is no
+    /// such entry.
     pub fn restore(&self, key: &str, into: &Path) -> io::Result<Option<u64>> {
         let _reading = self.lock.read().unwrap_or_else(|e| e.into_inner());
         let entry = self.root.join(key);
@@ -491,29 +495,35 @@ impl Cache {
         }
         super::disk::copy(&image, into)?;
         record_use(&entry, SystemTime::now())?;
-        Ok(Some(super::disk::allocated(into)?))
+        let data = fs::read_to_string(entry.join(DATA))
+            .ok()
+            .and_then(|d| d.trim().parse::<u64>().ok());
+        match data {
+            Some(data) => Ok(Some(data)),
+            None => super::disk::allocated(into).map(Some),
+        }
     }
 
     /// Saves `image`, the disk image of a successful job's `/work` that kept
-    /// only the cached paths, as the entry of `key` (moved, not copied, where
-    /// both are on one file system), then removes superseded generations
-    /// before current entries beyond `max_bytes`. Returns the bytes of data
-    /// it holds.
+    /// only the cached paths, whose file system holds `data` bytes, as the
+    /// entry of `key` (moved, not copied, where both are on one file system),
+    /// then removes superseded generations before current entries beyond
+    /// `max_bytes`. Returns the bytes the image takes.
     pub fn save(
         &self,
         key: &str,
         owner: &CacheOwner,
-        image: &Path,
+        (image, data): (&Path, u64),
         max_bytes: u64,
     ) -> io::Result<u64> {
-        self.save_with_clock(key, owner, image, max_bytes, SystemTime::now)
+        self.save_with_clock(key, owner, (image, data), max_bytes, SystemTime::now)
     }
 
     fn save_with_clock(
         &self,
         key: &str,
         owner: &CacheOwner,
-        image: &Path,
+        (image, data): (&Path, u64),
         max_bytes: u64,
         now: impl FnOnce() -> SystemTime,
     ) -> io::Result<u64> {
@@ -533,6 +543,7 @@ impl Cache {
             fs::create_dir_all(&tmp)?;
             super::disk::place(image, &tmp.join(IMAGE))?;
             let total = super::disk::allocated(&tmp.join(IMAGE))?;
+            fs::write(tmp.join(DATA), data.to_string())?;
             fs::write(tmp.join(OWNER), serde_json::to_vec(owner)?)?;
             let saved_at = now();
             record_use(&tmp, saved_at)?;
@@ -642,6 +653,31 @@ mod tests {
             .unwrap();
     }
 
+    impl Cache {
+        /// A save of `image` whose file system holds what the file takes.
+        fn save_taken(
+            &self,
+            key: &str,
+            owner: &CacheOwner,
+            image: &Path,
+            max_bytes: u64,
+        ) -> io::Result<u64> {
+            self.save_taken_with_clock(key, owner, image, max_bytes, SystemTime::now)
+        }
+
+        fn save_taken_with_clock(
+            &self,
+            key: &str,
+            owner: &CacheOwner,
+            image: &Path,
+            max_bytes: u64,
+            now: impl FnOnce() -> SystemTime,
+        ) -> io::Result<u64> {
+            let data = super::super::disk::allocated(image).unwrap_or(0);
+            self.save_with_clock(key, owner, (image, data), max_bytes, now)
+        }
+    }
+
     /// What a file of `content` takes on the test's disk: whole blocks.
     fn taken(dir: &Path, content: &[u8]) -> u64 {
         let path = packed(dir, content);
@@ -691,7 +727,8 @@ mod tests {
             for (what, path) in &planted {
                 fs::create_dir_all(&into).unwrap();
                 let unpacked = unpack_returned(path, 1 << 20, &into);
-                let saved = Cache::new(d.join("cache")).save("k", &owner("r", "j"), path, 1 << 20);
+                let saved =
+                    Cache::new(d.join("cache")).save_taken("k", &owner("r", "j"), path, 1 << 20);
                 let restored = Cache::new(d.join("cache")).restore("k", &d.join("given"));
                 done.send((
                     what.to_string(),
@@ -727,7 +764,7 @@ mod tests {
         let saved = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
         assert_eq!(cache.saved_age("k", saved).unwrap(), None);
         cache
-            .save_with_clock("k", &owner("r", "j"), &packed(d, b"x"), 1 << 20, || saved)
+            .save_taken_with_clock("k", &owner("r", "j"), &packed(d, b"x"), 1 << 20, || saved)
             .unwrap();
         let now = saved + Duration::from_secs(CACHE_REFRESH_SECS);
         assert_eq!(
@@ -750,7 +787,7 @@ mod tests {
         fs::remove_file(cache.root.join("k").join(SAVED)).unwrap();
         assert_eq!(cache.saved_age("k", now).unwrap(), None);
         cache
-            .save_with_clock("k", &owner("r", "j"), &packed(d, b"x"), 0, || now)
+            .save_taken_with_clock("k", &owner("r", "j"), &packed(d, b"x"), 0, || now)
             .unwrap();
         assert_eq!(
             cache.saved_age("k", now).unwrap(),
@@ -767,7 +804,7 @@ mod tests {
         let d = dir.path();
         let cache = Cache::new(d.join("cache"));
         cache
-            .save("new", &owner("r", "j"), &packed(d, b"new"), 1 << 20)
+            .save_taken("new", &owner("r", "j"), &packed(d, b"new"), 1 << 20)
             .unwrap();
         let tree = d.join("cache/tree");
         fs::create_dir_all(tree.join("paths/target")).unwrap();
@@ -1108,7 +1145,7 @@ mod tests {
         );
         let archive = packed(dir.path(), b"object");
         Cache::new(root.clone())
-            .save(&k1, &owner("acme/demo", &job.name), &archive, 1 << 20)
+            .save_taken(&k1, &owner("acme/demo", &job.name), &archive, 1 << 20)
             .unwrap();
         // The entry and what a job is given are copies: writing the image
         // saved from, or the one a job is given, changes no entry.
@@ -1132,11 +1169,28 @@ mod tests {
             fs::remove_file(fresh.join("cache.raw")).unwrap();
         }
         fs::write(fresh.join("Cargo.lock"), "v2").unwrap();
+        // What the saving VM measured its file system holds is what a
+        // restore says, whatever the image takes.
+        Cache::new(root.clone())
+            .save(
+                &k1,
+                &owner("acme/demo", &job.name),
+                (&packed(dir.path(), b"object"), 200 << 20),
+                1 << 30,
+            )
+            .unwrap();
+        assert_eq!(
+            Cache::new(root.clone())
+                .restore(&k1, &fresh.join("cache.raw"))
+                .unwrap(),
+            Some(200 << 20)
+        );
+        fs::remove_file(fresh.join("cache.raw")).unwrap();
         let k2 = cache_key("acme/demo", &job, IMAGE, &cache, &fresh);
         assert_ne!(k1, k2, "key files are in the key");
         // A limit that fits only one entry keeps the newest.
         Cache::new(root.clone())
-            .save(
+            .save_taken(
                 &k2,
                 &owner("acme/demo", &job.name),
                 &packed(dir.path(), b"object"),
@@ -1156,17 +1210,17 @@ mod tests {
             let first = owner("r1", "build");
             let time = |n| SystemTime::UNIX_EPOCH + Duration::from_secs(n);
             store
-                .save_with_clock("k1", &first, &packed(d, b"object"), u64::MAX, || time(1))
+                .save_taken_with_clock("k1", &first, &packed(d, b"object"), u64::MAX, || time(1))
                 .unwrap();
             store
-                .save_with_clock("other", &other, &packed(d, b"object"), u64::MAX, || time(2))
+                .save_taken_with_clock("other", &other, &packed(d, b"object"), u64::MAX, || time(2))
                 .unwrap();
             // Restoring an old generation makes it newer by use than the other
             // group's only entry. Plain LRU would evict that current entry.
             record_use(&store.root.join("k1"), time(3)).unwrap();
             let budget = tree_size(&store.root.join("k1")) + tree_size(&store.root.join("other"));
             store
-                .save_with_clock("k2", &first, &packed(d, b"object"), budget, || time(4))
+                .save_taken_with_clock("k2", &first, &packed(d, b"object"), budget, || time(4))
                 .unwrap();
             assert!(!store.root.join("k1").exists());
             assert!(store.root.join("other").exists());
@@ -1181,10 +1235,10 @@ mod tests {
         let store = Cache::new(d.join("cache"));
         let owner = owner("r", "j");
         store
-            .save("old", &owner, &packed(d, b"old"), u64::MAX)
+            .save_taken("old", &owner, &packed(d, b"old"), u64::MAX)
             .unwrap();
         store
-            .save("new", &owner, &packed(d, b"new"), u64::MAX)
+            .save_taken("new", &owner, &packed(d, b"new"), u64::MAX)
             .unwrap();
         assert!(store.root.join("new").exists());
         assert_eq!(
@@ -1202,13 +1256,13 @@ mod tests {
         let owner = owner("r", "j");
         let time = |n| SystemTime::UNIX_EPOCH + Duration::from_secs(n);
         store
-            .save_with_clock("later", &owner, &packed(d, b"object"), u64::MAX, || {
+            .save_taken_with_clock("later", &owner, &packed(d, b"object"), u64::MAX, || {
                 time(20)
             })
             .unwrap();
         let budget = tree_size(&store.root.join("later"));
         store
-            .save_with_clock("saved", &owner, &packed(d, b"object"), budget, || time(10))
+            .save_taken_with_clock("saved", &owner, &packed(d, b"object"), budget, || time(10))
             .unwrap();
         assert!(!store.root.join("later").exists());
         assert!(store.root.join("saved").exists());
@@ -1317,7 +1371,7 @@ mod tests {
                 for key in ["new", "next"] {
                     assert_eq!(
                         store
-                            .save(
+                            .save_taken(
                                 key,
                                 &owner("r", "j"),
                                 &packed(dir.path(), b"object"),
@@ -1394,7 +1448,7 @@ mod tests {
         let d = dir.path();
         let root = d.join("cache");
         Cache::new(root.clone())
-            .save("z-old", &owner("r", "old"), &packed(d, b"object"), u64::MAX)
+            .save_taken("z-old", &owner("r", "old"), &packed(d, b"object"), u64::MAX)
             .unwrap();
         assert_eq!(
             Cache::new(root.clone())
@@ -1414,7 +1468,7 @@ mod tests {
         // timestamp, and its key sorts before the restored entry's key.
         assert_eq!(
             Cache::new(root.clone())
-                .save_with_clock(
+                .save_taken_with_clock(
                     "a-new",
                     &owner("r", "new"),
                     &packed(d, b"object"),
@@ -1487,7 +1541,7 @@ mod tests {
                     for _ in 0..10 {
                         let archive = packed(&root, format!("v{n}").repeat(1000).as_bytes());
                         cache
-                            .save("k", &owner("r", "j"), &archive, 1 << 30)
+                            .save_taken("k", &owner("r", "j"), &archive, 1 << 30)
                             .unwrap();
                     }
                 })

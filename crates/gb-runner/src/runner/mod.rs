@@ -1238,11 +1238,13 @@ impl Runner {
             // Never mounted: the disk image `/work` starts from, and the one
             // it leaves for the cache.
             let cache_disk = dir.join("cache-disk.raw");
+            let (mut cache_data, mut kept_data) = (None, None);
             if let Some(key) = &key {
                 let restoring = Instant::now();
                 let (store, into, key) = (self.cache.clone(), cache_disk.clone(), key.clone());
                 match blocking(move || store.restore(&key, &into)).await {
                     Ok(Some(bytes)) => {
+                        cache_data = Some(bytes);
                         say(format!(
                             "cache restored in {} ({bytes} bytes)",
                             ms(restoring)
@@ -1268,6 +1270,8 @@ impl Runner {
                         timeout_secs,
                         io: &io,
                         cache_disk: &cache_disk,
+                        cache_data,
+                        kept_data: &mut kept_data,
                         save_cache: c.cache_scope == "protected",
                         work: &work,
                         log_dir: &log_dir,
@@ -1343,6 +1347,7 @@ impl Runner {
                 say("cache not saved (only a protected branch's run saves it)".into()).await;
             } else if conclusion == "success"
                 && let Some(key) = &key
+                && let Some(data) = kept_data
             {
                 let saving = Instant::now();
                 let (store, from, key) = (self.cache.clone(), cache_disk.clone(), key.clone());
@@ -1351,7 +1356,7 @@ impl Runner {
                     repo: c.repo.clone(),
                     job: job.name.clone(),
                 };
-                match blocking(move || store.save(&key, &owner, &from, max)).await {
+                match blocking(move || store.save(&key, &owner, (&from, data), max)).await {
                     Ok(bytes) => {
                         say(format!("cache saved in {} ({bytes} bytes)", ms(saving))).await
                     }

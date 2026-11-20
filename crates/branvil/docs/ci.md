@@ -587,9 +587,12 @@ copies the image to a path of the job's directory that no VM mounts, which
 then becomes the disk of the job's `/work`, so no VM ever has an entry's own
 file; a save takes a copy of that disk once the VM that kept the cached
 paths ended (a regular file only), and replaces the entry, which is never
-changed in place. The sizes the cache counts (`cache_max_mib`, `cache saved
-… bytes`) are the bytes of data the images hold. Entries of an earlier form
-(an archive of the cached paths) are removed when the runner starts.
+changed in place. An entry also records the bytes of data its file system
+holds, as the VM that kept the cached paths measured them (`df`): `cache
+restored … bytes` and the size of the next `/work` use it. The cache counts
+an entry by the blocks its files take (`cache_max_mib`, `cache saved …
+bytes`). Entries of an earlier form (an archive of the cached paths) are
+removed when the runner starts.
 
 A job finds no entry (`no cache entry yet`) when no protected branch's run
 has saved one for its key yet, or the entry was evicted. Changing a lock file
@@ -761,10 +764,16 @@ Per job the runner:
    image's superblock). The cache entry is not kept when its file system
    cannot grow, the checkout does not unpack over the cached paths, or a
    cached path goes through a symbolic link of the commit (it would be
-   written through): `/work` is then the checkout alone, and the log says
-   the job runs without the cache. The checkout is unpacked over the cached
-   paths by this VM, which has only `/work` and `io`, so a link an entry
-   holds below a cached path reaches nothing else.
+   written through): the VM stops there, and the runner removes that disk,
+   creates a new, empty one of the size the quota gives
+   (`bv-work-<runner>-<attempt>-new`, as the old one may outlive its
+   removal), and prepares it without the entry; the log says the job runs
+   without the cache. A preparing VM that fails on an entry is handled the
+   same way, and so is the second preparing VM's own name
+   (`bv-prep-new-<attempt>`). The checkout is unpacked over the cached
+   paths by this VM, which has only `/work` and `io`: a link an entry holds
+   below a cached path reaches nothing else of the host, and what it can
+   leave in `io` is removed before `/work` is collected.
    Every VM of the job flushes before its command ends: microsandbox stops
    the VM when the command ends, and what the guest has not written to
    `/work` or `io` by then can be lost (a lost `chown` left the checkout
@@ -795,17 +804,23 @@ Per job the runner:
    in large blocks and flushed (`dd … conv=fsync`, so a write that does not
    reach `io` fails). The archive is written as `<archive>.part` and renamed
    once `tar` and `dd` succeeded, so one whose packing failed is not there
-   (the log says so). For the cache, the VM then leaves only the cached
-   paths of `/work` and the directories above them (a cached path that goes
-   through a symbolic link loses the link), flushes, and gives the freed
-   blocks back to the disk's image (`fstrim`); only when that succeeded
-   does the runner take a copy of the disk to `cache-disk.raw` (after
-   flushing the image's file on the host). Otherwise the log says `/work`
-   is not kept: what was removed could still be read from the disk, and
-   the image would hold every block ever written. A failure of the
-   script itself (a `/work` that is not there, what is kept) fails the VM
-   (`set -e`). The archive and the copy are dropped when the VM failed or
-   was stopped; a stop makes the attempt `cancelled`. It then removes
+   (the log says so). For the cache, the VM then, in a shell of its own
+   (`sh -e`), leaves only the cached paths of `/work` and the directories
+   above them (a cached path that goes through a symbolic link loses the
+   link), flushes, and gives the freed blocks back to the disk's image
+   (`fstrim`); only when every step succeeded does the runner take a copy
+   of the disk to `cache-disk.raw` (after flushing the image's file on the
+   host). Otherwise the log says `/work` is not kept: what was removed
+   could still be read from the disk, and the image would hold every block
+   ever written. A failure of those steps keeps the disk out of the cache
+   and nothing else: the artifacts' archive stays. The mark of success
+   holds what the disk's file system then holds, which the entry records.
+   A failure of the script itself (a `/work` that is not there, a mark that
+   cannot be removed, a rename) fails the VM (`set -e`). The artifacts' archive is named only once it was packed
+   whole, so it stays even when the VM failed or was stopped later; the
+   copy of the disk is not taken then. A stop makes the attempt `cancelled`
+   when the job declares artifacts (a stop while only the cache is
+   collected leaves its end as it was). It then removes
    every sandbox of the attempt (by its `branvil.job` label) and the `/tmp`
    and `/work` volumes (which outlive the sandboxes), warning only about one
    that exists and could not be removed, and, for a job with artifacts,
@@ -817,7 +832,8 @@ Per job the runner:
 
 `S` is `ci.executor.work_quota_mib`, plus twice the size of the checkout's
 archive (a disk's blocks and inodes hold many small files in more than the
-archive's bytes), 256 MiB, and the bytes of data of the cache entry's image,
+archive's bytes), 256 MiB, and the bytes of data the cache entry records
+(what the image's file takes when it records none),
 rounded up to a multiple of 128 MiB (an ext4 block group; microsandbox
 refuses a disk whose last, partial group is too small for its metadata), and
 no smaller than that image. Its volume is in `MSB_HOME`
@@ -831,9 +847,9 @@ time. The image needs `/bin/sh`, `tar`, `chown`, `find`, `dd` (with `obs=`
 and `conv=fsync`), `rm`, `mv`, and `sync` for this, `mkdir` when it gives
 the job's user no home it can write, and, for a job with a cache, `fstrim`
 to save an entry and `df`, `awk`, and `resize2fs` to grow an entry's file
-system to `S`. Without `resize2fs`, an entry's file system is kept as it is
-only when it still leaves the quota (the log says so), and the job runs
-without the cache otherwise.
+system to `S`, and to measure what an entry holds. Without `resize2fs`, an
+entry's file system is kept as it is only when it still leaves the quota
+(the log says so), and the job runs without the cache otherwise.
 Without `sync`, preparing `/work` fails for every job, so an image that ran
 jobs before needs it too.
 
@@ -847,7 +863,7 @@ to the start of the guest command), `commands ran for … ms`, `/work
 collected in … ms` (a job whose artifacts or cache are collected),
 `sandbox removed in … ms` (from the job's end, the collecting included),
 `artifacts handled in … ms` (a job that declares artifacts), and `cache saved
-in … ms` (with the bytes of data of the image). `peak memory: … MiB` is the highest resident memory sample recorded while the
+in … ms` (with the bytes the image takes). `peak memory: … MiB` is the highest resident memory sample recorded while the
 job ran. The Hub uses the SDK's VM metrics. An external runner samples the
 `msb run` process tree. A short job can finish before there is a sample.
 
@@ -862,10 +878,12 @@ attempts. These lines distinguish reused work from cache refreshes when
 measuring queue time and execution time.
 
 At start it removes every sandbox labelled with its own name and every volume
-named `bv-tmp-<its name>-<attempt id>` or `bv-work-<its name>-<attempt id>`
-(leftovers of a runner that was killed), the old job directories, and the
-cache entries of an earlier form (a tree of the cached paths instead of an
-archive), which no restore reads.
+named `bv-tmp-<its name>-<attempt id>`, `bv-work-<its name>-<attempt id>`,
+or `bv-work-<its name>-<attempt id>-new` (leftovers of a runner that was
+killed), the old job directories, and the
+cache entries of an earlier form (a tree or an archive of the cached paths
+instead of an image), which no restore reads, and what a save that was
+stopped left aside.
 
 ## Executor: microsandbox
 

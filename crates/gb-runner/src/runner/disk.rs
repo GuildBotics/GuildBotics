@@ -63,18 +63,13 @@ pub fn ext4_bytes(path: &Path) -> io::Result<u64> {
     f.seek(SeekFrom::Start(1024))?;
     f.read_exact(&mut sb)?;
     let u32_at = |at: usize| u64::from(u32::from_le_bytes(sb[at..at + 4].try_into().unwrap()));
+    let invalid = |what: &str| io::Error::new(io::ErrorKind::InvalidData, what.to_string());
     if u16::from_le_bytes([sb[0x38], sb[0x39]]) != 0xEF53 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "not an ext4 file system",
-        ));
+        return Err(invalid("not an ext4 file system"));
     }
     let log = u32_at(0x18);
     if log > 6 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "an unknown block size",
-        ));
+        return Err(invalid("an unknown block size"));
     }
     // INCOMPAT_64BIT: the block count has a high half.
     let high = if u32_at(0x60) & 0x80 != 0 {
@@ -187,13 +182,36 @@ fn mark_sparse(_: &fs::File) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    /// An image of 64 MiB with data in two blocks only.
+    /// An image of 64 MiB with data in two blocks only (APFS fills a gap
+    /// of a few MiB before a write, not one this large).
     fn image(path: &Path) {
         let mut f = fs::File::create(path).unwrap();
         f.set_len(64 << 20).unwrap();
         f.write_all(b"head").unwrap();
         f.seek(SeekFrom::Start(40 << 20)).unwrap();
         f.write_all(b"middle").unwrap();
+    }
+
+    /// Whether `a` and `b` hold the same bytes, read a block at a time.
+    fn same(a: &Path, b: &Path) -> bool {
+        let (mut a, mut b) = (fs::File::open(a).unwrap(), fs::File::open(b).unwrap());
+        let (mut x, mut y) = (vec![0u8; 1 << 20], vec![0u8; 1 << 20]);
+        loop {
+            let (n, m) = (a.read(&mut x).unwrap(), b.read(&mut y).unwrap());
+            if n != m || x[..n] != y[..m] {
+                return false;
+            }
+            if n == 0 {
+                return true;
+            }
+        }
+    }
+
+    /// The first 4 bytes of `path`.
+    fn head(path: &Path) -> [u8; 4] {
+        let mut h = [0u8; 4];
+        fs::File::open(path).unwrap().read_exact(&mut h).unwrap();
+        h
     }
 
     /// A copy has the image's content and size, and takes no more of the
@@ -210,12 +228,15 @@ mod tests {
             } else {
                 sparse_copy(&from, &to).unwrap();
             }
-            assert_eq!(fs::read(&to).unwrap(), fs::read(&from).unwrap(), "{name}");
+            assert!(same(&to, &from), "{name}");
             assert!(allocated(&to).unwrap() <= 4 << 20, "{name}");
         }
         // It never replaces a file.
         assert!(copy(&from, &dir.path().join("copy")).is_err());
-        assert_eq!(fs::read(dir.path().join("copy")).unwrap().len(), 64 << 20);
+        assert_eq!(
+            fs::metadata(dir.path().join("copy")).unwrap().len(),
+            64 << 20
+        );
     }
 
     /// A copy writes nothing to the original: changing one leaves the other.
@@ -228,8 +249,8 @@ mod tests {
         let mut f = fs::OpenOptions::new().write(true).open(&to).unwrap();
         f.write_all(b"HEAD").unwrap();
         drop(f);
-        assert_eq!(&fs::read(&from).unwrap()[..4], b"head");
-        assert_eq!(&fs::read(&to).unwrap()[..4], b"HEAD");
+        assert_eq!(&head(&from), b"head");
+        assert_eq!(&head(&to), b"HEAD");
     }
 
     /// The size of an ext4 file system is read from its superblock, whatever
@@ -269,7 +290,7 @@ mod tests {
         fs::write(&to, "old").unwrap();
         place(&from, &to).unwrap();
         assert!(!from.exists());
-        assert_eq!(&fs::read(&to).unwrap()[..4], b"head");
+        assert_eq!(&head(&to), b"head");
         let before = allocated(&to).unwrap();
         grow(&to, 128 << 20).unwrap();
         assert_eq!(fs::metadata(&to).unwrap().len(), 128 << 20);

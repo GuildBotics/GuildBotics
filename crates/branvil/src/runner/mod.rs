@@ -516,6 +516,7 @@ fi
                 // The image of `/work` the collecting VM left for the cache.
                 if job.save_cache && job.job.cache.is_some() {
                     std::fs::write(job.cache_disk, b"cached").unwrap();
+                    *job.kept_data = Some(6);
                 }
                 Outcome::Exited(0)
             }
