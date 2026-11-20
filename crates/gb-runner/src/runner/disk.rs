@@ -236,6 +236,14 @@ mod tests {
         f.write_all(b"middle").unwrap();
     }
 
+    /// Whether at most `max` bytes of `path` take blocks of its disk. Every
+    /// claim about holes goes through this: they hold where the runners keep
+    /// their images (APFS on the Hub, ext4 on Linux), while NTFS fills those
+    /// of a file nobody marked sparse, so elsewhere there is nothing to check.
+    fn takes_at_most(path: &Path, max: u64) -> bool {
+        !cfg!(any(target_os = "linux", target_os = "macos")) || allocated(path).unwrap() <= max
+    }
+
     /// Whether `a` and `b` hold the same bytes, read a block at a time.
     fn same(a: &Path, b: &Path) -> bool {
         let (mut a, mut b) = (fs::File::open(a).unwrap(), fs::File::open(b).unwrap());
@@ -273,7 +281,7 @@ mod tests {
                 sparse_copy(&from, &to).unwrap();
             }
             assert!(same(&to, &from), "{name}");
-            assert!(allocated(&to).unwrap() <= 4 << 20, "{name}");
+            assert!(takes_at_most(&to, 4 << 20), "{name}");
         }
         // It never replaces a file.
         assert!(copy(&from, &dir.path().join("copy")).is_err());
@@ -311,7 +319,7 @@ mod tests {
         t.read_exact(&mut middle).unwrap();
         assert_eq!(&middle, b"middle");
         assert_eq!(&head(&to), b"head");
-        assert!(allocated(&to).unwrap() <= 4 << 20);
+        assert!(takes_at_most(&to, 4 << 20));
         for (name, tail) in [("empty", &b""[..]), ("tail", &b"end"[..])] {
             let (from, to) = (
                 dir.path().join(name),
@@ -383,7 +391,7 @@ mod tests {
         let before = allocated(&to).unwrap();
         grow(&to, 128 << 20).unwrap();
         assert_eq!(fs::metadata(&to).unwrap().len(), 128 << 20);
-        assert!(allocated(&to).unwrap() <= before + (1 << 20));
+        assert!(takes_at_most(&to, before + (1 << 20)));
         grow(&to, 1).unwrap();
         assert_eq!(fs::metadata(&to).unwrap().len(), 128 << 20);
     }
