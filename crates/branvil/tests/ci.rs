@@ -3,6 +3,8 @@
 //! so the service's queue, leases, supersession, checks, and merge gate are
 //! exercised exactly as a real runner would see them.
 
+use std::path::Path;
+
 use crate::common;
 
 use common::*;
@@ -13,6 +15,15 @@ const IMAGE: &str = "docker.io/library/alpine:3.22";
 /// The configuration digest the scripted runner reports for the image.
 pub(crate) const DIGEST: &str =
     "sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8";
+
+fn attempts_with_unknown_resources(db: &Path) -> Vec<Value> {
+    let mut attempts = records(db, "ci_attempts");
+    for attempt in &mut attempts {
+        attempt["allocation"] = Value::Null;
+        attempt["peak_memory_mib"] = Value::Null;
+    }
+    attempts
+}
 
 #[tokio::test]
 async fn post_merge_settings_validate_the_result_atomically_and_require_owner() {
@@ -255,14 +266,7 @@ async fn schema_37_upgrade_preserves_records() {
     assert_eq!(admin("reindex").0, 0);
     assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
     let verifications = records(&db, "ci_verifications");
-    let attempts = records(&db, "ci_attempts")
-        .into_iter()
-        .map(|mut a| {
-            a["allocation"] = Value::Null;
-            a["peak_memory_mib"] = Value::Null;
-            a
-        })
-        .collect::<Vec<_>>();
+    let attempts = attempts_with_unknown_resources(&db);
     let repos = records(&db, "repos");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let prior_runs = records(&db, "ci_runs");
@@ -1034,7 +1038,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
     // Preserve both purposes and their association across the previous-schema upgrade.
     w.server.stop();
     let db = w.server.data.join("branvil.redb");
-    let before_attempts = records(&db, "ci_attempts");
+    let before_attempts = attempts_with_unknown_resources(&db);
     assert!(
         before_attempts
             .iter()
