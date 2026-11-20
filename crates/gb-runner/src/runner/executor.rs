@@ -484,11 +484,8 @@ impl Microsandbox {
     /// before each job. The caller holds `lock_images`, so that no load is
     /// writing the layer files a removal deletes.
     pub async fn collect(&self) {
-        #[cfg(feature = "host")]
-        if self.sdk {
-            if let Err(error) = gb_vm::collect_images().await {
-                tracing::warn!("collecting cached images failed: {error}");
-            }
+        // The Hub sweep reindexes workspace snapshots before removing old versions.
+        if self.uses_sdk() {
             return;
         }
         let listed = match self.listed().await {
@@ -1079,10 +1076,7 @@ impl Executor for Microsandbox {
                 let _ = log.try_send(note.as_bytes().to_vec());
             })
             .await?;
-        // The shared Hub cache is collected under its exclusive lock.
-        if !self.uses_sdk() {
-            self.collect().await;
-        }
+        self.collect().await;
         match self.inspect(image).await? {
             Some(i) if !crate::ci::pipeline::valid_digest(&i.config_digest) => Err(format!(
                 "msb image inspect reports '{}' as the configuration digest of {image}, not sha256:<64 hex>",

@@ -7,6 +7,20 @@ impl Microsandbox {
     pub(super) async fn sdk_inspect(&self, reference: &str) -> Result<Option<ImageInfo>, String> {
         gb_vm::backend(&self.home).await?;
         let detail = match Image::inspect(reference).await {
+            Err(MicrosandboxError::ImageNotFound(_)) => {
+                let Some(alias) = Image::list()
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .find(|image| crate::ci::images::same_reference(reference, image.reference()))
+                else {
+                    return Ok(None);
+                };
+                Image::inspect(alias.reference()).await
+            }
+            result => result,
+        };
+        let detail = match detail {
             Ok(detail) => detail,
             Err(MicrosandboxError::ImageNotFound(_)) => return Ok(None),
             Err(error) => return Err(error.to_string()),

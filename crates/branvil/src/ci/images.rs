@@ -176,10 +176,12 @@ pub(crate) mod tests {
     use super::*;
     pub fn docker(architecture: &str, version: &str) -> tempfile::NamedTempFile {
         let file = tempfile::NamedTempFile::new().unwrap();
-        let config =
-            serde_json::json!({"architecture": architecture, "os":"linux", "version":version})
-                .to_string();
-        let manifest = r#"[{"Config":"config.json","RepoTags":["test/image:dev"]}]"#;
+        let config = serde_json::json!({
+            "architecture": architecture, "os": "linux", "version": version,
+            "rootfs": {"type": "layers", "diff_ids": []}, "config": {},
+        })
+        .to_string();
+        let manifest = r#"[{"Config":"config.json","RepoTags":["test/image:dev"],"Layers":[]}]"#;
         let mut tar = tar::Builder::new(file.reopen().unwrap());
         for (name, value) in [
             ("manifest.json", manifest),

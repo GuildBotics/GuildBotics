@@ -22,6 +22,38 @@ mod integration {
         use executor::ImageLock;
         use std::sync::atomic::AtomicBool;
 
+        #[tokio::test]
+        async fn hub_runner_defers_old_versions_to_the_snapshot_sweep() {
+            use crate::ci::images;
+            let dir = tempfile::tempdir().unwrap();
+            let ms = Microsandbox::hub(dir.path().to_owned(), "test");
+            let _images = ms.lock_images(true, || {}).await.unwrap();
+            ms.load(images::tests::docker(images::architecture(), "1").path())
+                .await
+                .unwrap();
+            let first = ms.images().await.unwrap().pop().unwrap();
+            let pin = format!("docker.io/test/image@{}", first.digest);
+
+            ms.load(images::tests::docker(images::architecture(), "2").path())
+                .await
+                .unwrap();
+            let current = ms.inspect(&first.reference).await.unwrap().unwrap();
+            assert_ne!(current.digest, first.digest);
+            let alias = ms
+                .inspect("docker.io/test/image:dev")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(alias.config_digest, current.config_digest);
+            assert!(ms.inspect(&pin).await.unwrap().is_some());
+
+            ms.collect().await;
+            assert_eq!(
+                ms.inspect(&pin).await.unwrap().unwrap().digest,
+                first.digest
+            );
+        }
+
         #[cfg(unix)]
         #[tokio::test]
         async fn hub_archives_follow_cpu_and_digest_without_reloading_equal_versions() {

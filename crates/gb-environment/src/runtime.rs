@@ -65,22 +65,23 @@ pub fn ready(home: &Path) -> Result<(), Failure> {
 }
 
 pub fn ensure(home: &Path) -> Result<(), Failure> {
-    gb_vm::ensure(home).map_err(|error| {
-        Failure::Command(Sentence::Key(
-            "intelligences.agent_environment.runtime.not_placed",
-            vec![
-                ("home", home.display().to_string()),
-                ("error", error.to_string()),
-            ],
-        ))
-    })?;
+    gb_vm::ensure(home).map_err(|error| installation_failure(home, error))?;
     ready(home)
 }
 
 pub fn doctor(home: &Path, bundled: &Path) -> Result<(), Failure> {
-    gb_vm::install_from(home, bundled)
-        .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
+    gb_vm::install_from(home, bundled).map_err(|error| installation_failure(home, error))?;
     ready(home)
+}
+
+fn installation_failure(home: &Path, error: std::io::Error) -> Failure {
+    Failure::Command(Sentence::Key(
+        "intelligences.agent_environment.runtime.not_placed",
+        vec![
+            ("home", home.display().to_string()),
+            ("error", error.to_string()),
+        ],
+    ))
 }
 
 /// The candidate population shared by the picker, declaration, and startup.
