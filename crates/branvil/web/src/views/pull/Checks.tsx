@@ -184,6 +184,7 @@ function CheckRow({ check, repo, required, onOpen }: { check: Check; repo: strin
   // A failed attempt's reason (`details`) is shown in the row.
   const job = useJob(repo, check.attempt_id ?? "", !!check.attempt_id && !isHosted(check) && failed);
   const reason = isHosted(check) ? check.details : (job.data?.details ?? check.details);
+  const runner = check.runner ? `${t("ci.runner")}: ${check.runner}` : undefined;
   const content = (
     <>
       <StatusIcon check={check} />
@@ -192,6 +193,11 @@ function CheckRow({ check, repo, required, onOpen }: { check: Check; repo: strin
       {check.attempt !== undefined && (
         <Text span size="sm" c="dimmed">
           #{check.attempt}
+        </Text>
+      )}
+      {runner && (
+        <Text span size="sm" c="dimmed" style={{ overflowWrap: "anywhere" }}>
+          {runner}
         </Text>
       )}
       <span style={{ marginLeft: "auto" }} />
@@ -203,7 +209,13 @@ function CheckRow({ check, repo, required, onOpen }: { check: Check; repo: strin
   return (
     <>
       {check.attempt_id ? (
-        <button type="button" className="check-row" onClick={() => onOpen(check)} aria-label={t("ci.open", { name: check.name })}>
+        <button
+          type="button"
+          className="check-row"
+          onClick={() => onOpen(check)}
+          aria-label={t("ci.open", { name: check.name })}
+          aria-description={runner}
+        >
           {content}
         </button>
       ) : (
@@ -302,6 +314,12 @@ function JobDetails({ repo, attemptId, onAttempt }: { repo: string; attemptId: s
         <dd>
           <Sha repo={repo} value={j.sha} />
         </dd>
+        {j.runner && (
+          <>
+            <dt>{t("ci.runner")}</dt>
+            <dd>{j.runner}</dd>
+          </>
+        )}
         <dt>{t("ci.started")}</dt>
         <dd>{j.started_at ? <Time value={j.started_at} /> : "—"}</dd>
         <dt>{t("ci.finished")}</dt>

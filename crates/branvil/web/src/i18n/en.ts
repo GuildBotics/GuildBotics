@@ -324,6 +324,7 @@ export const en = {
   "ci.started": "Started",
   "ci.finished": "Finished",
   "ci.duration": "Duration",
+  "ci.runner": "Runner",
   "ci.seconds": "{seconds}s",
   "ci.minutesSeconds": "{minutes}m {seconds}s",
   "ci.remaining": "about {time} left",
