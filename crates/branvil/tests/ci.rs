@@ -383,16 +383,7 @@ async fn schema_38_upgrade_preserves_records() {
         assert!(!tables(&db).contains_key(name));
     }
     assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
-    let backup = std::fs::read_dir(&data)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .find(|p| {
-            p.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("branvil-schema-37-")
-        })
-        .unwrap();
+    let backup = previous_schema_backup(&data);
     assert_eq!(tables(&backup), before);
     let (code, output) = admin("check");
     assert_eq!(code, 0, "{output}");

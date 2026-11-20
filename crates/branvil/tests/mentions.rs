@@ -277,16 +277,7 @@ async fn upgrade_preserves_resolved_mentions_and_their_index() {
         json!(["aiko", "ken"])
     );
     assert_eq!(tables(&db)["ix_ticket_mentions"].len(), 4);
-    let copy = std::fs::read_dir(&w.server.data)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .find(|p| {
-            p.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("branvil-schema-37-")
-        })
-        .unwrap();
+    let copy = previous_schema_backup(&w.server.data);
     assert_eq!(tables(&copy), old);
     w.restart(&[]);
     let after = w.server.ok(&query(), &w.aiko).await;

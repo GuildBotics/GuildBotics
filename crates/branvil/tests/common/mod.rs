@@ -810,17 +810,36 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
     txn.commit().unwrap();
 }
 
+const PREVIOUS_SCHEMA_VERSION: u64 = 38;
+
 /// Recreates the immediately preceding schema in a stopped database.
 pub fn as_schema_38(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
-            *v = json!(38);
+            *v = json!(PREVIOUS_SCHEMA_VERSION);
         }
     });
     edit_records(db, "ci_attempts", |v| v["cache_refresh"] = Value::Null);
     edit_records(db, "ci_runs", |v| {
         v.as_object_mut().unwrap().remove("cache_landed_at");
     });
+}
+
+pub fn previous_schema_backup(data: &Path) -> PathBuf {
+    let prefix = format!("branvil-schema-{PREVIOUS_SCHEMA_VERSION}-");
+    std::fs::read_dir(data)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "No schema backup starting with {prefix} in {}",
+                data.display()
+            )
+        })
 }
 
 /// Every table of a database, by name, as raw keys and values.
