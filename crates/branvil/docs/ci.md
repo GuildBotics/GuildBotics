@@ -772,8 +772,8 @@ Per job the runner:
    link, wherever it points: before it unpacks anything, the VM compares
    `io/checkout.members`, the members' names as the bytes of their headers,
    which the runner writes, with the links `find` lists, whatever their
-   number; a `find` that fails, and a link whose name holds a newline, count
-   as links there; a checkout with such a name gets no entry), or the
+   number; a `find` that fails, and a link whose path holds a newline
+   anywhere, count as links there; a checkout with such a name gets no entry), or the
    checkout does not
    unpack over the cached paths: the VM stops there, and the runner removes that disk,
    creates a new, empty one of the size the quota gives
