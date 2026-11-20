@@ -1918,6 +1918,39 @@ esac
         );
     }
 
+    /// A job that asks for `out/` and a cache of `target`, with those
+    /// archives already written under `state/returned`.
+    fn job_with_returned_archives(state: &std::path::Path) -> JobDef {
+        let mut tar = tar::Builder::new(Vec::new());
+        let mut h = tar::Header::new_gnu();
+        h.set_size(2);
+        h.set_mode(0o644);
+        tar.append_data(&mut h, "out/report.txt", &b"ok"[..])
+            .unwrap();
+        std::fs::write(
+            state.join("returned").join(ARTIFACTS),
+            tar.into_inner().unwrap(),
+        )
+        .unwrap();
+        std::fs::write(state.join("returned").join(CACHE_OUT), "cached").unwrap();
+        JobDef {
+            verified_sha: false,
+            paths: Vec::new(),
+            name: "j".into(),
+            image: "img:dev".into(),
+            commands: vec![],
+            timeout_secs: None,
+            artifacts: vec![crate::ci::pipeline::ArtifactDef {
+                name: "report".into(),
+                paths: vec!["out/".into()],
+            }],
+            cache: Some(crate::ci::pipeline::CacheDef {
+                paths: vec!["target".into()],
+                key_files: vec![],
+            }),
+        }
+    }
+
     /// `/work` is collected once the job's VM ended, by exit or by timeout,
     /// never after a stop: the artifacts' paths, and the cached paths when
     /// the job succeeded and saves the cache. The host unpacks what came
@@ -1935,34 +1968,7 @@ esac
         std::fs::create_dir_all(state.join("returned")).unwrap();
         std::fs::write(state.join("tag"), format!("sha256:{}", "a".repeat(64))).unwrap();
         std::fs::write(state.join("volumes"), "[]").unwrap();
-        let mut tar = tar::Builder::new(Vec::new());
-        let mut h = tar::Header::new_gnu();
-        h.set_size(2);
-        h.set_mode(0o644);
-        tar.append_data(&mut h, "out/report.txt", &b"ok"[..])
-            .unwrap();
-        std::fs::write(
-            state.join("returned").join(ARTIFACTS),
-            tar.into_inner().unwrap(),
-        )
-        .unwrap();
-        std::fs::write(state.join("returned").join(CACHE_OUT), "cached").unwrap();
-        let job = JobDef {
-            verified_sha: false,
-            paths: Vec::new(),
-            name: "j".into(),
-            image: "img:dev".into(),
-            commands: vec![],
-            timeout_secs: None,
-            artifacts: vec![crate::ci::pipeline::ArtifactDef {
-                name: "report".into(),
-                paths: vec!["out/".into()],
-            }],
-            cache: Some(crate::ci::pipeline::CacheDef {
-                paths: vec!["target".into()],
-                key_files: vec![],
-            }),
-        };
+        let job = job_with_returned_archives(&state);
         // A job that declares no artifacts collects nothing after a timeout.
         let bare = JobDef {
             artifacts: vec![],
@@ -2162,34 +2168,7 @@ esac
         std::fs::write(state.join("tag"), format!("sha256:{}", "a".repeat(64))).unwrap();
         std::fs::write(state.join("volumes"), "[]").unwrap();
         std::fs::write(state.join("done"), "").unwrap();
-        let mut tar = tar::Builder::new(Vec::new());
-        let mut h = tar::Header::new_gnu();
-        h.set_size(2);
-        h.set_mode(0o644);
-        tar.append_data(&mut h, "out/report.txt", &b"ok"[..])
-            .unwrap();
-        std::fs::write(
-            state.join("returned").join(ARTIFACTS),
-            tar.into_inner().unwrap(),
-        )
-        .unwrap();
-        std::fs::write(state.join("returned").join(CACHE_OUT), "cached").unwrap();
-        let job = JobDef {
-            verified_sha: false,
-            paths: Vec::new(),
-            name: "j".into(),
-            image: "img:dev".into(),
-            commands: vec![],
-            timeout_secs: None,
-            artifacts: vec![crate::ci::pipeline::ArtifactDef {
-                name: "report".into(),
-                paths: vec!["out/".into()],
-            }],
-            cache: Some(crate::ci::pipeline::CacheDef {
-                paths: vec!["target".into()],
-                key_files: vec![],
-            }),
-        };
+        let job = job_with_returned_archives(&state);
         for link in [false, true] {
             if link {
                 std::fs::write(
