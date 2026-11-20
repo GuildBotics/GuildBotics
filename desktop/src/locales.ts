@@ -577,7 +577,7 @@ export const resources = {
         device: {
           clientTitle: "Hub clients",
           clientBody:
-            "Set up SSH forwarding first. On Windows run guildbotics.exe install. On Linux mark guildbotics executable and run ./guildbotics install. Then run guildbotics connect.",
+            "Set up SSH forwarding first. On Windows, run guildbotics.exe install. On Linux, open a terminal in the download directory and run chmod +x guildbotics, then ./guildbotics install. Finally, run guildbotics connect.",
           clientDownload: "Download for Windows x86_64",
           linuxClientDownload: "Download for Linux x86_64",
           title: "This machine",
@@ -1713,7 +1713,7 @@ export const resources = {
         device: {
           clientTitle: "Hub クライアント",
           clientBody:
-            "先に SSH 転送を設定してください。Windows では guildbotics.exe install、Linux では実行権限を付けて ./guildbotics install を実行し、その後 guildbotics connect を実行してください。",
+            "先に SSH 転送を設定してください。Windows では guildbotics.exe install を実行します。Linux ではダウンロード先で chmod +x guildbotics、./guildbotics install の順に実行します。最後に guildbotics connect を実行してください。",
           clientDownload: "Windows x86_64 版をダウンロード",
           linuxClientDownload: "Linux x86_64 版をダウンロード",
           title: "このマシン",
