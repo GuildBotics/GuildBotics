@@ -115,12 +115,15 @@ pub struct JobRun<'a> {
     pub work_quota_mib: u64,
     pub timeout_secs: u64,
     /// A host directory of this job only that carries archives between the
-    /// host and `/work`, a disk of the job's own: it holds [`CHECKOUT`] (and
-    /// [`CACHE_IN`] to restore) and receives [`ARTIFACTS`] and, when
-    /// `save_cache` and the job succeeded, [`CACHE_OUT`]. Never mounted where
-    /// the job's commands run.
+    /// host and `/work`, a disk of the job's own: it holds [`CHECKOUT`] and
+    /// receives [`ARTIFACTS`]. Never mounted where the job's commands run.
     pub io: &'a Path,
-    /// Whether to pack the job's cached paths for the cache.
+    /// A host path of this job only that no VM mounts: the disk image of a
+    /// cache entry, when there is one, which `/work` starts from; when
+    /// `save_cache` and the job succeeded, the image of its `/work` that kept
+    /// only the cached paths, for the cache.
+    pub cache_disk: &'a Path,
+    /// Whether to keep the job's cached paths for the cache.
     pub save_cache: bool,
     /// The host directory of the checkout; once the job ended, it holds
     /// what the job left at its artifacts' paths.
@@ -641,6 +644,31 @@ impl Microsandbox {
         format!("bv-work-{}-{id}", self.runner)
     }
 
+    /// Creates the disk volume `name` of `mib` MiB, for a job's `/work`;
+    /// returns the host file of its image.
+    async fn create_disk(&self, name: &str, mib: u64) -> Result<PathBuf, String> {
+        #[cfg(feature = "host")]
+        if self.sdk {
+            return self.sdk_create_disk(name, mib).await;
+        }
+        let size = format!("{mib}M");
+        let args = [
+            "volume", "create", name, "--kind", "disk", "--size", &size, "-q",
+        ];
+        let out = self.output(&args).await?;
+        if !out.status.success() {
+            return Err(format!("msb volume create: {}", tail(&out.stderr, 1024)));
+        }
+        let out = self.output(&["volume", "inspect", name]).await?;
+        if !out.status.success() {
+            return Err(format!("msb volume inspect: {}", tail(&out.stderr, 1024)));
+        }
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find_map(|l| l.strip_prefix("Path:").map(|p| PathBuf::from(p.trim())))
+            .ok_or_else(|| format!("msb volume inspect names no path of {name}"))
+    }
+
     /// Runs `script` as root in a VM of the job's image with the job's
     /// `/work` (`disk`) and the transfer directory `io`, to which it may add
     /// `quota_mib`, to prepare `/work` or to collect from it; `cancel`
@@ -819,27 +847,36 @@ const TMP_DISK: &str = "4G";
 /// Where the transfer directory ([`JobRun::io`]) is mounted in the VMs that
 /// prepare and collect `/work`.
 pub const IO_MOUNT: &str = "/.branvil-io";
-/// The archives of the transfer directory: the checkout and the cache entry
-/// unpacked into `/work`, and what is collected from it.
+/// The archives of the transfer directory: the checkout unpacked into
+/// `/work`, and the artifacts collected from it.
 pub const CHECKOUT: &str = "checkout.tar";
-pub const CACHE_IN: &str = "cache-in.tar";
 pub const ARTIFACTS: &str = "artifacts.tar";
-pub const CACHE_OUT: &str = "cache.tar";
+/// The marks the preparing VM leaves in the transfer directory when `/work`
+/// could not keep the cache entry it started from, and when the image has
+/// no `resize2fs` to grow the entry's file system to the disk.
+const CACHE_DROPPED: &str = "cache.dropped";
+const CACHE_UNGROWN: &str = "cache.ungrown";
+/// The mark the collecting VM leaves when `fstrim` gave the blocks of what
+/// it removed back: only then does the disk become a cache entry.
+const CACHE_TRIMMED: &str = "cache.trimmed";
 /// The time limit of a VM that prepares or collects `/work`.
 const HELPER_SECS: u64 = 3600;
 /// How long a job stopped at its timeout may take to flush its disks.
 const TIMEOUT_FLUSH: Duration = Duration::from_secs(30);
 
-/// The size of a job's `/work`, which the archives are unpacked into: the
-/// quota, plus twice their size (a disk's blocks and inodes hold many small
-/// files in more than the archive's bytes) and room for the file system,
+/// An ext4 block group: 32768 blocks of 4 KiB.
+const GROUP_MIB: u64 = 128;
+
+/// The size of a job's `/work`, which the checkout's archive is unpacked
+/// into: the quota, plus twice its size (a disk's blocks and inodes hold many
+/// small files in more than the archive's bytes) and room for the file
+/// system, plus the bytes of data the cache entry's image already holds,
 /// rounded up to whole ext4 block groups: msb refuses a disk whose last,
 /// partial group is too small for its metadata (16642 MiB, the default quota
 /// with a small checkout, ends in a group of 2 MiB).
-fn work_disk_mib(quota_mib: u64, archives: u64) -> u64 {
-    /// An ext4 block group: 32768 blocks of 4 KiB.
-    const GROUP_MIB: u64 = 128;
-    (quota_mib + 2 * archives.div_ceil(1 << 20) + 256).next_multiple_of(GROUP_MIB)
+fn work_disk_mib(quota_mib: u64, checkout: u64, cached: u64) -> u64 {
+    (quota_mib + 2 * checkout.div_ceil(1 << 20) + 256 + cached.div_ceil(1 << 20))
+        .next_multiple_of(GROUP_MIB)
 }
 
 /// A shell loop over `paths`, quoted, that sets `q` to each without its
@@ -862,16 +899,94 @@ fn each_path(paths: &[&str], last: bool, body: &str) -> String {
     s
 }
 
-/// Unpacks the checkout into `/work`, a disk msb gives to root, then the
-/// cache entry unless a cached path goes through a link the commit has
-/// there (it would be written through) or it does not unpack, in which case
-/// `/work` is the checkout alone and `<cache-in>.failed` says so; then hands
-/// `/work` to the job's user, and flushes: microsandbox stops the VM when its
-/// command ends, and what the guest has not written to the disk can be lost.
-fn prepare_script(io: &str, cached: &[&str]) -> String {
-    let unlinked = each_path(cached, true, "  [ -z \"$link\" ] || exit 1");
+/// How `/work` starts from a cache entry's image: whether its file system is
+/// smaller than the disk, whether it leaves the quota without growing, and
+/// its size.
+struct Restore {
+    grow: bool,
+    ungrown_fits: bool,
+    fs_mib: u64,
+}
+
+/// Unpacks the checkout into `work`, a disk msb gives to root. When the disk
+/// is a cache entry's image (`restore`), which holds the cached paths only,
+/// the checkout goes over them, after its file system was grown to the whole
+/// disk when it is smaller (an image without `resize2fs` keeps the entry's
+/// file system when that still leaves the quota, and [`CACHE_UNGROWN`] says
+/// so); should the growing fail, or the checkout not unpack over them, or a
+/// cached path go through a link the commit has there (it would be written
+/// through), `work` is the checkout alone and [`CACHE_DROPPED`] says so.
+/// Then hands `work` to the job's user, and flushes: microsandbox stops the
+/// VM when its command ends, and what the guest has not written to the disk
+/// can be lost.
+fn prepare_script(work: &str, io: &str, cached: &[&str], restore: Option<&Restore>) -> String {
+    let unpack = format!("tar -xf {io}/{CHECKOUT} -C {work}");
+    let mut s = String::from("set -e\n");
+    if let Some(r) = restore {
+        let unlinked = each_path(cached, true, "  [ -z \"$link\" ] || exit 1");
+        let without = if r.ungrown_fits {
+            format!("echo ungrown >{io}/{CACHE_UNGROWN}")
+        } else {
+            "false".into()
+        };
+        let grown = if r.grow {
+            format!(
+                "if command -v resize2fs >/dev/null; then resize2fs \"$(df -P {work} | awk 'NR == 2 {{print $1}}')\" >/dev/null; else {without}; fi"
+            )
+        } else {
+            "true".into()
+        };
+        s.push_str(&format!(
+            "grown() {{ {grown}; }}\nif ! grown || ! {unpack} || ! (cd {work}\n{unlinked}); then\n  echo dropped >{io}/{CACHE_DROPPED}\n  find {work} -mindepth 1 -delete\n  {unpack}\nfi\n"
+        ));
+    } else {
+        s.push_str(&format!("{unpack}\n"));
+    }
+    s.push_str(&format!(
+        "chown -R {JOB_USER_ID}:{JOB_USER_ID} {work}\nsync\n"
+    ));
+    s
+}
+
+/// Leaves only `cached` of `work` (the current directory), for its disk to
+/// become a cache entry: a cached path that goes through a link loses the
+/// link; everything that is neither a cached path, below one, nor a
+/// directory above one goes. The freed blocks are given back to the disk's
+/// image, which then holds only what is kept: [`CACHE_TRIMMED`] in `io` says
+/// they were (without it, what went may still be on the disk, and the disk
+/// is not kept). The disk is flushed.
+fn keep_script(work: &str, io: &str, cached: &[&str]) -> String {
+    let unlink = each_path(cached, false, "  [ -z \"$link\" ] || rm -f -- \"./$link\"");
+    // `find -path` takes a pattern: its special characters stand for
+    // themselves here.
+    let pattern = |p: &str| {
+        let mut q = String::from("-path './");
+        for c in p.chars() {
+            match c {
+                '*' | '?' | '[' | ']' | '\\' => q.extend(['\\', c]),
+                '\'' => q.push_str("'\\''"),
+                _ => q.push(c),
+            }
+        }
+        q.push('\'');
+        q
+    };
+    let (mut kept, mut above) = (Vec::new(), Vec::new());
+    for p in cached {
+        let parts: Vec<&str> = p.trim_end_matches('/').split('/').collect();
+        kept.push(pattern(&parts.join("/")));
+        for n in 1..parts.len() {
+            above.push(pattern(&parts[..n].join("/")));
+        }
+    }
+    let above = if above.is_empty() {
+        String::new()
+    } else {
+        format!("\\( {} \\) -o ", above.join(" -o "))
+    };
     format!(
-        "set -e\ntar -xf {io}/{CHECKOUT} -C /work\nif [ -e {io}/{CACHE_IN} ]; then\n  if ! (cd /work\n{unlinked}) || ! tar -xf {io}/{CACHE_IN} -C /work; then\n    echo failed >{io}/{CACHE_IN}.failed\n    find /work -mindepth 1 -delete\n    tar -xf {io}/{CHECKOUT} -C /work\n  fi\nfi\nchown -R {JOB_USER_ID}:{JOB_USER_ID} /work\nsync\n"
+        "{unlink}find . -mindepth 1 \\( {} \\) -prune -o {above}-prune -exec rm -rf -- {{}} +\nsync\nif fstrim {work} >/dev/null 2>&1; then : >{io}/{CACHE_TRIMMED}; fi\nsync\n",
+        kept.join(" -o "),
     )
 }
 
@@ -897,9 +1012,10 @@ fn pack_script(io: &str, name: &str, paths: &[&str]) -> String {
     )
 }
 
-/// Packs `artifacts` and `cached` of `work` into their archives in `io`; an
-/// archive that failed is not there. A failure of the script itself (`work`
-/// not there, a mark that cannot be removed, the rename) fails it, and the
+/// Packs `artifacts` of `work` into their archive in `io`, which is not
+/// there when it failed, then leaves only `cached` of `work` ([`keep_script`])
+/// when there are any. A failure of the script itself (`work` not there, a
+/// mark that cannot be removed, the rename, what is kept) fails it, and the
 /// host keeps neither.
 fn collect_script(work: &str, io: &str, artifacts: &[&str], cached: &[&str]) -> String {
     let mut s = format!("set -e\ncd {work}\n");
@@ -907,7 +1023,7 @@ fn collect_script(work: &str, io: &str, artifacts: &[&str], cached: &[&str]) -> 
         s.push_str(&pack_script(io, ARTIFACTS, artifacts));
     }
     if !cached.is_empty() {
-        s.push_str(&pack_script(io, CACHE_OUT, cached));
+        s.push_str(&keep_script(work, io, cached));
     }
     s
 }
@@ -1009,6 +1125,8 @@ impl JobLog<'_> {
 struct JobDisk {
     name: String,
     mib: u64,
+    /// The host file of the volume's image.
+    path: PathBuf,
 }
 
 impl std::fmt::Display for JobDisk {
@@ -1136,19 +1254,81 @@ impl Executor for Microsandbox {
                 let _ = log.send(format!("[branvil] {text}\n").into_bytes()).await;
             }
         };
-        let archives = [CHECKOUT, CACHE_IN]
-            .iter()
-            .filter_map(|f| std::fs::metadata(job.io.join(f)).ok())
-            .map(|m| m.len())
-            .sum();
-        let disk_mib = work_disk_mib(job.work_quota_mib, archives);
-        let disk = JobDisk {
-            name: self.work_volume(job.attempt_id),
-            mib: disk_mib,
+        let checkout = std::fs::metadata(job.io.join(CHECKOUT)).map_or(0, |m| m.len());
+        // The cache entry's image: its length, the bytes of data it holds,
+        // and the size of its file system.
+        let image = std::fs::symlink_metadata(job.cache_disk)
+            .ok()
+            .filter(|m| m.is_file())
+            .map(|m| {
+                let data = super::disk::allocated(job.cache_disk).unwrap_or(m.len());
+                let fs = super::disk::ext4_bytes(job.cache_disk).ok();
+                (m.len(), data, fs)
+            });
+        let needed_mib = |cached: u64| {
+            job.work_quota_mib + 2 * checkout.div_ceil(1 << 20) + 256 + cached.div_ceil(1 << 20)
         };
-        // What the collecting VM may add to `io`: archives of `/work`'s
-        // files, twice when the artifacts and the cache name the same ones.
-        let collect_mib = 2 * disk_mib;
+        let disk_mib = work_disk_mib(job.work_quota_mib, checkout, image.map_or(0, |i| i.1));
+        let name = self.work_volume(job.attempt_id);
+        let disk = match self.create_disk(&name, disk_mib).await {
+            Ok(path) => JobDisk {
+                name,
+                mib: disk_mib,
+                path,
+            },
+            Err(e) => {
+                let _ = std::fs::remove_file(job.cache_disk);
+                self.remove_volumes(|n| n == name).await;
+                return Outcome::StartupFailure(format!("Creating /work failed: {e}"));
+            }
+        };
+        // The disk becomes the entry's image, grown to its size: a rename or
+        // a clone, no copy of its data where the file system shares blocks.
+        // An image larger than the disk, or with no file system to grow, is
+        // not used: the disk keeps the size the quota gives.
+        let mut restore = None;
+        match image {
+            Some((len, _, _)) if len > disk_mib << 20 => {
+                say(format!("the cache entry ({} MiB) is larger than /work ({disk_mib} MiB); the job runs without it", len >> 20)).await
+            }
+            Some((_, _, None)) => {
+                say("the cache entry holds no ext4 file system; the job runs without it".into())
+                    .await
+            }
+            Some((_, data, Some(fs))) => {
+                let (from, to, size) = (
+                    job.cache_disk.to_path_buf(),
+                    disk.path.clone(),
+                    disk_mib << 20,
+                );
+                match super::blocking(move || {
+                    super::disk::grow(&from, size)?;
+                    super::disk::place(&from, &to)
+                })
+                .await
+                {
+                    Ok(()) => {
+                        restore = Some(Restore {
+                            grow: fs < disk_mib << 20,
+                            // Without growing, it still leaves the quota.
+                            ungrown_fits: fs >= needed_mib(data) << 20,
+                            fs_mib: fs >> 20,
+                        })
+                    }
+                    Err(e) => {
+                        say(format!(
+                            "the cache entry could not become /work ({e}); the job runs without it"
+                        ))
+                        .await
+                    }
+                }
+            }
+            None => {}
+        }
+        let _ = std::fs::remove_file(job.cache_disk);
+        // What the collecting VM may add to `io`: the artifacts' archive of
+        // `/work`'s files.
+        let collect_mib = disk_mib;
         let image_lock = std::mem::take(&mut job.image_lock);
         let cache_paths: Vec<&str> = job
             .job
@@ -1161,16 +1341,19 @@ impl Executor for Microsandbox {
             .helper(
                 &job,
                 "prep",
-                // It writes no more than a `.failed` mark.
+                // It writes no more than a mark.
                 1,
                 &disk,
-                &prepare_script(IO_MOUNT, &cache_paths),
+                &prepare_script("/work", IO_MOUNT, &cache_paths, restore.as_ref()),
                 &mut cancel,
             )
             .await;
-        let _ = std::fs::remove_file(job.io.join(CACHE_IN));
-        if std::fs::remove_file(job.io.join(format!("{CACHE_IN}.failed"))).is_ok() {
-            say("the cache entry was not unpacked (a cached path goes through a link of the commit, or the archive is unreadable); the job runs without it".into()).await;
+        if std::fs::remove_file(job.io.join(CACHE_UNGROWN)).is_ok() {
+            let fs = restore.as_ref().map_or(0, |r| r.fs_mib);
+            say(format!("the image has no resize2fs: /work keeps the cache entry's file system, {fs} MiB rather than {disk_mib} MiB")).await;
+        }
+        if std::fs::remove_file(job.io.join(CACHE_DROPPED)).is_ok() {
+            say("the cache entry was not kept (its file system could not grow to /work, the checkout did not unpack over it, or a cached path goes through a link of the commit); the job runs without it".into()).await;
         }
         let mut outcome = match prepared {
             Err(e) => {
@@ -1258,11 +1441,27 @@ impl Executor for Microsandbox {
                     // only as the regular file of that name. The link is not
                     // followed: the VM can leave one where the archive should
                     // be, and that is not an archive.
-                    for (name, asked) in [(ARTIFACTS, &artifacts), (CACHE_OUT, &cached)] {
-                        let packed =
-                            std::fs::symlink_metadata(job.io.join(name)).is_ok_and(|m| m.is_file());
-                        if !asked.is_empty() && !packed {
-                            say(format!("packing {name} failed")).await;
+                    let packed = std::fs::symlink_metadata(job.io.join(ARTIFACTS))
+                        .is_ok_and(|m| m.is_file());
+                    if !artifacts.is_empty() && !packed {
+                        say(format!("packing {ARTIFACTS} failed")).await;
+                    }
+                    // The disk, which kept only the cached paths, for the
+                    // cache: a clone, no copy of its data where the file
+                    // system shares blocks. Its VM has ended.
+                    let trimmed = std::fs::remove_file(job.io.join(CACHE_TRIMMED)).is_ok();
+                    if !cached.is_empty() && !trimmed {
+                        say("/work is not kept for the cache: fstrim did not give back the blocks of what went (the image has none, or it failed)".into()).await;
+                    } else if !cached.is_empty() {
+                        let (from, to) = (disk.path.clone(), job.cache_disk.to_path_buf());
+                        let kept = super::blocking(move || {
+                            // What the VM wrote last reaches the file first.
+                            std::fs::File::open(&from)?.sync_all()?;
+                            super::disk::copy(&from, &to)
+                        })
+                        .await;
+                        if let Err(e) = kept {
+                            say(format!("keeping /work for the cache failed: {e}")).await;
                         }
                     }
                 }
@@ -1276,9 +1475,7 @@ impl Executor for Microsandbox {
                     ))
                     .await;
                     // What it wrote may be cut short.
-                    for name in [ARTIFACTS, CACHE_OUT] {
-                        let _ = std::fs::remove_file(job.io.join(name));
-                    }
+                    let _ = std::fs::remove_file(job.io.join(ARTIFACTS));
                 }
             }
         }
@@ -1785,17 +1982,20 @@ pub(crate) mod tests {
     fn the_work_disk_is_whole_ext4_block_groups() {
         // The default quota with a checkout of a few bytes: msb refused
         // 16642 MiB, whose last group is 2 MiB.
-        assert_eq!(work_disk_mib(16384, 1), 16768);
-        assert_eq!(work_disk_mib(2048, 0), 2304);
+        assert_eq!(work_disk_mib(16384, 1, 0), 16768);
+        assert_eq!(work_disk_mib(2048, 0, 0), 2304);
+        // The cache entry's data counts once: it is not unpacked.
+        assert_eq!(work_disk_mib(2048, 0, 128 << 20), 2432);
         for quota in [0, 1, 127, 128, 2048, 16384, 16385] {
-            for archives in [0u64, 1, 1 << 20, (1 << 20) + 1, 21_343_338, 2_132_153_879] {
-                let raw = quota + 2 * archives.div_ceil(1 << 20) + 256;
-                let mib = work_disk_mib(quota, archives);
-                assert_eq!(mib % 128, 0, "{quota} MiB, {archives} bytes: {mib}");
-                assert!(
-                    (raw..raw + 128).contains(&mib),
-                    "{quota} MiB, {archives} bytes: {mib}"
-                );
+            for archive in [0u64, 1, 1 << 20, (1 << 20) + 1, 21_343_338, 2_132_153_879] {
+                for cached in [0u64, 1, 5_740_625_920] {
+                    let raw =
+                        quota + 2 * archive.div_ceil(1 << 20) + 256 + cached.div_ceil(1 << 20);
+                    let mib = work_disk_mib(quota, archive, cached);
+                    let at = format!("{quota} MiB, {archive} + {cached} bytes: {mib}");
+                    assert_eq!(mib % 128, 0, "{at}");
+                    assert!((raw..raw + 128).contains(&mib), "{at}");
+                }
             }
         }
     }
@@ -1824,8 +2024,12 @@ pub(crate) mod tests {
     /// writes the start marker, and runs until `fake/done` exists; the VM
     /// that collects `/work` copies `fake/returned/*` into the transfer
     /// directory, or, when `fake/archive-links` names them, leaves a
-    /// symbolic link of each name there; the others end at once. `volume list` answers
-    /// `fake/volumes`; removals are noted in `fake/removed`, and so is an
+    /// symbolic link of each name there; the others end at once. `volume
+    /// create` makes an empty image `fake/disks/<name>` (noting its
+    /// arguments in `fake/created`), whose path `volume inspect` tells
+    /// (it fails when `fake/inspect-fails` exists);
+    /// `volume list` answers `fake/volumes`; removals are noted in
+    /// `fake/removed`, and so is an
     /// `exec` into a job's VM while its `run` is alive (it fails otherwise,
     /// and when `fake/exec-fails` exists), which then runs while
     /// `fake/exec-hangs` exists.
@@ -1875,6 +2079,9 @@ exec)
   while [ -e "$state/exec-hangs" ]; do sleep 0.05; done ;;
 volume)
   case "$2" in
+  create) mkdir -p "$state/disks"; : > "$state/disks/$3"; echo "$*" >> "$state/created" ;;
+  inspect) [ ! -e "$state/inspect-fails" ] || exit 1
+    printf 'Name:           %s\nPath:           %s\n' "$3" "$state/disks/$3" ;;
   list) cat "$state/volumes" ;;
   remove) echo "$*" >> "$state/removed" ;;
   esac ;;
@@ -1939,6 +2146,7 @@ esac
             cache: None,
         };
         let (_cancel, cancel) = watch::channel(false);
+        let cache_disk = root.join("cache-disk.raw");
         let running = tokio::spawn(async move {
             let job = JobRun {
                 attempt_id: "a1",
@@ -1950,6 +2158,7 @@ esac
                 work_quota_mib: 2048,
                 timeout_secs: 60,
                 io: &io,
+                cache_disk: &cache_disk,
                 save_cache: true,
                 work: &work,
                 log_dir: &log_dir,
@@ -1994,6 +2203,11 @@ esac
             args.windows(2).any(|w| w == [flag, value])
         };
         let disk = "bv-work-t-a1:/work:kind=disk,size=2432M";
+        // The runner made that disk before the VMs.
+        assert_eq!(
+            std::fs::read_to_string(state.join("created")).unwrap(),
+            "volume create bv-work-t-a1 --kind disk --size 2432M -q\n"
+        );
         let io_mount = format!("{}:/.branvil-io:quota=1M", root.join("io").display());
         let prep = args("bv-prep-a1").unwrap();
         for (flag, value) in [
@@ -2096,8 +2310,25 @@ esac
         );
     }
 
-    /// A job that asks for `out/` and a cache of `target`, with those
-    /// archives already written under `state/returned`.
+    /// An image whose superblock says it holds an ext4 file system of
+    /// `fs_mib` MiB, and whose first bytes are `head`.
+    fn ext4_image(path: &Path, fs_mib: u64, head: &[u8]) {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut sb = [0u8; 1024];
+        let blocks = u32::try_from((fs_mib << 20) / 4096).unwrap();
+        sb[0x04..0x08].copy_from_slice(&blocks.to_le_bytes());
+        sb[0x18..0x1c].copy_from_slice(&2u32.to_le_bytes());
+        sb[0x38..0x3a].copy_from_slice(&0xEF53u16.to_le_bytes());
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(head).unwrap();
+        f.seek(SeekFrom::Start(1024)).unwrap();
+        f.write_all(&sb).unwrap();
+        f.set_len(fs_mib << 20).unwrap();
+    }
+
+    /// A job that asks for `out/` and a cache of `target`, with the
+    /// artifacts' archive and the mark of a trimmed disk already written
+    /// under `state/returned`.
     fn job_with_returned_archives(state: &std::path::Path) -> JobDef {
         let mut tar = tar::Builder::new(Vec::new());
         let mut h = tar::Header::new_gnu();
@@ -2110,7 +2341,7 @@ esac
             tar.into_inner().unwrap(),
         )
         .unwrap();
-        std::fs::write(state.join("returned").join(CACHE_OUT), "cached").unwrap();
+        std::fs::write(state.join("returned").join(CACHE_TRIMMED), "").unwrap();
         JobDef {
             verified_sha: false,
             paths: Vec::new(),
@@ -2129,11 +2360,12 @@ esac
         }
     }
 
-    /// `/work` is collected once the job's VM ended, by exit or by timeout,
-    /// never after a stop: the artifacts' paths, and the cached paths when
-    /// the job succeeded and saves the cache. The host unpacks what came
-    /// back of the artifacts into the work directory and keeps the cache's
-    /// archive as it is; the cache entry it was given is gone before the job.
+    /// `/work` starts from the cache entry's image it was given, grown to the
+    /// disk's size, and is collected once the job's VM ended, by exit or by
+    /// timeout, never after a stop: the artifacts' paths, and the cached
+    /// paths when the job succeeded and saves the cache. The host unpacks
+    /// what came back of the artifacts into the work directory and keeps the
+    /// image of `/work` for the cache only when it was collected.
     #[cfg(unix)]
     #[tokio::test]
     async fn work_is_collected_after_the_jobs_vm_ended() {
@@ -2154,6 +2386,7 @@ esac
         };
         for (ending, collected, cached) in [
             ("exit", true, true),
+            ("exit-untrimmed", true, true),
             ("timeout", true, false),
             ("timeout-bare", false, false),
             ("timeout-unflushed", true, false),
@@ -2168,7 +2401,12 @@ esac
                 std::fs::create_dir_all(d).unwrap();
             }
             std::fs::write(io.join(CHECKOUT), "checkout").unwrap();
-            std::fs::write(io.join(CACHE_IN), "restored").unwrap();
+            let cache_disk = at.join("cache-disk.raw");
+            ext4_image(&cache_disk, 128, b"restored");
+            let _ = std::fs::remove_file(state.join("returned").join(CACHE_TRIMMED));
+            if ending != "exit-untrimmed" {
+                std::fs::write(state.join("returned").join(CACHE_TRIMMED), "").unwrap();
+            }
             std::fs::write(work.join("README"), "checkout").unwrap();
             let _ = std::fs::remove_file(state.join("done"));
             let _ = std::fs::remove_file(state.join("args-bv-collect-a1"));
@@ -2182,7 +2420,14 @@ esac
             if ending == "stop-while-flushing" {
                 std::fs::write(state.join("exec-hangs"), "").unwrap();
             }
-            if ["exit", "collect-fails", "stop-while-locked"].contains(&ending) {
+            if [
+                "exit",
+                "exit-untrimmed",
+                "collect-fails",
+                "stop-while-locked",
+            ]
+            .contains(&ending)
+            {
                 std::fs::write(state.join("done"), "").unwrap();
             }
             if ending == "collect-fails" {
@@ -2204,7 +2449,7 @@ esac
             } else {
                 &job
             };
-            let (work_dir, io_dir) = (work.clone(), io.clone());
+            let (work_dir, io_dir, kept_disk) = (work.clone(), io.clone(), cache_disk.clone());
             let running = async move {
                 runner
                     .run(
@@ -2224,6 +2469,7 @@ esac
                                 60
                             },
                             io: &io_dir,
+                            cache_disk: &kept_disk,
                             save_cache: true,
                             work: &work_dir,
                             log_dir: &log_dir,
@@ -2266,7 +2512,7 @@ esac
             assert_eq!(
                 outcome,
                 match ending {
-                    "exit" | "collect-fails" => Outcome::Exited(0),
+                    "exit" | "exit-untrimmed" | "collect-fails" => Outcome::Exited(0),
                     "timeout" | "timeout-bare" | "timeout-unflushed" => Outcome::TimedOut,
                     _ => Outcome::Cancelled,
                 }
@@ -2283,7 +2529,36 @@ esac
                 ending == "timeout-unflushed",
                 "{ending}: {text}"
             );
-            assert!(!io.join(CACHE_IN).exists(), "{ending}");
+            // The entry became the disk: grown to its size, and holding what
+            // the image held.
+            let disk = state.join("disks/bv-work-t-a1");
+            assert_eq!(
+                std::fs::metadata(&disk).unwrap().len(),
+                2432 << 20,
+                "{ending}"
+            );
+            assert!(
+                std::fs::read(&disk).unwrap().starts_with(b"restored"),
+                "{ending}"
+            );
+            let prep = std::fs::read_to_string(state.join("args-bv-prep-a1")).unwrap();
+            assert!(prep.contains("resize2fs"), "{prep}");
+            // The image of `/work` is kept for the cache only after a
+            // collection that kept its cached paths and gave back the blocks
+            // of what went.
+            let kept = ending == "exit";
+            assert_eq!(
+                text.contains("/work is not kept for the cache: fstrim"),
+                ending == "exit-untrimmed",
+                "{ending}: {text}"
+            );
+            assert_eq!(cache_disk.exists(), kept, "{ending}");
+            if kept {
+                assert_eq!(
+                    std::fs::read(&cache_disk).unwrap(),
+                    std::fs::read(&disk).unwrap()
+                );
+            }
             // A job stopped at its timeout is flushed before it is killed
             // when it declares artifacts: they are collected from what
             // reached the disk. One that exits flushes itself; a cancelled
@@ -2299,8 +2574,8 @@ esac
             let script = std::fs::read_to_string(state.join("args-bv-collect-a1"));
             assert_eq!(script.is_ok(), collected, "{ending}");
             if let Ok(script) = script {
-                // It may add to `io` twice what `/work` holds.
-                let io_mount = format!("{}:/.branvil-io:quota=4864M", io.display());
+                // It may add to `io` what `/work` holds.
+                let io_mount = format!("{}:/.branvil-io:quota=2432M", io.display());
                 assert!(script.lines().any(|l| l == io_mount), "{script}");
                 assert!(script.contains("'out/'"), "{script}");
                 assert_eq!(script.contains("'target'"), cached, "{script}");
@@ -2312,7 +2587,6 @@ esac
                     // What a failed collection wrote may be cut short.
                     assert!(!work.join("out").exists(), "{ending}");
                     assert!(!io.join(ARTIFACTS).exists(), "{ending}");
-                    assert!(!io.join(CACHE_OUT).exists(), "{ending}");
                 } else {
                     assert_eq!(
                         std::fs::read_to_string(work.join("out/report.txt")).unwrap(),
@@ -2330,10 +2604,108 @@ esac
         }
     }
 
+    /// A `/work` that cannot be made ends the attempt before any VM, its
+    /// volume removed and the cache entry it was given gone; an entry larger
+    /// than the disk the quota gives is not used.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_disk_that_cannot_be_made_or_an_entry_too_large_is_not_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let msb = root.join("msb");
+        write_script(&msb, FAKE_MSB);
+        let home = root.join("home");
+        let state = home.join("fake");
+        std::fs::create_dir_all(state.join("returned")).unwrap();
+        std::fs::write(state.join("tag"), format!("sha256:{}", "a".repeat(64))).unwrap();
+        std::fs::write(state.join("volumes"), r#"[{"name": "bv-work-t-a1"}]"#).unwrap();
+        std::fs::write(state.join("done"), "").unwrap();
+        let job = job_with_returned_archives(&state);
+        for case in ["inspect-fails", "too-large"] {
+            let at = root.join(case);
+            let (work, log_dir, io) = (at.join("work"), at.join("log"), at.join("io"));
+            for d in [&work, &log_dir, &io] {
+                std::fs::create_dir_all(d).unwrap();
+            }
+            std::fs::write(io.join(CHECKOUT), "checkout").unwrap();
+            let cache_disk = at.join("cache-disk.raw");
+            ext4_image(&cache_disk, 4096, b"restored");
+            let _ = std::fs::remove_file(state.join("removed"));
+            let _ = std::fs::remove_file(state.join("args-bv-prep-a1"));
+            if case == "inspect-fails" {
+                std::fs::write(state.join("inspect-fails"), "").unwrap();
+            } else {
+                let _ = std::fs::remove_file(state.join("inspect-fails"));
+            }
+            let (log, mut logs) = mpsc::channel(64);
+            let (_stop, cancel) = watch::channel(false);
+            let runner = Microsandbox::new(Msb::Found(msb.clone()), home.clone(), "t");
+            let outcome = runner
+                .run(
+                    JobRun {
+                        attempt_id: "a1",
+                        peak_memory_mib: &mut None,
+                        job: &job,
+                        image_lock: ImageLock::default(),
+                        cpus: 1,
+                        memory_mib: 256,
+                        work_quota_mib: 2048,
+                        timeout_secs: 60,
+                        io: &io,
+                        cache_disk: &cache_disk,
+                        save_cache: false,
+                        work: &work,
+                        log_dir: &log_dir,
+                        network: false,
+                        env: vec![],
+                    },
+                    log,
+                    cancel,
+                )
+                .await;
+            let mut text = String::new();
+            while let Ok(bytes) = logs.try_recv() {
+                text.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            let removed = std::fs::read_to_string(state.join("removed")).unwrap_or_default();
+            assert!(
+                removed.contains("volume remove -q bv-work-t-a1"),
+                "{case}: {removed}"
+            );
+            // Nothing is left for the cache: the entry was used or dropped,
+            // and a run that does not save keeps nothing.
+            assert!(!cache_disk.exists(), "{case}");
+            if case == "inspect-fails" {
+                assert!(
+                    matches!(&outcome, Outcome::StartupFailure(m) if m.starts_with("Creating /work failed")),
+                    "{outcome:?}"
+                );
+                assert!(!state.join("args-bv-prep-a1").exists());
+            } else {
+                assert_eq!(outcome, Outcome::Exited(0));
+                assert!(
+                    text.contains("the cache entry (4096 MiB) is larger than /work (2432 MiB)"),
+                    "{text}"
+                );
+                assert_eq!(
+                    std::fs::metadata(state.join("disks/bv-work-t-a1"))
+                        .unwrap()
+                        .len(),
+                    0
+                );
+                let prep = std::fs::read_to_string(state.join("args-bv-prep-a1")).unwrap();
+                assert!(
+                    !prep.contains("resize2fs") && !prep.contains(CACHE_DROPPED),
+                    "{prep}"
+                );
+            }
+        }
+    }
+
     /// A name in the return directory is an archive only as a regular file.
     /// A symbolic link of that name, even one whose target is a regular
-    /// file, is logged as `packing <name> failed` for every archive the job
-    /// asked for. A regular file of that name is not.
+    /// file, is logged as `packing <name> failed`. A regular file of that
+    /// name is not.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_symbolic_link_is_not_counted_as_a_packed_archive() {
@@ -2350,11 +2722,7 @@ esac
         let job = job_with_returned_archives(&state);
         for link in [false, true] {
             if link {
-                std::fs::write(
-                    state.join("archive-links"),
-                    format!("{ARTIFACTS}\n{CACHE_OUT}\n"),
-                )
-                .unwrap();
+                std::fs::write(state.join("archive-links"), format!("{ARTIFACTS}\n")).unwrap();
             }
             let at = root.join(if link { "link" } else { "file" });
             let (work, log_dir, io) = (at.join("work"), at.join("log"), at.join("io"));
@@ -2376,6 +2744,7 @@ esac
                         work_quota_mib: 2048,
                         timeout_secs: 60,
                         io: &io,
+                        cache_disk: &at.join("cache-disk.raw"),
                         save_cache: true,
                         work: &work,
                         log_dir: &log_dir,
@@ -2391,13 +2760,11 @@ esac
             while let Ok(bytes) = logs.try_recv() {
                 text.push_str(&String::from_utf8_lossy(&bytes));
             }
-            for name in [ARTIFACTS, CACHE_OUT] {
-                let line = format!("[branvil] packing {name} failed\n");
-                assert_eq!(text.contains(&line), link, "{line} in {text}");
-                let meta = std::fs::symlink_metadata(io.join(name)).unwrap();
-                assert_eq!(meta.file_type().is_symlink(), link, "{name}");
-                assert_eq!(meta.is_file(), !link, "{name}");
-            }
+            let line = format!("[branvil] packing {ARTIFACTS} failed\n");
+            assert_eq!(text.contains(&line), link, "{line} in {text}");
+            let meta = std::fs::symlink_metadata(io.join(ARTIFACTS)).unwrap();
+            assert_eq!(meta.file_type().is_symlink(), link);
+            assert_eq!(meta.is_file(), !link);
             if link {
                 assert!(text.contains("artifacts: unpacking failed:"), "{text}");
                 assert!(!work.join("out/report.txt").exists());
@@ -2520,20 +2887,13 @@ esac
             ),
         );
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-        let collect = |work: &Path, artifacts: &[&str], cached: &[&str]| {
+        let collect = |work: &Path, artifacts: &[&str]| {
             let _ = std::fs::remove_file(&calls);
-            for name in [ARTIFACTS, CACHE_OUT] {
-                let _ = std::fs::remove_file(io.join(name));
-            }
+            let _ = std::fs::remove_file(io.join(ARTIFACTS));
             std::process::Command::new("/bin/sh")
                 .args([
                     "-c",
-                    &collect_script(
-                        work.to_str().unwrap(),
-                        io.to_str().unwrap(),
-                        artifacts,
-                        cached,
-                    ),
+                    &collect_script(work.to_str().unwrap(), io.to_str().unwrap(), artifacts, &[]),
                 ])
                 .env("PATH", &path)
                 .env("COPYFILE_DISABLE", "1")
@@ -2542,37 +2902,287 @@ esac
                 .status
                 .success()
         };
-        // Both archives, the empty one included, are written and flushed.
-        assert!(collect(&work, &["out/"], &["missing"]));
+        // The archive is written and flushed, and so is an empty one.
         let calls_of = || std::fs::read_to_string(&calls).unwrap();
-        assert_eq!(calls_of().lines().count(), 2, "{}", calls_of());
-        assert!(
-            calls_of().lines().all(|l| l.contains("conv=fsync")),
-            "{}",
-            calls_of()
-        );
-        let named = |name: &str| io.join(name).is_file();
-        assert!(named(ARTIFACTS) && named(CACHE_OUT));
+        let named = || io.join(ARTIFACTS).is_file();
+        for paths in [&["out/"][..], &["missing"]] {
+            assert!(collect(&work, paths));
+            assert_eq!(calls_of().lines().count(), 1, "{}", calls_of());
+            assert!(calls_of().contains("conv=fsync"), "{}", calls_of());
+            assert!(named());
+        }
         // A `dd` that fails once it read all (`tar` succeeded), of the empty
-        // archive or one of paths, leaves neither, and the script goes on.
+        // archive or one of paths, leaves none, and the script goes on.
         std::fs::write(dir.path().join("dd-fails"), "").unwrap();
-        assert!(collect(&work, &["missing"], &["out/"]));
-        assert!(!named(ARTIFACTS) && !named(CACHE_OUT));
+        for paths in [&["out/"][..], &["missing"]] {
+            assert!(collect(&work, paths));
+            assert!(!named());
+        }
         std::fs::remove_file(dir.path().join("dd-fails")).unwrap();
         // A `tar` that fails midway leaves no archive, though `dd` wrote
         // what it got.
         std::fs::write(dir.path().join("tar-fails"), "").unwrap();
-        assert!(collect(&work, &["out/"], &["out/"]));
-        assert!(!named(ARTIFACTS) && !named(CACHE_OUT));
+        assert!(collect(&work, &["out/"]));
+        assert!(!named());
         std::fs::remove_file(dir.path().join("tar-fails")).unwrap();
         // A mark that cannot be removed fails the script, and names nothing.
         let mark = io.join(format!("{ARTIFACTS}.packed"));
         std::fs::create_dir(&mark).unwrap();
-        assert!(!collect(&work, &["out/"], &[]));
-        assert!(!named(ARTIFACTS));
+        assert!(!collect(&work, &["out/"]));
+        assert!(!named());
         std::fs::remove_dir(&mark).unwrap();
         // `/work` not there: nothing is packed from elsewhere.
-        assert!(!collect(&dir.path().join("gone"), &["out/"], &[]));
+        assert!(!collect(&dir.path().join("gone"), &["out/"]));
+    }
+
+    /// What is kept of `/work` for the cache is the cached paths, whole, and
+    /// the directories above them; a cached path that goes through a link
+    /// loses the link (what it points to is kept), and so does nothing else.
+    /// Names that are patterns or quotes to `find` and the shell are taken as
+    /// they are. With the system's `/bin/sh` and `find`.
+    #[cfg(unix)]
+    #[test]
+    fn the_keep_script_leaves_only_the_cached_paths() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let (work, outside) = (dir.path().join("work"), dir.path().join("outside"));
+        for d in [
+            "target/debug",
+            ".ci/cargo-home/registry/index",
+            ".ci/cargo-home/bin",
+            "src",
+            "star*/x",
+            "starry/x",
+            "it's",
+        ] {
+            std::fs::create_dir_all(work.join(d)).unwrap();
+        }
+        std::fs::create_dir_all(outside.join("inner")).unwrap();
+        for f in [
+            "target/debug/a.o",
+            ".ci/cargo-home/registry/index/i",
+            ".ci/cargo-home/bin/tool",
+            ".ci/cargo-home/config.toml",
+            "src/main.rs",
+            "README",
+            "star*/x/f",
+            "starry/x/f",
+            "it's/f",
+        ] {
+            std::fs::write(work.join(f), "x").unwrap();
+        }
+        std::fs::write(outside.join("inner/secret"), "x").unwrap();
+        symlink(&outside, work.join("linked")).unwrap();
+        symlink("target", work.join("alias")).unwrap();
+        let cached = [
+            "target/",
+            ".ci/cargo-home/registry",
+            "linked/inner",
+            "star*/x",
+            "it's",
+            "missing",
+        ];
+        // An `fstrim` that succeeds on request; there is none otherwise.
+        let (io, bin) = (dir.path().join("io"), dir.path().join("bin"));
+        for d in [&io, &bin] {
+            std::fs::create_dir(d).unwrap();
+        }
+        write_script(
+            &bin.join("fstrim"),
+            &format!(
+                "#!/bin/sh\n[ -e '{}' ]\n",
+                dir.path().join("trims").display()
+            ),
+        );
+        let keep = |trims: bool| {
+            if trims {
+                std::fs::write(dir.path().join("trims"), "").unwrap();
+            }
+            let out = std::process::Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    &keep_script(work.to_str().unwrap(), io.to_str().unwrap(), &cached),
+                ])
+                .current_dir(&work)
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            io.join(CACHE_TRIMMED).exists()
+        };
+        // Only a trim that succeeded is marked.
+        assert!(!keep(false));
+        assert!(keep(true));
+        let mut left = Vec::new();
+        let mut walk = vec![work.clone()];
+        while let Some(d) = walk.pop() {
+            for e in std::fs::read_dir(&d).unwrap() {
+                let e = e.unwrap();
+                let rel = e.path().strip_prefix(&work).unwrap().display().to_string();
+                if e.file_type().unwrap().is_dir() {
+                    walk.push(e.path());
+                } else {
+                    left.push(rel);
+                }
+            }
+        }
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                ".ci/cargo-home/registry/index/i",
+                "it's/f",
+                "star*/x/f",
+                "target/debug/a.o",
+            ]
+        );
+        assert!(!work.join("starry").exists() && !work.join("src").exists());
+        assert!(
+            outside.join("inner/secret").exists(),
+            "a link's target stays"
+        );
+    }
+
+    /// `/work` starting from a cache entry's image gets the checkout over the
+    /// cached paths once its file system grew to the disk; without
+    /// `resize2fs`, the entry is kept only when its file system leaves the
+    /// quota; a failed growing, or a cached path through a link of the
+    /// commit, leaves the checkout alone. With the system's `/bin/sh`,
+    /// `tar`, `df`, and `awk`, a `resize2fs` that notes its argument and
+    /// succeeds on request, and a `chown` that notes its arguments.
+    #[cfg(unix)]
+    #[test]
+    fn the_prepare_script_keeps_the_entry_only_on_a_disk_it_fills() {
+        let dir = tempfile::tempdir().unwrap();
+        let (io, bin) = (dir.path().join("io"), dir.path().join("bin"));
+        for d in [&io, &bin] {
+            std::fs::create_dir(d).unwrap();
+        }
+        let checkout = |link: bool| {
+            let mut tar = tar::Builder::new(Vec::new());
+            let mut h = tar::Header::new_gnu();
+            h.set_size(2);
+            h.set_mode(0o644);
+            tar.append_data(&mut h, "src/main.rs", &b"ok"[..]).unwrap();
+            if link {
+                let mut h = tar::Header::new_gnu();
+                h.set_entry_type(tar::EntryType::Symlink);
+                h.set_size(0);
+                tar.append_link(&mut h, "target", "/tmp").unwrap();
+            }
+            std::fs::write(io.join(CHECKOUT), tar.into_inner().unwrap()).unwrap();
+        };
+        let resized = dir.path().join("resized");
+        let tool = bin.join("resize2fs");
+        let tool_script = format!(
+            "#!/bin/sh\necho \"$1\" >> '{}'\n[ ! -e '{}' ]\n",
+            resized.display(),
+            dir.path().join("resize-fails").display()
+        );
+        write_script(
+            &bin.join("chown"),
+            &format!(
+                "#!/bin/sh\necho \"$*\" >> '{}'\n",
+                dir.path().join("chowned").display()
+            ),
+        );
+        let prepare = |name: &str, restore: Option<Restore>, resize2fs: bool| {
+            let work = dir.path().join(name);
+            std::fs::create_dir_all(work.join("target/debug")).unwrap();
+            std::fs::write(work.join("target/debug/a.o"), "cached").unwrap();
+            let _ = std::fs::remove_file(&tool);
+            if resize2fs {
+                write_script(&tool, &tool_script);
+            }
+            let out = std::process::Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    &prepare_script(
+                        work.to_str().unwrap(),
+                        io.to_str().unwrap(),
+                        &["target"],
+                        restore.as_ref(),
+                    ),
+                ])
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{name}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let marks =
+                [CACHE_UNGROWN, CACHE_DROPPED].map(|m| std::fs::remove_file(io.join(m)).is_ok());
+            (work.join("target/debug/a.o").exists(), marks, work)
+        };
+        let grows = |fits| {
+            Some(Restore {
+                grow: true,
+                ungrown_fits: fits,
+                fs_mib: 128,
+            })
+        };
+        checkout(false);
+        // Grown: the cached paths stay under the checkout; the device is
+        // the file system's.
+        let (kept, marks, work) = prepare("grown", grows(false), true);
+        assert!(kept && marks == [false, false]);
+        assert_eq!(
+            std::fs::read_to_string(work.join("src/main.rs")).unwrap(),
+            "ok"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&resized).unwrap().lines().count(),
+            1
+        );
+        assert!(
+            std::fs::read_to_string(dir.path().join("chowned"))
+                .unwrap()
+                .contains(&format!("-R 1000:1000 {}", work.display()))
+        );
+        // No growing is needed: no resize2fs either.
+        let (kept, marks, _) = prepare(
+            "full",
+            Some(Restore {
+                grow: false,
+                ungrown_fits: false,
+                fs_mib: 128,
+            }),
+            false,
+        );
+        assert!(kept && marks == [false, false]);
+        // No resize2fs: kept as it is when that leaves the quota, said.
+        let (kept, marks, _) = prepare("fits", grows(true), false);
+        assert!(kept && marks == [true, false]);
+        // Otherwise, and when growing fails, the checkout alone.
+        for (name, resize2fs) in [("small", false), ("failing", true)] {
+            if resize2fs {
+                std::fs::write(dir.path().join("resize-fails"), "").unwrap();
+            }
+            let (kept, marks, work) = prepare(name, grows(false), resize2fs);
+            assert!(!kept && marks == [false, true], "{name}");
+            assert!(work.join("src/main.rs").exists(), "{name}");
+        }
+        std::fs::remove_file(dir.path().join("resize-fails")).unwrap();
+        // A cached path through a link of the commit: the checkout alone.
+        checkout(true);
+        let (kept, marks, work) = prepare("linked", grows(false), true);
+        assert!(!kept && marks == [false, true]);
+        assert!(
+            std::fs::symlink_metadata(work.join("target"))
+                .unwrap()
+                .is_symlink()
+        );
+        // Without an entry, the checkout is unpacked as it is.
+        checkout(false);
+        let (kept, marks, work) = prepare("plain", None, false);
+        assert!(kept && marks == [false, false]);
+        assert!(work.join("src/main.rs").exists());
     }
 
     /// A pull, and a load's pin, name the version the tag now points to by

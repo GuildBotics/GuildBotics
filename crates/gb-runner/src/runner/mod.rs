@@ -5,6 +5,7 @@
 //! and reports the conclusion, renewing its lease while it works. See
 //! `docs/ci.md`.
 
+mod disk;
 pub mod executor;
 mod machine;
 pub mod workspace;
@@ -747,7 +748,7 @@ impl Runner {
         let mut current = executor();
         current.sweep().await;
         let _ = std::fs::remove_dir_all(self.work_dir.join("jobs"));
-        if let Err(e) = self.cache.remove_unpacked() {
+        if let Err(e) = self.cache.remove_earlier_forms() {
             tracing::warn!("removing cache entries of an earlier form failed: {e}");
         }
         let mut running = tokio::task::JoinSet::new();
@@ -1234,10 +1235,12 @@ impl Runner {
                 .cache
                 .as_ref()
                 .map(|cache| workspace::cache_key(&c.repo, job, &digest, cache, &work));
+            // Never mounted: the disk image `/work` starts from, and the one
+            // it leaves for the cache.
+            let cache_disk = dir.join("cache-disk.raw");
             if let Some(key) = &key {
                 let restoring = Instant::now();
-                let (store, into, key) =
-                    (self.cache.clone(), io.join(executor::CACHE_IN), key.clone());
+                let (store, into, key) = (self.cache.clone(), cache_disk.clone(), key.clone());
                 match blocking(move || store.restore(&key, &into)).await {
                     Ok(Some(bytes)) => {
                         say(format!(
@@ -1264,6 +1267,7 @@ impl Runner {
                         work_quota_mib: limits.work_quota_mib,
                         timeout_secs,
                         io: &io,
+                        cache_disk: &cache_disk,
                         save_cache: c.cache_scope == "protected",
                         work: &work,
                         log_dir: &log_dir,
@@ -1341,11 +1345,7 @@ impl Runner {
                 && let Some(key) = &key
             {
                 let saving = Instant::now();
-                let (store, from, key) = (
-                    self.cache.clone(),
-                    io.join(executor::CACHE_OUT),
-                    key.clone(),
-                );
+                let (store, from, key) = (self.cache.clone(), cache_disk.clone(), key.clone());
                 let max = limits.cache_max_mib << 20;
                 let owner = workspace::CacheOwner {
                     repo: c.repo.clone(),

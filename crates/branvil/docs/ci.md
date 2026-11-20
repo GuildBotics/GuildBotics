@@ -550,9 +550,12 @@ read.
 
 `cache.paths` are restored into `/work` before the job, and saved after a
 successful job of a run that a protected branch asked for (its cache scope is
-`protected`). An entry is the archive a VM packed of the cached paths, links
-and hard links, owners and modes included; a VM unpacks it into `/work`, and
-the runner never unpacks it. When a protected branch comes to want a commit whose
+`protected`). An entry is the disk image of such a job's `/work` that kept
+only the cached paths (links, hard links, owners and modes included); a job's
+`/work` starts as a copy of it, and the runner never mounts it. On a file
+system that shares blocks between copies (APFS), a restore and a save write
+none of the entry's data: a job writes only what it changes. Elsewhere a copy
+writes the blocks that hold data, and leaves the rest holes. When a protected branch comes to want a commit whose
 jobs ran for a pull request, jobs with a cache get
 protected attempts (one still running for the pull request is stopped), and an
 attempt still queued takes its run's scope when a runner claims it. These
@@ -577,14 +580,16 @@ say `cache not saved`): they cannot plant a cache entry that the default branch
 would use, and never push out the entries every run restores. The key is the SHA-256
 of the repository, the job name, the configuration digest of the image the
 job runs on (a new version of the tag does not reuse what the previous one
-built), the user the job runs as (the archive keeps the owner of each file),
+built), the user the job runs as (the image keeps the owner of each file),
 the cached paths, and the content of `cache.key_files`. The cache lives in
-`<runner work dir>/cache/`, an entry's archive in `<key>/cache.tar`. A
-restore copies the archive into the job's `io` directory, which the
-preparing VM can write, so no VM ever has an entry's own file; a save copies
-the new archive in, read as the artifacts' archive is (a regular file, no
-link followed, no FIFO waited for), and replaces the entry, which is never
-changed in place.
+`<runner work dir>/cache/`, an entry's image in `<key>/disk.raw`. A restore
+copies the image to a path of the job's directory that no VM mounts, which
+then becomes the disk of the job's `/work`, so no VM ever has an entry's own
+file; a save takes a copy of that disk once the VM that kept the cached
+paths ended (a regular file only), and replaces the entry, which is never
+changed in place. The sizes the cache counts (`cache_max_mib`, `cache saved
+… bytes`) are the bytes of data the images hold. Entries of an earlier form
+(an archive of the cached paths) are removed when the runner starts.
 
 A job finds no entry (`no cache entry yet`) when no protected branch's run
 has saved one for its key yet, or the entry was evicted. Changing a lock file
@@ -743,13 +748,23 @@ Per job the runner:
    `out` (opened once, before the VM exists), and checks that no component
    below the runner's directory is a symbolic link. Git never runs in the
    work directory once a VM has had what it holds;
-3. puts a copy of the cache entry's archive at `io/cache-in.tar`, then prepares `/work`
-   in a VM of the job's image:
-   `msb run --name bv-prep-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --user 0:0 --mount-dir <io>:/.branvil-io:quota=1M --mount-named bv-work-<runner>-<attempt>:/work:kind=disk,size=SM --max-duration 3600s --no-net <image> -- /bin/sh -c <unpack the archives into /work; chown -R 1000:1000 /work; sync>`,
-   removes that sandbox and `io/cache-in.tar`, and runs the job. The cache entry is not
-   unpacked when a cached path goes through a symbolic link of the commit
-   (it would be written through) or the archive does not unpack: `/work` is
-   then the checkout alone, and the log says the job runs without the cache.
+3. when the cache has an entry for the job, puts a copy of its image at
+   `<work dir>/jobs/<attempt id>/cache-disk.raw`; creates the disk of `/work`
+   (`msb volume create bv-work-<runner>-<attempt> --kind disk --size SM`),
+   and makes the copy, grown to `S` (the space it gains takes no blocks),
+   that volume's disk (a rename). An entry larger than `S` (a quota that was
+   lowered), or one that holds no ext4 file system, is not used. It then
+   prepares `/work` in a VM of the job's image:
+   `msb run --name bv-prep-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --user 0:0 --mount-dir <io>:/.branvil-io:quota=1M --mount-named bv-work-<runner>-<attempt>:/work:kind=disk,size=SM --max-duration 3600s --no-net <image> -- /bin/sh -c <grow the file system to the disk; unpack the checkout into /work; chown -R 1000:1000 /work; sync>`,
+   removes that sandbox, and runs the job. The file system of an entry is
+   grown only when it is smaller than `S` (its size is read from the
+   image's superblock). The cache entry is not kept when its file system
+   cannot grow, the checkout does not unpack over the cached paths, or a
+   cached path goes through a symbolic link of the commit (it would be
+   written through): `/work` is then the checkout alone, and the log says
+   the job runs without the cache. The checkout is unpacked over the cached
+   paths by this VM, which has only `/work` and `io`, so a link an entry
+   holds below a cached path reaches nothing else.
    Every VM of the job flushes before its command ends: microsandbox stops
    the VM when the command ends, and what the guest has not written to
    `/work` or `io` by then can be lost (a lost `chown` left the checkout
@@ -774,31 +789,38 @@ Per job the runner:
    succeeded in a protected branch's run with a cache, a VM like the one
    that prepared `/work` (`bv-collect-<attempt>`, started under the shared
    image lock as the job's VM is, a cancel ending the wait for it, `io`
-   mounted with `quota=` twice `S`, as
-   the artifacts and the cache may pack the same files) packs the artifacts' paths into
-   `io/artifacts.tar` and the cached paths into `io/cache.tar`: those that
-   exist and go through no symbolic link (one at the end goes as a link),
-   an empty archive when there is none, written in large blocks and flushed
-   (`dd … conv=fsync`, so a write that does not reach `io` fails). Each is
-   written as `<archive>.part` and renamed once `tar` and `dd` succeeded, so
-   an archive whose packing failed is not there (the log says so); a failure
-   of the script itself (a `/work` that is not there) fails the VM (`set -e`).
-   Both archives are dropped when the VM failed or was stopped; a stop
-   makes the attempt `cancelled`. It then removes
+   mounted with `quota=S`) packs the artifacts' paths into
+   `io/artifacts.tar`: those that exist and go through no symbolic link (one
+   at the end goes as a link), an empty archive when there is none, written
+   in large blocks and flushed (`dd … conv=fsync`, so a write that does not
+   reach `io` fails). The archive is written as `<archive>.part` and renamed
+   once `tar` and `dd` succeeded, so one whose packing failed is not there
+   (the log says so). For the cache, the VM then leaves only the cached
+   paths of `/work` and the directories above them (a cached path that goes
+   through a symbolic link loses the link), flushes, and gives the freed
+   blocks back to the disk's image (`fstrim`); only when that succeeded
+   does the runner take a copy of the disk to `cache-disk.raw` (after
+   flushing the image's file on the host). Otherwise the log says `/work`
+   is not kept: what was removed could still be read from the disk, and
+   the image would hold every block ever written. A failure of the
+   script itself (a `/work` that is not there, what is kept) fails the VM
+   (`set -e`). The archive and the copy are dropped when the VM failed or
+   was stopped; a stop makes the attempt `cancelled`. It then removes
    every sandbox of the attempt (by its `branvil.job` label) and the `/tmp`
    and `/work` volumes (which outlive the sandboxes), warning only about one
    that exists and could not be removed, and, for a job with artifacts,
    empties the work directory and unpacks the artifacts' archive into it
    (see "Artifacts"): nothing of the checkout is taken for an artifact;
-5. uploads artifacts, saves `io/cache.tar` as the cache entry after a
+5. uploads artifacts, saves `cache-disk.raw` as the cache entry after a
    success of a protected branch's run, reports the conclusion with the
    image's configuration digest, and deletes the job's directories.
 
-`S` is `ci.executor.work_quota_mib`, plus twice the size of the archives
-unpacked into `/work` (a disk's blocks and inodes hold many small files in
-more than the archive's bytes) and 256 MiB, rounded up to a multiple of
-128 MiB (an ext4 block group; microsandbox refuses a disk whose last, partial
-group is too small for its metadata). Its volume is in `MSB_HOME`
+`S` is `ci.executor.work_quota_mib`, plus twice the size of the checkout's
+archive (a disk's blocks and inodes hold many small files in more than the
+archive's bytes), 256 MiB, and the bytes of data of the cache entry's image,
+rounded up to a multiple of 128 MiB (an ext4 block group; microsandbox
+refuses a disk whose last, partial group is too small for its metadata), and
+no smaller than that image. Its volume is in `MSB_HOME`
 (`<GuildBotics data>/msb` on the Hub). `/work` is a
 disk rather than the host directory mounted into the VM: microsandbox's
 directory mounts read and write a file at a time across the VM's boundary,
@@ -806,7 +828,12 @@ which on Windows made the small files of a build about 30 times slower than
 on the host (a Rust workspace's build passed its time limit), while a disk
 is as fast as the VM's own. What crosses the boundary is one archive at a
 time. The image needs `/bin/sh`, `tar`, `chown`, `find`, `dd` (with `obs=`
-and `conv=fsync`), `rm`, `mv`, and `sync` for this, and `mkdir` when it gives the job's user no home it can write.
+and `conv=fsync`), `rm`, `mv`, and `sync` for this, `mkdir` when it gives
+the job's user no home it can write, and, for a job with a cache, `fstrim`
+to save an entry and `df`, `awk`, and `resize2fs` to grow an entry's file
+system to `S`. Without `resize2fs`, an entry's file system is kept as it is
+only when it still leaves the quota (the log says so), and the job runs
+without the cache otherwise.
 Without `sync`, preparing `/work` fails for every job, so an image that ran
 jobs before needs it too.
 
@@ -814,13 +841,13 @@ The log says how long each step took, so the time of a job can be read off
 it: how long the attempt waited in the queue (`queued for … s`, from its
 registration to the claim), then `source fetched in … ms` (with the bundle's
 size), `checked out in … ms` (the clone and its archive), `cache restored in
-… ms` (with the size of the entry's archive), `/work prepared in … ms` (the
-VM that unpacks the archives), `sandbox started in … ms` (from VM creation
+… ms` (with the bytes of data of the entry's image), `/work prepared in …
+ms` (the VM that unpacks the checkout), `sandbox started in … ms` (from VM creation
 to the start of the guest command), `commands ran for … ms`, `/work
 collected in … ms` (a job whose artifacts or cache are collected),
 `sandbox removed in … ms` (from the job's end, the collecting included),
 `artifacts handled in … ms` (a job that declares artifacts), and `cache saved
-in … ms` (with the archive's size). `peak memory: … MiB` is the highest resident memory sample recorded while the
+in … ms` (with the bytes of data of the image). `peak memory: … MiB` is the highest resident memory sample recorded while the
 job ran. The Hub uses the SDK's VM metrics. An external runner samples the
 `msb run` process tree. A short job can finish before there is a sample.
 
@@ -901,14 +928,18 @@ reports itself unavailable without it, as without `msb`).
   a protected branch's run saves).
 - `crates/gb-runner/src/runner/workspace.rs`: the checkout's archive (modes and links from
   the index), the unpacking of what a VM returns (nothing outside its
-  directory), and the dependency cache (keys, eviction, entries of an
-  earlier form, and restores and saves of one entry at once getting whole
-  archives).
+  directory), and the dependency cache (keys, eviction by the bytes of
+  data, entries of an earlier form, and restores and saves of one entry at
+  once getting whole images).
 - `crates/gb-runner/src/runner/executor.rs`: `msb` run as a fake script (the VMs that prepare
   and collect `/work` as root with the `io` directory, the job's as its user
-  without it, the mounts and volumes a job gets, collecting after an exit or
-  a timeout and never after a stop, their removal, and the sweep of this
-  runner's leftovers only).
+  without it, the mounts and volumes a job gets, `/work` started from the
+  cache entry's image and its image kept for the cache only after a
+  collection, collecting after an exit or a timeout and never after a stop,
+  their removal, and the sweep of this runner's leftovers only), and what
+  the collecting VM keeps for the cache (with the system's `sh` and `find`).
+- `crates/gb-runner/src/runner/disk.rs`: copies of an image keep its content
+  and its holes and are independent of it.
 - `tests/real_executor.rs` (opt-in, `BRANVIL_REAL_EXECUTOR=1`): real microVMs
   (no network or host files; a checkout of the commit at `/work` whose index
   is clean, a non-root user that cannot read a file of mode 0, `/tmp` on a
