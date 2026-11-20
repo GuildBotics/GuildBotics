@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from tests.blackbox.environment import EnvironmentSource
-from tests.blackbox.harness import Stack, _environment, running_stack
+from tests.blackbox.harness import TIMINGS_ENV, Stack, _environment, running_stack
 
 
 def test_server_fixture_runs_without_cli(tmp_path, monkeypatch):
@@ -60,6 +60,7 @@ def test_cli_timeout_keeps_the_started_phase_without_server_log(
     monkeypatch.setenv("GUILDBOTICS_BLACKBOX_CLI", "cli-command")
 
     def timeout(args, **kwargs):
+        assert kwargs["env"][TIMINGS_ENV] == "1"
         raise subprocess.TimeoutExpired(
             args,
             kwargs["timeout"],
@@ -70,6 +71,7 @@ def test_cli_timeout_keeps_the_started_phase_without_server_log(
     with pytest.raises(AssertionError, match="Timed out after"):
         stack.cli(timings=True)
 
+    assert TIMINGS_ENV not in stack.env
     stderr = capsys.readouterr().err
     assert "readiness wall=" in stderr
     assert "cli_cpu=" in stderr
@@ -102,9 +104,11 @@ def test_children_use_temporary_home_keyring_and_loopback_only(tmp_path, monkeyp
         "OPENAI_API_KEY",
         "MSB_HOME",
         "PYTHONSTARTUP",
+        TIMINGS_ENV,
     ):
         monkeypatch.setenv(name, "ambient-setting-must-not-be-inherited")
     env = _environment(tmp_path, workspace, home, 12345)
+    assert TIMINGS_ENV not in env
     result = subprocess.run(
         [
             sys.executable,

@@ -25,6 +25,7 @@ PERSON = "blackbox"
 SUPPORT = Path(__file__).parent / "support"
 ROOT = Path(__file__).resolve().parents[2]
 STARTUP_TIMEOUT_SECONDS = 30
+TIMINGS_ENV = "GUILDBOTICS_BLACKBOX_TIMINGS"
 
 
 @dataclass
@@ -52,7 +53,7 @@ class Stack:
             result = subprocess.run(
                 [*shlex.split(command), *arguments],
                 cwd=cwd or self.workspace,
-                env=self.env,
+                env=self.env | {TIMINGS_ENV: "1"} if timings else self.env,
                 input=content,
                 capture_output=True,
                 text=True,
@@ -200,7 +201,6 @@ def _environment(root: Path, workspace: Path, home: Path, port: int) -> dict[str
         GIT_ALLOW_PROTOCOL="file:http",
         GUILDBOTICS_BROWSER_TEST_BRANVIL="1",
         GUILDBOTICS_BLACKBOX_CONTROL="1",
-        GUILDBOTICS_BLACKBOX_TIMINGS="1",
         BRANVIL_DATA_DIR=str(home / "branvil"),
         HTTP_PROXY="http://127.0.0.1:1",
         HTTPS_PROXY="http://127.0.0.1:1",
@@ -256,7 +256,7 @@ def serving(tmp_path: Path, workspace: Path, home: Path, provider=None, **overri
         process = subprocess.Popen(
             command,
             cwd=workspace,
-            env=env,
+            env=env | {TIMINGS_ENV: "1"},
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=log,
