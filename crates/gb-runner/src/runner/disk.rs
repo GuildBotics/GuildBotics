@@ -236,14 +236,6 @@ mod tests {
         f.write_all(b"middle").unwrap();
     }
 
-    /// Whether at most `max` bytes of `path` take blocks of its disk. Every
-    /// claim about holes goes through this: they hold where the runners keep
-    /// their images (APFS on the Hub, ext4 on Linux), while NTFS fills those
-    /// of a file nobody marked sparse, so elsewhere there is nothing to check.
-    fn takes_at_most(path: &Path, max: u64) -> bool {
-        !cfg!(any(target_os = "linux", target_os = "macos")) || allocated(path).unwrap() <= max
-    }
-
     /// Whether `a` and `b` hold the same bytes, read a block at a time.
     fn same(a: &Path, b: &Path) -> bool {
         let (mut a, mut b) = (fs::File::open(a).unwrap(), fs::File::open(b).unwrap());
@@ -281,7 +273,7 @@ mod tests {
                 sparse_copy(&from, &to).unwrap();
             }
             assert!(same(&to, &from), "{name}");
-            assert!(takes_at_most(&to, 4 << 20), "{name}");
+            assert!(allocated(&to).unwrap() <= 4 << 20, "{name}");
         }
         // It never replaces a file.
         assert!(copy(&from, &dir.path().join("copy")).is_err());
@@ -319,7 +311,7 @@ mod tests {
         t.read_exact(&mut middle).unwrap();
         assert_eq!(&middle, b"middle");
         assert_eq!(&head(&to), b"head");
-        assert!(takes_at_most(&to, 4 << 20));
+        assert!(allocated(&to).unwrap() <= 4 << 20);
         for (name, tail) in [("empty", &b""[..]), ("tail", &b"end"[..])] {
             let (from, to) = (
                 dir.path().join(name),
@@ -378,12 +370,15 @@ mod tests {
     }
 
     /// Placing replaces the target and leaves nothing at the source; growing
-    /// adds a hole and never shrinks.
+    /// adds a hole and never shrinks. Like the runner's, the image placed is
+    /// a copy (NTFS keeps holes only in a file marked sparse).
     #[test]
     fn placing_replaces_and_growing_only_grows() {
         let dir = tempfile::tempdir().unwrap();
         let (from, to) = (dir.path().join("from.raw"), dir.path().join("to.raw"));
-        image(&from);
+        let image_path = dir.path().join("image.raw");
+        image(&image_path);
+        copy(&image_path, &from).unwrap();
         fs::write(&to, "old").unwrap();
         place(&from, &to).unwrap();
         assert!(!from.exists());
@@ -391,7 +386,7 @@ mod tests {
         let before = allocated(&to).unwrap();
         grow(&to, 128 << 20).unwrap();
         assert_eq!(fs::metadata(&to).unwrap().len(), 128 << 20);
-        assert!(takes_at_most(&to, before + (1 << 20)));
+        assert!(allocated(&to).unwrap() <= before + (1 << 20));
         grow(&to, 1).unwrap();
         assert_eq!(fs::metadata(&to).unwrap().len(), 128 << 20);
     }
