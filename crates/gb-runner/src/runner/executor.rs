@@ -1147,9 +1147,14 @@ impl Executor for Microsandbox {
                         collecting.elapsed().as_millis()
                     ))
                     .await;
-                    // An archive is there only once it was packed whole.
+                    // An archive is there only once it was packed whole, and
+                    // only as the regular file of that name. The link is not
+                    // followed: the VM can leave one where the archive should
+                    // be, and that is not an archive.
                     for (name, asked) in [(ARTIFACTS, &artifacts), (CACHE_OUT, &cached)] {
-                        if !asked.is_empty() && !job.io.join(name).is_file() {
+                        let packed =
+                            std::fs::symlink_metadata(job.io.join(name)).is_ok_and(|m| m.is_file());
+                        if !asked.is_empty() && !packed {
                             say(format!("packing {name} failed")).await;
                         }
                     }
@@ -1641,7 +1646,8 @@ pub(crate) mod tests {
     /// in `fake/args-<name>`. The job's VM notes the digest it started,
     /// writes the start marker, and runs until `fake/done` exists; the VM
     /// that collects `/work` copies `fake/returned/*` into the transfer
-    /// directory; the others end at once. `volume list` answers
+    /// directory, or, when `fake/archive-links` names them, leaves a
+    /// symbolic link of each name there; the others end at once. `volume list` answers
     /// `fake/volumes`; removals are noted in `fake/removed`, and so is an
     /// `exec` into a job's VM while its `run` is alive (it fails otherwise,
     /// and when `fake/exec-fails` exists), which then runs while
@@ -1667,7 +1673,16 @@ run)
   done
   printf '%s\n' "$@" > "$state/args-$name"
   case "$name" in
-  bv-collect-*) cp "$state"/returned/* "$io" 2>/dev/null; [ ! -e "$state/collect-fails" ]; exit $? ;;
+  bv-collect-*)
+    if [ -f "$state/archive-links" ]; then
+      while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        ln -sfn "$state/tag" "$io/$name"
+      done < "$state/archive-links"
+    else
+      cp "$state"/returned/* "$io" 2>/dev/null
+    fi
+    [ ! -e "$state/collect-fails" ]; exit $? ;;
   bv-job-*) echo $$ > "$state/pid-$name" ;;
   *) exit 0 ;;
   esac
@@ -1903,6 +1918,39 @@ esac
         );
     }
 
+    /// A job that asks for `out/` and a cache of `target`, with those
+    /// archives already written under `state/returned`.
+    fn job_with_returned_archives(state: &std::path::Path) -> JobDef {
+        let mut tar = tar::Builder::new(Vec::new());
+        let mut h = tar::Header::new_gnu();
+        h.set_size(2);
+        h.set_mode(0o644);
+        tar.append_data(&mut h, "out/report.txt", &b"ok"[..])
+            .unwrap();
+        std::fs::write(
+            state.join("returned").join(ARTIFACTS),
+            tar.into_inner().unwrap(),
+        )
+        .unwrap();
+        std::fs::write(state.join("returned").join(CACHE_OUT), "cached").unwrap();
+        JobDef {
+            verified_sha: false,
+            paths: Vec::new(),
+            name: "j".into(),
+            image: "img:dev".into(),
+            commands: vec![],
+            timeout_secs: None,
+            artifacts: vec![crate::ci::pipeline::ArtifactDef {
+                name: "report".into(),
+                paths: vec!["out/".into()],
+            }],
+            cache: Some(crate::ci::pipeline::CacheDef {
+                paths: vec!["target".into()],
+                key_files: vec![],
+            }),
+        }
+    }
+
     /// `/work` is collected once the job's VM ended, by exit or by timeout,
     /// never after a stop: the artifacts' paths, and the cached paths when
     /// the job succeeded and saves the cache. The host unpacks what came
@@ -1920,34 +1968,7 @@ esac
         std::fs::create_dir_all(state.join("returned")).unwrap();
         std::fs::write(state.join("tag"), format!("sha256:{}", "a".repeat(64))).unwrap();
         std::fs::write(state.join("volumes"), "[]").unwrap();
-        let mut tar = tar::Builder::new(Vec::new());
-        let mut h = tar::Header::new_gnu();
-        h.set_size(2);
-        h.set_mode(0o644);
-        tar.append_data(&mut h, "out/report.txt", &b"ok"[..])
-            .unwrap();
-        std::fs::write(
-            state.join("returned").join(ARTIFACTS),
-            tar.into_inner().unwrap(),
-        )
-        .unwrap();
-        std::fs::write(state.join("returned").join(CACHE_OUT), "cached").unwrap();
-        let job = JobDef {
-            verified_sha: false,
-            paths: Vec::new(),
-            name: "j".into(),
-            image: "img:dev".into(),
-            commands: vec![],
-            timeout_secs: None,
-            artifacts: vec![crate::ci::pipeline::ArtifactDef {
-                name: "report".into(),
-                paths: vec!["out/".into()],
-            }],
-            cache: Some(crate::ci::pipeline::CacheDef {
-                paths: vec!["target".into()],
-                key_files: vec![],
-            }),
-        };
+        let job = job_with_returned_archives(&state);
         // A job that declares no artifacts collects nothing after a timeout.
         let bare = JobDef {
             artifacts: vec![],
@@ -2126,6 +2147,85 @@ esac
                 assert!(!work.join("out").exists(), "{ending}");
             } else {
                 assert!(work.join("README").exists(), "{ending}");
+            }
+        }
+    }
+
+    /// A name in the return directory is an archive only as a regular file.
+    /// A symbolic link of that name, even one whose target is a regular
+    /// file, is logged as `packing <name> failed` for every archive the job
+    /// asked for. A regular file of that name is not.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_symbolic_link_is_not_counted_as_a_packed_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let msb = root.join("msb");
+        write_script(&msb, FAKE_MSB);
+        let home = root.join("home");
+        let state = home.join("fake");
+        std::fs::create_dir_all(state.join("returned")).unwrap();
+        std::fs::write(state.join("tag"), format!("sha256:{}", "a".repeat(64))).unwrap();
+        std::fs::write(state.join("volumes"), "[]").unwrap();
+        std::fs::write(state.join("done"), "").unwrap();
+        let job = job_with_returned_archives(&state);
+        for link in [false, true] {
+            if link {
+                std::fs::write(
+                    state.join("archive-links"),
+                    format!("{ARTIFACTS}\n{CACHE_OUT}\n"),
+                )
+                .unwrap();
+            }
+            let at = root.join(if link { "link" } else { "file" });
+            let (work, log_dir, io) = (at.join("work"), at.join("log"), at.join("io"));
+            for d in [&work, &log_dir, &io] {
+                std::fs::create_dir_all(d).unwrap();
+            }
+            let (log, mut logs) = mpsc::channel(64);
+            let (_stop, cancel) = watch::channel(false);
+            let runner = Microsandbox::new(Msb::Found(msb.clone()), home.clone(), "t");
+            let outcome = runner
+                .run(
+                    JobRun {
+                        attempt_id: "a1",
+                        job: &job,
+                        image_lock: ImageLock::default(),
+                        cpus: 1,
+                        memory_mib: 256,
+                        work_quota_mib: 2048,
+                        timeout_secs: 60,
+                        io: &io,
+                        save_cache: true,
+                        work: &work,
+                        log_dir: &log_dir,
+                        network: false,
+                        env: vec![],
+                    },
+                    log,
+                    cancel,
+                )
+                .await;
+            assert_eq!(outcome, Outcome::Exited(0), "link={link}");
+            let mut text = String::new();
+            while let Ok(bytes) = logs.try_recv() {
+                text.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            for name in [ARTIFACTS, CACHE_OUT] {
+                let line = format!("[branvil] packing {name} failed\n");
+                assert_eq!(text.contains(&line), link, "{line} in {text}");
+                let meta = std::fs::symlink_metadata(io.join(name)).unwrap();
+                assert_eq!(meta.file_type().is_symlink(), link, "{name}");
+                assert_eq!(meta.is_file(), !link, "{name}");
+            }
+            if link {
+                assert!(text.contains("artifacts: unpacking failed:"), "{text}");
+                assert!(!work.join("out/report.txt").exists());
+            } else {
+                assert_eq!(
+                    std::fs::read_to_string(work.join("out/report.txt")).unwrap(),
+                    "ok"
+                );
             }
         }
     }
