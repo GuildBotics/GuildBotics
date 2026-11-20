@@ -1161,6 +1161,15 @@ esac
         #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn runner_publishes_only_the_merged_heads_pending_image() {
             let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write target/out built\"]\ncache = { paths = [\"target\"], key_files = [\"Cargo.lock\"] }\n").await;
+            let settings = s
+                .http
+                .patch(format!("{}/api/v1/repos/acme%2Fdemo", s.url))
+                .bearer_auth(&s.owner)
+                .json(&serde_json::json!({"revision":s.repo.revision,"required_approvals":0}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(settings.status(), 200, "{}", settings.text().await.unwrap());
             let runner = Runner::new(
                 Api::new(&s.url, &s.runner_token),
                 s.dir.path().join("runner"),
