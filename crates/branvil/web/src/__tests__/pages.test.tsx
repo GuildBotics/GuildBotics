@@ -24,8 +24,8 @@ it.each([ ["en", "paths"], ["ja", "paths"], ["en", "post_merge"], ["ja", "post_m
   const path_skip = {reason, paths:["src/**", "tests/*.rs"], bases:[{pull:3,base:"main",base_sha:base,merge_base:mergeBase}]};
   fakeApi({...SHELL,
     [`GET /api/v1/repos/acme/demo/commits/${sha}`]:json(200,{sha,message:"Documentation",author:"Test",authored_at:"2026-10-27T00:00:00Z",parents:[base]}),
-    [`GET /api/v1/repos/acme/demo/commits/${sha}/checks`]:json(200,{sha,checks_expected:true,checks:[{name:"test",status:"completed",conclusion:"skipped",path_skip,attempt_id:"att_skip",attempt:1}]}),
-    "GET /api/v1/repos/acme/demo/jobs/att_skip":json(200,{id:"att_skip",purpose:"check",job:"test",attempt:1,sha,status:"completed",conclusion:"skipped",path_skip,artifact_names:[],details:null}),
+    [`GET /api/v1/repos/acme/demo/commits/${sha}/checks`]:json(200,{sha,checks_expected:true,checks:[{name:"test",status:"completed",conclusion:"skipped",runner:null,path_skip,attempt_id:"att_skip",attempt:1}]}),
+    "GET /api/v1/repos/acme/demo/jobs/att_skip":json(200,{id:"att_skip",purpose:"check",job:"test",attempt:1,sha,status:"completed",conclusion:"skipped",runner:null,path_skip,artifact_names:[],details:null}),
     "GET /api/v1/repos/acme/demo/jobs/att_skip/log":json(200,{log:"[branvil] skipped: no file matching paths changed since merge-base",log_bytes:70,truncated:false}),
   });
   const user = userEvent.setup();
@@ -43,6 +43,7 @@ it.each([ ["en", "paths"], ["ja", "paths"], ["en", "post_merge"], ["ja", "post_m
   if (reason === "post_merge") expect(await within(drawer).findByText(postMergeExplanation)).toBeInTheDocument();
   if (reason === "paths") expect(await within(drawer).findByText(/src\/\*\*, tests\/\*\.rs/)).toBeInTheDocument();
   expect(within(drawer).getByText(label)).toBeInTheDocument();
+  expect(within(drawer).queryByText(lang === "ja" ? "ランナー" : "Runner")).not.toBeInTheDocument();
   expect(within(drawer).getByRole("button",{name:lang === "ja" ? "再実行" : "Retry"})).toBeEnabled();
 });
 
@@ -186,12 +187,12 @@ describe("pages", () => {
       [`GET /api/v1/repos/acme/demo/commits/${sha}/checks`]: json(200, {
         sha,
         checks: [
-          { name: "test", status: "completed", conclusion: "failure", attempt_id: "att_1", attempt: 1, artifact_names: [] },
-          { name: "lint", status: "queued", conclusion: null },
+          { name: "test", status: "completed", conclusion: "failure", runner: "linux-runner", attempt_id: "att_1", attempt: 1, artifact_names: [] },
+          { name: "lint", status: "queued", conclusion: null, runner: null },
         ],
         checks_expected: true,
       }),
-      "GET /api/v1/repos/acme/demo/jobs/att_1": json(200, { id: "att_1", job: "test", attempt: 1, sha, status: "completed", conclusion: "failure", details: "exit code 101", artifact_names: ["report"] }),
+      "GET /api/v1/repos/acme/demo/jobs/att_1": json(200, { id: "att_1", job: "test", attempt: 1, sha, status: "completed", conclusion: "failure", runner: "linux-runner", details: "exit code 101", artifact_names: ["report"] }),
       "GET /api/v1/repos/acme/demo/jobs/att_1/log": json(200, { log: "test login ... FAILED", log_bytes: 20, truncated: false }),
     });
     const user = userEvent.setup();
@@ -200,12 +201,16 @@ describe("pages", () => {
     expect(await within(checks).findByText("failing")).toBeInTheDocument();
     expect(within(checks).getByText("queued")).toBeInTheDocument();
     expect(await within(checks).findByText("Reason: exit code 101")).toBeInTheDocument();
+    const row = within(checks).getByRole("button", { name: "Open check test" });
+    expect(row).toHaveTextContent("Runner: linux-runner");
+    expect(row).toHaveAccessibleDescription("Runner: linux-runner");
     expect(screen.getByRole("link", { name: sha })).toHaveAttribute("href", `/acme/demo/-/commits/${sha}`);
     expect(within(checks).getByTitle(sha).closest("a")).toHaveAttribute("href", `/acme/demo/-/commits/${sha}`);
 
-    await user.click(within(checks).getByRole("button", { name: "Open check test" }));
+    await user.click(row);
     const job = await screen.findByRole("dialog", { name: /test/ });
     expect(await within(job).findByText("test login ... FAILED")).toBeInTheDocument();
+    expect(within(job).getByText("Runner").nextElementSibling).toHaveTextContent("linux-runner");
     expect(within(job).getByRole("link", { name: "report" })).toHaveAttribute("href", `/api/v1/repos/acme%2Fdemo/commits/${sha}/artifacts/report`);
     expect(fake.calls("GET", `/api/v1/repos/acme/demo/commits/${sha}/checks`)).toHaveLength(1);
   });
@@ -263,12 +268,13 @@ describe("pages", () => {
       "GET /api/v1/repos/acme/demo/pulls": page([]),
       [`GET /api/v1/repos/acme/demo/commits/${sha}`]: json(200, { sha, message: "Same tree", author: "Test", parents: [] }),
       [`GET /api/v1/repos/acme/demo/commits/${sha}/checks`]: json(200, { sha, checks_expected: true, checks: [] }),
-      "GET /api/v1/repos/acme/demo/jobs/att_refresh": json(200, { id: "att_refresh", job: "test", purpose: "cache_refresh", attempt: 2, sha, status: "completed", conclusion: "failure", details: "exit 1", artifact_names: [], reused_from: null }),
+      "GET /api/v1/repos/acme/demo/jobs/att_refresh": json(200, { id: "att_refresh", job: "test", purpose: "cache_refresh", attempt: 2, sha, status: "completed", conclusion: "failure", runner: "cache-runner", details: "exit 1", artifact_names: [], reused_from: null }),
       "GET /api/v1/repos/acme/demo/jobs/att_refresh/log": json(200, { log: "cache refresh failed", log_bytes: 20, truncated: false }),
     });
     renderApp("/acme/demo/-/jobs/att_refresh", language);
     const drawer = await screen.findByRole("dialog", { name: /test/ });
     expect(await within(drawer).findByText(language === "ja" ? "キャッシュの更新" : "Cache refresh")).toBeInTheDocument();
+    expect(within(drawer).getByText(language === "ja" ? "ランナー" : "Runner").nextElementSibling).toHaveTextContent("cache-runner");
     expect(within(drawer).getByRole("button", { name: language === "ja" ? "再実行" : "Retry" })).toBeDisabled();
     expect(within(drawer).getByText(language === "ja" ? "この結果はチェックと自動更新に影響しません。" : "This result does not affect checks or automatic updates.")).toBeInTheDocument();
   });

@@ -77,6 +77,8 @@ pub struct Check {
     pub attempt_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attempt: Option<u64>,
+    /// The runner that claimed this attempt, if any.
+    pub runner: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details_url: Option<String>,
     /// Why the check is where it is (a failure reason, "superseded", "no
@@ -267,6 +269,7 @@ impl Ci {
             conclusion: a.conclusion.clone(),
             attempt_id: Some(a.id.clone()),
             attempt: Some(a.number),
+            runner: a.runner.clone(),
             details_url: Some(self.job_url(&a.repo_path, &a.id)),
             details: a
                 .cache_refresh

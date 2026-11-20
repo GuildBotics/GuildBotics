@@ -112,6 +112,7 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
     let slow = check(&report, "slow");
     assert_eq!(slow["conclusion"], "skipped");
     assert_eq!(slow["path_skip"]["reason"], "post_merge");
+    assert_eq!(slow.get("runner"), Some(&Value::Null));
     let log = w
         .server
         .ok(
@@ -146,6 +147,59 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
     }
     seen.sort();
     assert_eq!(seen, ["slow"]);
+}
+
+#[tokio::test]
+async fn job_and_check_responses_identify_the_runner_that_claimed_each_attempt() {
+    let w = World::new().await;
+    set_required(&w, &["test", "lint"]).await;
+    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
+    let head = w.push_change("feature", ".branvil/ci.toml", &pipeline(&["test", "lint"]));
+    let commit_url = format!("{}/commits/{head}/checks", w.repo_path());
+    let unregistered = w.server.ok(&commit_url, &w.aiko).await;
+    assert_eq!(unregistered["run_registered"], false);
+    let placeholder = check(&unregistered, "test");
+    assert_eq!(placeholder.get("runner"), Some(&Value::Null));
+    assert!(placeholder.get("attempt_id").is_none());
+
+    let p = w.open_pull("feature", json!([])).await;
+    let n = p["number"].as_u64().unwrap();
+    let before = checks(&w, n).await;
+    let job_url = |check: &Value| {
+        format!(
+            "{}/jobs/{}",
+            w.repo_path(),
+            check["attempt_id"].as_str().unwrap()
+        )
+    };
+    for name in ["test", "lint"] {
+        let queued = check(&before, name);
+        assert_eq!(queued["status"], "queued");
+        assert_eq!(queued.get("runner"), Some(&Value::Null));
+        let attempt = w.server.ok(&job_url(queued), &w.aiko).await;
+        assert_eq!(attempt.get("runner"), Some(&Value::Null));
+    }
+
+    let linux = Runner::new(&w, "linux-runner").await;
+    let windows = Runner::new(&w, "windows-runner").await;
+    let finished = linux.next_claim().await;
+    assert_eq!(linux.finish(&finished, "success").await.0, 200);
+    let running = windows.next_claim().await;
+    let pull_checks = checks(&w, n).await;
+    let commit_checks = w.server.ok(&commit_url, &w.aiko).await;
+    for (claim, name, status) in [
+        (finished, "linux-runner", "completed"),
+        (running, "windows-runner", "in_progress"),
+    ] {
+        let job = claim["job"]["name"].as_str().unwrap();
+        let projected = check(&pull_checks, job);
+        assert_eq!(projected["attempt_id"], claim["attempt_id"]);
+        assert_eq!(projected["status"], status);
+        assert_eq!(projected["runner"], name);
+        assert_eq!(check(&commit_checks, job)["runner"], name);
+        let attempt = w.server.ok(&job_url(projected), &w.aiko).await;
+        assert_eq!(attempt["runner"], name);
+    }
 }
 
 #[tokio::test]
@@ -2368,6 +2422,14 @@ async fn the_automatic_runner_starting_again_queues_the_jobs_its_predecessor_hel
     };
     let ((test_attempt, test_id), (_, lint_id)) = (started("test"), started("lint"));
     assert_eq!(test_attempt, 2);
+    assert_eq!(test_id, first["attempt_id"].as_str().unwrap());
+    assert_eq!(check(&list, "test")["runner"], "ready-runner");
+    let rerun = w
+        .server
+        .ok(&format!("{}/jobs/{test_id}", w.repo_path()), &w.aiko)
+        .await;
+    assert_eq!(rerun["runner"], "ready-runner");
+    assert_eq!(w.server.ok(&url, &w.aiko).await["runner"], "branvil-runner");
     let at = |id: String| {
         let w = &w;
         async move {
@@ -2756,141 +2818,197 @@ async fn author_yields_only_deferred_running_checks_and_old_finish_stays_obsolet
     }
 }
 
-#[tokio::test]
-async fn yield_noops_for_closed_protected_approved_outdated_and_answered_heads() {
-    for case in [
-        "closed",
-        "protected",
-        "approved",
-        "outdated",
-        "answered",
-        "other_pull",
-        "missing_run",
-    ] {
-        let w = World::new().await;
-        let runner = Runner::new(&w, "yield-noop").await;
-        if case != "missing_run" {
-            land(
-                &w,
-                "setup",
-                &[(".branvil/ci.toml", &pipeline(&["test"]))],
-                None,
-            )
-            .await;
-            runner.drain("success").await;
-        }
-        let head = w.push_change("feature", "change.txt", "change");
-        let p = w.open_pull("feature", json!([])).await;
-        let path = format!("{}/pulls/{}", w.repo_path(), p["number"]);
-        let repo = w.server.ok(&w.repo_path(), &w.owner).await;
-        assert_eq!(
-            w.server
-                .patch(
-                    &w.repo_path(),
-                    &w.owner,
-                    json!({"revision":repo["revision"],"required_approvals":1})
+mod yield_noops_for_closed_protected_approved_outdated_and_answered_heads {
+    use super::*;
+
+    struct Fixture {
+        world: World,
+        runner: Runner,
+        head: String,
+        path: String,
+    }
+
+    impl Fixture {
+        async fn new(with_pipeline: bool) -> Self {
+            let world = World::new().await;
+            let runner = Runner::new(&world, "yield-noop").await;
+            if with_pipeline {
+                land(
+                    &world,
+                    "setup",
+                    &[(".branvil/ci.toml", &pipeline(&["test"]))],
+                    None,
                 )
-                .await
-                .0,
-            200
-        );
-        assert_eq!(
-            w.server
+                .await;
+                runner.drain("success").await;
+            }
+            let head = world.push_change("feature", "change.txt", "change");
+            let pull = world.open_pull("feature", json!([])).await;
+            let path = format!("{}/pulls/{}", world.repo_path(), pull["number"]);
+            let repo = world.server.ok(&world.repo_path(), &world.owner).await;
+            let (status, result) = world
+                .server
+                .patch(
+                    &world.repo_path(),
+                    &world.owner,
+                    json!({"revision": repo["revision"], "required_approvals": 1}),
+                )
+                .await;
+            assert_eq!(status, 200, "{result}");
+            let (status, result) = world
+                .server
                 .post(
                     &format!("{path}/reviews"),
-                    &w.ken,
-                    json!({"verdict":"request_changes","body":"Change","commit":head})
+                    &world.ken,
+                    json!({"verdict": "request_changes", "body": "Change", "commit": head}),
                 )
-                .await
-                .0,
-            201
-        );
-        match case {
-            "closed" => {
-                assert_eq!(
-                    w.server
-                        .post(&format!("{path}/close"), &w.aiko, json!({}))
-                        .await
-                        .0,
-                    200
-                );
+                .await;
+            assert_eq!(status, 201, "{result}");
+            Self {
+                world,
+                runner,
+                head,
+                path,
             }
-            "protected" => {
-                let repo = w.server.ok(&w.repo_path(), &w.owner).await;
-                assert_eq!(
-                    w.server
-                        .patch(
-                            &w.repo_path(),
-                            &w.owner,
-                            json!({"revision":repo["revision"],"protected_branches":["feature"]})
-                        )
-                        .await
-                        .0,
-                    200
-                );
-            }
-            "approved" => {
-                assert_eq!(
-                    w.server
-                        .post(
-                            &format!("{path}/reviews"),
-                            &w.ken,
-                            json!({"verdict":"approve","commit":head})
-                        )
-                        .await
-                        .0,
-                    201
-                );
-            }
-            "answered" => {
-                assert_eq!(
-                    w.server
-                        .post(
-                            &format!("{path}/comments"),
-                            &w.aiko,
-                            json!({"body":"Explained"})
-                        )
-                        .await
-                        .0,
-                    201
-                );
-            }
-            "outdated" => {
-                w.push_change("feature", "change.txt", "next");
-            }
-            "other_pull" => {
-                git_as_ok(
-                    &w.work,
-                    "aiko",
-                    &w.aiko,
-                    &["push", "-q", "origin", "HEAD:refs/heads/other"],
-                );
-                w.open_pull("other", json!([])).await;
-            }
-            _ => {}
         }
-        let running = runner.claim().await;
-        let (st, result) = w
-            .server
-            .post(&format!("{path}/checks/yield"), &w.aiko, json!({}))
-            .await;
-        assert_eq!(st, 200, "{case}: {result}");
-        assert_eq!(result["yielded"], json!([]), "{case}: {result}");
-        if let Some(running) = running {
-            let old = w
+
+        async fn assert_empty_yield(&self) {
+            let (status, result) = self
+                .world
+                .server
+                .post(
+                    &format!("{}/checks/yield", self.path),
+                    &self.world.aiko,
+                    json!({}),
+                )
+                .await;
+            assert_eq!(status, 200, "{result}");
+            assert_eq!(result["head"], self.head);
+            assert_eq!(result["yielded"], json!([]), "{result}");
+        }
+
+        async fn assert_running_check_untouched(&self) {
+            let running = self.runner.next_claim().await;
+            assert_eq!(running["sha"], self.head);
+            self.assert_empty_yield().await;
+            let world = &self.world;
+            let job = world
                 .server
                 .ok(
                     &format!(
                         "{}/jobs/{}",
-                        w.repo_path(),
+                        world.repo_path(),
                         running["attempt_id"].as_str().unwrap()
                     ),
-                    &w.aiko,
+                    &world.aiko,
                 )
                 .await;
-            assert_eq!(old["cancel_requested"], false, "{case}: {old}");
-            assert_eq!(old["status"], "in_progress");
+            assert_eq!(job["cancel_requested"], false, "{job}");
+            assert_eq!(job["status"], "in_progress");
         }
+    }
+
+    #[tokio::test]
+    async fn closed() {
+        let f = Fixture::new(true).await;
+        let (status, result) = f
+            .world
+            .server
+            .post(&format!("{}/close", f.path), &f.world.aiko, json!({}))
+            .await;
+        assert_eq!(status, 200, "{result}");
+        f.assert_running_check_untouched().await;
+    }
+
+    #[tokio::test]
+    async fn protected() {
+        let f = Fixture::new(true).await;
+        let w = &f.world;
+        let repo = w.server.ok(&w.repo_path(), &w.owner).await;
+        let (status, result) = w
+            .server
+            .patch(
+                &w.repo_path(),
+                &w.owner,
+                json!({"revision": repo["revision"], "protected_branches": ["feature"]}),
+            )
+            .await;
+        assert_eq!(status, 200, "{result}");
+        f.assert_running_check_untouched().await;
+    }
+
+    #[tokio::test]
+    async fn approved() {
+        let f = Fixture::new(true).await;
+        // An approval can meet the threshold while another review still requests changes.
+        let (status, result) = f
+            .world
+            .server
+            .post(
+                &format!("{}/reviews", f.path),
+                &f.world.owner,
+                json!({"verdict": "approve", "commit": f.head}),
+            )
+            .await;
+        assert_eq!(status, 201, "{result}");
+        f.assert_running_check_untouched().await;
+    }
+
+    #[tokio::test]
+    async fn outdated() {
+        let mut f = Fixture::new(true).await;
+        f.head = f.world.push_change("feature", "change.txt", "next");
+        f.assert_running_check_untouched().await;
+    }
+
+    #[tokio::test]
+    async fn answered() {
+        let f = Fixture::new(true).await;
+        let (status, result) = f
+            .world
+            .server
+            .post(
+                &format!("{}/comments", f.path),
+                &f.world.aiko,
+                json!({"body": "Explained"}),
+            )
+            .await;
+        assert_eq!(status, 201, "{result}");
+        f.assert_running_check_untouched().await;
+    }
+
+    #[tokio::test]
+    async fn other_pull() {
+        let f = Fixture::new(true).await;
+        let w = &f.world;
+        // Both pulls share a head. The other pull still needs this check.
+        git_as_ok(
+            &w.work,
+            "aiko",
+            &w.aiko,
+            &["push", "-q", "origin", "HEAD:refs/heads/other"],
+        );
+        let other = w.open_pull("other", json!([])).await;
+        assert_eq!(other["head_sha"], f.head);
+        f.assert_running_check_untouched().await;
+    }
+
+    #[tokio::test]
+    async fn missing_run() {
+        let mut f = Fixture::new(false).await;
+        // The head has no configured jobs. Deleting it also leaves no run for
+        // the pull's current head, which must still be a successful no-op.
+        assert!(f.runner.claim().await.is_none());
+        f.assert_empty_yield().await;
+        let w = &f.world;
+        git_as_ok(
+            &w.work,
+            "aiko",
+            &w.aiko,
+            &["push", "-q", "origin", ":refs/heads/feature"],
+        );
+        f.head.clear();
+        f.assert_empty_yield().await;
     }
 }
 

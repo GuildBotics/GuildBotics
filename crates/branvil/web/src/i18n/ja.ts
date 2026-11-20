@@ -326,6 +326,7 @@ export const ja: Record<MessageKey, string> = {
   "ci.started": "開始",
   "ci.finished": "終了",
   "ci.duration": "所要時間",
+  "ci.runner": "ランナー",
   "ci.seconds": "{seconds}秒",
   "ci.minutesSeconds": "{minutes}分{seconds}秒",
   "ci.remaining": "残り約 {time}",

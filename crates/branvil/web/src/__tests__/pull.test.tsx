@@ -8,11 +8,11 @@ import { apiError, fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 import { BASE, HEAD, NEW_HEAD, card, landing, pull } from "./fixtures";
 
 const P = "/api/v1/repos/acme/demo/pulls/3";
-const SUCCESS: Check = { name: "test", status: "completed", conclusion: "success" };
+const SUCCESS: Check = { name: "test", status: "completed", conclusion: "success", runner: null };
 const CHECKS: Checks = { conflicts: [], head_sha: HEAD, base_sha: BASE, behind_by: 0, checks: [SUCCESS], checks_expected: true, base_checks: 1 };
 
 it("keeps the server's queue order and reloads it when another PR changes priority", async () => {
-  const queued = (name: string): Check => ({ name, status: "queued", conclusion: null });
+  const queued = (name: string): Check => ({ name, status: "queued", conclusion: null, runner: null });
   let checks = [queued("z-first"), queued("a-second")];
   fakeApi(pullRoutes({ [`GET ${P}/checks`]: () => json(200, { ...CHECKS, checks }) }));
   const { client } = renderApp("/acme/demo/-/pulls/3");
@@ -386,14 +386,14 @@ describe("pull request review", () => {
         [`GET ${P}/checks`]: json(200, {
           ...CHECKS,
           checks: [
-            { name: "test", status: "completed", conclusion: "failure", attempt_id: "att_1", attempt: 1, ...times },
-            { name: "lint", status: "in_progress", attempt_id: "att_2", started_at: ago(65), expected_secs: 120, ...unfinished },
-            { name: "web", status: "in_progress", attempt_id: "att_3", started_at: ago(60), expected_secs: 30, ...unfinished },
-            { name: "fmt", status: "queued", attempt_id: "att_4", expected_secs: 30, ...unfinished },
+            { name: "test", status: "completed", conclusion: "failure", attempt_id: "att_1", attempt: 1, runner: "linux-runner", ...times },
+            { name: "lint", status: "in_progress", attempt_id: "att_2", runner: "windows-runner", started_at: ago(65), expected_secs: 120, ...unfinished },
+            { name: "web", status: "in_progress", attempt_id: "att_3", runner: "windows-runner", started_at: ago(60), expected_secs: 30, ...unfinished },
+            { name: "fmt", status: "queued", attempt_id: "att_4", runner: null, expected_secs: 30, ...unfinished },
           ],
         }),
         "GET /api/v1/repos/acme/demo/jobs/att_1": json(200, {
-          id: "att_1", job: "test", attempt: 1, sha: HEAD, status: "completed", conclusion: "failure", details: "exit code 101", artifact_names: [], ...times,
+          id: "att_1", job: "test", attempt: 1, sha: HEAD, status: "completed", conclusion: "failure", runner: "linux-runner", details: "exit code 101", artifact_names: [], ...times,
         }),
       }),
     );
@@ -402,6 +402,8 @@ describe("pull request review", () => {
     const words = dictionaries[language];
     const region = await screen.findByRole("region", { name: words["pull.checks"] });
     expect(await within(region).findByText(took)).toBeInTheDocument();
+    expect(within(region).getByRole("button", { name: words["ci.open"].replace("{name}", "test") })).toHaveTextContent(`${words["ci.runner"]}: linux-runner`);
+    expect(within(region).getByRole("button", { name: words["ci.open"].replace("{name}", "lint") })).toHaveTextContent(`${words["ci.runner"]}: windows-runner`);
     // Past its estimate, a running check says what the job took before.
     expect(within(region).getByText(past)).toBeInTheDocument();
     // A running check counts each second.
@@ -411,7 +413,9 @@ describe("pull request review", () => {
     });
     expect(lint).toHaveTextContent(later);
     // A queued one has no time yet.
-    expect(within(region).getByRole("button", { name: words["ci.open"].replace("{name}", "fmt") })).not.toHaveTextContent(/\d+(s|秒)/);
+    const queued = within(region).getByRole("button", { name: words["ci.open"].replace("{name}", "fmt") });
+    expect(queued).not.toHaveTextContent(/\d+(s|秒)/);
+    expect(queued).not.toHaveTextContent(words["ci.runner"]);
     // The job's drawer says how long it took.
     await user.click(within(region).getByRole("button", { name: words["ci.open"].replace("{name}", "test") }));
     const drawer = await screen.findByRole("dialog", { name: /test/ });
