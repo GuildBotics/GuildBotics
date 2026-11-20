@@ -15,6 +15,7 @@ fn pulls(w: &World) -> String {
 #[tokio::test]
 async fn readiness_order_is_applied_before_pagination_and_bound_to_the_cursor() {
     let w = World::new().await;
+    let pulls = pulls(&w);
     let repo = w.server.ok(&w.repo_path(), &w.owner).await;
     let (status, body) = w
         .server
@@ -25,54 +26,65 @@ async fn readiness_order_is_applied_before_pagination_and_bound_to_the_cursor() 
         )
         .await;
     assert_eq!(status, 200, "{body}");
-    for i in 0..32 {
-        let branch = format!("feature-{i}");
-        w.push_change(&branch, "f.txt", &i.to_string());
-        let p = w.open_pull(&branch, json!([])).await;
-        if i > 0 {
-            let (status, body) = w
-                .server
-                .patch(
-                    &format!("{}/{}", pulls(&w), p["number"]),
-                    &w.aiko,
-                    json!({"draft":true}),
-                )
-                .await;
-            assert_eq!(status, 200, "{body}");
-        }
+
+    // Two full pages and a partial page. The oldest pull ranks above all the drafts.
+    const PULL_COUNT: u64 = 5;
+    for i in 0..PULL_COUNT {
+        let head = format!("feature-{i}");
+        w.push_change(&head, "f.txt", &i.to_string());
+        let (status, body) = w
+            .server
+            .post(
+                &pulls,
+                &w.aiko,
+                json!({"head": head, "title": format!("PR {head}"), "draft": i > 0}),
+            )
+            .await;
+        assert_eq!(status, 201, "{body}");
     }
-    let url = format!("{}?sort=readiness&limit=2", pulls(&w));
+
+    let url = format!("{pulls}?sort=readiness&limit=2");
     let first = w.server.ok(&url, &w.aiko).await;
-    assert_eq!(first["items"][0]["number"], 1);
-    assert_eq!(first["items"][0]["merge_order"][0], 4);
-    assert_eq!(first["items"][1]["merge_order"][0], 6);
+    let mut found = first["items"].as_array().unwrap().clone();
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0]["number"], 1);
+    assert_eq!(found[0]["merge_order"][0], 4);
+
     let cursor = first["next_cursor"].as_str().unwrap();
     let (status, _) = w
         .server
         .get(
-            &format!("{}?sort=updated&cursor={cursor}", pulls(&w)),
+            &format!("{pulls}?sort=updated&limit=2&cursor={cursor}"),
             &w.aiko,
         )
         .await;
     assert_eq!(status, 400);
-    let mut found = first["items"].as_array().unwrap().clone();
-    let mut cursor = Some(cursor.to_string());
-    while let Some(next) = cursor {
-        let page = w.server.ok(&format!("{url}&cursor={next}"), &w.aiko).await;
-        found.extend(page["items"].as_array().unwrap().iter().cloned());
-        cursor = page["next_cursor"].as_str().map(str::to_string);
+
+    let mut page = first;
+    for expected_size in [2, 1] {
+        let cursor = page["next_cursor"].as_str().unwrap();
+        page = w
+            .server
+            .ok(&format!("{url}&cursor={cursor}"), &w.aiko)
+            .await;
+        let items = page["items"].as_array().unwrap();
+        assert_eq!(items.len(), expected_size);
+        found.extend(items.iter().cloned());
     }
-    assert_eq!(found.len(), 32);
+    assert!(page["next_cursor"].is_null());
+    for draft in &found[1..] {
+        assert_eq!(draft["merge_order"][0], 6);
+    }
     let mut numbers: Vec<_> = found
         .iter()
         .map(|p| p["number"].as_u64().unwrap())
         .collect();
-    numbers.sort();
-    numbers.dedup();
-    assert_eq!(numbers.len(), 32);
+    numbers.sort_unstable();
+    assert_eq!(numbers, (1..=PULL_COUNT).collect::<Vec<_>>());
+
     let (status, _) = w
         .server
-        .get(&format!("{}?sort=unknown", pulls(&w)), &w.aiko)
+        .get(&format!("{pulls}?sort=unknown"), &w.aiko)
         .await;
     assert_eq!(status, 400);
 }
