@@ -15,23 +15,24 @@ use tokio::sync::{mpsc, watch};
 
 use crate::ci::pipeline::JobDef;
 
-static HOST_RUNTIME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+static HOST_RUNTIME: std::sync::OnceLock<(PathBuf, Option<PathBuf>)> = std::sync::OnceLock::new();
 
 /// An embedding application's runtime default. The runner's own cache home
 /// stays independent, and an explicit CI setting still takes precedence.
-pub fn set_runtime_binary(path: PathBuf) -> Result<(), String> {
-    if !path.is_absolute() {
+pub fn set_runtime_binary(path: PathBuf, firmware: Option<PathBuf>) -> Result<(), String> {
+    if !path.is_absolute() || firmware.as_ref().is_some_and(|path| !path.is_absolute()) {
         return Err("The runtime binary must have an absolute path".into());
     }
+    let runtime = (path, firmware);
     if let Some(current) = HOST_RUNTIME.get() {
-        return if current == &path {
+        return if current == &runtime {
             Ok(())
         } else {
             Err("The runtime binary was already configured".into())
         };
     }
     HOST_RUNTIME
-        .set(path)
+        .set(runtime)
         .map_err(|_| "The runtime binary was already configured".into())
 }
 
@@ -237,7 +238,7 @@ pub fn resolve_msb(configured: Option<&Path>) -> Msb {
     if let Some(c) = configured {
         candidates.push(c.to_path_buf());
     }
-    if let Some(path) = HOST_RUNTIME.get() {
+    if let Some((path, _)) = HOST_RUNTIME.get() {
         candidates.push(path.clone());
     }
     candidates.push(branvil_home().join("msb/bin").join(msb_file()));
@@ -352,6 +353,9 @@ impl Microsandbox {
             if let Some(v) = std::env::var_os(key) {
                 cmd.env(key, v);
             }
+        }
+        if let Some((_, Some(firmware))) = HOST_RUNTIME.get().filter(|(binary, _)| binary == path) {
+            cmd.env("MSB_LIBKRUNFW_PATH", firmware);
         }
         cmd.env("MSB_HOME", &self.home)
             .env("DOCKER_CONFIG", &docker)
@@ -2006,11 +2010,35 @@ pub(crate) mod tests {
         use super::{HOST_RUNTIME, set_runtime_binary};
         let dir = tempfile::tempdir().unwrap();
         let binary = dir.path().join("host-msb");
-        assert!(set_runtime_binary("relative/msb".into()).is_err());
-        set_runtime_binary(binary.clone()).unwrap();
-        assert_eq!(HOST_RUNTIME.get(), Some(&binary));
-        set_runtime_binary(binary).unwrap();
-        assert!(set_runtime_binary(dir.path().join("other-msb")).is_err());
+        assert!(set_runtime_binary("relative/msb".into(), None).is_err());
+        let firmware = dir.path().join("host-firmware");
+        assert!(set_runtime_binary(binary.clone(), Some("relative/library".into())).is_err());
+        set_runtime_binary(binary.clone(), Some(firmware.clone())).unwrap();
+        assert_eq!(
+            HOST_RUNTIME.get(),
+            Some(&(binary.clone(), Some(firmware.clone())))
+        );
+        set_runtime_binary(binary.clone(), Some(firmware.clone())).unwrap();
+        assert!(set_runtime_binary(dir.path().join("other-msb"), None).is_err());
+
+        let command = |path| {
+            Microsandbox::new(Msb::Found(path), dir.path().into(), "fixture")
+                .command()
+                .unwrap()
+        };
+        let configured = command(binary);
+        let library = configured
+            .as_std()
+            .get_envs()
+            .find(|(key, _)| *key == "MSB_LIBKRUNFW_PATH")
+            .and_then(|(_, value)| value);
+        assert_eq!(library, Some(firmware.as_os_str()));
+        assert!(
+            !command(dir.path().join("other-msb"))
+                .as_std()
+                .get_envs()
+                .any(|(key, _)| key == "MSB_LIBKRUNFW_PATH")
+        );
     }
     use super::*;
 

@@ -27,7 +27,13 @@ pub async fn prepare() -> anyhow::Result<Option<PathBuf>> {
 
 fn target() -> &'static str {
     if cfg!(all(windows, target_arch = "x86_64", target_env = "gnu")) {
-        crate::client_release::TARGET
+        crate::client_release::WINDOWS.triple
+    } else if cfg!(all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        target_env = "gnu"
+    )) {
+        crate::client_release::LINUX.triple
     } else {
         "unsupported"
     }
@@ -441,6 +447,28 @@ mod tests {
         replace(&exe, &bytes).unwrap();
         assert!(!previous[0].exists());
         assert_eq!(backups().len(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_replaces_the_image_without_modifying_open_handles() {
+        use std::io::Read;
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("guildbotics");
+        std::fs::write(&executable, b"original image").unwrap();
+        let mut open_image = std::fs::File::open(&executable).unwrap();
+        replace(&executable, b"#!/bin/sh\nprintf updated\n").unwrap();
+        let mut original = Vec::new();
+        open_image.read_to_end(&mut original).unwrap();
+        assert_eq!(original, b"original image");
+        assert_eq!(
+            std::fs::metadata(&executable).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        let output = std::process::Command::new(&executable).output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"updated");
     }
 
     #[test]

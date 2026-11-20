@@ -59,11 +59,37 @@ pub async fn verified(
         }
         None => repository(origin.context("checkout origin is missing")?, base)?,
     };
+    let (verified, since_mark) = verification_history(base, token, &repo, since).await?;
+    Ok(json!({"since_on_main": since_mark.is_some(), "verified": verified}))
+}
+
+/// Client distribution only uses commits that passed main verification.
+pub async fn require_verified(
+    base: &str,
+    token: &str,
+    origin: &str,
+    sha: &str,
+) -> anyhow::Result<()> {
+    let repo = repository(origin, base)?;
+    let (_, mark) = verification_history(base, token, &repo, sha).await?;
+    anyhow::ensure!(
+        mark == Some(true),
+        "client release commit has not passed main verification"
+    );
+    Ok(())
+}
+
+async fn verification_history(
+    base: &str,
+    token: &str,
+    repo: &str,
+    since: &str,
+) -> anyhow::Result<(Vec<String>, Option<bool>)> {
     anyhow::ensure!(
         since.len() == 40 && since.bytes().all(|b| b.is_ascii_hexdigit()),
         "invalid commit SHA"
     );
-    let repo = crate::util::encode_segment(&repo);
+    let repo = crate::util::encode_segment(repo);
     let http = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -103,14 +129,14 @@ pub async fn verified(
                 "invalid commit SHA"
             );
             if sha.eq_ignore_ascii_case(since) {
-                return Ok(json!({"since_on_main":true,"verified":verified}));
+                return Ok((verified, Some(item["mark"] == "verified")));
             }
             if item["mark"] == "verified" {
                 verified.push(sha.to_owned());
             }
         }
         cursor = match &page["next_cursor"] {
-            Value::Null => return Ok(json!({"since_on_main":false,"verified":verified})),
+            Value::Null => return Ok((verified, None)),
             Value::String(value) => Some(value.clone()),
             _ => anyhow::bail!("invalid verification cursor"),
         };
@@ -236,6 +262,16 @@ mod tests {
                 .unwrap(),
             json!({"since_on_main":true,"verified":[]})
         );
+        let origin = format!("{base}/git/team/repo.git");
+        for (commit, required) in [('a', true), ('b', false), ('c', true), ('f', false)] {
+            let sha = commit.to_string().repeat(40);
+            assert_eq!(
+                require_verified(&base, "fixture-owner", &origin, &sha)
+                    .await
+                    .is_ok(),
+                required
+            );
+        }
         for value in [2, 3] {
             mode.store(value, Ordering::SeqCst);
             let error = verified_at(Some("team/repo"), None, "c".repeat(40))

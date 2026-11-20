@@ -77,10 +77,20 @@ Hubで[GuildBoticsのインストール手順](../README.ja.md#インストー�
 
 1. 下記の手順に従い `scripts/hub-forward.ps1` で SSH 転送を設定します。
 2. Hub で `guildbotics open --print` を実行し、入口リンクを Windows のブラウザで開きます。
-3. 設定の「このマシン」にある Windows クライアントから `guildbotics.exe` をダウンロードします。画面のセッションで Hub の現在の版を取得できます。
+3. 設定の「このマシン」にある Windows x86_64 版ボタンから `guildbotics.exe` をダウンロードします。画面のセッションで Hub の現在の版を取得できます。
 4. PowerShell で `./guildbotics.exe install` を実行します。`~/.guildbotics/bin` に managed CLI を置き、PATH を設定し、AI ツールごとのスキルの状態を表示します。人の git の credential helper は、このマシンの managed CLI を転送先の Hub の origin に設定します。PATH 反映後は新しい端末を開き、先に見つかる別の CLI の警告があれば解消してください。
 5. クライアント専用ビルドは、登録先の実在する `.guildbotics`、identity root、キーチェーンの項目を一覧にします。`DELETE` と入力した場合だけ消し、Enter または EOF なら残します。一般ファイルとチェックアウト、人の git のトークン（`GuildBotics/branvil-git`）、同意トークン（`guildbotics-server`）、端末 ID、managed CLI、SSH 転送は残します。
 6. `guildbotics connect` を実行し、ブラウザでこのマシンを許可します。スキルの確認・置き直しには `guildbotics install` を使います。編集したスキルは残します。以後の CLI 呼び出しで Hub と同じ版に自動更新されます。
+
+## Linux クライアントの導入
+
+1. 下記の手順に従い、Linux x86_64 のデスクトップで SSH 転送のユーザーサービスを設定します。
+2. Hub で `guildbotics open --print` を実行し、入口リンクを Linux のブラウザで開きます。
+3. 設定の「このマシン」にある Linux x86_64 版ボタンから `guildbotics` をダウンロードします。
+4. ダウンロード先で `chmod +x guildbotics` と `./guildbotics install` を実行します。
+   インストーラーの案内があれば、導入先の `~/.guildbotics/bin` を PATH に加えます。
+5. `guildbotics connect` を実行し、ブラウザでクライアントを許可します。
+   以後の CLI 呼び出しで Hub と同じ版に自動更新されます。
 
 ## Hub 以外のマシンで SSH 転送を設定する
 
@@ -309,8 +319,14 @@ Branvil のリポジトリは、GitHub のリポジトリに追従できます�
 ## 別のマシンを CI ランナーとして参加させる
 
 先に SSH 転送を常駐させ、GuildBotics クライアントを導入して接続します。
-Windows x86_64 で `guildbotics runner join` を実行し、ブラウザで CI ランナーの
-参加を許可してください。トークンは OS キーチェーンに保存され、表示されません。
-ユーザーごとのタスクがログイン時に起動し、終了や Hub の版変更のあとに再起動します。
-再参加すると同じ端末の以前のランナートークンは失効します。runtime は固定版の
-microsandbox リリースから取得し、SHA-256 と `msb --version` で検証します。
+Windows x86_64 または Linux x86_64 のデスクトップで `guildbotics runner join`
+を実行し、ブラウザで CI ランナーの参加を許可します。Linux では glibc 2.36 以降、
+Git、libcap-ng、ロックを解除した Secret Service のキーチェーン、`/dev/kvm` の
+読み書き権限が必要です。`hub-forward.service` ユーザーサービスで SSH 転送を維持します。
+
+トークンは OS の資格情報ストアに保存します。Windows のタスクまたは systemd の
+ユーザーサービスがログイン時に起動し、ランナー終了時に起動し直します。Hub の版が
+変わった場合は、再起動したクライアントが更新を済ませてから試行を取りに行きます。
+Linux では転送ポートに合わせて `systemctl --user status guildbotics-runner-7878.service`
+で状態を確認できます。再参加すると同じ端末の以前のランナートークンは失効します。
+runtime は固定版の microsandbox リリースから取得し、SHA-256 と `msb --version` で検証します。
