@@ -767,18 +767,20 @@ Per job the runner:
    removes that sandbox, and runs the job. The file system of an entry is
    grown only when it is smaller than `S` (its size is read from the
    image's superblock). The cache entry is not kept when its file system
-   cannot grow, the entry has a symbolic link where the commit has a
-   directory at or below a cached path (the runner names those from the
-   index, and the VM looks before it unpacks anything: unpacking would
-   write through the link, wherever it points), or the checkout does not
+   cannot grow, a member of the checkout's archive (`.git` included) is at
+   or below a symbolic link of the entry (unpacking would write through the
+   link, wherever it points: before it unpacks anything, the VM compares
+   `io/checkout.members`, the members' names as the bytes of their headers,
+   which the runner writes, with the links `find` lists, whatever their
+   number; a `find` that fails counts as a link), or the checkout does not
    unpack over the cached paths: the VM stops there, and the runner removes that disk,
    creates a new, empty one of the size the quota gives
    (`bv-work-<runner>-<attempt>-new`, as the old one may outlive its
    removal), and prepares it without the entry; the log says the job runs
    without the cache. A preparing VM that fails on an entry is handled the
    same way. The second preparing VM has a name of its own
-   (`bv-prep-new-<attempt>`). An entry's links that the commit's
-   directories do not go through stay as they are.
+   (`bv-prep-new-<attempt>`). An entry's links that no member of the
+   checkout goes through stay as they are.
    Every VM of the job flushes before its command ends: microsandbox stops
    the VM when the command ends, and what the guest has not written to
    `/work` or `io` by then can be lost (a lost `chown` left the checkout
@@ -851,7 +853,8 @@ is as fast as the VM's own. What crosses the boundary is one archive at a
 time. The image needs `/bin/sh`, `tar`, `chown`, `find`, `dd` (with `obs=`
 and `conv=fsync`), `rm`, `mv`, and `sync` for this, `mkdir` when it gives
 the job's user no home it can write, and, for a job with a cache, `fstrim`
-to save an entry and `df`, `awk`, and `resize2fs` to grow an entry's file
+to save an entry, `awk` and `find` to use one, and `df`, `awk`, and
+`resize2fs` to grow an entry's file
 system to `S`, and to measure what an entry holds. Without `resize2fs`, an
 entry's file system is kept as it is only when it still leaves the quota
 (the log says so), and the job runs without the cache otherwise.

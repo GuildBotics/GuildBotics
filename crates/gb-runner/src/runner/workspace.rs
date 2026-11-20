@@ -86,13 +86,25 @@ pub async fn checkout(
     Ok((size, tree))
 }
 
+/// Writes the names of the members of the archive `tar` to `into`, one per
+/// line, as the bytes of their headers (`tar -t` escapes some): what
+/// unpacking it creates.
+pub fn list_members(tar: &Path, into: &Path) -> io::Result<()> {
+    let mut out = io::BufWriter::new(fs::File::create(into)?);
+    let mut archive = tar::Archive::new(io::BufReader::new(fs::File::open(tar)?));
+    for entry in archive.entries()? {
+        io::Write::write_all(&mut out, &entry?.path_bytes())?;
+        io::Write::write_all(&mut out, b"\n")?;
+    }
+    io::Write::flush(&mut out)
+}
+
 /// What a commit tracks, as its index records it (whatever the machine's
 /// file system could make of it, and byte for byte): the paths of its
-/// symbolic links and of the directories its files are in.
+/// symbolic links.
 #[derive(Debug, Default)]
 pub struct Tree {
     links: std::collections::BTreeSet<String>,
-    dirs: std::collections::BTreeSet<String>,
 }
 
 impl Tree {
@@ -108,11 +120,6 @@ impl Tree {
             if meta.starts_with("120000 ") {
                 tree.links.insert(path.to_string());
             }
-            let mut at = path;
-            while let Some((up, _)) = at.rsplit_once('/') {
-                tree.dirs.insert(up.to_string());
-                at = up;
-            }
         }
         Ok(tree)
     }
@@ -127,21 +134,6 @@ impl Tree {
                 .chain([p])
                 .any(|prefix| self.links.contains(prefix))
         })
-    }
-
-    /// The commit's directories at or below `cached`: unpacking the checkout
-    /// writes below each of them.
-    pub fn dirs_within(&self, cached: &[&str]) -> Vec<String> {
-        self.dirs
-            .iter()
-            .filter(|d| {
-                cached.iter().any(|c| {
-                    let c = c.trim_end_matches('/');
-                    d.as_str() == c || d.strip_prefix(c).is_some_and(|r| r.starts_with('/'))
-                })
-            })
-            .cloned()
-            .collect()
     }
 }
 
@@ -896,9 +888,8 @@ mod tests {
         assert_eq!(fs::read(d.join("new.raw")).unwrap(), b"new");
     }
 
-    /// The commit's links and directories come from its index, byte for
-    /// byte: a link the machine made a file is a link, `Target` is not
-    /// `target`, and the directories are those its files are in.
+    /// The commit's links come from its index, byte for byte: a link the
+    /// machine made a file is a link, and `Target` is not `target`.
     #[test]
     fn the_tree_is_the_indexs() {
         let index = b"120000 aa 0\ttarget\x00100644 bb 0\tvendor/sub/a.rs\x00120000 cc 0\tTop\x00100644 dd 0\tsrc/main.rs\x00160000 ee 0\tdeps/module\x00";
@@ -906,14 +897,6 @@ mod tests {
         assert_eq!(tree.link_on(["deps", "target/debug"]), Some("target/debug"));
         assert_eq!(tree.link_on(["target/"]), Some("target/"));
         assert_eq!(tree.link_on(["top", "vendor", "src/main.rs/x"]), None);
-        assert_eq!(
-            tree.dirs_within(&["vendor/", "deps"]),
-            ["deps", "vendor", "vendor/sub"]
-        );
-        assert_eq!(
-            tree.dirs_within(&["vend", "target", "src/main.rs"]),
-            Vec::<String>::new()
-        );
         assert!(Tree::from_index(b"no tab\x00").is_err());
     }
 
