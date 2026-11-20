@@ -429,17 +429,23 @@ pub fn pack(
 /// The cache key of a job: repository, job, the configuration digest of the
 /// image it runs on (a new version of a tag does not reuse what the previous
 /// one built), the user it runs as (the files keep the owner the VM saw),
-/// cached paths, and the content of the key files.
+/// the runner's work quota (a job's `/work` is no smaller than the entry's
+/// image, so a changed quota takes a new entry), cached paths, and the
+/// content of the key files.
 pub fn cache_key(
     repo: &str,
     job: &JobDef,
     image_digest: &str,
     cache: &CacheDef,
+    work_quota_mib: u64,
     work: &Path,
 ) -> String {
-    let user = super::executor::JOB_USER_ID.to_string();
+    let (user, quota) = (
+        super::executor::JOB_USER_ID.to_string(),
+        work_quota_mib.to_string(),
+    );
     let mut h = Vec::new();
-    for part in [repo, &job.name, image_digest, &user] {
+    for part in [repo, &job.name, image_digest, &user, &quota] {
         h.extend_from_slice(part.as_bytes());
         h.push(0);
     }
@@ -1235,11 +1241,23 @@ mod tests {
             paths: vec!["target".into()],
             key_files: vec!["Cargo.lock".into()],
         };
-        let k1 = cache_key("acme/demo", &job, IMAGE, &cache, &work);
+        let k1 = cache_key("acme/demo", &job, IMAGE, &cache, 2048, &work);
         assert_ne!(
             k1,
-            cache_key("acme/demo", &job, &IMAGE.replace('1', "2"), &cache, &work),
+            cache_key(
+                "acme/demo",
+                &job,
+                &IMAGE.replace('1', "2"),
+                &cache,
+                2048,
+                &work
+            ),
             "the image's digest is in the key"
+        );
+        assert_ne!(
+            k1,
+            cache_key("acme/demo", &job, IMAGE, &cache, 1024, &work),
+            "the work quota is in the key"
         );
         let archive = packed(dir.path(), b"object");
         Cache::new(root.clone())
@@ -1251,7 +1269,10 @@ mod tests {
         let fresh = dir.path().join("fresh");
         fs::create_dir_all(&fresh).unwrap();
         fs::write(fresh.join("Cargo.lock"), "v1").unwrap();
-        assert_eq!(cache_key("acme/demo", &job, IMAGE, &cache, &fresh), k1);
+        assert_eq!(
+            cache_key("acme/demo", &job, IMAGE, &cache, 2048, &fresh),
+            k1
+        );
         for _ in 0..2 {
             assert_eq!(
                 Cache::new(root.clone())
@@ -1284,7 +1305,7 @@ mod tests {
             Some(200 << 20)
         );
         fs::remove_file(fresh.join("cache.raw")).unwrap();
-        let k2 = cache_key("acme/demo", &job, IMAGE, &cache, &fresh);
+        let k2 = cache_key("acme/demo", &job, IMAGE, &cache, 2048, &fresh);
         assert_ne!(k1, k2, "key files are in the key");
         // A limit that fits only one entry keeps the newest.
         Cache::new(root.clone())

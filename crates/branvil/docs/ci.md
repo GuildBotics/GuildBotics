@@ -581,7 +581,9 @@ would use, and never push out the entries every run restores. The key is the SHA
 of the repository, the job name, the configuration digest of the image the
 job runs on (a new version of the tag does not reuse what the previous one
 built), the user the job runs as (the image keeps the owner of each file),
-the cached paths, and the content of `cache.key_files`. The cache lives in
+the runner's `work_quota_mib` (a job's `/work` is no smaller than the
+entry's image, so a changed quota starts a new entry), the cached paths, and
+the content of `cache.key_files`. The cache lives in
 `<runner work dir>/cache/`, an entry's image in `<key>/disk.raw`. A restore
 copies the image to a path of the job's directory that no VM mounts, which
 then becomes the disk of the job's `/work`, so no VM ever has an entry's own

@@ -1235,10 +1235,9 @@ impl Runner {
                     Some(format!("Unsafe work directory: {e}")),
                 );
             }
-            let key = job
-                .cache
-                .as_ref()
-                .map(|cache| workspace::cache_key(&c.repo, job, &digest, cache, &work));
+            let key = job.cache.as_ref().map(|cache| {
+                workspace::cache_key(&c.repo, job, &digest, cache, limits.work_quota_mib, &work)
+            });
             // Never mounted: the disk image `/work` starts from, and the one
             // it leaves for the cache.
             let cache_disk = dir.join("cache-disk.raw");

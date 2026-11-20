@@ -105,8 +105,48 @@ fn clone(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
-/// Copies `from` into a new `to` in blocks of 1 MiB, skipping those that are
-/// all zero: they stay holes of `to`, which is sparse.
+/// The ranges of `file` (`len` bytes) that may hold data: what `SEEK_DATA`
+/// and `SEEK_HOLE` tell, so that the holes of a large image are never read;
+/// the whole file where they tell nothing.
+fn data_ranges(file: &fs::File, len: u64) -> Vec<(u64, u64)> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use std::os::fd::AsRawFd;
+        let fd = file.as_raw_fd();
+        let mut ranges = Vec::new();
+        let mut at = 0i64;
+        while (at as u64) < len {
+            // SAFETY: lseek on the open file's descriptor.
+            let start = unsafe { libc::lseek(fd, at, libc::SEEK_DATA) };
+            if start < 0 {
+                // ENXIO: no data after `at`; anything else: no answer.
+                let e = io::Error::last_os_error();
+                return if e.raw_os_error() == Some(libc::ENXIO) {
+                    ranges
+                } else {
+                    vec![(0, len)]
+                };
+            }
+            // SAFETY: as above.
+            let end = unsafe { libc::lseek(fd, start, libc::SEEK_HOLE) };
+            if end < 0 {
+                return vec![(0, len)];
+            }
+            ranges.push((start as u64, end as u64));
+            at = end;
+        }
+        ranges
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = file;
+        vec![(0, len)]
+    }
+}
+
+/// Copies `from` into a new `to`: the ranges that may hold data
+/// ([`data_ranges`]) in blocks of 1 MiB, skipping those that are all zero.
+/// The rest stays holes of `to`, which is sparse.
 fn sparse_copy(from: &Path, to: &Path) -> io::Result<()> {
     const BLOCK: usize = 1 << 20;
     let mut src = fs::File::open(from)?;
@@ -119,23 +159,27 @@ fn sparse_copy(from: &Path, to: &Path) -> io::Result<()> {
         mark_sparse(&dst)?;
         dst.set_len(len)?;
         let mut buf = vec![0u8; BLOCK];
-        let mut at = 0u64;
-        loop {
-            let mut n = 0;
-            while n < BLOCK {
-                match src.read(&mut buf[n..])? {
-                    0 => break,
-                    read => n += read,
+        for (start, end) in data_ranges(&src, len) {
+            src.seek(SeekFrom::Start(start))?;
+            let mut at = start;
+            while at < end {
+                let want = BLOCK.min(usize::try_from(end - at).unwrap_or(BLOCK));
+                let mut n = 0;
+                while n < want {
+                    match src.read(&mut buf[n..want])? {
+                        0 => break,
+                        read => n += read,
+                    }
                 }
+                if n == 0 {
+                    break;
+                }
+                if buf[..n].iter().any(|b| *b != 0) {
+                    dst.seek(SeekFrom::Start(at))?;
+                    dst.write_all(&buf[..n])?;
+                }
+                at += n as u64;
             }
-            if n == 0 {
-                break;
-            }
-            if buf[..n].iter().any(|b| *b != 0) {
-                dst.seek(SeekFrom::Start(at))?;
-                dst.write_all(&buf[..n])?;
-            }
-            at += n as u64;
         }
         dst.sync_all()
     })();
@@ -237,6 +281,49 @@ mod tests {
             fs::metadata(dir.path().join("copy")).unwrap().len(),
             64 << 20
         );
+    }
+
+    /// A sparse copy reads only where the image holds data (a file of 64 GiB
+    /// with two small blocks of data has a few MiB of ranges to read), and
+    /// copies a file with no data, or with data up to its end, whole.
+    #[test]
+    fn a_sparse_copy_reads_only_the_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("big.raw"), dir.path().join("copy.raw"));
+        let mut f = fs::File::create(&from).unwrap();
+        f.set_len(64 << 30).unwrap();
+        f.write_all(b"head").unwrap();
+        f.seek(SeekFrom::Start(40 << 30)).unwrap();
+        f.write_all(b"middle").unwrap();
+        drop(f);
+        let ranges = data_ranges(&fs::File::open(&from).unwrap(), 64 << 30);
+        assert!(
+            ranges.iter().map(|(a, b)| b - a).sum::<u64>() <= 8 << 20,
+            "{ranges:?}"
+        );
+        sparse_copy(&from, &to).unwrap();
+        assert_eq!(fs::metadata(&to).unwrap().len(), 64 << 30);
+        let mut middle = [0u8; 6];
+        let mut t = fs::File::open(&to).unwrap();
+        t.seek(SeekFrom::Start(40 << 30)).unwrap();
+        t.read_exact(&mut middle).unwrap();
+        assert_eq!(&middle, b"middle");
+        assert_eq!(&head(&to), b"head");
+        assert!(allocated(&to).unwrap() <= 4 << 20);
+        for (name, tail) in [("empty", &b""[..]), ("tail", &b"end"[..])] {
+            let (from, to) = (
+                dir.path().join(name),
+                dir.path().join(format!("{name}.copy")),
+            );
+            let mut f = fs::File::create(&from).unwrap();
+            f.set_len((64 << 20) - tail.len() as u64).unwrap();
+            f.seek(SeekFrom::End(0)).unwrap();
+            f.write_all(tail).unwrap();
+            drop(f);
+            sparse_copy(&from, &to).unwrap();
+            assert!(same(&from, &to), "{name}");
+            assert_eq!(fs::metadata(&to).unwrap().len(), 64 << 20, "{name}");
+        }
     }
 
     /// A copy writes nothing to the original: changing one leaves the other.
