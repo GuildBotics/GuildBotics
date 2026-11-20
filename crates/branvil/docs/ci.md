@@ -22,9 +22,8 @@ The Hub hands out only compatible work. A missing image on every live runner
 ends the queued attempt as `startup_failure` after `runner_absent_secs`, with the
 missing tag and CPU in its details. Automatic retries wait for a compatible runner.
 
-Settings → CI and `guildbotics environment image load-ci <archive>` accept archives
-for either CPU. The Hub retains the archives under its data directory; only native
-images enter its own runner cache. `scripts/build-agent-environment-image.sh` sends
+Settings → CI and `guildbotics environment image load --ci <archive>` accept archives
+for either CPU. The Hub retains the archives under its data directory; native images also enter the Hub's shared image store. The Hub's CI and isolated commands both use this store. `scripts/build-agent-environment-image.sh` sends
 every built architecture to the Hub. Registry images are pulled on each runner
 with `guildbotics runner pull <tag>`; jobs themselves never pull.
 
@@ -219,7 +218,10 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   lock). Settings → CI shows the tag to write and the digest of
   every cached image. (A runner started by hand on another machine loads such
   an archive with `msb load` under its own `MSB_HOME`.)
-- A pull or a load also names the version the tag now points to by its
+- The Hub loads each archive image with a manifest digest reference. Only the
+  snapshot-aware sweep removes unused versions from the shared store. Tags stay
+  available for future jobs and isolated commands.
+- An external runner also names the version a pull or load now points to by its
   manifest digest (`<name>@sha256:…`), as msb cannot remove a version that no
   reference names. After a pull or a load, and before each job, the runner
   removes the versions no tag points to anymore, with their layers; msb
@@ -472,7 +474,7 @@ No runner, no executor:
   for other ready runners. When no ready runner has an attempt's image, the same
   timeout concludes it `startup_failure`, naming the missing image and CPU.
   The check includes the runner's CPU, executor or synchronization failure details,
-  and actions in Settings → CI / `load-ci` / `runner pull`. The same details remain
+  and actions in Settings → CI / `image load --ci` / `runner pull`. The same details remain
   visible in runner diagnostics.
 
 Cancel and retry: `POST …/jobs/{id}/cancel` concludes a queued attempt
@@ -719,7 +721,7 @@ Switching the supervised runner off stops its child. Stopping or restarting
 the child interrupts the attempts it is running, which are queued once more
 (see "Leases and interruptions"); the service removes the microVMs it left.
 The image cache Settings → CI manages is the supervised runner's
-(`[ci.microsandbox] home`). Another machine can synchronize CPU-specific Hub
+(`<GuildBotics data>/msb`). Another machine can synchronize CPU-specific Hub
 images or fill its own cache with `guildbotics runner pull`. Upgrade manually
 started runners together with the Hub, as their runner API shares the build's
 job and image formats.
@@ -797,7 +799,7 @@ unpacked into `/work` (a disk's blocks and inodes hold many small files in
 more than the archive's bytes) and 256 MiB, rounded up to a multiple of
 128 MiB (an ext4 block group; microsandbox refuses a disk whose last, partial
 group is too small for its metadata). Its volume is in `MSB_HOME`
-(`[ci.microsandbox] home`), not in the runner's work directory. `/work` is a
+(`<GuildBotics data>/msb` on the Hub). `/work` is a
 disk rather than the host directory mounted into the VM: microsandbox's
 directory mounts read and write a file at a time across the VM's boundary,
 which on Windows made the small files of a build about 30 times slower than
@@ -813,18 +815,14 @@ it: how long the attempt waited in the queue (`queued for … s`, from its
 registration to the claim), then `source fetched in … ms` (with the bundle's
 size), `checked out in … ms` (the clone and its archive), `cache restored in
 … ms` (with the size of the entry's archive), `/work prepared in … ms` (the
-VM that unpacks the archives), `sandbox started in … ms` (the spawn of the
-job's `msb run` → the script's first line), `commands ran for … ms`, `/work
+VM that unpacks the archives), `sandbox started in … ms` (from VM creation
+to the start of the guest command), `commands ran for … ms`, `/work
 collected in … ms` (a job whose artifacts or cache are collected),
 `sandbox removed in … ms` (from the job's end, the collecting included),
 `artifacts handled in … ms` (a job that declares artifacts), and `cache saved
-in … ms` (with the archive's size). `peak memory of msb run and its VM: … MiB` is
-the largest resident memory of `msb run` and every process under it (the VM
-among them), read with `ps` every second while the job runs; the VM's grows
-with the guest memory the job touches and does not shrink, so the last samples
-hold the peak. The line is emitted only when a positive sample was collected.
-A host without `ps`, or a short-lived process that exits before `ps` sees it,
-gives no such line; an absent measurement is not reported as zero MiB.
+in … ms` (with the archive's size). `peak memory: … MiB` is the highest resident memory sample recorded while the
+job ran. The Hub uses the SDK's VM metrics. An external runner samples the
+`msb run` process tree. A short job can finish before there is a sample.
 
 A reused attempt instead logs `reused result of <attempt> (<commit>, the same
 tree), image <digest>` (`the same contents of paths` for the paths basis) and `job ended: success (reused)`, with the cache key
@@ -849,40 +847,26 @@ stronger than a container sharing the host kernel, and it starts fast (about
 0.25 s measured, `docs/performance.md`). GuildBotics already deploys the same
 runtime, so no second VM stack is installed.
 
-How it is driven: through the `msb` command line, version **0.6.17 exactly**
-(the runner checks `msb --version`). The Rust SDK crate was the first choice,
-but its 0.6.17 release cannot be built without downloading a guest-agent
-binary at build time, which Branvil's build does not do; the CLI needs no
-build-time download and no SDK dependency.
+The Hub boots VMs and streams job output through the microsandbox Rust SDK
+(0.6.17). CI and isolated commands share the runtime and images at
+`<GuildBotics data>/msb`. The Hub uses the tagged images already in that store.
+To make a local archive available to runners of the same CPU on other machines,
+run `guildbotics environment image load --ci <archive>` on the Hub.
 
-`msb` is looked up in this order, each accepted only with the pinned version:
-`ci.microsandbox.msb_path`, the embedding application's configured runtime
-binary (GuildBotics supplies its deployed runtime), Branvil's copy
-`~/.branvil/msb/bin/msb`
-(created only by `guildbotics runner install-msb --from <msb>`). Nothing is
-downloaded. Branvil's microsandbox state (`MSB_HOME`: image cache, sandbox
-records) is `~/.branvil/msb-home` (`ci.microsandbox.home`), separate from
-GuildBotics'. `msb` runs with only `PATH`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`,
-`LANG` from the host, plus `MSB_HOME` and an
-empty `DOCKER_CONFIG` (host registry credentials are never read).
+An external runner uses the pinned `msb` executable. Its configured
+`ci.microsandbox.msb_path` takes precedence over the enrolled runtime and the
+copy installed by `guildbotics runner install-msb --from <msb>`. On an external
+runner, `ci.microsandbox.home` sets `MSB_HOME` (default `~/.branvil/msb-home`).
+External runners read job output live from the mounted log file.
 
-Why the log goes through a file: `msb run` 0.6.17 hands a command's stdout
-and stderr over only when the command exits (measured: lines written at 0 s
-and at 2 s arrive together when the command ends; `--tty` and `--timeout` do
-not change it, and a killed `msb run` delivers nothing). Read from `msb run`,
-a running job's log would stay empty, and a job stopped by its timeout or a
-cancellation would lose all its output.
-
-What a job gets: its own empty log directory at `/.branvil-log` as its only
-host mount, and disks of its own at `/work` (the checkout, prepared by a VM
-that has the job's `io` directory) and `/tmp`; no host home, no Docker
-socket, no Branvil data, no secrets. Network: denied
-(`--no-net`: the guest has an interface, but the host-side network stack
-refuses every connection and DNS answers nothing; verified to a public host
-name, a public IP, and the host gateway). With `ci_network = true` (the owner
-only) a job gets `--net public`: public destinations only, never the host or
-private networks; microsandbox's hostname filtering is best effort and not
-used as a guarantee.
+The job gets private disks at `/work` and `/tmp`. A preparation VM uses the
+job's `io` directory to put the checkout into `/work`. On an external runner the
+job also gets an empty log directory at `/.branvil-log`. The job cannot access
+the host home, Docker socket, code host data, or secrets. By default the Hub
+disables the VM network device and external runners pass `--no-net`. With
+`ci_network = true` set by the owner, the Public policy allows only public
+destinations and blocks the host and private networks. The policy does not
+rely on hostname filtering.
 
 ### Host prerequisites
 

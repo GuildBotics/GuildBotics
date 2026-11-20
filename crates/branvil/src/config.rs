@@ -216,11 +216,6 @@ pub fn restrict(_path: &Path, _dir: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Validates a base URL: `http(s)://host:port` with nothing after it.
-pub fn normalize_base_url(value: &str) -> anyhow::Result<String> {
-    loopback_auth::normalize_base_url(value).map_err(anyhow::Error::msg)
-}
-
 impl Config {
     /// Reads `config_path`, else `branvil.toml` of `data_dir` when it exists.
     pub fn load(config_path: Option<&Path>, data_dir: &Path) -> anyhow::Result<Config> {

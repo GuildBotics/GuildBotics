@@ -18,6 +18,7 @@ mod maintenance;
 mod markdown;
 mod mentions;
 mod pulls;
+#[cfg(feature = "host")]
 mod real_executor;
 mod recovery;
 mod security;

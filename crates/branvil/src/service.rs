@@ -61,6 +61,7 @@ impl Embedded {
     }
 }
 
+#[cfg(feature = "host")]
 pub(crate) async fn prepare(
     config: Config,
     vault: Arc<dyn crate::vault::Vault>,

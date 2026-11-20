@@ -9,6 +9,7 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
+use gb_environment::runtime;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
@@ -674,7 +675,7 @@ pub async fn list_images(
         }
         None => None,
     };
-    let images = gb_environment::runtime::images(&data.join("msb"), &default)
+    let images = gb_environment::runtime::images(&runtime::home(data), &default)
         .await
         .map_err(|e| anyhow::anyhow!(i18n::say(e.sentence(), language)))?;
     Ok(image_projection(
@@ -709,7 +710,7 @@ pub async fn build(
     on_line: impl Fn(&str) + Send + Sync + 'static,
 ) -> anyhow::Result<BuildOutcome> {
     use gb_environment::{contract, image, recipe::Recipe, runtime, snapshot};
-    let runtime_home = data.join("msb");
+    let runtime_home = runtime::home(data);
     runtime::ensure(&runtime_home)
         .map_err(|e| anyhow::anyhow!(crate::i18n::say(e.sentence(), language)))?;
     let config = workspace.join(".guildbotics/config");
@@ -774,7 +775,7 @@ pub async fn build(
     .map_err(anyhow::Error::msg)?;
     // A declared image is every version's, so its other images' recipes go.
     // The default image comes with the version: a prebuilt update's differs.
-    let home = data.join("msb");
+    let home = runtime::home(data);
     let cleaned = match snapshot_dirs(data, workspace) {
         Ok(indexed) if pull => runtime::sweep_images(&home, &indexed).await,
         Ok(indexed) => runtime::retire(&home, workspace, &name, &indexed).await,
@@ -825,7 +826,7 @@ pub async fn sweep_images(
     data: &std::path::Path,
     workspace: &std::path::Path,
 ) -> anyhow::Result<()> {
-    gb_environment::runtime::sweep_images(&data.join("msb"), &snapshot_dirs(data, workspace)?)
+    gb_environment::runtime::sweep_images(&runtime::home(data), &snapshot_dirs(data, workspace)?)
         .await
         .map_err(anyhow::Error::msg)
 }
@@ -897,8 +898,8 @@ async fn build_task(
     }
 }
 
-/// A CI archive belongs to the code host's runner store, not this device's store.
-pub async fn load_ci(
+/// Register an archive with the Hub for distribution to runners of its CPU.
+pub async fn publish_image(
     workspace: &std::path::Path,
     archive: &std::path::Path,
     on_load: impl FnOnce(&std::path::Path),
@@ -1976,7 +1977,7 @@ mod provider_image_tests {
             )
             .unwrap();
             assert_eq!(
-                load_ci(root.path(), &root.path().join("absent.tar"), |_| panic!(
+                publish_image(root.path(), &root.path().join("absent.tar"), |_| panic!(
                     "a different provider cannot begin a CI load"
                 ))
                 .await

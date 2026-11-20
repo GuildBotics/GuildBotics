@@ -138,14 +138,30 @@ wheel for GuildBotics' Python) and git, which [member git](#member-git-and-the-m
 the member's clones with (the build checks it last), and ship no bubblewrap (`bwrap`): Codex prefers it to the one it
 bundles and cannot start a session with Debian's (packages such as
 `libwebkit2gtk` pull it in as a dependency; remove the binary then). The build replaces the image's Node.js with the version GuildBotics pins. A loaded image is used without asking a registry (pull policy
-`never`). When the CI jobs of the workspace's code host run on the same image
-(Branvil), load the archive into its CI runner too with `guildbotics environment
-image load-ci <archive>`, on the machine the runner runs on: a pipeline names the
-image by its tag alone, so the runner's cache decides the version the jobs get.
-The image for developing GuildBotics itself
-(`docker/agent-environment/Dockerfile`; `scripts/build-agent-environment-image.sh`
-builds every architecture, loads it here and into the CI runner, and declares) is
-the worked example.
+`never`). Hub CI can use the same image. To distribute it to CI runners on other machines,
+run `guildbotics environment image load --ci <archive>` on the Hub. The
+`scripts/build-agent-environment-image.sh` script builds the images for GuildBotics
+development and registers the archive for each CPU with the Hub.
+
+### Remove an old image tag
+
+`guildbotics environment prune` removes obsolete snapshots and image versions
+unused by tags, snapshots, or VMs. Tags stay because either an isolated
+environment or a CI job may use them. When a recipe changes tags, the old tag
+can be removed manually.
+
+Run `guildbotics environment --workspace <path> prune` for each registered
+workspace. Stop CI and isolated commands. Check the current declarations,
+CI configuration, and the snapshot list before removing an image they no longer
+use. The example lists snapshots in the default store and removes one old tag.
+Use your actual data directory if it differs.
+
+```sh
+store="$HOME/.guildbotics/data/msb"
+MSB_HOME="$store" "$store/bin/msb" snapshot list --format json
+# Confirm that no snapshot, workspace declaration, or CI job uses this image.
+MSB_HOME="$store" "$store/bin/msb" image remove example/base:old
+```
 
 On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics server start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
 

@@ -10,7 +10,7 @@ fn image_load_help_and_validation_reach_the_real_entry() {
         .unwrap();
     assert!(help.status.success());
     let help = String::from_utf8(help.stdout).unwrap();
-    assert!(help.contains("<ARCHIVE>") && help.contains("--tag"));
+    assert!(help.contains("<ARCHIVE>") && help.contains("--tag") && help.contains("--ci"));
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("not an image.tar");
     std::fs::write(&path, "invalid archive").unwrap();
@@ -120,6 +120,44 @@ fn loads_and_reloads_real_archives_without_booting_a_vm() {
                 );
             }
         }
+    }
+
+    let workspace = dir.path().join("workspace");
+    let team = workspace.join(".guildbotics/config/team");
+    std::fs::create_dir_all(&team).unwrap();
+    std::fs::write(team.join("project.yml"), "name: Test\n").unwrap();
+    for (language, notice) in [
+        (
+            "en",
+            "Loaded the image on this device only. CI distribution is unavailable for this workspace.",
+        ),
+        (
+            "ja",
+            "この端末にイメージを読み込みました。このワークスペースではCIに配布できません。",
+        ),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_guildbotics"))
+            .env("HOME", dir.path())
+            .env("GUILDBOTICS_HOME", dir.path())
+            .env("MSB_CONFIG_PATH", dir.path().join("no-config.json"))
+            .env("LANGUAGE", language)
+            .args(["environment", "--workspace"])
+            .arg(&workspace)
+            .args(["image", "load", "--ci"])
+            .arg(dir.path().join("image.tar"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            text.contains(&format!("loaded local/agent:1 {digest}")),
+            "{text}"
+        );
+        assert!(text.contains(notice), "{text}");
     }
 }
 
@@ -283,7 +321,7 @@ fn image_declare_merges_architectures_replaces_the_reference_and_can_reset() {
 }
 
 #[test]
-fn ci_image_load_requires_a_workspace_and_a_real_archive_before_looking_for_a_runner() {
+fn publishing_requires_a_workspace_and_validates_a_local_archive_without_ci() {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");
     let team = workspace.join(".guildbotics/config/team");
@@ -307,7 +345,7 @@ fn ci_image_load_requires_a_workspace_and_a_real_archive_before_looking_for_a_ru
         if let Some(workspace) = workspace {
             cli.arg("--workspace").arg(workspace);
         }
-        cli.args(["image", "load-ci"])
+        cli.args(["image", "load", "--ci"])
             .arg(archive)
             .output()
             .unwrap()
@@ -321,11 +359,8 @@ fn ci_image_load_requires_a_workspace_and_a_real_archive_before_looking_for_a_ru
     let absent = invoke(Some(&workspace), &root.path().join("missing.tar"));
     assert_eq!(absent.status.code(), Some(2));
     let no_runner = invoke(Some(&workspace), &archive);
-    assert!(no_runner.status.success(), "{no_runner:?}");
-    assert_eq!(
-        String::from_utf8(no_runner.stdout).unwrap(),
-        "The workspace's code host has no CI runner GuildBotics loads images into; there is nothing to load.\n"
-    );
+    assert!(!no_runner.status.success());
+    assert!(String::from_utf8_lossy(&no_runner.stderr).contains("Could not read image archive"));
     assert!(!root.path().join("machine/data/msb").exists());
 }
 

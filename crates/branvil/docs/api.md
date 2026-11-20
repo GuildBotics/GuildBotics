@@ -1379,14 +1379,14 @@ alone and automatic retry recovery do not send notices.
 
 What the owner changes under Settings → CI (`docs/ci.md`). The runner mode and
 the limits are `branvil.toml` settings: written there, keeping the rest of the
-file, and applied without a restart. The image cache is the supervised
-runner's (`[ci.microsandbox] home`).
+file, and applied without a restart. The Hub uses the shared image store at
+`<GuildBotics data>/msb`.
 
 - `GET /api/v1/admin/ci` (owner) →
 
   ```json
   {"runner": {"mode": "auto", "state": "ready", "detail": "1 runner(s) connected.", "runners": [...], "queue": {...}},
-   "executor": {"msb": "/…/msb", "problem": null, "home": "/…/.branvil/msb-home"},
+   "executor": {"msb": "/…/msb", "problem": null, "home": "/…/.guildbotics/data/msb"},
    "limits": {"max_cpus": 4, "max_memory_mib": 4096, "work_quota_mib": 16384, "max_timeout_secs": 3600, "cache_max_mib": 2048, "max_jobs": 1},
    "images": {"error": null,
               "cached": [{"reference": "guildbotics/agent-environment:dev",

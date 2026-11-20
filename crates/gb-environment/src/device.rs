@@ -34,7 +34,7 @@ impl Device {
 }
 
 pub async fn read(host: &Host, workspace: &Path) -> Device {
-    let home = host.data.join("msb");
+    let home = runtime::home(&host.data);
     let health = runtime::ensure(&home).err().map(Failure::sentence);
     let templates = host.package.join("templates");
     let config = workspace.join(".guildbotics/config");

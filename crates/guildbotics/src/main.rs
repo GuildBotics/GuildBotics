@@ -249,15 +249,6 @@ fn main() -> ExitCode {
         if let Some(code) = branvil::askpass_main() {
             return code;
         }
-        if let Ok(data) = gb_base::home::data() {
-            let binary = gb_environment::placed_files(&data.join("msb"))[0].clone();
-            if let Err(error) =
-                branvil::set_runtime_binary(std::path::absolute(binary).unwrap_or_default())
-            {
-                eprintln!("guildbotics: {error}");
-                return ExitCode::FAILURE;
-            }
-        }
     }
     let command = Cli::parse().command;
     let credential_input = if matches!(&command, Command::GitCredential { .. }) {
@@ -561,9 +552,12 @@ async fn runner(args: gb_runner::RunnerArgs) -> anyhow::Result<u8> {
     {
         let language = gb_server::client::language().await;
         let url = format!("http://127.0.0.1:{}", gb_server::port()?);
-        return gb_runner::run_runner(args, url, gb_server::endpoint::code_host_data()?, async {
-            Ok(gb_server::client::local_owner().await?.1)
-        })
+        return gb_runner::run_runner(
+            args.vm_home(gb_base::home::data()?),
+            url,
+            gb_server::endpoint::code_host_data()?,
+            async { Ok(gb_server::client::local_owner().await?.1) },
+        )
         .await
         .map_err(|error| gb_server::client::runner::localized_error(error, language));
     }
@@ -604,6 +598,7 @@ fn start(services: bool) -> anyhow::Result<u8> {
 async fn serve(services: bool) -> anyhow::Result<u8> {
     let signals = server_stops(gb_server::client::language().await)?;
     let data_dir = gb_server::endpoint::code_host_data()?;
+    let vm_home = gb_environment::runtime::home(&gb_base::home::data()?);
     let mut server = gb_server::Server::start().await?;
     server.start_services(services);
     let stop = wait_for_stop(signals.clone(), Stop::Waiting);
@@ -615,7 +610,8 @@ async fn serve(services: bool) -> anyhow::Result<u8> {
     let vault = Arc::new(gb_server::branvil_vault::IdentityVault::system());
     let (_held, served) = server
         .serve_embedded(stop, cancel, async move {
-            branvil::prepare_embedded(&data_dir, vault, &base_url, host, active_agents).await
+            branvil::prepare_embedded(&data_dir, vm_home, vault, &base_url, host, active_agents)
+                .await
         })
         .await;
     served?;

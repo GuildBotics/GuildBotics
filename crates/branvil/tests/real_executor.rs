@@ -1,14 +1,13 @@
 //! The real executor, end to end: a real test server, a real
 //! `guildbotics runner` process, and microVMs started by the pinned `msb`.
 //!
-//! Opt-in (it needs GuildBotics' msb 0.6.17 runtime in
-//! `~/.guildbotics/data/msb`, which the runner is given too, a hypervisor,
-//! and the images below already in Branvil's image cache):
+//! Opt-in: supply an absolute, disposable data directory with the two
+//! fixture images already loaded in its `msb` store. The runner boots with
+//! the SDK and uses the same directory as isolated commands.
 //!
 //! ```sh
-//! guildbotics runner pull docker.io/library/alpine:3.22
-//! guildbotics runner pull docker.io/library/node:22.23.2-bookworm
-//! BRANVIL_REAL_EXECUTOR=1 cargo test --locked -p branvil --features test-support --test main real_executor:: -- --nocapture
+//! BRANVIL_REAL_EXECUTOR=1 BRANVIL_REAL_EXECUTOR_DATA=/absolute/path/to/test-data \
+//!   cargo nextest run --locked -p branvil --features test-support --test main -E 'test(/^real_executor::/)'
 //! ```
 
 use crate::common;
@@ -31,15 +30,27 @@ fn home() -> String {
     std::env::var("HOME").unwrap()
 }
 
-fn msb() -> String {
-    format!("{}/.guildbotics/data/msb/bin/msb", home())
+fn test_data() -> std::path::PathBuf {
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "real executor requires an attending owner"
+    );
+    let data = std::path::PathBuf::from(
+        std::env::var_os("BRANVIL_REAL_EXECUTOR_DATA").expect("disposable test data required"),
+    );
+    assert!(data.is_absolute(), "use an absolute path for test data");
+    data
 }
 
-fn msb_home() -> String {
-    format!("{}/.branvil/msb-home", home())
+fn msb() -> std::path::PathBuf {
+    msb_home().join("bin/msb")
 }
 
-/// The sandboxes of Branvil's MSB_HOME that the runner `runner` labelled,
+fn msb_home() -> std::path::PathBuf {
+    test_data().join("msb")
+}
+
+/// The sandboxes in the test runtime that the runner `runner` labelled,
 /// names only. Other runs may use the same MSB_HOME at the same time (or have
 /// left sandboxes behind when they were killed), so this run looks only at
 /// its own.
@@ -50,7 +61,12 @@ fn sandboxes(runner: &str) -> Vec<String> {
         .env("MSB_HOME", msb_home())
         .output()
         .unwrap();
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap_or(json!([]));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     v.as_array()
         .unwrap()
         .iter()
@@ -58,7 +74,7 @@ fn sandboxes(runner: &str) -> Vec<String> {
         .collect()
 }
 
-/// The `/tmp` and `/work` volumes of Branvil's MSB_HOME that the runner
+/// The `/tmp` and `/work` volumes in the test runtime that the runner
 /// `runner` named its own (`bv-tmp-<runner>-<attempt id>`,
 /// `bv-work-<runner>-<attempt id>`).
 fn volumes(runner: &str) -> Vec<String> {
@@ -67,7 +83,12 @@ fn volumes(runner: &str) -> Vec<String> {
         .env("MSB_HOME", msb_home())
         .output()
         .unwrap();
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap_or(json!([]));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     v.as_array()
         .unwrap()
         .iter()
@@ -238,10 +259,7 @@ async fn jobs_run_in_microvms_without_network_or_host_files() {
     let config = w.dir.path().join("runner.toml");
     std::fs::write(
         &config,
-        format!(
-            "[ci.executor]\nmax_cpus = 1\nmax_memory_mib = 512\n[ci.microsandbox]\nmsb_path = {:?}\n",
-            msb()
-        ),
+        "[ci.executor]\nmax_cpus = 1\nmax_memory_mib = 512\n",
     )
     .unwrap();
     let mut child = branvil_command()
@@ -251,6 +269,7 @@ async fn jobs_run_in_microvms_without_network_or_host_files() {
         .arg(&work_dir)
         .env("BRANVIL_TOKEN", &token)
         .env("BRANVIL_LOG", "branvil=debug")
+        .env("BRANVIL_TEST_VM_DATA", test_data())
         .stdout(Stdio::null())
         .stderr(std::fs::File::create(w.dir.path().join("runner.log")).unwrap())
         .spawn()
@@ -259,14 +278,12 @@ async fn jobs_run_in_microvms_without_network_or_host_files() {
     let runner_cmd = format!("--work-dir {}", work_dir.display());
     let started = Instant::now();
     let mut peak_rss: u64 = 0;
-    let mut peak_msb_run: u64 = 0;
     let mut peak_runner: u64 = 0;
     let mut done = Value::Null;
     let mut names = Vec::new();
     let mut seen_running = false;
     while started.elapsed() < Duration::from_secs(300) {
         peak_rss = peak_rss.max(jobs_rss("sandbox", &names).into_iter().max().unwrap_or(0));
-        peak_msb_run = peak_msb_run.max(jobs_rss("run", &names).into_iter().max().unwrap_or(0));
         peak_runner = peak_runner.max(rss_of(&runner_cmd).into_iter().max().unwrap_or(0));
         let v = s.ok(&format!("{base}/checks"), &w.aiko).await;
         names = job_names(&v);
@@ -473,7 +490,7 @@ async fn jobs_run_in_microvms_without_network_or_host_files() {
         "a job VM is still running"
     );
     println!(
-        "MEASURE startup_ms={startup_ms} peak_vm_rss_kib={peak_rss} peak_msb_run_rss_kib={peak_msb_run} peak_runner_rss_kib={peak_runner} three_jobs_total_ms={}",
+        "MEASURE startup_ms={startup_ms} peak_vm_rss_kib={peak_rss} peak_runner_rss_kib={peak_runner} three_jobs_total_ms={}",
         total.as_millis()
     );
 }

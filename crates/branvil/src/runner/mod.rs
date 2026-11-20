@@ -22,6 +22,64 @@ mod integration {
         use executor::ImageLock;
         use std::sync::atomic::AtomicBool;
 
+        #[cfg(feature = "host")]
+        #[tokio::test]
+        async fn hub_runner_defers_old_versions_to_the_snapshot_sweep() {
+            use crate::ci::images;
+            let dir = tempfile::tempdir().unwrap();
+            let ms = Microsandbox::hub(dir.path().to_owned(), "test");
+            let _images = ms.lock_images(true, || {}).await.unwrap();
+            ms.load(images::tests::docker(images::architecture(), "1").path())
+                .await
+                .unwrap();
+            let first = ms.images().await.unwrap().pop().unwrap();
+            let pin = format!("docker.io/test/image@{}", first.digest);
+
+            let second = images::tests::docker_tagged(
+                images::architecture(),
+                "2",
+                "docker.io/test/image:dev",
+            );
+            ms.load(second.path()).await.unwrap();
+            let current = ms.inspect(&first.reference).await.unwrap().unwrap();
+            assert_ne!(current.digest, first.digest);
+            let alias = ms
+                .inspect("docker.io/test/image:dev")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(alias.config_digest, current.config_digest);
+            assert!(ms.inspect(&pin).await.unwrap().is_some());
+
+            ms.collect().await;
+            assert_eq!(
+                ms.inspect(&pin).await.unwrap().unwrap().digest,
+                first.digest
+            );
+
+            // An interrupted GuildBotics registration can leave the runtime's
+            // cache updated with one spelling while another catalog row is stale.
+            let third = images::tests::docker_tagged(
+                images::architecture(),
+                "3",
+                "docker.io/test/image:dev",
+            );
+            let output = ms
+                .command()
+                .unwrap()
+                .args(["load", "--quiet", "--input"])
+                .arg(third.path())
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(ms.inspect(&first.reference).await.is_err());
+        }
+
         #[cfg(unix)]
         #[tokio::test]
         async fn hub_archives_follow_cpu_and_digest_without_reloading_equal_versions() {
@@ -742,13 +800,16 @@ fi
             .await;
             let msb = s.dir.path().join("msb");
             let home = s.dir.path().join("msb-home");
-            let settings = Settings {
-                url: s.url.clone(),
-                token: Some(s.runner_token.clone()),
-                work_dir: s.dir.path().join("runner"),
-                msb_path: Some(msb.clone()),
-                msb_home: home.clone(),
-            };
+            let mut settings = Settings::new(
+                s.url.clone(),
+                Some(s.runner_token.clone()),
+                Some(s.dir.path().join("runner")),
+                None,
+                None,
+            )
+            .unwrap();
+            settings.msb_path = Some(msb.clone());
+            settings.msb_home = home.clone();
             let serving = tokio::spawn(run(settings));
             let sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
             let settled = |sha: String| {

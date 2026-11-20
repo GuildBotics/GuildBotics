@@ -78,6 +78,8 @@ pub enum LimitsSource {
 pub struct Control {
     file: PathBuf,
     microsandbox: MicrosandboxConfig,
+    #[cfg(feature = "host")]
+    pub(crate) vm_home: std::sync::OnceLock<PathBuf>,
     /// The mode the supervisor follows.
     mode: watch::Sender<RunnerMode>,
     limits: Mutex<(Limits, BTreeMap<String, Limits>)>,
@@ -91,6 +93,8 @@ impl Control {
         Self {
             file,
             microsandbox: ci.microsandbox.clone(),
+            #[cfg(feature = "host")]
+            vm_home: Default::default(),
             mode: watch::Sender::new(ci.runner),
             limits: Mutex::new((Limits::from(&ci.executor), ci.runner_limits.clone())),
             operation: Mutex::new(None),
@@ -216,6 +220,10 @@ impl Control {
     /// The supervised runner's image cache, as the runner `runner` would
     /// use it.
     pub async fn microsandbox(&self, runner: &str) -> Microsandbox {
+        #[cfg(feature = "host")]
+        if let Some(home) = self.vm_home.get() {
+            return Microsandbox::hub(home.clone(), runner);
+        }
         let path = self.microsandbox.msb_path.clone();
         let msb = tokio::task::spawn_blocking(move || executor::resolve_msb(path.as_deref()))
             .await

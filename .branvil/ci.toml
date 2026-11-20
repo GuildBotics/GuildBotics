@@ -166,7 +166,7 @@ cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["rust-tool
 [[jobs]]
 name = "rust-test-branvil"
 paths = [
-  "crates/branvil/**", "crates/gb-runner/**",
+  "crates/branvil/**", "crates/gb-runner/**", "crates/gb-vm/**",
   "crates/loopback-auth/**",
   "crates/gb-base/**",
   "Cargo.toml",

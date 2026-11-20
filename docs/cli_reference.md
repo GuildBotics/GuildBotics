@@ -22,7 +22,6 @@ For workspace setup and examples, see the [README](../README.md).
 - [`guildbotics environment usage`](#guildbotics-environment-usage)
 - [`guildbotics environment image`](#guildbotics-environment-image)
 - [`guildbotics environment image load`](#guildbotics-environment-image-load)
-- [`guildbotics environment image load-ci`](#guildbotics-environment-image-load-ci)
 - [`guildbotics environment image list`](#guildbotics-environment-image-list)
 - [`guildbotics environment image declare`](#guildbotics-environment-image-declare)
 - [`guildbotics server`](#guildbotics-server)
@@ -166,7 +165,7 @@ Usage: guildbotics environment [OPTIONS] <COMMAND>
 Commands:
   status  Read the device's environment and refusal or warning
   build   Build the declared environment on this device
-  prune   Remove obsolete snapshots and the images no snapshot uses after a successful Hub activation
+  prune   Remove obsolete snapshots and unreferenced image versions, retaining tags
   remove  Remove device snapshots while preserving provider logins
   login   Log in to a provider in its private environment
   usage   Probe provider usage in its private environment
@@ -217,7 +216,7 @@ Options:
 ## guildbotics environment prune
 
 ```text
-Remove obsolete snapshots and the images no snapshot uses after a successful Hub activation
+Remove obsolete snapshots and unreferenced image versions, retaining tags
 
 Usage: guildbotics environment prune
 
@@ -278,8 +277,7 @@ Manage local and CI base images
 Usage: guildbotics environment image <COMMAND>
 
 Commands:
-  load     Load a Docker save or OCI archive built for this device's CPU
-  load-ci  Load an archive into the workspace code host's CI runner
+  load     Load a Docker save or OCI image archive
   list     List eligible local base images
   declare  Declare the image's digest per architecture in the selected workspace
   help     Print this message or the help of the given subcommand(s)
@@ -292,7 +290,7 @@ Options:
 ## guildbotics environment image load
 
 ```text
-Load a Docker save or OCI archive built for this device's CPU
+Load a Docker save or OCI image archive
 
 Usage: guildbotics environment image load [OPTIONS] <ARCHIVE>
 
@@ -304,22 +302,9 @@ Options:
       --tag <TAG>
           Add a reference to the archive's own tags
 
-  -h, --help
-          Print help
-```
+      --ci
+          Also distribute the archive to CI runners of its CPU architecture
 
-## guildbotics environment image load-ci
-
-```text
-Load an archive into the workspace code host's CI runner
-
-Usage: guildbotics environment image load-ci <ARCHIVE>
-
-Arguments:
-  <ARCHIVE>
-
-
-Options:
   -h, --help
           Print help
 ```

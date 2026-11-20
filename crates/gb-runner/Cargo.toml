@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 oci-spec = { version = "0.9.0", default-features = false, features = ["distribution"] }
 gb-base = { path = "../gb-base" }
+gb-vm = { path = "../gb-vm" }
 tempfile = "3.27.0"
 anyhow = "1"
 base64 = "0.23.1"
@@ -36,6 +37,7 @@ windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_ToolHelp
 
 [features]
 test-support=[]
+host = ["gb-vm/host"]
 
 [dev-dependencies]
 axum="0.8.9"

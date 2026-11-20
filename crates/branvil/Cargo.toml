@@ -11,6 +11,8 @@ publish = false
 autotests = false
 
 [features]
+default = ["host"]
+host = ["gb-runner/host"]
 test-support = []
 
 [dependencies]
