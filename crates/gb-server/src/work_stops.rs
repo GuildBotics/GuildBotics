@@ -1,18 +1,14 @@
 //! A stopped ticket's notice, separate from the execution that stopped.
 use branvil::agent::port::Task;
-use gb_base::service::WorkflowStatus;
-use gb_integrations::chat::ChatService;
 use gb_member::context::PublicMember;
 use gb_observability::runs::{Completion, RunRecord, RunState};
-use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Subscription {
     pub channel_id: String,
     pub channel_name: String,
     pub participation: String,
-    pub notify_work_stops: bool,
     pub startup_minutes: u32,
     pub interval_seconds: f64,
     pub overlap_seconds: f64,
@@ -62,7 +58,6 @@ pub fn subscriptions(member: &Value) -> Vec<Subscription> {
                 } else {
                     "strict".into()
                 },
-                notify_work_stops: config.get("notify_work_stops") == Some(&Value::Bool(true)),
                 startup_minutes: number("startup_backfill_minutes", 60.0) as u32,
                 interval_seconds: number("backfill_interval_seconds", 300.0),
                 overlap_seconds: number("backfill_overlap_seconds", 60.0),
@@ -165,16 +160,7 @@ pub fn completed_stop(
     Some(stop)
 }
 
-/// Never changes the run result. Only opted-in channels receive one notice;
-/// a workflow status suppresses the notification as input for every member.
-pub async fn notify(
-    chat: &dyn ChatService,
-    person: &PublicMember,
-    channels: &[Subscription],
-    stop: &WorkStop,
-    language: &str,
-    observe: &(dyn Fn(Value) + Send + Sync),
-) {
+pub fn message(person: &PublicMember, stop: &WorkStop, language: &str) -> String {
     let item = [stop.label.as_str(), stop.title.as_str()]
         .into_iter()
         .filter(|s| !s.is_empty())
@@ -193,46 +179,13 @@ pub async fn notify(
             &[("url", &stop.comment_url)],
         ));
     }
-    let Ok(status) = serde_json::from_value::<WorkflowStatus>(
-        json!({"reason":stop.reason,"person_id":person.person_id,"run_id":stop.run_id,"subject":stop.url}),
-    ) else {
-        return;
-    };
-    let mut attempted = BTreeSet::new();
-    for channel in channels.iter().filter(|channel| channel.notify_work_stops) {
-        let resolved = if channel.channel_id.is_empty() {
-            chat.resolve_channel_id(&channel.channel_name)
-                .await
-                .map(|id| id.unwrap_or_default())
-        } else {
-            Ok(channel.channel_id.clone())
-        };
-        let (id, delivered, error) = match resolved {
-            Ok(id) if !id.is_empty() => {
-                if !attempted.insert(id.clone()) {
-                    continue;
-                }
-                let result = chat.post_message(&id, &body, None, Some(&status)).await;
-                let error = result
-                    .as_ref()
-                    .err()
-                    .map(|e| e.translation_key())
-                    .unwrap_or_default();
-                (id, result.is_ok(), error)
-            }
-            Ok(_) => (String::new(), false, ""),
-            Err(error) => (String::new(), false, error.translation_key()),
-        };
-        observe(
-            json!({"run_id":stop.run_id,"reason":stop.reason,"url":stop.url,"comment_url":stop.comment_url,
-            "channel_id":id,"channel_name":channel.channel_name,"delivered":delivered,"error":error}),
-        );
-    }
+    body
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn person(id: &str, kind: &str, active: bool) -> PublicMember {
         serde_json::from_value(
@@ -297,119 +250,23 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn local_chat_receives_one_status_notice_per_opted_in_channel() {
-        use gb_config::secrets::{DeviceKey, Keychain, Scope, SecretStore};
-        struct UnusedKeychain;
-        impl Keychain for UnusedKeychain {
-            fn read(&self) -> anyhow::Result<Option<String>> {
-                panic!("local provider must not read a credential");
-            }
-            fn create(&self, _: &str) -> anyhow::Result<()> {
-                panic!("local provider must not create a credential");
-            }
-        }
-        let root = tempfile::tempdir().unwrap();
-        let writes = gb_base::shared_writes::SharedWrites::new(
-            root.path().join("identity"),
-            Some(root.path().join("workspace")),
-        );
-        let secrets = SecretStore::new(
-            &writes,
-            Scope::Identity,
-            DeviceKey {
-                machine_root: root.path().into(),
-                keychain: &UnusedKeychain,
-            },
-        )
-        .unwrap();
-        let config = gb_integrations::IntegrationConfig {
-            local_root: root.path().join("services"),
-            identity_root: root.path().join("identity"),
-            person_id: "aiko".into(),
-            display_name: "Aiko".into(),
-            accounts: Default::default(),
-
-            chat_provider: "local".into(),
-
-            slack_base_url: String::new(),
-        };
-        let factory = gb_integrations::ServiceIntegrationFactory::new(
-            config,
-            &secrets,
-            std::sync::Arc::new(|_| {}),
-        )
-        .unwrap();
-        let chat = factory.create_chat_service().unwrap();
-        chat.post_message("notify", "seed", None, None)
-            .await
-            .unwrap();
-        let channels = subscriptions(&json!({"message_channels":[
-            {"chat":{"channel_id":"notify","notify_work_stops":true}},
-            {"chat":{"channel_name":"notify","notify_work_stops":true}},
-            {"chat":{"channel_id":"excluded","notify_work_stops":false}}
-        ]}));
-        let task = Task {
-            url: Some("local://tickets/90".into()),
-            label: "#90".into(),
-            title: "Task".into(),
-            ..Task::default()
-        };
-        let stop = WorkStop::of(&task, "blocked", "run", "local://comment/1");
-        let observed = std::sync::Mutex::new(vec![]);
-        notify(
-            chat.as_ref(),
-            &person("aiko", "agent", true),
-            &channels,
-            &stop,
-            "ja",
-            &|value| observed.lock().unwrap().push(value),
-        )
-        .await;
-        let events = chat
-            .list_channel_events(
-                "notify",
-                gb_integrations::chat::ChannelEventsQuery {
-                    since: None,
-                    until: None,
-                    cursor: None,
-                    limit: 100,
-                },
-            )
-            .await
-            .unwrap()
-            .events;
-        assert_eq!(events.len(), 2);
-        let notice = &events[1];
-        assert!(notice.message.text.contains("#90 Task"));
-        assert!(notice.message.text.contains("local://comment/1"));
-        assert_eq!(
-            notice.status.as_ref().unwrap().reason(),
-            gb_base::service::WorkflowStatusReason::Blocked
-        );
-        assert_eq!(observed.lock().unwrap().len(), 1);
-        assert_eq!(observed.lock().unwrap()[0]["delivered"], true);
-    }
-
     #[test]
-    fn subscriptions_preserve_enabled_participation_notification_and_backfill_policies() {
+    fn subscriptions_preserve_enabled_participation_and_backfill_policies() {
         let member = json!({"message_channels":[
-            {"name":"primary","chat":{"enabled":true,"participation":" SOCIAL ","notify_work_stops":true,"backfill_limit":20}},
+            {"name":"primary","chat":{"enabled":true,"participation":" SOCIAL ","backfill_limit":20}},
             {"name":"disabled","chat":{"enabled":false}},
             {"name":"muted","channel_info":{"channel_id":"C2","chat":{"participation":"muted"}}},
-            {"name":"unknown","chat":{"participation":"invalid","notify_work_stops":"true"}},
+            {"name":"unknown","chat":{"participation":"invalid"}},
             {"name":"not chat"}
         ]});
         let channels = subscriptions(&member);
         assert_eq!(channels.len(), 3);
         assert_eq!(channels[0].participation, "social");
-        assert!(channels[0].notify_work_stops);
         assert_eq!(channels[0].channel_name, "primary");
         assert_eq!(channels[0].limit, 20);
         assert_eq!(channels[1].channel_id, "C2");
         assert_eq!(channels[1].participation, "muted");
         assert_eq!(channels[2].participation, "strict");
-        assert!(!channels[2].notify_work_stops);
     }
 
     #[test]
@@ -449,176 +306,5 @@ mod tests {
             ),
             ""
         );
-    }
-
-    #[tokio::test]
-    async fn notification_matrix_preserves_language_status_scope_and_safe_delivery_failures() {
-        let root = tempfile::tempdir().unwrap();
-        let chat = crate::test_chat::Faults::new(crate::test_chat::local(root.path()));
-        let member = person("aiko", "agent", true);
-        for language in ["en", "ja"] {
-            for reason in ["asking", "blocked", "failed", "review_limit"] {
-                for address in ["", "local://comment/1"] {
-                    let prefix = format!("{language}-{reason}-{}", !address.is_empty());
-                    let first = format!("{prefix}-one");
-                    let second = format!("{prefix}-two");
-                    chat.inner
-                        .post_message(&first, "seed", None, None)
-                        .await
-                        .unwrap();
-                    let channels = subscriptions(&json!({"message_channels":[
-                        {"name":"first","chat":{"channel_id":first,"notify_work_stops":true}},
-                        {"name":"second","chat":{"channel_id":second,"enabled":true,"notify_work_stops":true}},
-                        {"name":first,"chat":{"notify_work_stops":true}},
-                        {"name":"disabled","chat":{"channel_id":"disabled","enabled":false,"notify_work_stops":true}},
-                        {"name":"quiet","chat":{"channel_id":"quiet","notify_work_stops":false}},
-                        {"name":"legacy","chat":{"channel_id":"legacy"}}
-                    ]}));
-                    let stop = WorkStop {
-                        reason,
-                        run_id: prefix.clone(),
-                        url: "local://tickets/90".into(),
-                        label: "#90".into(),
-                        title: "Task".into(),
-                        comment_url: address.into(),
-                    };
-                    let observed = std::sync::Mutex::new(vec![]);
-                    notify(&chat, &member, &channels, &stop, language, &|v| {
-                        observed.lock().unwrap().push(v)
-                    })
-                    .await;
-                    let mut expected = crate::i18n::t(
-                        language,
-                        &format!("capabilities.work_stops.{reason}"),
-                        &[
-                            ("name", &member.name),
-                            ("item", "#90 Task"),
-                            ("url", &stop.url),
-                        ],
-                    );
-                    if !address.is_empty() {
-                        expected.push('\n');
-                        expected.push_str(&crate::i18n::t(
-                            language,
-                            "capabilities.work_stops.comment",
-                            &[("url", address)],
-                        ));
-                    }
-                    for id in [&first, &second] {
-                        let page = chat
-                            .inner
-                            .list_channel_events(id, Default::default())
-                            .await
-                            .unwrap();
-                        let notice = page.events.last().unwrap();
-                        assert_eq!(notice.message.text, expected);
-                        assert_eq!(notice.message.author_id.as_deref(), Some("local-aiko"));
-                        let expected_status: WorkflowStatus = serde_json::from_value(json!({"reason":reason,"person_id":"aiko","run_id":prefix,"subject":stop.url})).unwrap();
-                        assert_eq!(notice.status.as_ref().unwrap(), &expected_status);
-                    }
-                    let observed = observed.lock().unwrap();
-                    assert_eq!(observed.len(), 2);
-                    assert!(
-                        observed
-                            .iter()
-                            .all(|v| v["delivered"] == true && v["error"] == "")
-                    );
-                    assert_eq!(observed[0]["channel_id"], first);
-                    assert_eq!(observed[1]["channel_id"], second);
-                }
-            }
-        }
-        let channels = subscriptions(&json!({"message_channels":[
-            {"chat":{"channel_id":"bad","notify_work_stops":true}},
-            {"chat":{"channel_id":"good","notify_work_stops":true}},
-            {"name":"missing","chat":{"notify_work_stops":true}}
-        ]}));
-        chat.errors
-            .lock()
-            .unwrap()
-            .insert("post:bad".into(), gb_base::service::ServiceError::Failed);
-        let stop = WorkStop::of(
-            &Task {
-                url: Some("ticket".into()),
-                ..Default::default()
-            },
-            "blocked",
-            "run",
-            "",
-        );
-        let observed = std::sync::Mutex::new(vec![]);
-        notify(&chat, &member, &channels, &stop, "en", &|v| {
-            observed.lock().unwrap().push(v)
-        })
-        .await;
-        let events = observed.lock().unwrap().clone();
-        assert_eq!(events.len(), 3);
-        assert_eq!(events[0]["delivered"], false);
-        assert_eq!(events[0]["error"], "integrations.resources.service_failed");
-        assert_eq!(events[1]["delivered"], true);
-        assert_eq!(events[2]["channel_id"], "");
-        assert_eq!(events[2]["channel_name"], "missing");
-        assert_eq!(events[2]["delivered"], false);
-        assert_eq!(
-            chat.inner
-                .list_channel_events("good", Default::default())
-                .await
-                .unwrap()
-                .events
-                .len(),
-            1
-        );
-        assert!(
-            chat.inner
-                .list_channel_events("quiet", Default::default())
-                .await
-                .unwrap()
-                .events
-                .is_empty()
-        );
-        assert!(
-            chat.inner
-                .list_channel_events("disabled", Default::default())
-                .await
-                .unwrap()
-                .events
-                .is_empty()
-        );
-        assert!(
-            chat.inner
-                .list_channel_events("legacy", Default::default())
-                .await
-                .unwrap()
-                .events
-                .is_empty()
-        );
-        notify(&chat, &member, &[], &stop, "en", &|_| {
-            panic!("empty subscriptions cannot notify")
-        })
-        .await;
-        let channels = subscriptions(
-            &json!({"message_channels":[{"chat":{"channel_id":"good","notify_work_stops":true}}]}),
-        );
-        for (reason, id) in [("asking", "run-x"), ("blocked", "run-y")] {
-            let mut next = stop.clone();
-            next.reason = reason;
-            next.run_id = id.into();
-            next.comment_url = "local://same-comment".into();
-            notify(&chat, &member, &channels, &next, "en", &|_| ()).await;
-        }
-        let notices = chat
-            .inner
-            .list_channel_events("good", Default::default())
-            .await
-            .unwrap()
-            .events;
-        assert_eq!(notices.len(), 3);
-        for (index, id) in [(1, "run-x"), (2, "run-y")] {
-            assert_eq!(
-                serde_json::to_value(notices[index].status.as_ref().unwrap()).unwrap()["run_id"],
-                id
-            );
-            assert!(notices[index].message.text.contains("local://same-comment"));
-        }
     }
 }

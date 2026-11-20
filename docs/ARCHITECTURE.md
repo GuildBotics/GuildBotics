@@ -197,9 +197,8 @@ What these share lives in `gb-base/src/service.rs`:
   comments, the head the member read: on a moved head nothing is written.
 - **A workflow status** (`WorkflowStatus`) is what a run that did not finish leaves where
   its work came from: a comment's `meta`, or chat message metadata, given back on
-  reading. It also marks the notice a member posts
-  in its explicitly selected chat channels (`chat.notify_work_stops`) when its ticket or PR work stops to wait for a person, which the
-  ticket selector posts (`gb-server/src/work_stops.rs`), so no member answers it.
+  reading. The ticket selector sends work-stop notices for the owner through
+  Branvil's shared webhook. The workflow status on the original item still drives patrol.
 - **Write scope.** Each service's configuration names a workspace; a write goes only to
   a repository directly in it (`check_path`), a push only to the code host's.
 - **Selection rules are GuildBotics' own.** The shared patrol code decides which pull

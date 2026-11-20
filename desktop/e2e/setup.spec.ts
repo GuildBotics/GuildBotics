@@ -107,9 +107,6 @@ test("first-run setup happy path writes project.yml and enters the service view"
   await page.getByRole("button", { name: "Add channel", exact: true }).click();
   await page.getByRole("textbox", { name: "Channel", exact: true }).first().fill("random");
   await page.getByRole("button", { name: "Add channel", exact: true }).click();
-  const notification = page.getByRole("switch", { name: /Notify when work stops/ }).first();
-  await expect(notification).toBeVisible({ timeout: 5000 });
-  await notification.check();
   const saveMember = async () => {
     const saved = page.waitForResponse(
       (response) =>
@@ -120,17 +117,14 @@ test("first-run setup happy path writes project.yml and enters the service view"
     expect((await saved).status()).toBe(200);
   };
   await saveMember();
-  expect(readFileSync(memberFile, "utf-8")).toMatch(/"?notify_work_stops"?:\s*true/);
+  const member = JSON.parse(readFileSync(memberFile, "utf-8"));
+  expect(member.message_channels.map((channel: { chat: object }) => channel.chat)).toEqual([
+    { enabled: true, participation: "strict", channel_id: "C0123456789" },
+    { enabled: true, participation: "strict", channel_name: "random" },
+  ]);
   await page.reload();
-  await expect(notification).toBeChecked();
-  await page.getByRole("combobox", { name: "Display language", exact: true }).click();
-  await page.getByRole("option", { name: "Japanese", exact: true }).click();
-  await expect(page.getByRole("switch", { name: /作業停止を通知する/ }).first()).toBeChecked();
-  await page.getByRole("combobox", { name: "表示言語", exact: true }).click();
-  await page.getByRole("option", { name: "English", exact: true }).click();
-  await notification.uncheck();
-  await saveMember();
-  expect(readFileSync(memberFile, "utf-8")).toMatch(/"?notify_work_stops"?:\s*false/);
+  await expect(page.locator('input[value="C0123456789"]')).toBeVisible();
+  await expect(page.locator('input[value="random"]')).toBeVisible();
 
   // Effort overlay: the settings UI builds typed controls from the descriptor
   // the backend serves for the provider. jsdom can only prove the editor state

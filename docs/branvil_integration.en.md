@@ -274,7 +274,7 @@ The ticket workflow and pull request patrol read the Branvil board and conversat
   After a member has reviewed 3 heads, automatic re-review not driven by a request
   stops when a head that member has never reviewed is pushed: the host ticket selector makes the
   pull request a draft during candidate selection, records it in Activity, and
-  announces it on the PR and in the reviewer’s `notify_work_stops: true` chat channels. Statements and thread replies on an already reviewed head still
+  announces it on the PR and through the owner’s webhook in **Settings → Notifications**. Statements and thread replies on an already reviewed head still
   start a run after the limit, including heads restored by force push or reviewed
   before the count restarted. Explicit review requests remain outside the limit.
   Mark it ready for review to go on; every reviewer's count starts over.

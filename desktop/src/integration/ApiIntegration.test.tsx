@@ -614,7 +614,6 @@ describe("Setup integration (real client + mock server)", () => {
       git_email: "",
       accounts: { slack: { bot_token: "", app_token: "" } },
       chat_channels: [],
-      work_stop_notification_channels: [],
       config_dir: "/workspace/.guildbotics/config",
     });
     expect(memberCall.body).not.toHaveProperty("accounts.github");
