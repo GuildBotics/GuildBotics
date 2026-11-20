@@ -123,6 +123,8 @@ pub struct JobRun<'a> {
     /// `save_cache` and the job succeeded, the image of its `/work` that kept
     /// only the cached paths, for the cache.
     pub cache_disk: &'a Path,
+    /// What the commit tracks, as its index records it.
+    pub tree: &'a super::workspace::Tree,
     /// The bytes of data the file system of the cache entry's image holds.
     pub cache_data: Option<u64>,
     /// Set to the bytes of data the file system of the image left at
@@ -917,12 +919,14 @@ fn each_path(paths: &[&str], last: bool, body: &str) -> String {
 }
 
 /// How `/work` starts from a cache entry's image: whether its file system is
-/// smaller than the disk, whether it leaves the quota without growing, and
-/// its size.
+/// smaller than the disk, whether it leaves the quota without growing, its
+/// size, and where the checkout writes below the cached paths.
 struct Restore {
     grow: bool,
     ungrown_fits: bool,
     fs_mib: u64,
+    /// The commit's directories at or below the cached paths.
+    dirs: Vec<String>,
 }
 
 /// Unpacks the checkout into `work`, a disk msb gives to root. When the disk
@@ -930,17 +934,19 @@ struct Restore {
 /// the checkout goes over them, after its file system was grown to the whole
 /// disk when it is smaller (an image without `resize2fs` keeps the entry's
 /// file system when that still leaves the quota, and [`CACHE_UNGROWN`] says
-/// so); should the growing fail, or the checkout not unpack over them, or a
-/// cached path go through a link the commit has there (it would be written
-/// through), it stops there and [`CACHE_DROPPED`] says so: the runner then
-/// prepares a new, empty disk without the entry. Otherwise it hands `work`
+/// so). Should the growing fail, should the entry have a symbolic link where
+/// the commit has a directory below a cached path (unpacking would write
+/// through it, wherever it points), or should the checkout not unpack over
+/// them, it stops there and [`CACHE_DROPPED`] says so: the runner then
+/// prepares a new, empty disk without the entry. The entry's other links
+/// stay; a cached path through a link of the commit gets no entry
+/// ([`super::workspace::Tree::link_on`]). Otherwise it hands `work`
 /// to the job's user, and flushes: microsandbox stops the VM when its
 /// command ends, and what the guest has not written to the disk can be lost.
-fn prepare_script(work: &str, io: &str, cached: &[&str], restore: Option<&Restore>) -> String {
+fn prepare_script(work: &str, io: &str, restore: Option<&Restore>) -> String {
     let unpack = format!("tar -xf {io}/{CHECKOUT} -C {work}");
     let mut s = String::from("set -e\n");
     if let Some(r) = restore {
-        let unlinked = each_path(cached, true, "  [ -z \"$link\" ] || exit 1");
         let without = if r.ungrown_fits {
             format!("echo ungrown >{io}/{CACHE_UNGROWN}")
         } else {
@@ -953,8 +959,10 @@ fn prepare_script(work: &str, io: &str, cached: &[&str], restore: Option<&Restor
         } else {
             "true".into()
         };
+        let dirs: Vec<&str> = r.dirs.iter().map(String::as_str).collect();
+        let unlinked = each_path(&dirs, true, "  [ -z \"$link\" ] || exit 1");
         s.push_str(&format!(
-            "grown() {{ {grown}; }}\nif ! grown || ! {unpack} || ! (cd {work}\n{unlinked}); then\n  echo dropped >{io}/{CACHE_DROPPED}\n  exit 0\nfi\n"
+            "grown() {{ {grown}; }}\nif ! grown || ! (cd {work}\n{unlinked}) || ! {unpack}; then\n  echo dropped >{io}/{CACHE_DROPPED}\n  exit 0\nfi\n"
         ));
     } else {
         s.push_str(&format!("{unpack}\n"));
@@ -1278,6 +1286,20 @@ impl Executor for Microsandbox {
             }
         };
         let checkout = std::fs::metadata(job.io.join(CHECKOUT)).map_or(0, |m| m.len());
+        let cached_paths: Vec<&str> = job
+            .job
+            .cache
+            .iter()
+            .flat_map(|c| c.paths.iter().map(String::as_str))
+            .collect();
+        // A cached path through a link of the commit: unpacking the checkout
+        // over an entry would write through it, so this run neither uses
+        // nor keeps one.
+        let linked = job.tree.link_on(cached_paths.iter().copied());
+        if let Some(p) = linked {
+            say(format!("the cached path {p} goes through a symbolic link of the commit, which unpacking the checkout over the cache entry would write through; the job runs without the cache")).await;
+            let _ = std::fs::remove_file(job.cache_disk);
+        }
         // The cache entry's image: its length, the bytes of data its file
         // system holds (what the copy takes when the entry does not say),
         // and the size of its file system.
@@ -1339,6 +1361,7 @@ impl Executor for Microsandbox {
                             // Without growing, it still leaves the quota.
                             ungrown_fits: fs >= needed_mib(data) << 20,
                             fs_mib: fs >> 20,
+                            dirs: job.tree.dirs_within(&cached_paths),
                         })
                     }
                     Err(e) => {
@@ -1356,12 +1379,6 @@ impl Executor for Microsandbox {
         // `/work`'s files.
         let collect_mib = disk_mib;
         let image_lock = std::mem::take(&mut job.image_lock);
-        let cache_paths: Vec<&str> = job
-            .job
-            .cache
-            .iter()
-            .flat_map(|c| c.paths.iter().map(String::as_str))
-            .collect();
         let preparing = Instant::now();
         let mut prepared = self
             .helper(
@@ -1370,7 +1387,7 @@ impl Executor for Microsandbox {
                 // It writes no more than a mark.
                 1,
                 &disk,
-                &prepare_script("/work", IO_MOUNT, &cache_paths, restore.as_ref()),
+                &prepare_script("/work", IO_MOUNT, restore.as_ref()),
                 &mut cancel,
             )
             .await;
@@ -1380,7 +1397,7 @@ impl Executor for Microsandbox {
         let ungrown = std::fs::remove_file(job.io.join(CACHE_UNGROWN)).is_ok();
         let dropped = match &prepared {
             Ok(()) if std::fs::remove_file(job.io.join(CACHE_DROPPED)).is_ok() => {
-                say("the cache entry was not kept (its file system could not grow to /work, the checkout did not unpack over it, or a cached path goes through a link of the commit); the job runs without it".into()).await;
+                say("the cache entry was not kept (its file system could not grow to /work, it has a symbolic link where the commit has a directory, or the checkout did not unpack over it); the job runs without it".into()).await;
                 true
             }
             Err(Some(e)) if restore.is_some() => {
@@ -1409,7 +1426,7 @@ impl Executor for Microsandbox {
                         "prep-new",
                         1,
                         &disk,
-                        &prepare_script("/work", IO_MOUNT, &cache_paths, None),
+                        &prepare_script("/work", IO_MOUNT, None),
                         &mut cancel,
                     )
                     .await
@@ -1472,7 +1489,7 @@ impl Executor for Microsandbox {
             _ => Vec::new(),
         };
         let cached: Vec<&str> = match (&job.job.cache, &outcome) {
-            (Some(c), Outcome::Exited(0)) if job.save_cache => {
+            (Some(c), Outcome::Exited(0)) if job.save_cache && linked.is_none() => {
                 c.paths.iter().map(String::as_str).collect()
             }
             _ => Vec::new(),
@@ -2254,6 +2271,7 @@ esac
                 timeout_secs: 60,
                 io: &io,
                 cache_disk: &cache_disk,
+                tree: &Default::default(),
                 cache_data: None,
                 kept_data: &mut None,
                 save_cache: true,
@@ -2588,6 +2606,7 @@ esac
                             },
                             io: &io_dir,
                             cache_disk: &kept_disk,
+                            tree: &Default::default(),
                             cache_data: None,
                             kept_data: &mut kept,
                             save_cache: true,
@@ -2726,7 +2745,8 @@ esac
 
     /// A `/work` that cannot be made ends the attempt before any VM, its
     /// volume removed and the cache entry it was given gone; an entry larger
-    /// than the disk the quota gives is not used; an entry the preparing VM
+    /// than the disk the quota gives, or for a cached path through a link of
+    /// the commit, is not used; an entry the preparing VM
     /// drops, or fails on, takes its disk with it: the job gets a new, empty
     /// one of its own name.
     #[cfg(unix)]
@@ -2747,7 +2767,13 @@ esac
         .unwrap();
         std::fs::write(state.join("done"), "").unwrap();
         let job = job_with_returned_archives(&state);
-        for case in ["inspect-fails", "too-large", "dropped", "prep-fails"] {
+        for case in [
+            "inspect-fails",
+            "too-large",
+            "dropped",
+            "prep-fails",
+            "commit-link",
+        ] {
             let at = root.join(case);
             let (work, log_dir, io) = (at.join("work"), at.join("log"), at.join("io"));
             for d in [&work, &log_dir, &io] {
@@ -2760,6 +2786,10 @@ esac
             let _ = std::fs::remove_file(state.join("created"));
             let _ = std::fs::remove_file(state.join("args-bv-prep-a1"));
             let _ = std::fs::remove_file(state.join("args-bv-prep-new-a1"));
+            let _ = std::fs::remove_file(state.join("args-bv-collect-a1"));
+            if case == "commit-link" {
+                ext4_image(&cache_disk, 128, b"restored");
+            }
             if case == "dropped" || case == "prep-fails" {
                 ext4_image(&cache_disk, 512, b"restored");
                 let mark = if case == "dropped" {
@@ -2790,11 +2820,23 @@ esac
                         timeout_secs: 60,
                         io: &io,
                         cache_disk: &cache_disk,
+                        tree: &super::super::workspace::Tree::from_index(
+                            if case == "commit-link" {
+                                // A link of the commit, which the host may not
+                                // have made one.
+                                &b"120000 aa 0\ttarget\0"[..]
+                            } else {
+                                // A directory of the commit below a cached path.
+                                &b"100644 bb 0\ttarget/debug/x\0"[..]
+                            },
+                        )
+                        .unwrap(),
                         // What the entry says its file system holds counts, though the
                         // file does not take it: 2306 MiB and 200 MiB, rounded up.
-                        cache_data: matches!(case, "dropped" | "prep-fails").then_some(200 << 20),
+                        cache_data: matches!(case, "dropped" | "prep-fails" | "commit-link")
+                            .then_some(200 << 20),
                         kept_data: &mut None,
-                        save_cache: false,
+                        save_cache: case == "commit-link",
                         work: &work,
                         log_dir: &log_dir,
                         network: false,
@@ -2857,6 +2899,12 @@ esac
                 let new = state.join("disks/bv-work-t-a1-new");
                 assert_eq!(std::fs::metadata(new).unwrap().len(), 0);
                 let first = std::fs::read_to_string(state.join("args-bv-prep-a1")).unwrap();
+                // The entry was checked for links where the commit has its
+                // directories below the cached paths.
+                assert!(
+                    first.contains("for p in 'target' 'target/debug'"),
+                    "{first}"
+                );
                 assert!(
                     first.contains("bv-work-t-a1:/work:kind=disk,size=2560M"),
                     "{first}"
@@ -2869,6 +2917,35 @@ esac
                 );
                 let ran = std::fs::read_to_string(state.join("args-bv-job-a1")).unwrap();
                 assert!(ran.contains("bv-work-t-a1-new:/work:kind=disk"), "{ran}");
+            } else if case == "commit-link" {
+                assert_eq!(outcome, Outcome::Exited(0));
+                assert!(
+                    text.contains(
+                        "the cached path target goes through a symbolic link of the commit"
+                    ),
+                    "{text}"
+                );
+                assert_eq!(text.matches("the job runs without").count(), 1, "{text}");
+                // As if there were no entry: the disk the quota gives, not
+                // grown for the entry, prepared once without it.
+                let created = std::fs::read_to_string(state.join("created")).unwrap();
+                assert_eq!(
+                    created,
+                    "volume create bv-work-t-a1 --kind disk --size 2432M -q\n"
+                );
+                let disk = state.join("disks/bv-work-t-a1");
+                assert_eq!(std::fs::metadata(disk).unwrap().len(), 0);
+                let prep = std::fs::read_to_string(state.join("args-bv-prep-a1")).unwrap();
+                assert!(
+                    !prep.contains("resize2fs") && !prep.contains(CACHE_DROPPED),
+                    "{prep}"
+                );
+                assert!(!state.join("args-bv-prep-new-a1").exists());
+                assert!(!cache_disk.exists());
+                // Nor is anything kept for the cache: an entry of this commit
+                // would never be used.
+                let collect = std::fs::read_to_string(state.join("args-bv-collect-a1")).unwrap();
+                assert!(!collect.contains("BRANVIL:KEEP"), "{collect}");
             } else {
                 assert_eq!(outcome, Outcome::Exited(0));
                 assert!(
@@ -2933,6 +3010,7 @@ esac
                         timeout_secs: 60,
                         io: &io,
                         cache_disk: &at.join("cache-disk.raw"),
+                        tree: &Default::default(),
                         cache_data: None,
                         kept_data: &mut None,
                         save_cache: true,
@@ -3289,18 +3367,12 @@ esac
         for d in [&io, &bin] {
             std::fs::create_dir(d).unwrap();
         }
-        let checkout = |link: bool| {
+        let checkout = || {
             let mut tar = tar::Builder::new(Vec::new());
             let mut h = tar::Header::new_gnu();
             h.set_size(2);
             h.set_mode(0o644);
             tar.append_data(&mut h, "src/main.rs", &b"ok"[..]).unwrap();
-            if link {
-                let mut h = tar::Header::new_gnu();
-                h.set_entry_type(tar::EntryType::Symlink);
-                h.set_size(0);
-                tar.append_link(&mut h, "target", "/tmp").unwrap();
-            }
             std::fs::write(io.join(CHECKOUT), tar.into_inner().unwrap()).unwrap();
         };
         let resized = dir.path().join("resized");
@@ -3318,9 +3390,11 @@ esac
             ),
         );
         let prepare = |name: &str, restore: Option<Restore>, resize2fs: bool| {
+            // The entry: cached paths, one of them a link to another.
             let work = dir.path().join(name);
             std::fs::create_dir_all(work.join("target/debug")).unwrap();
             std::fs::write(work.join("target/debug/a.o"), "cached").unwrap();
+            std::os::unix::fs::symlink("target", work.join("target-link")).unwrap();
             let _ = std::fs::remove_file(&tool);
             if resize2fs {
                 write_script(&tool, &tool_script);
@@ -3331,7 +3405,6 @@ esac
                     &prepare_script(
                         work.to_str().unwrap(),
                         io.to_str().unwrap(),
-                        &["target"],
                         restore.as_ref(),
                     ),
                 ])
@@ -3352,13 +3425,15 @@ esac
                 grow: true,
                 ungrown_fits: fits,
                 fs_mib: 128,
+                dirs: vec![],
             })
         };
-        checkout(false);
-        // Grown: the cached paths stay under the checkout; the device is
-        // the file system's.
+        checkout();
+        // Grown: the cached paths stay under the checkout, the entry's own
+        // link among them; the device is the file system's.
         let (kept, marks, work) = prepare("grown", grows(false), true);
         assert!(kept && marks == [false, false]);
+        assert!(std::fs::read_link(work.join("target-link")).unwrap() == Path::new("target"));
         assert_eq!(
             std::fs::read_to_string(work.join("src/main.rs")).unwrap(),
             "ok"
@@ -3379,6 +3454,7 @@ esac
                 grow: false,
                 ungrown_fits: false,
                 fs_mib: 128,
+                dirs: vec![],
             }),
             false,
         );
@@ -3386,26 +3462,31 @@ esac
         // No resize2fs: kept as it is when that leaves the quota, said.
         let (kept, marks, _) = prepare("fits", grows(true), false);
         assert!(kept && marks == [true, false]);
-        // Otherwise, when growing fails, and for a cached path through a
-        // link of the commit, it stops there and says so: that disk never
-        // goes to the job's user (the runner prepares a new one).
+        // Otherwise, when growing fails, and when the entry has a link where
+        // the commit has a directory (here `target-link`, which unpacking
+        // would write through), it stops there and says so, before anything
+        // is unpacked: that disk never goes to the job's user (the runner
+        // prepares a new one).
         let chowned = || std::fs::read_to_string(dir.path().join("chowned")).unwrap();
-        for (name, resize2fs, link) in [
-            ("small", false, false),
-            ("failing", true, false),
-            ("linked", true, true),
+        for (name, resize2fs, dirs) in [
+            ("small", false, vec![]),
+            ("failing", true, vec![]),
+            ("through", true, vec!["target-link".to_string()]),
         ] {
-            if resize2fs && !link {
+            if resize2fs && dirs.is_empty() {
                 std::fs::write(dir.path().join("resize-fails"), "").unwrap();
             }
-            checkout(link);
-            let (_, marks, work) = prepare(name, grows(false), resize2fs);
+            let restore = Some(Restore {
+                dirs,
+                ..grows(false).unwrap()
+            });
+            let (_, marks, work) = prepare(name, restore, resize2fs);
+            assert!(!work.join("src").exists(), "{name}");
             let _ = std::fs::remove_file(dir.path().join("resize-fails"));
             assert_eq!(marks, [false, true], "{name}");
             assert!(!chowned().contains(&work.display().to_string()), "{name}");
         }
         // Without an entry, the checkout is unpacked as it is.
-        checkout(false);
         let (kept, marks, work) = prepare("plain", None, false);
         assert!(kept && marks == [false, false]);
         assert!(work.join("src/main.rs").exists());

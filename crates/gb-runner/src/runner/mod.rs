@@ -1185,6 +1185,7 @@ impl Runner {
                 );
             }
             let bundle = dir.join("source.bundle");
+            let tree: workspace::Tree;
             let fetching = Instant::now();
             match self.api.source(c, &bundle).await {
                 Ok(bytes) => {
@@ -1202,11 +1203,14 @@ impl Runner {
                     )
                     .await;
                     let _ = std::fs::remove_file(&bundle);
-                    if let Err(e) = checked_out {
-                        return (
-                            "startup_failure",
-                            Some(format!("Checking out the source failed: {e}")),
-                        );
+                    match checked_out {
+                        Ok((_, checked)) => tree = checked,
+                        Err(e) => {
+                            return (
+                                "startup_failure",
+                                Some(format!("Checking out the source failed: {e}")),
+                            );
+                        }
                     }
                     say(format!("checked out in {}", ms(checking_out))).await;
                 }
@@ -1270,6 +1274,7 @@ impl Runner {
                         timeout_secs,
                         io: &io,
                         cache_disk: &cache_disk,
+                        tree: &tree,
                         cache_data,
                         kept_data: &mut kept_data,
                         save_cache: c.cache_scope == "protected",

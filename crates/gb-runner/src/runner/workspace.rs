@@ -30,13 +30,14 @@ const VM_GIT_CONFIG: &str = "[core]\n\tfilemode = true\n\tsymlinks = true\n\tign
 /// the archive `into` for the VM ([`pack_checkout`]). Git runs with
 /// `global_config` (written empty) and writes no reflog, so nothing of this
 /// machine (a path, its user) reaches the job. Git never runs in the work
-/// directory once the job has had it. Returns the archive's size.
+/// directory once the job has had it. Returns the archive's size and what
+/// the commit tracks.
 pub async fn checkout(
     bundle: &Path,
     work: &Path,
     global_config: &Path,
     into: &Path,
-) -> io::Result<u64> {
+) -> io::Result<(u64, Tree)> {
     fs::write(global_config, "")?;
     let mut clone = crate::git::base_command(global_config);
     clone
@@ -77,10 +78,71 @@ pub async fn checkout(
         .append(true)
         .open(work.join(".git/config"))
         .and_then(|mut f| io::Write::write_all(&mut f, VM_GIT_CONFIG.as_bytes()))?;
+    let tree = Tree::from_index(&index)?;
     let (work, into) = (work.to_path_buf(), into.to_path_buf());
-    tokio::task::spawn_blocking(move || pack_checkout(&work, &index, &into))
+    let size = tokio::task::spawn_blocking(move || pack_checkout(&work, &index, &into))
         .await
-        .map_err(io::Error::other)?
+        .map_err(io::Error::other)??;
+    Ok((size, tree))
+}
+
+/// What a commit tracks, as its index records it (whatever the machine's
+/// file system could make of it, and byte for byte): the paths of its
+/// symbolic links and of the directories its files are in.
+#[derive(Debug, Default)]
+pub struct Tree {
+    links: std::collections::BTreeSet<String>,
+    dirs: std::collections::BTreeSet<String>,
+}
+
+impl Tree {
+    /// From the output of `git ls-files -s -z`.
+    pub fn from_index(index: &[u8]) -> io::Result<Self> {
+        let mut tree = Self::default();
+        for record in index.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+            let record = std::str::from_utf8(record)
+                .map_err(|_| io::Error::other("a tracked path is not valid UTF-8"))?;
+            let (meta, path) = record
+                .split_once('\t')
+                .ok_or_else(|| io::Error::other(format!("unexpected index entry {record:?}")))?;
+            if meta.starts_with("120000 ") {
+                tree.links.insert(path.to_string());
+            }
+            let mut at = path;
+            while let Some((up, _)) = at.rsplit_once('/') {
+                tree.dirs.insert(up.to_string());
+                at = up;
+            }
+        }
+        Ok(tree)
+    }
+
+    /// The first of `cached` that goes through a symbolic link of the
+    /// commit, the last component included.
+    pub fn link_on<'a>(&self, cached: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+        cached.into_iter().find(|p| {
+            let p = p.trim_end_matches('/');
+            p.match_indices('/')
+                .map(|(at, _)| &p[..at])
+                .chain([p])
+                .any(|prefix| self.links.contains(prefix))
+        })
+    }
+
+    /// The commit's directories at or below `cached`: unpacking the checkout
+    /// writes below each of them.
+    pub fn dirs_within(&self, cached: &[&str]) -> Vec<String> {
+        self.dirs
+            .iter()
+            .filter(|d| {
+                cached.iter().any(|c| {
+                    let c = c.trim_end_matches('/');
+                    d.as_str() == c || d.strip_prefix(c).is_some_and(|r| r.starts_with('/'))
+                })
+            })
+            .cloned()
+            .collect()
+    }
 }
 
 /// Packs the checkout in `work` into one tar archive: each file Git tracks
@@ -832,6 +894,27 @@ mod tests {
         assert!(!tree.exists() && !archive.exists() && !aside.exists());
         assert!(cache.restore("new", &d.join("new.raw")).unwrap().is_some());
         assert_eq!(fs::read(d.join("new.raw")).unwrap(), b"new");
+    }
+
+    /// The commit's links and directories come from its index, byte for
+    /// byte: a link the machine made a file is a link, `Target` is not
+    /// `target`, and the directories are those its files are in.
+    #[test]
+    fn the_tree_is_the_indexs() {
+        let index = b"120000 aa 0\ttarget\x00100644 bb 0\tvendor/sub/a.rs\x00120000 cc 0\tTop\x00100644 dd 0\tsrc/main.rs\x00160000 ee 0\tdeps/module\x00";
+        let tree = Tree::from_index(index).unwrap();
+        assert_eq!(tree.link_on(["deps", "target/debug"]), Some("target/debug"));
+        assert_eq!(tree.link_on(["target/"]), Some("target/"));
+        assert_eq!(tree.link_on(["top", "vendor", "src/main.rs/x"]), None);
+        assert_eq!(
+            tree.dirs_within(&["vendor/", "deps"]),
+            ["deps", "vendor", "vendor/sub"]
+        );
+        assert_eq!(
+            tree.dirs_within(&["vend", "target", "src/main.rs"]),
+            Vec::<String>::new()
+        );
+        assert!(Tree::from_index(b"no tab\x00").is_err());
     }
 
     /// The machine's Git attributes never change the checkout. Git finds

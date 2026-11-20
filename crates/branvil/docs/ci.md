@@ -756,24 +756,29 @@ Per job the runner:
    (`msb volume create bv-work-<runner>-<attempt> --kind disk --size SM`),
    and makes the copy, grown to `S` (the space it gains takes no blocks),
    that volume's disk (a rename). An entry larger than `S` (a quota that was
-   lowered), or one that holds no ext4 file system, is not used. It then
+   lowered), or one that holds no ext4 file system, is not used. When a
+   cached path goes through a symbolic link of the commit (unpacking the
+   checkout over an entry would write through it), the job neither uses nor
+   keeps an entry; the runner decides this from the commit's index, byte
+   for byte, not from what its machine's file system made of the checkout,
+   so the entry's own links, which a job left there, do not count. It then
    prepares `/work` in a VM of the job's image:
    `msb run --name bv-prep-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --user 0:0 --mount-dir <io>:/.branvil-io:quota=1M --mount-named bv-work-<runner>-<attempt>:/work:kind=disk,size=SM --max-duration 3600s --no-net <image> -- /bin/sh -c <grow the file system to the disk; unpack the checkout into /work; chown -R 1000:1000 /work; sync>`,
    removes that sandbox, and runs the job. The file system of an entry is
    grown only when it is smaller than `S` (its size is read from the
    image's superblock). The cache entry is not kept when its file system
-   cannot grow, the checkout does not unpack over the cached paths, or a
-   cached path goes through a symbolic link of the commit (it would be
-   written through): the VM stops there, and the runner removes that disk,
+   cannot grow, the entry has a symbolic link where the commit has a
+   directory at or below a cached path (the runner names those from the
+   index, and the VM looks before it unpacks anything: unpacking would
+   write through the link, wherever it points), or the checkout does not
+   unpack over the cached paths: the VM stops there, and the runner removes that disk,
    creates a new, empty one of the size the quota gives
    (`bv-work-<runner>-<attempt>-new`, as the old one may outlive its
    removal), and prepares it without the entry; the log says the job runs
    without the cache. A preparing VM that fails on an entry is handled the
-   same way, and so is the second preparing VM's own name
-   (`bv-prep-new-<attempt>`). The checkout is unpacked over the cached
-   paths by this VM, which has only `/work` and `io`: a link an entry holds
-   below a cached path reaches nothing else of the host, and what it can
-   leave in `io` is removed before `/work` is collected.
+   same way. The second preparing VM has a name of its own
+   (`bv-prep-new-<attempt>`). An entry's links that the commit's
+   directories do not go through stay as they are.
    Every VM of the job flushes before its command ends: microsandbox stops
    the VM when the command ends, and what the guest has not written to
    `/work` or `io` by then can be lost (a lost `chown` left the checkout
