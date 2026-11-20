@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from tests.blackbox.environment import EnvironmentSource
-from tests.blackbox.harness import _environment, running_stack
+from tests.blackbox.harness import TIMINGS_ENV, Stack, _environment, running_stack
 
 
 def test_server_fixture_runs_without_cli(tmp_path, monkeypatch):
@@ -51,6 +51,34 @@ def test_server_fixture_requires_a_server_command(tmp_path, monkeypatch):
         next(conftest.server_stack.__wrapped__(tmp_path))
 
 
+def test_cli_timeout_keeps_the_started_phase_without_server_log(
+    tmp_path, monkeypatch, capsys
+):
+    log = tmp_path / "server.log"
+    log.touch()
+    stack = Stack(tmp_path, {}, None, None, log)
+    monkeypatch.setenv("GUILDBOTICS_BLACKBOX_CLI", "cli-command")
+
+    def timeout(args, **kwargs):
+        assert kwargs["env"][TIMINGS_ENV] == "1"
+        raise subprocess.TimeoutExpired(
+            args,
+            kwargs["timeout"],
+            stderr=b"timestamp INFO plan: member_timing: new\nunrelated stderr\n",
+        )
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    with pytest.raises(AssertionError, match="Timed out after"):
+        stack.cli(timings=True)
+
+    assert TIMINGS_ENV not in stack.env
+    stderr = capsys.readouterr().err
+    assert "readiness wall=" in stderr
+    assert "cli_cpu=" in stderr
+    assert "client timestamp INFO plan: member_timing: new" in stderr
+    assert "unrelated stderr" not in stderr
+
+
 def test_blackbox_sources_do_not_import_guildbotics():
     for path in Path(__file__).parent.rglob("*.py"):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -76,9 +104,11 @@ def test_children_use_temporary_home_keyring_and_loopback_only(tmp_path, monkeyp
         "OPENAI_API_KEY",
         "MSB_HOME",
         "PYTHONSTARTUP",
+        TIMINGS_ENV,
     ):
         monkeypatch.setenv(name, "ambient-setting-must-not-be-inherited")
     env = _environment(tmp_path, workspace, home, 12345)
+    assert TIMINGS_ENV not in env
     result = subprocess.run(
         [
             sys.executable,

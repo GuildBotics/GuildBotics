@@ -29,6 +29,7 @@ def read(stack, kind, resource, url, **parameters):
         url,
         "--params",
         json.dumps(parameters),
+        timings=resource == "pull_request_readiness",
     )["items"]
 
 
