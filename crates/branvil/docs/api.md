@@ -1045,7 +1045,10 @@ is not the full sha of a commit of the repository.
 - `GET /api/v1/repos/{repo}/jobs/{attempt_id}` →
   `{"id","purpose","cache_refresh","url","repository","job","attempt","sha","image_digest","reused_from","status","conclusion","path_skip","details","cancel_requested","created_at","started_at","finished_at","artifact_names","log_bytes"}`.
   `path_skip` has the same shape as on checks and is `null` for an attempt
-  that was not skipped by the service's path selection.
+  that was not skipped by the service's path selection. `runner` names the
+  runner that held the attempt. `allocation` records `cpus`, `vm_memory_mib`,
+  and `reserved_memory_mib` at claim. `peak_memory_mib` is the measured host
+  memory at finish. These fields are nullable.
   `image_digest` is the configuration digest (`sha256:…`) of the image the
   job ran on, as its runner reported it; `null` when the job did not get that
   far. `purpose` is `check`, `cache_refresh`, or `probe`. `cache_refresh` is the ID of
@@ -1112,12 +1115,14 @@ attempts are not interrupted by changes in class.
   runner's effective concurrency. The runner checks for a version change before
   it claims.
 - `POST /claim` `{"architecture":"arm64"|"amd64","version","max_jobs","running_jobs","accept":true|false,"executor":"microsandbox","executor_state":"ready"|"unavailable","executor_detail"?:"...","images":[{"reference":"tag","architecture":"arm64"|"amd64","digest":"sha256:..."}]}`
-  records a report even when there is no work or `accept` is false. The
+  also takes `machine`, either `null` (unknown) or `{"logical_cpus",
+  "total_memory_mib","available_memory_mib"}`. It records a report even when
+  there is no work or `accept` is false. The
   runner reports its build, the concurrency it read, and the number of locally
   held attempts, including when idle or at capacity. The Hub returns `204`
   when the runner did not ask for work, the version differs, the executor is
   unavailable, the Hub's current concurrency has been reached, no compatible
-  attempt is queued, or the service is stopping. Otherwise it returns:
+  attempt fits the reported capacity, or the service is stopping. Otherwise it returns:
   `{"attempt_id","purpose","lease","expires_at","lease_secs","repo","sha","attempt","verified_sha":"<latest verified sha>"|null,"job":{"verified_sha":false,"name","image","commands","paths","timeout_secs"|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_scope":"protected"|"branch:<name>"|"probe","network":false,"queued_secs","reuse","limits","artifacts_max_mib"}`.
   `limits` contains the effective job resources for this attempt (see
   [CI settings](#ci-settings)). `timeout_secs` is `null` when the pipeline
@@ -1135,6 +1140,9 @@ attempts are not interrupted by changes in class.
   logs which one it reused. `cache_key` is present for cached jobs,
   otherwise `null`. Manual retries, automatic retries, and refresh attempts
   receive no reuse offer.
+  The claim sets `reuse_only` when it reserves no VM capacity. The runner may
+  finish such a claim with `conclusion: "deferred"` if its image changes,
+  releasing the lease and restoring the attempt to its queue position.
   The runner compares the current image digest before fetching source. A match
   succeeds without a VM. Protected cached jobs set `refresh_cache: true` at
   finish if the save is absent, unreadable, or older than 24 hours. The executor
@@ -1165,7 +1173,7 @@ attempts are not interrupted by changes in class.
 - `PUT /attempts/{id}/artifacts/{name}` zip bytes → `{"name","bytes"}`. The name
   must be one the job declares; `400 invalid` for anything not starting like a
   zip archive, `413 too_large` above `ci.artifact_max_mib`.
-- `POST /attempts/{id}/finish` `{"lease","conclusion","details"?,"image_digest"?,"reused_from"?,"cache_key"?,"refresh_cache"?}`
+- `POST /attempts/{id}/finish` `{"lease","conclusion","details"?,"image_digest"?,"peak_memory_mib"?,"reused_from"?,"cache_key"?,"refresh_cache"?}`
   → the attempt. `image_digest` is the configuration digest of the image the
   job ran on (`sha256:<64 hex>`, `400 invalid` otherwise), recorded on the
   attempt. An actual execution of a cached job reports its computed
@@ -1401,15 +1409,21 @@ runner's (`[ci.microsandbox] home`).
 - `PUT /api/v1/admin/ci/runner` (owner) `{"mode": "auto"|"off"}` → the settings.
   `auto` starts the supervised runner, `off` stops it.
 - `PUT /api/v1/admin/ci/limits` (owner) `{"max_cpus", "max_memory_mib",
-  "work_quota_mib", "max_timeout_secs", "cache_max_mib", "max_jobs"}` → the
+  "work_quota_mib", "max_timeout_secs", "cache_max_mib", "max_jobs",
+  "memory_reserve_percent", "cpu_multiplier_percent"}` → the
   settings; `400 invalid` outside 1–64, 128–65536, 1024–1048576, 1–86400,
   0–1048576, 1–64. Every job runs with `max_cpus` and `max_memory_mib`;
   `work_quota_mib` is what a job may write to `/work` beyond the checkout and
   the restored cache; `max_timeout_secs` is the time limit of
   a job that gives no `timeout_secs` and caps one that does; the runner runs up
   to `max_jobs` jobs at once. The runner applies them from its next claim; the
-  jobs it is running keep theirs. This endpoint updates the Hub defaults.
-- `PUT /api/v1/admin/ci/runners/{name}/limits` (owner) takes the same six
+  jobs it is running keep theirs. Reserve and CPU multiplier default to 10 and
+  0 respectively, with ranges 0–100 and 0–6400. Zero for the CPU multiplier
+  derives a budget that preserves configured concurrency. The runner row
+  reports `machine` and, if held by resource limits, `resource_wait` with
+  the attempt, repository, job, and CPU and memory shortfall. This endpoint
+  updates the Hub defaults.
+- `PUT /api/v1/admin/ci/runners/{name}/limits` (owner) takes the same
   fields and returns the settings. It saves an override under
   `[ci.runner_limits.<name>]` for the named runner member, including members
   that have never reported. An unknown name or a member of another kind returns

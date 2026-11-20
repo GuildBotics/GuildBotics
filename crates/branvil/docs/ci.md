@@ -698,6 +698,22 @@ next claim and leaves running jobs with their original resources. Each machine
 continues to set its own `work_dir`; job resource values in a remote runner's
 local file are no longer used.
 
+At each claim the runner reports its logical CPUs, physical memory, and memory
+the OS can make available now. An unknown sample leaves resource selection
+unrestricted and is shown in Settings → CI. An actual execution records the
+VM allocation at claim and its measured peak memory at finish. The estimate
+is the nearest-rank 90th percentile of up to 20 recent successful samples for
+the same repository, job and VM allocation, or the VM's memory without a
+sample. A reusable result on a matching image needs no VM.
+
+The Hub subtracts a physical-memory reserve (default 10%) and the estimates of
+held attempts from the machine's capacity. The next attempt must also fit in
+currently available memory after the reserve. The CPU budget is logical CPUs
+times the configured percentage. The automatic value (0) allows at least the
+runner's configured concurrency at its VM size. A later attempt can go ahead
+only if it leaves room for the first blocked attempt that could fit on that
+machine. Settings → CI shows the resource shortfall by runner for queued work.
+
 Switching the supervised runner off stops its child. Stopping or restarting
 the child interrupts the attempts it is running, which are queued once more
 (see "Leases and interruptions"); the service removes the microVMs it left.

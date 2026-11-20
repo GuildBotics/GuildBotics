@@ -146,6 +146,7 @@ struct RunnerSeen {
     name: String,
     last_seen_at: String,
     report: RunnerReport,
+    resource_wait: Option<queue::ResourceWait>,
     seen: Instant,
     stopped: bool,
 }
@@ -900,17 +901,38 @@ impl Ci {
         }
     }
 
-    pub fn report_runner(&self, name: &str, report: RunnerReport) {
+    pub fn report_runner(&self, name: &str, report: RunnerReport) -> Instant {
+        let seen = Instant::now();
         self.inner.runners.lock().unwrap().insert(
             util::fold(name),
             RunnerSeen {
                 name: name.to_string(),
                 last_seen_at: util::now(),
                 report,
-                seen: Instant::now(),
+                resource_wait: None,
+                seen,
                 stopped: false,
             },
         );
+        seen
+    }
+
+    pub(super) fn report_resource_wait(
+        &self,
+        name: &str,
+        seen: Instant,
+        wait: Option<queue::ResourceWait>,
+    ) {
+        if let Some(report) = self
+            .inner
+            .runners
+            .lock()
+            .unwrap()
+            .get_mut(&util::fold(name))
+            && report.seen == seen
+        {
+            report.resource_wait = wait;
+        }
     }
 
     /// Diagnostics section for `GET /api/v1/admin/diagnostics`.
@@ -925,15 +947,32 @@ impl Ci {
         &self,
         required_images: Option<&[String]>,
     ) -> AppResult<serde_json::Value> {
-        let (members, running, (queued, in_progress, waiting)) = self
+        let runners = self.inner.runners.lock().unwrap().clone();
+        let claimed_waits = runners
+            .iter()
+            .filter_map(|(name, runner)| Some((name.clone(), runner.resource_wait.clone()?)))
+            .collect::<Vec<_>>();
+        let (members, running, (queued, in_progress, waiting), resource_waits) = self
             .inner
             .store
-            .read(|r| {
+            .read(move |r| {
                 let members: Vec<Member> = r.prefix_all(store::MEMBERS, &[])?;
-                Ok((members, queue::running_by_runner(r)?, queue::counts(r)?))
+                let mut waits = BTreeMap::new();
+                for (name, wait) in claimed_waits {
+                    if queue::get_attempt(r, &wait.attempt_id)?
+                        .is_some_and(|a| a.status == "queued")
+                    {
+                        waits.insert(name, wait);
+                    }
+                }
+                Ok((
+                    members,
+                    queue::running_by_runner(r)?,
+                    queue::counts(r)?,
+                    waits,
+                ))
             })
             .await?;
-        let runners = self.inner.runners.lock().unwrap().clone();
         let absent = Duration::from_secs(self.inner.config.runner_absent_secs);
         let members: Vec<_> = members
             .iter()
@@ -1026,6 +1065,8 @@ impl Ci {
                 "executor_state": report.map(|r| r.executor_state),
                 "executor_detail": report.and_then(|r| r.executor_detail.as_ref()),
                 "architecture": report.map(|r| &r.architecture),
+                "machine": report.and_then(|r| r.machine),
+                "resource_wait": resource_waits.get(&key).filter(|_| connection == "online"),
                 "missing_images": missing_images,
                 "limits": limits,
                 "limits_source": limits_source,
@@ -1308,6 +1349,7 @@ mod tests {
             max_jobs: 2,
             accept: false,
             running_jobs: 0,
+            machine: None,
         };
         ci.report_runner("expired", report.clone());
         ci.inner
@@ -1388,6 +1430,7 @@ mod tests {
                     max_jobs: 1,
                     accept: true,
                     running_jobs: 0,
+                    machine: None,
                 },
             );
             ci.sweep().await.unwrap();

@@ -80,7 +80,7 @@ async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
     assert_eq!(v["runner"]["mode"], "off");
     assert_eq!(
         v["limits"],
-        json!({"max_cpus": 4, "max_memory_mib": 4096, "work_quota_mib": 16384, "max_timeout_secs": 3600, "cache_max_mib": 2048, "max_jobs": 1})
+        json!({"max_cpus": 4, "max_memory_mib": 4096, "work_quota_mib": 16384, "max_timeout_secs": 3600, "cache_max_mib": 2048, "max_jobs": 1, "memory_reserve_percent": 10, "cpu_multiplier_percent": 0})
     );
     assert_eq!(
         v["repositories"],
@@ -106,7 +106,7 @@ async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
         config_text(&w)
     );
 
-    let limits = json!({"max_cpus": 8, "max_memory_mib": 8192, "work_quota_mib": 32768, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 2});
+    let limits = json!({"max_cpus": 8, "max_memory_mib": 8192, "work_quota_mib": 32768, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 2, "memory_reserve_percent": 15, "cpu_multiplier_percent": 125});
     let (st, v) = w
         .server
         .put("/admin/ci/limits", &w.owner, limits.clone())
@@ -193,7 +193,7 @@ async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
     assert_eq!(idle_row["limits"]["max_cpus"], 6);
 
     let path = "/admin/ci/runners/idle-runner/limits";
-    let limits = json!({"max_cpus": 8, "max_memory_mib": 8192, "work_quota_mib": 32768, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 3});
+    let limits = json!({"max_cpus": 8, "max_memory_mib": 8192, "work_quota_mib": 32768, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 3, "memory_reserve_percent": 15, "cpu_multiplier_percent": 125});
     for token in [&w.aiko, &remote] {
         assert_eq!(
             w.server.put(path, token, limits.clone()).await.0,
@@ -284,6 +284,20 @@ async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
         StatusCode::NO_CONTENT
     );
     report["running_jobs"] = json!(0);
+    report["machine"] =
+        json!({"logical_cpus": 4, "total_memory_mib": 10000, "available_memory_mib": 3000});
+    assert_eq!(
+        w.server
+            .post("/runner/claim", &remote, report.clone())
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    let blocked = settings(&w).await;
+    let waiting = &row(&blocked, "remote-runner")["resource_wait"];
+    assert_eq!(waiting["job"], "test");
+    assert_eq!(waiting["memory_shortfall_mib"], 2096);
+    report["machine"] = Value::Null;
     let (status, claim) = w.server.post("/runner/claim", &remote, report).await;
     assert_eq!(status, StatusCode::OK, "{claim}");
     assert_eq!(claim["limits"]["max_cpus"], 6);
@@ -293,6 +307,8 @@ async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
     assert_eq!(remote_row["version_matches"], true);
     assert_eq!(remote_row["missing_images"], json!([]));
     assert_eq!(remote_row["running_jobs"], 1);
+    assert!(remote_row["machine"].is_null());
+    assert!(remote_row["resource_wait"].is_null());
     assert_eq!(v["runner"]["state"], "ready");
     assert!(v["runner"]["version_mismatch"].is_null());
     assert_eq!(row(&v, "idle-runner")["connection"], "online");
@@ -310,10 +326,16 @@ async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
             json!({
                 "lease": claim["lease"], "conclusion": "success", "details": "finished",
                 "image_digest": format!("sha256:{}", "a".repeat(64)),
+                "peak_memory_mib": 5000,
             }),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(
+        result["allocation"],
+        json!({"cpus": 6, "vm_memory_mib": 4096, "reserved_memory_mib": 4096})
+    );
+    assert_eq!(result["peak_memory_mib"], 5000);
     assert_eq!(row(&settings(&w).await, "remote-runner")["running_jobs"], 0);
 
     isolate(&mut w);

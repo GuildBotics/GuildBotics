@@ -6,6 +6,7 @@
 //! `docs/ci.md`.
 
 pub mod executor;
+mod machine;
 pub mod workspace;
 pub mod zip;
 
@@ -223,6 +224,7 @@ pub struct Claim {
     pub attempt_id: String,
     pub lease: String,
     pub lease_secs: u64,
+    pub reuse_only: bool,
     pub repo: String,
     pub sha: String,
     pub attempt: u64,
@@ -505,7 +507,8 @@ impl Api {
             .post(self.at(&format!("/runner/attempts/{}/finish", c.attempt_id)))
             .bearer_auth(&self.token)
             .json(&serde_json::json!({"lease": c.lease, "conclusion": conclusion, "details": details,
-                "image_digest": info.image_digest, "reused_from": info.reused_from, "cache_key": info.cache_key, "refresh_cache": info.refresh_cache}))
+                "image_digest": info.image_digest, "peak_memory_mib": info.peak_memory_mib,
+                "reused_from": info.reused_from, "cache_key": info.cache_key, "refresh_cache": info.refresh_cache}))
             .send()
             .await
             .map_err(Self::net)?;
@@ -866,6 +869,7 @@ impl Runner {
                 images,
                 accept,
                 running_jobs,
+                machine: executor.machine(),
             })
             .await?;
         Ok(claim.map(|c| (c, health)))
@@ -1032,6 +1036,9 @@ impl Runner {
             }
         };
         let Some(digest) = held else {
+            if c.reuse_only {
+                return ("deferred", None, ResultInfo::default());
+            }
             let why = format!(
                 "The image {} is not in the runner's image cache (jobs never pull); pull or load it under Settings → CI for the runner on the Hub, or run `guildbotics runner pull {}` on the runner's machine.",
                 job.image, job.image
@@ -1093,6 +1100,10 @@ impl Runner {
                 None
             };
             if let Some(reason) = reason {
+                if c.reuse_only {
+                    say(format!("reuse deferred: {reason}")).await;
+                    return ("deferred", None, ResultInfo::default());
+                }
                 say(format!(
                     "reuse declined for {} ({}): {reason}; executing the job",
                     source.attempt_id, source.sha
@@ -1224,6 +1235,7 @@ impl Runner {
                 .run(
                     JobRun {
                         attempt_id: &c.attempt_id,
+                        peak_memory_mib: &mut info.peak_memory_mib,
                         job,
                         image_lock,
                         cpus,

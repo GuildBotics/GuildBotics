@@ -77,6 +77,9 @@ pub struct ExecutorConfig {
     pub work_quota_mib: u64,
     /// Jobs run at once, each in its own microVM.
     pub max_jobs: u32,
+    pub memory_reserve_percent: u32,
+    /// Zero preserves the configured concurrency on the reported machine.
+    pub cpu_multiplier_percent: u32,
     /// The time limit of a job that gives none, and the cap of a pipeline's
     /// `timeout_secs`.
     pub max_timeout_secs: u64,
@@ -96,6 +99,8 @@ impl Default for ExecutorConfig {
             max_memory_mib: 4096,
             work_quota_mib: 16384,
             max_jobs: 1,
+            memory_reserve_percent: memory_reserve_percent(),
+            cpu_multiplier_percent: 0,
             max_timeout_secs: 3600,
             cache_max_mib: 2048,
             artifacts_max_mib: 64,
@@ -113,6 +118,14 @@ pub struct JobLimits {
     pub max_timeout_secs: u64,
     pub cache_max_mib: u64,
     pub max_jobs: u32,
+    #[serde(default = "memory_reserve_percent")]
+    pub memory_reserve_percent: u32,
+    #[serde(default)]
+    pub cpu_multiplier_percent: u32,
+}
+
+fn memory_reserve_percent() -> u32 {
+    10
 }
 
 impl From<&ExecutorConfig> for JobLimits {
@@ -124,6 +137,8 @@ impl From<&ExecutorConfig> for JobLimits {
             max_timeout_secs: config.max_timeout_secs,
             cache_max_mib: config.cache_max_mib,
             max_jobs: config.max_jobs,
+            memory_reserve_percent: config.memory_reserve_percent,
+            cpu_multiplier_percent: config.cpu_multiplier_percent,
         }
     }
 }

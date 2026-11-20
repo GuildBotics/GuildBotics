@@ -526,6 +526,8 @@ export interface CiRunner {
   executor_state: "ready" | "unavailable" | null;
   executor_detail: string | null;
   architecture: string | null;
+  machine: { logical_cpus: number; total_memory_mib: number; available_memory_mib: number } | null;
+  resource_wait: { attempt_id: string; repo: string; job: string; cpu_shortfall: number; memory_shortfall_mib: number } | null;
   missing_images: string[] | null;
   limits: CiLimits;
   limits_source: "default" | "runner";
@@ -538,6 +540,8 @@ export interface CiLimits {
   max_timeout_secs: number;
   cache_max_mib: number;
   max_jobs: number;
+  memory_reserve_percent: number;
+  cpu_multiplier_percent: number;
 }
 
 export interface CachedImage {

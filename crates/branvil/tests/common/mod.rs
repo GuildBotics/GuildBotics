@@ -804,22 +804,17 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
 }
 
 /// Recreates the immediately preceding schema in a stopped database.
-/// Version 36 stored the same records and browser sessions, which the
-/// upgrade removes, and its configuration had the keys of a standalone
-/// service, which this build refuses until the upgrade removes them.
-pub fn as_schema_36(db: &Path) {
+pub fn as_schema_37(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
-            *v = json!(36);
+            *v = json!(37);
         }
     });
-    let config = db.with_file_name("branvil.toml");
-    let kept = std::fs::read_to_string(&config).unwrap_or_default();
-    std::fs::write(
-        &config,
-        format!("listen = \"127.0.0.1:7878\"\nbase_url = \"http://127.0.0.1:7878\"\n{kept}"),
-    )
-    .unwrap();
+    edit_records(db, "ci_attempts", |v| {
+        let attempt = v.as_object_mut().unwrap();
+        attempt.remove("allocation");
+        attempt.remove("peak_memory_mib");
+    });
 }
 
 /// Every table of a database, by name, as raw keys and values.

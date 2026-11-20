@@ -193,7 +193,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_36_upgrade_preserves_records() {
+async fn schema_37_upgrade_preserves_records() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -255,11 +255,18 @@ async fn schema_36_upgrade_preserves_records() {
     assert_eq!(admin("reindex").0, 0);
     assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
     let verifications = records(&db, "ci_verifications");
-    let attempts = records(&db, "ci_attempts");
+    let attempts = records(&db, "ci_attempts")
+        .into_iter()
+        .map(|mut a| {
+            a["allocation"] = Value::Null;
+            a["peak_memory_mib"] = Value::Null;
+            a
+        })
+        .collect::<Vec<_>>();
     let repos = records(&db, "repos");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let prior_runs = records(&db, "ci_runs");
-    as_schema_36(&db);
+    as_schema_37(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
     assert!(
@@ -269,7 +276,7 @@ async fn schema_36_upgrade_preserves_records() {
     );
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 36 to 37"), "{output}");
+    assert!(output.contains("from schema version 37 to 38"), "{output}");
     assert_eq!(
         tables(&db).get("ix_repair_unnotified"),
         before.get("ix_repair_unnotified")
@@ -1038,7 +1045,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
             .iter()
             .any(|a| a["cache_refresh"] == refresh_id)
     );
-    as_schema_36(&db);
+    as_schema_37(&db);
     for (command, expected) in [("upgrade", 0), ("check", 0)] {
         let out = branvil_command()
             .args(["admin", command, "--data-dir"])

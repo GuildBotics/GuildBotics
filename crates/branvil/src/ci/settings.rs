@@ -42,6 +42,12 @@ fn check(limits: Limits) -> AppResult<()> {
     if !(1..=64).contains(&limits.max_jobs) {
         return out("max_jobs", "1–64");
     }
+    if limits.memory_reserve_percent > 100 {
+        return out("memory_reserve_percent", "0–100");
+    }
+    if limits.cpu_multiplier_percent > 6400 {
+        return out("cpu_multiplier_percent", "0–6400");
+    }
     Ok(())
 }
 
@@ -148,6 +154,16 @@ impl Control {
         self.persist(&path, |t| {
             set(t, "max_cpus", i64::from(limits.max_cpus));
             set(t, "max_jobs", i64::from(limits.max_jobs));
+            set(
+                t,
+                "memory_reserve_percent",
+                i64::from(limits.memory_reserve_percent),
+            );
+            set(
+                t,
+                "cpu_multiplier_percent",
+                i64::from(limits.cpu_multiplier_percent),
+            );
             for (key, v) in [
                 ("max_memory_mib", limits.max_memory_mib),
                 ("work_quota_mib", limits.work_quota_mib),
@@ -315,6 +331,8 @@ mod tests {
             max_timeout_secs: 5400,
             cache_max_mib: 4096,
             max_jobs: 3,
+            memory_reserve_percent: 15,
+            cpu_multiplier_percent: 125,
         }
     }
 
@@ -346,6 +364,8 @@ mod tests {
         assert_eq!(parsed.ci.executor.max_timeout_secs, 5400);
         assert_eq!(parsed.ci.executor.cache_max_mib, 4096);
         assert_eq!(parsed.ci.executor.max_jobs, 3);
+        assert_eq!(parsed.ci.executor.memory_reserve_percent, 15);
+        assert_eq!(parsed.ci.executor.cpu_multiplier_percent, 125);
         assert_eq!(control.limits(), limits());
         assert_eq!(*seen.borrow_and_update(), RunnerMode::Auto);
         // New limits do not stop the runner: it reads them before its next

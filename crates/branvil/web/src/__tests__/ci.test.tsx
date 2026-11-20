@@ -26,10 +26,11 @@ const CACHED = {
   ],
 };
 
-const LIMITS = { max_cpus: 4, max_memory_mib: 4096, work_quota_mib: 16384, max_timeout_secs: 3600, cache_max_mib: 2048, max_jobs: 1 };
+const LIMITS = { max_cpus: 4, max_memory_mib: 4096, work_quota_mib: 16384, max_timeout_secs: 3600, cache_max_mib: 2048, max_jobs: 1, memory_reserve_percent: 10, cpu_multiplier_percent: 0 };
 const HUB_RUNNER: CiRunner = {
   name: "branvil-runner", connection: "online", last_seen_at: "2026-10-18T05:00:00.000Z",
   executor: "microsandbox", executor_state: "ready", executor_detail: null, architecture: "arm64",
+  machine: null, resource_wait: null,
   version: "hub-build", version_matches: true, max_jobs: 1, running_jobs: 1, missing_images: [], limits: LIMITS, limits_source: "default",
 };
 const REMOTE_RUNNER: CiRunner = {
@@ -40,6 +41,7 @@ const REMOTE_RUNNER: CiRunner = {
 const NEW_RUNNER: CiRunner = {
   name: "new-runner", connection: "never_seen", last_seen_at: null, executor: null, executor_state: null,
   executor_detail: null, architecture: null, version: null, version_matches: null, max_jobs: null, running_jobs: 0,
+  machine: null, resource_wait: null,
   missing_images: null, limits: LIMITS, limits_source: "default",
 };
 
@@ -65,6 +67,17 @@ const withImages = (images: Partial<CiSettings["images"]>, operation: unknown = 
 const RUNNING = { kind: "load", target: "/Users/u/image.tar", state: "running", detail: null, started_at: "2026-10-18T06:00:00Z", finished_at: null, loaded: [] };
 
 describe("CI settings", () => {
+  it("shows the blocked job, runner and resource shortfall, and reports unknown capacity", async () => {
+    const resource_wait = { attempt_id: "att_waiting", repo: "acme/demo", job: "rust-test", cpu_shortfall: 2, memory_shortfall_mib: 2048 };
+    const machine = { logical_cpus: 8, total_memory_mib: 16384, available_memory_mib: 1024 };
+    fakeApi({ ...SHELL, "GET /api/v1/admin/ci": json(200, { ...CI, runner: { ...CI.runner, runners: [{ ...HUB_RUNNER, machine, resource_wait }, REMOTE_RUNNER] } }) });
+    renderApp("/-/settings/ci");
+    expect(await screen.findByText("Machine capacity is unknown")).toBeInTheDocument();
+    expect(screen.getByText("8 logical CPUs, 16384 MiB memory, 1024 MiB available")).toBeInTheDocument();
+    const queue = screen.getByRole("region", { name: "CI jobs waiting for capacity" });
+    expect(within(queue).getByRole("link", { name: "acme/demo · rust-test" })).toHaveAttribute("href", "/acme/demo/-/jobs/att_waiting");
+    expect(queue).toHaveTextContent("branvil-runner is short by 2 vCPUs and 2048 MiB of memory");
+  });
   it("shows each part of the settings in its own card to the owner", async () => {
     fakeApi({ ...SHELL, "GET /api/v1/admin/ci": json(200, CI) });
     renderApp("/-/settings/ci");

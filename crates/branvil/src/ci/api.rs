@@ -51,6 +51,9 @@ pub struct AttemptView {
     pub attempt: u64,
     pub sha: String,
     pub image_digest: Option<String>,
+    pub allocation: Option<queue::Allocation>,
+    pub peak_memory_mib: Option<u64>,
+    pub runner: Option<String>,
     pub reused_from: Option<super::ReusedFrom>,
     pub status: String,
     pub conclusion: Option<String>,
@@ -85,6 +88,9 @@ pub(crate) async fn view(app: &Shared, a: &Attempt) -> AppResult<AttemptView> {
         attempt: a.number,
         sha: a.sha.clone(),
         image_digest: a.image_digest.clone(),
+        allocation: a.allocation,
+        peak_memory_mib: a.peak_memory_mib,
+        runner: a.runner.clone(),
         reused_from: app.ci.reused_from(a, &source),
         status: a.status.clone(),
         conclusion: a.conclusion.clone(),
@@ -392,6 +398,7 @@ pub struct ClaimView {
     pub lease: String,
     pub expires_at: String,
     pub lease_secs: u64,
+    pub reuse_only: bool,
     pub repo: String,
     pub sha: String,
     pub attempt: u64,
@@ -410,11 +417,17 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     report
         .images
         .retain(|i| i.architecture == report.architecture);
+    report.machine = report.machine.filter(|machine| {
+        machine.logical_cpus > 0
+            && machine.total_memory_mib > 0
+            && machine.available_memory_mib <= machine.total_memory_mib
+    });
     let (limits, _) = app.ci.settings().runner_limits(c.name());
     let accept =
         report.accept && report.can_run() && report.running_jobs < limits.max_jobs as usize;
     let held = accept.then(|| report.images.clone());
-    app.ci.report_runner(c.name(), report);
+    let machine = report.machine;
+    let reported_at = app.ci.report_runner(c.name(), report);
     let Some(held) = held else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
@@ -428,15 +441,16 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     // Checked in the write: `Ci::stop` counts the running jobs in a write
     // too, so a claim it does not see gives out nothing.
     let ci = app.ci.clone();
-    let claimed = app
+    let (claimed, waiting) = app
         .store
         .write(move |w| {
             if ci.stopping() {
-                return Ok(None);
+                return Ok((None, None));
             }
-            queue::claim_images(w, &runner, lease_secs, &at, &images)
+            queue::claim_images(w, &runner, lease_secs, &at, &images, limits, machine)
         })
         .await?;
+    app.ci.report_resource_wait(c.name(), reported_at, waiting);
     let Some(cl) = claimed else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
@@ -452,6 +466,7 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
         lease: cl.lease.clone(),
         expires_at: a.lease_expires_at.clone().unwrap_or_default(),
         lease_secs,
+        reuse_only: a.allocation.is_none(),
         repo: a.repo_path.clone(),
         sha: a.sha.clone(),
         attempt: a.number,
@@ -761,6 +776,7 @@ struct FinishInput {
     details: Option<String>,
     #[serde(default)]
     image_digest: Option<String>,
+    peak_memory_mib: Option<u64>,
     reused_from: Option<String>,
     cache_key: Option<String>,
     #[serde(default)]
@@ -793,6 +809,7 @@ async fn finish(
                 input.details,
                 queue::ResultInfo {
                     image_digest: input.image_digest,
+                    peak_memory_mib: input.peak_memory_mib,
                     reused_from: input.reused_from,
                     cache_key: input.cache_key,
                     refresh_cache: input.refresh_cache,
