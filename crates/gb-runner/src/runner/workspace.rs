@@ -861,11 +861,12 @@ mod tests {
     }
 
     #[test]
-    fn a_pending_image_larger_than_the_current_limit_leaves_published_data_intact() {
+    fn a_lower_limit_leaves_current_data_intact_during_staging_and_publication() {
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::new(dir.path().join("cache"));
         let owner = owner("repo", "job");
         let original = packed(dir.path(), b"original");
+        let small = packed(dir.path(), b"small");
         let newer = packed(dir.path(), b"newer");
         let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
         assert!(
@@ -874,6 +875,12 @@ mod tests {
                 .unwrap()
         );
         cache.settle("first", Some(at), 100).unwrap();
+        // A lowered budget may already be smaller than the published image.
+        assert!(
+            !cache
+                .stage("small", "key", &owner, (&small, 5), 15)
+                .unwrap()
+        );
         assert!(
             cache
                 .stage("second", "key", &owner, (&newer, 70), 100)

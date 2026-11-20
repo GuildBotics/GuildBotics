@@ -1205,7 +1205,10 @@ esac
                 let attempt = result_of(&s, &head).await;
                 let key = attempt.cache_key.unwrap();
                 assert_ne!(key, published);
-                assert_eq!(cache.pending().unwrap(), [attempt.id.clone()]);
+                assert_eq!(
+                    cache.pending().unwrap().as_slice(),
+                    std::slice::from_ref(&attempt.id)
+                );
                 assert!(cache.restore(&key, &restored).unwrap().is_none());
                 assert_eq!(cache.restore(&published, &restored).unwrap(), Some(6));
                 std::fs::remove_file(&restored).unwrap();

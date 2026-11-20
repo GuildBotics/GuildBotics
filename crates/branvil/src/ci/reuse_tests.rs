@@ -122,9 +122,8 @@ fn any_purpose_supplies_a_source_but_only_actual_kept_successes_of_the_same_job(
             }
             let first = run(w, source, "success", T0)?;
             let mut changed = first.clone();
-            match case {
-                "pruned" => changed.files_pruned = true,
-                _ => {}
+            if case == "pruned" {
+                changed.files_pruned = true;
             }
             put_attempt(w, Some(&first), &changed)?;
             let mut source_id = first.id.clone();
