@@ -50,13 +50,15 @@ async fn main() -> anyhow::Result<()> {
     let server = gb_server::Server::start_with_keychain(Arc::new(Vault::default())).await?;
     let embedded = if std::env::var_os("GUILDBOTICS_BROWSER_TEST_BRANVIL").is_some() {
         let vault: Arc<dyn branvil::vault::Vault> = Arc::new(branvil::vault::Memory::default());
+        let vm_home = gb_environment::runtime::home(&gb_base::home::data()?);
         let data_dir = gb_server::endpoint::code_host_data()?;
         let base = server.base_url();
         let host = server.host();
         let active_agents = server.active_agents();
         Some(async move {
             let embedded =
-                branvil::prepare_embedded(&data_dir, vault, &base, host, active_agents).await?;
+                branvil::prepare_embedded(&data_dir, vm_home, vault, &base, host, active_agents)
+                    .await?;
             if std::env::var_os("GUILDBOTICS_BLACKBOX_CONTROL").is_some() {
                 let data = embedded.data_api();
                 tokio::spawn(async move { controls(data).await.expect("test controls") });

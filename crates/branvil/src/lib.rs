@@ -39,11 +39,10 @@ mod util;
 pub mod vault;
 mod webhook;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use backup::{request as request_backup, restore};
-pub use runner::executor::set_runtime_binary;
 pub use runner::{RunnerArgs, main as run_runner};
 pub use service::{Embedded, Maintenance, maintain};
 pub use upstream::askpass_main;
@@ -52,6 +51,7 @@ pub use upstream::askpass_main;
 /// binding. All advertised URLs use the host origin `base_url`.
 pub async fn prepare_embedded(
     data_dir: &Path,
+    vm_home: PathBuf,
     vault: Arc<dyn vault::Vault>,
     base_url: &str,
     host: Arc<dyn host::Host>,
@@ -67,6 +67,7 @@ pub async fn prepare_embedded(
     )
     .await?;
     let _ = embedded.app.host.set(host);
+    let _ = embedded.app.ci.settings().vm_home.set(vm_home);
     Ok(embedded)
 }
 

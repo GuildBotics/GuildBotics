@@ -212,8 +212,9 @@ def test_the_client_build_has_no_branvil() -> None:
 _ALLOWED = {
     "loopback-auth": set(),
     "branvil": {"loopback-auth", "gb-base", "gb-runner"},
-    "gb-runner": {"gb-base"},
+    "gb-runner": {"gb-base", "gb-vm"},
     "gb-base": set(),
+    "gb-vm": {"gb-base"},
     "gb-workspace": {"gb-base"},
     "gb-observability": {"gb-base"},
     "gb-wire": set(),
@@ -221,7 +222,7 @@ _ALLOWED = {
     "gb-member": {"gb-base", "gb-workspace", "gb-observability"},
     "gb-config": {"gb-base", "gb-wire"},
     "gb-setup": {"gb-base", "gb-config"},
-    "gb-environment": {"gb-base", "gb-config", "gb-wire"},
+    "gb-environment": {"gb-base", "gb-config", "gb-vm", "gb-wire"},
     "gb-server": {
         "gb-runner",
         "gb-base",
@@ -254,9 +255,7 @@ def test_each_crate_uses_only_the_crates_below_it() -> None:
             assert _uses(name, (table,)) <= allowed, (name, table)
 
 
-def test_only_the_environment_drives_the_microvm_runtime() -> None:
-    """One crate speaks to the runtime, as one module does in the Python
-    version (the ``one-sandbox-runtime`` contract)."""
+def test_only_gb_vm_depends_on_the_microvm_sdk() -> None:
     users = set()
     for path in (ROOT / "crates").glob("*/Cargo.toml"):
         manifest = _load(path.relative_to(ROOT).as_posix())
@@ -265,15 +264,15 @@ def test_only_the_environment_drives_the_microvm_runtime() -> None:
                 if "microsandbox" in scope.get(table, {}):
                     users.add(path.parent.name)
 
-    assert users == {"gb-environment"}
+    assert users == {"gb-vm"}
 
 
 def test_the_runtime_crates_and_version_check_are_pinned() -> None:
-    manifest = _load("crates/gb-environment/Cargo.toml")
+    manifest = _load("crates/gb-vm/Cargo.toml")
     crates = manifest["dependencies"]
-    runtime = (ROOT / "crates/gb-environment/src/runtime.rs").read_text("utf-8")
+    runtime = (ROOT / "crates/gb-vm/src/lib.rs").read_text("utf-8")
     [checked] = re.findall(r'RUNTIME_VERSION: &str = "([^"]+)"', runtime)
-    for name in ("microsandbox", "microsandbox-utils"):
+    for name in ("microsandbox", "microsandbox-image", "microsandbox-utils"):
         assert crates[name]["version"] == f"={checked}"
         assert crates[name]["optional"] is True
         assert f"dep:{name}" in manifest["features"]["host"]

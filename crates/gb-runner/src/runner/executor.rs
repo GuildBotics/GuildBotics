@@ -3,6 +3,8 @@
 //! There is no host executor: when the executor is unusable, jobs conclude
 //! `startup_failure`.
 
+#[cfg(feature = "host")]
+mod sdk;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -35,7 +37,7 @@ pub fn set_runtime_binary(path: PathBuf) -> Result<(), String> {
 
 /// The `msb` version this runner accepts (the CLI flags and behaviour it was
 /// verified against).
-pub const MSB_VERSION: &str = "0.6.17";
+pub use gb_vm::RUNTIME_VERSION as MSB_VERSION;
 
 /// How long pulling or loading an image may take (a GiB-sized archive).
 pub const IMAGE_TRANSFER: Duration = Duration::from_secs(1800);
@@ -269,6 +271,8 @@ pub struct Microsandbox {
     /// Label value that marks this runner's sandboxes.
     runner: String,
     health: tokio::sync::Mutex<Option<(Instant, Health)>>,
+    #[cfg(feature = "host")]
+    sdk: bool,
 }
 
 impl Microsandbox {
@@ -278,7 +282,28 @@ impl Microsandbox {
             home,
             runner: runner.to_string(),
             health: tokio::sync::Mutex::new(None),
+            #[cfg(feature = "host")]
+            sdk: false,
         }
+    }
+
+    #[cfg(feature = "host")]
+    pub fn hub(home: PathBuf, runner: &str) -> Self {
+        let msb = match gb_vm::ensure(&home) {
+            Ok(()) => Msb::Found(gb_vm::placed_files(&home)[0].clone()),
+            Err(error) => Msb::Missing(error.to_string()),
+        };
+        Self {
+            sdk: true,
+            ..Self::new(msb, home, runner)
+        }
+    }
+
+    fn uses_sdk(&self) -> bool {
+        #[cfg(feature = "host")]
+        return self.sdk;
+        #[cfg(not(feature = "host"))]
+        false
     }
 
     pub fn msb(&self) -> &Msb {
@@ -351,6 +376,14 @@ impl Microsandbox {
         reference: &str,
         listed: bool,
     ) -> Result<Option<ImageInfo>, String> {
+        #[cfg(feature = "host")]
+        if self.sdk {
+            let found = self.sdk_inspect(reference).await?;
+            if listed && found.is_none() {
+                return Err(format!("Cached image {reference} was removed"));
+            }
+            return Ok(found);
+        }
         let out = self
             .output(&["image", "inspect", "--format", "json", reference])
             .await?;
@@ -371,6 +404,10 @@ impl Microsandbox {
 
     /// Every reference of the cache.
     async fn listed(&self) -> Result<Vec<Listed>, String> {
+        #[cfg(feature = "host")]
+        if self.sdk {
+            return self.sdk_listed().await;
+        }
         let out = self.output(&["image", "list", "--format", "json"]).await?;
         if !out.status.success() {
             return Err(format!(
@@ -405,6 +442,10 @@ impl Microsandbox {
     /// moves the tag leaves the old version in the cache for good. The tag
     /// has moved either way, so a failure is a warning, not the transfer's.
     pub async fn pin(&self, name: &str, archive: Option<&Path>) {
+        // On the Hub, the archive importer already protects each imported version.
+        if self.uses_sdk() && archive.is_some() {
+            return;
+        }
         if let Err(e) = self.try_pin(name, archive).await {
             tracing::warn!("{name} is not pinned, so its version stays when replaced: {e}");
         }
@@ -443,6 +484,13 @@ impl Microsandbox {
     /// before each job. The caller holds `lock_images`, so that no load is
     /// writing the layer files a removal deletes.
     pub async fn collect(&self) {
+        #[cfg(feature = "host")]
+        if self.sdk {
+            if let Err(error) = gb_vm::collect_images().await {
+                tracing::warn!("collecting cached images failed: {error}");
+            }
+            return;
+        }
         let listed = match self.listed().await {
             Ok(listed) => listed,
             Err(e) => return tracing::warn!("listing the image cache failed: {e}"),
@@ -486,7 +534,7 @@ impl Microsandbox {
             .create(true)
             .truncate(false)
             .write(true)
-            .open(self.home.join("branvil-images.lock"))
+            .open(self.home.join(gb_vm::IMAGE_LOCK))
             .map_err(fail)?;
         let mut waiting = Some(waiting);
         loop {
@@ -525,6 +573,10 @@ impl Microsandbox {
     /// `lock_images(true)` and pins the reference the load registered (msb
     /// tags only the first image of an archive).
     pub async fn load(&self, archive: &Path) -> Result<(), String> {
+        #[cfg(feature = "host")]
+        if self.sdk {
+            return self.sdk_load(archive, Vec::new()).await;
+        }
         let _ = std::fs::create_dir_all(&self.home);
         let path = archive.to_string_lossy();
         self.finish(
@@ -536,6 +588,10 @@ impl Microsandbox {
 
     /// Load one configuration under exactly the requested tag, without moving its other aliases.
     pub async fn load_as(&self, archive: &Path, reference: &str) -> Result<(), String> {
+        #[cfg(feature = "host")]
+        if self.sdk {
+            return self.sdk_load(archive, vec![reference.to_owned()]).await;
+        }
         let path = archive.to_string_lossy();
         self.finish(
             "load",
@@ -589,12 +645,21 @@ impl Microsandbox {
         &self,
         job: &JobRun<'_>,
         what: &str,
-        (io, quota_mib, disk): (&str, u64, &str),
+        quota_mib: u64,
+        disk: &JobDisk,
         script: &str,
         cancel: &mut watch::Receiver<bool>,
     ) -> Result<(), Option<String>> {
-        let mut cmd = self.command().ok_or_else(|| Some(self.missing()))?;
+        #[cfg(feature = "host")]
+        if self.sdk {
+            return self
+                .sdk_helper(job, what, quota_mib, disk, script, cancel)
+                .await;
+        }
         let name = format!("bv-{what}-{}", job.attempt_id.to_lowercase());
+        let mut cmd = self.command().ok_or_else(|| Some(self.missing()))?;
+        let io = job.io.to_string_lossy();
+        let disk = disk.to_string();
         cmd.args(["run", "--name", &name, "--quiet", "--pull", "never"])
             .args(["--label", &format!("branvil.runner={}", self.runner)])
             .args(["--label", &format!("branvil.job={}", job.attempt_id)])
@@ -603,7 +668,7 @@ impl Microsandbox {
                 "--mount-dir",
                 &format!("{io}:{IO_MOUNT}:quota={quota_mib}M"),
             ])
-            .args(["--mount-named", disk])
+            .args(["--mount-named", &disk])
             .args(["--max-duration", &format!("{HELPER_SECS}s")])
             .arg("--no-net")
             .arg(&job.job.image)
@@ -853,9 +918,18 @@ fn collect_script(work: &str, io: &str, artifacts: &[&str], cached: &[&str]) -> 
 /// exits, so a running job's log would stay empty and a stopped job's output
 /// (a timeout, a cancellation) would be lost.
 pub fn script(commands: &[String]) -> String {
-    let mut s = format!(
-        "trap sync EXIT\nexec >>{LOG_MOUNT}/out 2>&1\n[ -w \"$HOME\" ] || {{ export HOME=/tmp/home; mkdir -p \"$HOME\"; }}\nprintf '\\036branvil:started\\n'\n"
-    );
+    job_script(commands, true)
+}
+
+fn job_script(commands: &[String], log_file: bool) -> String {
+    let mut s = String::from("trap sync EXIT\n");
+    if log_file {
+        s.push_str(&format!("exec >>{LOG_MOUNT}/out 2>&1\n"));
+    }
+    s.push_str("[ -w \"$HOME\" ] || { export HOME=/tmp/home; mkdir -p \"$HOME\"; }\n");
+    if log_file {
+        s.push_str("printf '\\036branvil:started\\n'\n");
+    }
     for c in commands {
         let q = c.replace('\'', "'\\''");
         s.push_str(&format!(
@@ -927,6 +1001,17 @@ impl JobLog<'_> {
     }
 }
 
+struct JobDisk {
+    name: String,
+    mib: u64,
+}
+
+impl std::fmt::Display for JobDisk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:/work:kind=disk,size={}M", self.name, self.mib)
+    }
+}
+
 impl Executor for Microsandbox {
     fn machine(&self) -> Option<crate::ci::api::Machine> {
         super::machine::sample()
@@ -994,8 +1079,10 @@ impl Executor for Microsandbox {
                 let _ = log.try_send(note.as_bytes().to_vec());
             })
             .await?;
-        // A version a job ran on when a load replaced it goes once it ended.
-        self.collect().await;
+        // The shared Hub cache is collected under its exclusive lock.
+        if !self.uses_sdk() {
+            self.collect().await;
+        }
         match self.inspect(image).await? {
             Some(i) if !crate::ci::pipeline::valid_digest(&i.config_digest) => Err(format!(
                 "msb image inspect reports '{}' as the configuration digest of {image}, not sha256:<64 hex>",
@@ -1014,28 +1101,32 @@ impl Executor for Microsandbox {
         if self.command().is_none() {
             return Outcome::StartupFailure(self.missing());
         }
-        let io = job.io.to_string_lossy().to_string();
-        let log_dir = job.log_dir.to_string_lossy().to_string();
-        if let Some(dir) = [&io, &log_dir].into_iter().find(|d| {
-            let body = after_drive(d);
-            body.contains(':') || body.contains(',')
-        }) {
-            return Outcome::StartupFailure(format!(
-                "the work directory {dir} contains ':' or ',', which msb mount specifications cannot carry"
-            ));
-        }
-        // Created here, before the VM exists, and read through this handle
-        // only: whatever the job later puts at that path (a link, another
-        // file) is never opened on the host.
-        let output = match tokio::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(job.log_dir.join("out"))
-            .await
-        {
-            Ok(f) => f,
-            Err(e) => return Outcome::StartupFailure(format!("cannot create the job log: {e}")),
+        let log_dir = job.log_dir.to_string_lossy();
+        let output = if self.uses_sdk() {
+            None
+        } else {
+            let io = job.io.to_string_lossy();
+            if let Some(dir) = [&io, &log_dir].into_iter().find(|d| {
+                let body = after_drive(d);
+                body.contains(':') || body.contains(',')
+            }) {
+                return Outcome::StartupFailure(format!(
+                    "the work directory {dir} contains ':' or ',', which msb mount specifications cannot carry"
+                ));
+            }
+            // Open before the VM starts. A path the job replaces is never reopened.
+            match tokio::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(job.log_dir.join("out"))
+                .await
+            {
+                Ok(file) => Some(file),
+                Err(e) => {
+                    return Outcome::StartupFailure(format!("cannot create the job log: {e}"));
+                }
+            }
         };
         let say = |text: String| {
             let log = log.clone();
@@ -1049,10 +1140,10 @@ impl Executor for Microsandbox {
             .map(|m| m.len())
             .sum();
         let disk_mib = work_disk_mib(job.work_quota_mib, archives);
-        let disk = format!(
-            "{}:/work:kind=disk,size={disk_mib}M",
-            self.work_volume(job.attempt_id)
-        );
+        let disk = JobDisk {
+            name: self.work_volume(job.attempt_id),
+            mib: disk_mib,
+        };
         // What the collecting VM may add to `io`: archives of `/work`'s
         // files, twice when the artifacts and the cache name the same ones.
         let collect_mib = 2 * disk_mib;
@@ -1069,7 +1160,8 @@ impl Executor for Microsandbox {
                 &job,
                 "prep",
                 // It writes no more than a `.failed` mark.
-                (&io, 1, &disk),
+                1,
+                &disk,
                 &prepare_script(IO_MOUNT, &cache_paths),
                 &mut cancel,
             )
@@ -1092,15 +1184,26 @@ impl Executor for Microsandbox {
                     preparing.elapsed().as_millis()
                 ))
                 .await;
-                self.run_job(
-                    &mut job,
-                    (&disk, &log_dir),
-                    output,
-                    image_lock,
-                    &log,
-                    &mut cancel,
-                )
-                .await
+                match output {
+                    Some(output) => {
+                        self.run_job(
+                            &mut job,
+                            (&disk.to_string(), &log_dir),
+                            output,
+                            image_lock,
+                            &log,
+                            &mut cancel,
+                        )
+                        .await
+                    }
+                    #[cfg(feature = "host")]
+                    None => {
+                        self.sdk_job(&mut job, &disk, image_lock, &log, &mut cancel)
+                            .await
+                    }
+                    #[cfg(not(feature = "host"))]
+                    None => unreachable!("the client always uses the CLI executor"),
+                }
             }
         };
         let removing = Instant::now();
@@ -1137,14 +1240,8 @@ impl Executor for Microsandbox {
             };
             let collected = match locked {
                 Ok(_lock) => {
-                    self.helper(
-                        &job,
-                        "collect",
-                        (&io, collect_mib, &disk),
-                        &script,
-                        &mut cancel,
-                    )
-                    .await
+                    self.helper(&job, "collect", collect_mib, &disk, &script, &mut cancel)
+                        .await
                 }
                 Err(e) => Err(e),
             };
@@ -1461,7 +1558,7 @@ impl Microsandbox {
 /// process can exit before a sample sees it; zero is not a measured peak.
 async fn log_peak_memory(log: &mpsc::Sender<Vec<u8>>, peak_kib: u64) -> Option<u64> {
     let mib = (peak_kib > 0).then(|| peak_kib.div_ceil(1024))?;
-    let note = format!("[branvil] peak memory of msb run and its VM: {mib} MiB\n");
+    let note = format!("[branvil] peak memory: {mib} MiB\n");
     let _ = log.send(note.into_bytes()).await;
     Some(mib)
 }
@@ -1667,10 +1764,7 @@ pub(crate) mod tests {
             drop(log);
             assert_eq!(
                 logs.recv().await,
-                expected.map(|mib| format!(
-                    "[branvil] peak memory of msb run and its VM: {mib} MiB\n"
-                )
-                .into_bytes()),
+                expected.map(|mib| format!("[branvil] peak memory: {mib} MiB\n").into_bytes()),
                 "peak {peak_kib} KiB"
             );
             assert_eq!(logs.recv().await, None);

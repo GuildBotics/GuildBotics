@@ -13,6 +13,73 @@ const TEST: &str = "runtime::real_device::real_device_owner_exit_stops_the_vm";
 const LOGIN: &str = "synthetic-owner-login";
 const CANARY: &str = "synthetic-owner-disk-positive-control";
 
+#[tokio::test]
+#[ignore = "real_device: owner approval and disposable CI image store"]
+async fn isolated_command_uses_the_ci_image_store() {
+    assert!(std::env::var_os("CI").is_none());
+    let data = PathBuf::from(
+        std::env::var_os("BRANVIL_REAL_EXECUTOR_DATA").expect("disposable test data required"),
+    );
+    assert!(data.is_absolute());
+    let home = gb_vm::home(&data);
+    ensure(&home).unwrap();
+    backend(&home).await.unwrap();
+    let dir = tempfile::tempdir_in(data).unwrap();
+    let image = "docker.io/library/alpine:3.22";
+    let manifest = microsandbox::Image::get(image).await.unwrap();
+    let vm = OwnedVm::start(
+        Sandbox::builder(format!("guildbotics-shared-test-{}", std::process::id()))
+            .image(image)
+            .pull_policy(microsandbox::sandbox::PullPolicy::Never)
+            .disable_network(),
+        (),
+    )
+    .await
+    .unwrap();
+    vm.stop_with_timeout(STOP_TIMEOUT).await.unwrap();
+    let snapshot = microsandbox::Snapshot::builder("guildbotics-shared-store-test")
+        .from_sandbox(vm.name())
+        .dest_dir(dir.path())
+        .create()
+        .await
+        .unwrap();
+    vm.close().await;
+    sweep_images(&home, &[dir.path().to_owned()]).await.unwrap();
+    assert_eq!(
+        microsandbox::Image::get(image)
+            .await
+            .unwrap()
+            .manifest_digest(),
+        manifest.manifest_digest()
+    );
+    let result = run_once(
+        &Boot {
+            files: None,
+            home: &home,
+            snapshot: snapshot.path(),
+            memory_mib: 512,
+            cpus: 1,
+            mounts: &[],
+            links: &[],
+            network: &Network::default(),
+            worktree: None,
+        },
+        &Process {
+            argv: &[
+                "sh".into(),
+                "-ec".into(),
+                r#"printf '%s\n' '{"result":"shared image"}'"#.into(),
+            ],
+            cwd: "/",
+            env: &[],
+            stdin: &[],
+        },
+    )
+    .await;
+    remove_snapshot(snapshot.path().to_owned()).await.unwrap();
+    assert_eq!(result.unwrap().result, serde_json::json!("shared image"));
+}
+
 fn verification_snapshot() -> PathBuf {
     assert!(
         std::env::var_os("CI").is_none(),

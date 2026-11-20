@@ -748,6 +748,7 @@ fi
                 work_dir: s.dir.path().join("runner"),
                 msb_path: Some(msb.clone()),
                 msb_home: home.clone(),
+                vm_home: None,
             };
             let serving = tokio::spawn(run(settings));
             let sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();

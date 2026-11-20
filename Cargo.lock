@@ -2103,11 +2103,10 @@ dependencies = [
  "flate2",
  "gb-base",
  "gb-config",
+ "gb-vm",
  "gb-wire",
  "iana-time-zone",
  "libc",
- "microsandbox",
- "microsandbox-utils",
  "same-file",
  "serde",
  "serde_json",
@@ -2198,6 +2197,7 @@ dependencies = [
  "directories",
  "futures-util",
  "gb-base",
+ "gb-vm",
  "getrandom 0.4.3",
  "libc",
  "oci-spec 0.9.0",
@@ -2278,6 +2278,19 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "gb-vm"
+version = "0.1.0"
+dependencies = [
+ "gb-base",
+ "microsandbox",
+ "microsandbox-image",
+ "microsandbox-utils",
+ "tokio",
+ "tokio-util",
  "tracing",
 ]
 

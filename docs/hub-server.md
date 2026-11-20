@@ -437,3 +437,26 @@ Hub の既存キャッシュだけでは、別 CPU のアーカイブは配布�
 
 ランナーは取得・読み込みのあと、保有するタグ・CPU・digest を通知する。
 レジストリのイメージは各ランナーで `guildbotics runner pull <tag>` を実行する。
+
+## HubのCIイメージを共有ストアへ移す（手作業の版9）
+
+新しいHubは、CIと隔離コマンドのイメージを `<GuildBoticsのデータディレクトリ>/msb` に置きます。
+データディレクトリの既定値は `~/.guildbotics/data` です。
+
+1. 更新前に、CI設定画面のイメージ一覧で、使っているタグとdigestを控えます。元のアーカイブが手元にない場合は、旧CIのイメージストアから必要なタグを一つずつ書き出します。次の例のパスとタグは、旧CI設定画面のランタイムとイメージに合わせて置き換えます。
+
+   ```sh
+   MSB_HOME="$HOME/.branvil/msb-home" "$HOME/.guildbotics/data/msb/bin/msb" save \
+     --output /absolute/path/to/ci-image.tar guildbotics/agent-environment:dev
+   ```
+
+2. [手動更新](#手動更新)の手順でHubを更新します。旧ストアと書き出したアーカイブは、動作確認が済むまで保管します。
+3. 新しいHubで、必要なタグのアーカイブを読み込みます。次のコマンドはHubのストアに読み込み、同じCPUの別マシンのランナーにも配ります。
+
+   ```sh
+   guildbotics environment image load --ci /absolute/path/to/ci-image.tar
+   ```
+
+4. CI設定画面で、控えたタグとdigestを確認します。同じタグを使うCIジョブをHubで実行し、隔離コマンドも起動できることを確認します。
+
+CI設定の `[ci.microsandbox]` で旧ストアを指定していた場合は、その設定値を手順1の書き出しに使います。更新後のHubは共有ストアを使います。

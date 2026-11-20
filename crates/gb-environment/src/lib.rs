@@ -270,7 +270,7 @@ pub async fn run(
     runtime::run_once_with_guest(
         &runtime::Boot {
             files: command.files.clone(),
-            home: &host.data.join("msb"),
+            home: &runtime::home(&host.data),
             snapshot: &snapshot,
             memory_mib: resources.memory_mib,
             cpus: resources.cpus,

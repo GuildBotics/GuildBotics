@@ -13,10 +13,9 @@
 # builds foreign platforms through emulation is enough), each saved as
 # <ARCHIVE_DIR>/<reference>-<arch>.tar (default ARCHIVE_DIR:
 # dist/agent-environment). The archive for this device's architecture is
-# loaded here with `guildbotics environment image load`, and into the CI
-# runner of the workspace's code host with `guildbotics environment image
-# load-ci`. Every CPU archive is saved by the Hub and distributed to runners
-# of that CPU; only the native one enters the Hub runner cache. The shared
+# loaded from `guildbotics environment image load --ci`. Every CPU archive
+# is saved by the Hub and distributed to runners of that CPU. The native
+# archive is loaded into the Hub's shared image store. The shared
 # environment declaration receives every architecture's digest so other
 # interactive devices can load the matching archive.
 # Devices of another architecture run with the image they last loaded, and
@@ -63,7 +62,6 @@ mkdir -p "${archive_dir}"
 archive_base="${archive_dir}/$(echo "${reference}" | tr '/:' '__')"
 declare_args=()
 foreign_archives=()
-native_archive=""
 
 for platform in ${platforms//,/ }; do
     arch="${platform#*/}"
@@ -75,18 +73,13 @@ for platform in ${platforms//,/ }; do
     archive="${archive_base}-${arch}.tar"
     "${builder}" save --output "${archive}" "${reference}"
     echo "saved ${archive} (${arch} ${digest})"
-    cli image load-ci "${archive}"
+    cli image load --ci "${archive}"
     declare_args+=(--digest "${arch}=${digest}")
-    if [ "${arch}" = "${device_arch}" ]; then
-        native_archive="${archive}"
-    else
+    if [ "${arch}" != "${device_arch}" ]; then
         foreign_archives+=("${archive}")
     fi
 done
 
-if [ -n "${native_archive}" ]; then
-    cli image load "${native_archive}"
-fi
 cli image declare "${reference}" "${declare_args[@]}"
 
 for archive in "${foreign_archives[@]}"; do

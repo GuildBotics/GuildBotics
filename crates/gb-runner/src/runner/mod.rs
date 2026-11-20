@@ -36,6 +36,9 @@ pub struct RunnerArgs {
     work_dir: Option<PathBuf>,
     #[arg(skip)]
     default_work_dir: Option<PathBuf>,
+    #[cfg(feature = "host")]
+    #[arg(skip)]
+    vm_home: Option<PathBuf>,
     /// Base URL of the server [default: the server on this machine]
     #[arg(long, env = "BRANVIL_URL")]
     url: Option<String>,
@@ -53,6 +56,11 @@ pub struct RunnerArgs {
 impl RunnerArgs {
     pub fn default_work(mut self, path: PathBuf) -> Self {
         self.default_work_dir = Some(path);
+        self
+    }
+    #[cfg(feature = "host")]
+    pub fn vm_home(mut self, path: PathBuf) -> Self {
+        self.vm_home = Some(gb_vm::home(&path));
         self
     }
     pub fn is_join(&self) -> bool {
@@ -87,13 +95,18 @@ pub async fn main(
         None => crate::config::Config::load(None, &data_dir).ok(),
     };
     let url = args.url.unwrap_or(url);
-    let settings = Settings::new(
+    #[allow(unused_mut)]
+    let mut settings = Settings::new(
         url,
         args.token,
         args.work_dir,
         config.as_ref(),
         args.default_work_dir,
     )?;
+    #[cfg(feature = "host")]
+    {
+        settings.vm_home = args.vm_home;
+    }
     match args.command {
         Some(RunnerCommand::Join) => bail!("Join requires the GuildBotics client"),
         None => run(settings).await.map(|_| 0),
@@ -140,6 +153,8 @@ pub struct Settings {
     pub work_dir: PathBuf,
     pub msb_path: Option<PathBuf>,
     pub msb_home: PathBuf,
+    #[cfg(feature = "host")]
+    pub vm_home: Option<PathBuf>,
 }
 
 impl Settings {
@@ -159,6 +174,8 @@ impl Settings {
                 .or(default_work_dir)
                 .unwrap_or_else(|| executor::branvil_home().join("runner")),
             msb_path: ci.microsandbox.msb_path.clone(),
+            #[cfg(feature = "host")]
+            vm_home: None,
             msb_home: ci
                 .microsandbox
                 .home
@@ -168,6 +185,10 @@ impl Settings {
     }
 
     fn microsandbox(&self, runner: &str) -> Microsandbox {
+        #[cfg(feature = "host")]
+        if let Some(home) = &self.vm_home {
+            return Microsandbox::hub(home.clone(), runner);
+        }
         Microsandbox::new(
             executor::resolve_msb(self.msb_path.as_deref()),
             self.msb_home.clone(),

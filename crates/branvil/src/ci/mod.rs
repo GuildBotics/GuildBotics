@@ -818,7 +818,7 @@ impl Ci {
                             let reasons = live.iter().map(|r| format!("runner {} (CPU {}): {}", r.name,
                                 &r.report.architecture,
                                 r.report.executor_detail.as_deref().unwrap_or(if r.report.can_run() {"image not cached"} else {"runner version or executor unavailable"}))).collect::<Vec<_>>().join("; ");
-                            format!("No ready CI runner can execute image {}: {reasons}. Check runner diagnostics for executor/synchronization failures. Register this CPU's archive under Settings → CI or `guildbotics environment image load-ci`, or for registry images run `guildbotics runner pull {}` on that runner", a.job.image, a.job.image)
+                            format!("No ready CI runner can execute image {}: {reasons}. Check runner diagnostics for executor/synchronization failures. Register this CPU's archive under Settings → CI or `guildbotics environment image load --ci`, or for registry images run `guildbotics runner pull {}` on that runner", a.job.image, a.job.image)
                         })
                     })
                 })

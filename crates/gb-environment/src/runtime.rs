@@ -1,21 +1,17 @@
-//! The microVM a command runs in, driven through the microsandbox crate, as
-//! the Python version drives it through the SDK
-//! (`guildbotics/environment/runtime.py`). This is the only module that uses
-//! the crate.
-//!
-//! The runtime is the one the Python version placed: `msb` and `libkrunfw`
-//! under `<machine root>/data/msb`, which is also where the runtime keeps its
-//! state. It is told so through the backend, never through the process'
-//! environment, which the processes the server starts inherit.
+//! MicroVM commands, snapshot builds, and private provider sessions.
 
 pub use crate::{Mount, Network};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(test)]
+use gb_vm::Cleanup;
+use gb_vm::sdk as microsandbox;
+use gb_vm::{IMAGE_LOCK, OwnedVm, STOP_TIMEOUT, owned_boot};
+pub use gb_vm::{RUNTIME_VERSION, drain_vms, home, placed_files};
 use microsandbox::sandbox::MountBuilder;
-use microsandbox::{ExecEvent, LocalBackend, Sandbox};
-use tokio::sync::OnceCell;
+use microsandbox::{ExecEvent, Sandbox};
 
 use crate::{Failure, Sentence};
 
@@ -32,19 +28,6 @@ const REPLY_LIMIT: usize = 10 * 1024 * 1024;
 /// How long the entry's log is read after its reply: a process the command
 /// left running holds it open, and ends with the microVM.
 const LOG_DRAIN: Duration = Duration::from_secs(2);
-/// How long the microVM has to stop before it is killed.
-const STOP_TIMEOUT: Duration = Duration::from_secs(5);
-/// Held by a load, a build until its microVM holds its image, and a sweep of
-/// the runtime's images: the first two reuse or pin images and layer files a
-/// sweep deletes, and none takes the runtime's own locks for that.
-const IMAGE_LOCK: &str = "images.lock";
-/// The runtime this crate speaks to: the version of the `microsandbox` crate
-/// and of the Python SDK, whose `msb` the Python version placed and marked
-/// with its version.
-pub const RUNTIME_VERSION: &str = "0.6.17";
-
-/// The runtime's home, which every microVM of this process boots through.
-static BACKEND: OnceCell<PathBuf> = OnceCell::const_new();
 
 /// What a microVM boots from and with.
 pub struct Boot<'a> {
@@ -69,86 +52,34 @@ pub struct Process<'a> {
     pub stdin: &'a [u8],
 }
 
-/// The files the Python version places under the runtime's `home`: `msb`
-/// and `libkrunfw`, as the runtime names them on this OS.
-pub fn placed_files(home: &Path) -> [PathBuf; 2] {
-    let os = std::env::consts::OS;
-    [
-        home.join(microsandbox_utils::BIN_SUBDIR)
-            .join(microsandbox_utils::msb_binary_filename(os)),
-        home.join(microsandbox_utils::LIB_SUBDIR)
-            .join(microsandbox_utils::libkrunfw_filename(os)),
-    ]
-}
-
-/// Whether the runtime the Python version placed under `home` is there, and
-/// is the one this speaks to.
 pub fn ready(home: &Path) -> Result<(), Failure> {
-    if !placed_files(home).iter().all(|file| file.is_file()) {
-        return Err(Failure::Command(Sentence::key(
+    gb_vm::ready(home).map_err(|error| match error {
+        gb_vm::Readiness::Missing => Failure::Command(Sentence::key(
             "intelligences.agent_environment.runtime.not_installed",
-        )));
-    }
-    let placed = std::fs::read_to_string(home.join("version")).unwrap_or_default();
-    if placed.trim() != RUNTIME_VERSION {
-        return Err(Failure::Command(Sentence::Text(format!(
-            "The microVM runtime under {} is version '{}', not {RUNTIME_VERSION}.",
+        )),
+        gb_vm::Readiness::Version(placed) => Failure::Command(Sentence::Text(format!(
+            "The microVM runtime under {} is version '{placed}', not {RUNTIME_VERSION}.",
             home.display(),
-            placed.trim()
-        ))));
-    }
-    Ok(())
+        ))),
+    })
 }
 
-/// Place the exact runtime carried by this executable, once per version.
 pub fn ensure(home: &Path) -> Result<(), Failure> {
-    place(
-        home,
-        [
-            include_bytes!(env!("GB_MSB")),
-            include_bytes!(env!("GB_KRUN")),
-        ],
-    )
-}
-
-pub fn doctor(home: &Path, bundled: &Path) -> Result<(), Failure> {
-    let files = placed_files(bundled);
-    let bytes: Vec<_> = files
-        .iter()
-        .map(std::fs::read)
-        .collect::<Result<_, _>>()
-        .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
-    place(home, [&bytes[0], &bytes[1]])
-}
-
-fn place(home: &Path, bytes: [&[u8]; 2]) -> Result<(), Failure> {
-    let failed = |e: std::io::Error| {
+    gb_vm::ensure(home).map_err(|error| {
         Failure::Command(Sentence::Key(
             "intelligences.agent_environment.runtime.not_placed",
             vec![
                 ("home", home.display().to_string()),
-                ("error", e.to_string()),
+                ("error", error.to_string()),
             ],
         ))
-    };
-    let _held = gb_base::files::FileLock::hold(&home.join("install.lock"), Duration::from_secs(30))
-        .map_err(failed)?;
-    if ready(home).is_ok() {
-        return Ok(());
-    }
-    for (i, path) in placed_files(home).iter().enumerate() {
-        gb_base::files::atomic_write(path, bytes[i]).map_err(failed)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if i == 0 {
-                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-                    .map_err(failed)?;
-            }
-        }
-    }
-    gb_base::files::atomic_write(&home.join("version"), RUNTIME_VERSION.as_bytes())
-        .map_err(failed)?;
+    })?;
+    ready(home)
+}
+
+pub fn doctor(home: &Path, bundled: &Path) -> Result<(), Failure> {
+    gb_vm::install_from(home, bundled)
+        .map_err(|e| Failure::Command(Sentence::Text(e.to_string())))?;
     ready(home)
 }
 
@@ -199,32 +130,10 @@ pub async fn images(
     Ok(found)
 }
 
-/// Speaks to the runtime under `home` from now on, in this process.
 async fn backend(home: &Path) -> Result<(), Failure> {
-    let installed = BACKEND
-        .get_or_try_init(|| async {
-            let backend = LocalBackend::builder()
-                .home(home)
-                .build()
-                .await
-                .map_err(|e| {
-                    Failure::Runtime(Sentence::Text(format!(
-                        "The microVM runtime cannot start: {e}"
-                    )))
-                })?;
-            microsandbox::set_default_backend(backend);
-            Ok::<_, Failure>(home.to_path_buf())
-        })
-        .await?;
-    // One process has one runtime home, as the runtime has one per process.
-    if installed != home {
-        return Err(Failure::Runtime(Sentence::Text(format!(
-            "The microVM runtime is at {}, not {}.",
-            installed.display(),
-            home.display()
-        ))));
-    }
-    Ok(())
+    gb_vm::backend(home)
+        .await
+        .map_err(|e| Failure::Runtime(Sentence::Text(e)))
 }
 
 /// Import into the local image store, without booting a microVM. Inspect
@@ -245,7 +154,7 @@ pub async fn load_image(
     let unpacked =
         crate::image_archive::uncompressed(archive).map_err(|e| Sentence::Text(e.to_string()))?;
     let input = unpacked.as_ref().map(|file| file.path()).unwrap_or(archive);
-    let handles = microsandbox::Image::load(input, tag.into_iter().collect())
+    let handles = gb_vm::load_image(input, tag.into_iter().collect())
         .await
         .map_err(|e| Sentence::Text(format!("{}: {e}", archive.display())))?;
     if handles.is_empty() {
@@ -316,97 +225,6 @@ mod image_tests {
     }
 }
 
-static VM_TASKS: std::sync::LazyLock<tokio_util::task::TaskTracker> =
-    std::sync::LazyLock::new(tokio_util::task::TaskTracker::new);
-
-/// Drain late boots and shutdown tasks after callers stop accepting work.
-pub async fn drain_vms() {
-    drain_tasks(&VM_TASKS, STOP_TIMEOUT).await;
-}
-async fn drain_tasks(tasks: &tokio_util::task::TaskTracker, deadline: Duration) {
-    tasks.close();
-    let _ = tokio::time::timeout(deadline, tasks.wait()).await;
-}
-
-/// An owned cleanup task survives cancellation of the operation awaiting it.
-struct Cleanup {
-    start: Option<tokio::sync::oneshot::Sender<()>>,
-    task: tokio::task::JoinHandle<()>,
-}
-impl Cleanup {
-    fn with_files(
-        files: Option<std::sync::Arc<crate::run_files::Lease>>,
-        work: impl Future<Output = ()> + Send + 'static,
-    ) -> Self {
-        Self::new(async move {
-            work.await;
-            drop(files);
-        })
-    }
-    fn new(work: impl Future<Output = ()> + Send + 'static) -> Self {
-        Self::new_in(&VM_TASKS, work)
-    }
-    fn new_in(
-        tasks: &tokio_util::task::TaskTracker,
-        work: impl Future<Output = ()> + Send + 'static,
-    ) -> Self {
-        let (start, ready) = tokio::sync::oneshot::channel();
-        let task = tasks.spawn(async move {
-            let _ = ready.await;
-            work.await;
-        });
-        Self {
-            start: Some(start),
-            task,
-        }
-    }
-    async fn finish(mut self) {
-        if let Some(start) = self.start.take() {
-            let _ = start.send(());
-        }
-        let _ = (&mut self.task).await;
-    }
-}
-
-struct OwnedVm {
-    sandbox: Sandbox,
-    cleanup: Cleanup,
-}
-impl OwnedVm {
-    fn new(sandbox: Sandbox) -> Self {
-        Self::with_files(sandbox, None)
-    }
-    fn with_files(
-        sandbox: Sandbox,
-        files: Option<std::sync::Arc<crate::run_files::Lease>>,
-    ) -> Self {
-        let owned = sandbox.clone();
-        Self {
-            sandbox,
-            cleanup: Cleanup::with_files(files, stop_vm(owned)),
-        }
-    }
-    async fn close(self) {
-        drop(self.sandbox);
-        self.cleanup.finish().await;
-    }
-}
-impl std::ops::Deref for OwnedVm {
-    type Target = Sandbox;
-    fn deref(&self) -> &Sandbox {
-        &self.sandbox
-    }
-}
-async fn owned_boot<T: Send + 'static>(boot: impl Future<Output = T> + Send + 'static) -> T {
-    owned_boot_in(&VM_TASKS, boot).await
-}
-async fn owned_boot_in<T: Send + 'static>(
-    tasks: &tokio_util::task::TaskTracker,
-    boot: impl Future<Output = T> + Send + 'static,
-) -> T {
-    // Dropping the waiter detaches creation; its owned result still drops and cleans up.
-    tasks.spawn(boot).await.expect("microVM boot task failed")
-}
 /// Waits for the lock without occupying a runtime thread, so a cancelled
 /// caller stops waiting and shutdown is not held up.
 async fn hold(lock: &Path) -> Result<gb_base::files::FileLock, String> {
@@ -456,9 +274,10 @@ mod lifecycle_tests {
         let kept = lease.clone();
         let (started, entered) = tokio::sync::oneshot::channel();
         let (release, stopped) = tokio::sync::oneshot::channel();
-        let cleanup = Cleanup::with_files(Some(kept), async move {
+        let cleanup = Cleanup::new(async move {
             let _ = started.send(());
             let _ = stopped.await;
+            drop(kept);
         });
         drop(lease);
         assert!(crate::run_files::completed(root.path(), &id).is_err());
@@ -468,60 +287,6 @@ mod lifecycle_tests {
         release.send(()).unwrap();
         task.await.unwrap();
         assert!(crate::run_files::completed(root.path(), &id).is_ok());
-    }
-    #[tokio::test]
-    async fn shutdown_drain_has_a_deadline_for_hanging_vm_tasks() {
-        let tasks = tokio_util::task::TaskTracker::new();
-        let task = tasks.spawn(std::future::pending::<()>());
-        tokio::time::timeout(
-            Duration::from_millis(100),
-            drain_tasks(&tasks, Duration::from_millis(10)),
-        )
-        .await
-        .unwrap();
-        assert!(!tasks.is_empty());
-        task.abort();
-        let _ = task.await;
-    }
-    #[tokio::test]
-    async fn shutdown_drain_waits_for_a_cancelled_late_boot_and_its_cleanup() {
-        let tasks = tokio_util::task::TaskTracker::new();
-        let boot_tasks = tasks.clone();
-        let cleanup_tasks = tasks.clone();
-        let (started, boot_started) = tokio::sync::oneshot::channel();
-        let (boot_release, boot_released) = tokio::sync::oneshot::channel();
-        let (cleanup_start, cleanup_started) = tokio::sync::oneshot::channel();
-        let (cleanup_release, cleanup_released) = tokio::sync::oneshot::channel();
-        let waiter = tokio::spawn(async move {
-            owned_boot_in(&boot_tasks, async move {
-                let _ = started.send(());
-                let _ = boot_released.await;
-                Cleanup::new_in(&cleanup_tasks, async move {
-                    let _ = cleanup_start.send(());
-                    let _ = cleanup_released.await;
-                })
-            })
-            .await
-        });
-        boot_started.await.unwrap();
-        waiter.abort();
-        let _ = waiter.await;
-        let mut drain = Box::pin(drain_tasks(&tasks, STOP_TIMEOUT));
-        assert!(
-            tokio::time::timeout(Duration::from_millis(10), &mut drain)
-                .await
-                .is_err()
-        );
-        boot_release.send(()).unwrap();
-        cleanup_started.await.unwrap();
-        assert!(
-            tokio::time::timeout(Duration::from_millis(10), &mut drain)
-                .await
-                .is_err()
-        );
-        cleanup_release.send(()).unwrap();
-        drain.await;
-        assert!(tasks.is_empty());
     }
     #[tokio::test(flavor = "multi_thread")]
     async fn a_cancelled_boot_keeps_the_image_lock_until_creation_ends() {
@@ -1691,14 +1456,11 @@ pub async fn build_snapshot(
     let images = home.join(IMAGE_LOCK);
     let boot = async move {
         reclaim_build_vms(&prefix).await?;
-        let OwnedVm { sandbox, cleanup } = boot_holding(&images, async move {
-            builder
-                .create()
-                .await
-                .map(OwnedVm::new)
-                .map_err(|e| e.to_string())
+        let vm = boot_holding(&images, async move {
+            OwnedVm::start(builder, ()).await.map_err(|e| e.to_string())
         })
         .await?;
+        let (sandbox, cleanup) = vm.into_parts();
         Ok((sandbox, move || cleanup.finish()))
     };
     build_lifecycle(boot, cancelled, |guest| async move {
@@ -2228,10 +1990,7 @@ pub async fn sweep_images(home: &Path, indexed: &[PathBuf]) -> Result<(), String
             }
         }
     }
-    microsandbox::Image::prune()
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    gb_vm::collect_images().await
 }
 
 /// Remove SDK metadata together with artifacts while retaining provider logins.
@@ -2370,24 +2129,18 @@ async fn create_vm(boot: &Boot<'_>, scratch_mib: u32) -> Result<OwnedVm, Failure
             .map_err(|e| Failure::Command(Sentence::Text(e)))?;
         builder = builder.volume(crate::worktree::SOURCE, |m| m.bind(&copy.host).readonly());
     }
-    let files = boot.files.clone();
-    let sandbox = owned_boot(async move {
-        builder
-            .create()
-            .await
-            .map(|sandbox| OwnedVm::with_files(sandbox, files))
-    })
-    .await
-    .map_err(|e| {
-        Failure::Runtime(Sentence::Key(
-            "intelligences.agent_environment.runtime.start_failed",
-            vec![
-                ("memory_mib", boot.memory_mib.to_string()),
-                ("cpus", boot.cpus.to_string()),
-                ("error", e.to_string()),
-            ],
-        ))
-    })?;
+    let sandbox = OwnedVm::start(builder, boot.files.clone())
+        .await
+        .map_err(|e| {
+            Failure::Runtime(Sentence::Key(
+                "intelligences.agent_environment.runtime.start_failed",
+                vec![
+                    ("memory_mib", boot.memory_mib.to_string()),
+                    ("cpus", boot.cpus.to_string()),
+                    ("error", e.to_string()),
+                ],
+            ))
+        })?;
     Ok(sandbox)
 }
 
@@ -2497,42 +2250,9 @@ mod volume_tests {
             MountBuilder::new("/scratch").tmpfs().build().unwrap(),
         ];
         assert_eq!(
-            temporary_disk_names(vm, &mounts).collect::<Vec<_>>(),
+            gb_vm::temporary_disk_names(vm, &mounts).collect::<Vec<_>>(),
             [&names[0], &names[1], &format!("{vm}-12")]
         );
-    }
-}
-
-/// Only named volumes owned by this VM are removed after its destruction.
-fn temporary_disk_names<'a>(
-    vm: &str,
-    mounts: &'a [microsandbox::sandbox::VolumeMount],
-) -> impl Iterator<Item = &'a str> {
-    let prefix = format!("{vm}-");
-    mounts.iter().filter_map(move |mount| match mount {
-        microsandbox::sandbox::VolumeMount::Named { name, .. } if name.starts_with(&prefix) => {
-            Some(name.as_str())
-        }
-        _ => None,
-    })
-}
-
-async fn stop_vm(sandbox: Sandbox) {
-    let name = sandbox.name();
-    let disks: Vec<_> = temporary_disk_names(name, &sandbox.config().spec.mounts)
-        .map(str::to_owned)
-        .collect();
-    if let Err(e) = sandbox.stop_with_timeout(STOP_TIMEOUT).await {
-        tracing::warn!("The microVM {name} did not stop, and is killed: {e}");
-        if let Err(e) = sandbox.kill().await {
-            tracing::warn!("The microVM {name} was not killed: {e}");
-        }
-    }
-    let _ = sandbox.destroy().await;
-    // The stopped process handle still owns its disk locks until the last Sandbox drops.
-    drop(sandbox);
-    for disk in disks {
-        let _ = microsandbox::Volume::remove(&disk).await;
     }
 }
 

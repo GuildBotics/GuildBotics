@@ -98,7 +98,7 @@ wheelが無いPythonの依存をビルドする`gcc`・`g++`・`make`）と、
 [member git](#member-git-とメンバーの-clone)がメンバーのcloneを扱うgit（buildの最後に確かめます）を
 備えていれば何でもかまいません。imageのNode.jsは、buildがGuildBoticsの固定した版で置き換えます。ただしbubblewrap（`bwrap`）は入れないでください: Codexは同梱のbubblewrapより
 imageのものを優先し、Debianの0.8.0ではhelperをexecできずセッションを開始できません
-（`libwebkit2gtk`などが依存で引き込むので、入った場合はbinaryを消します）。読み込んだimageはregistryへ問い合わせずに使います（pull policy `never`）。ワークスペースのコードホストのCIのジョブが同じimageで動く場合（Branvil）は、CIランナーが動くマシンで`guildbotics environment image load-ci <アーカイブ>`を実行し、CIランナーにも読み込みます（パイプラインはimageをタグだけで指すので、ジョブがどの版で動くかはランナーのキャッシュで決まります）。GuildBotics自身の開発用image（`docker/agent-environment/Dockerfile`、`scripts/build-agent-environment-image.sh`でbuild、この端末とCIランナーへの読み込み、宣言）が実例です。
+（`libwebkit2gtk`などが依存で引き込むので、入った場合はbinaryを消します）。読み込んだimageはregistryへ問い合わせずに使います（pull policy `never`）。HubのCIでも同じイメージを使えます。別マシンのCIランナーにも配る場合は、Hubで`guildbotics environment image load --ci <アーカイブ>`を使います。GuildBotics自身の開発では、`scripts/build-agent-environment-image.sh`でCPUごとのイメージをビルドし、Hubへ登録します。
 
 macOS では、**システム設定 → プライバシーとセキュリティ → ファイルとフォルダ**で、GuildBotics を起動しているアプリに書類フォルダへのアクセスを一度許可してください（ターミナルで `guildbotics server start` を実行したときは、そのターミナルのアプリです）。環境の状態表示と turn の開始前にディレクトリへのアクセスを確認し、許可がなければ CLI と画面に同じ拒否理由を表示します。
 

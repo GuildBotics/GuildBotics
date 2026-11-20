@@ -17,7 +17,7 @@ pub(crate) enum EnvironmentCommand {
         #[arg(long)]
         force: bool,
     },
-    /// Remove obsolete snapshots and the images no snapshot uses after a successful Hub activation
+    /// Remove obsolete snapshots and cached image versions after a successful Hub activation
     Prune,
     /// Remove device snapshots while preserving provider logins
     Remove,
@@ -39,18 +39,16 @@ pub(crate) enum OutputFormat {
 
 #[derive(Subcommand)]
 pub(crate) enum ImageCommand {
-    /// Load a Docker save or OCI archive built for this device's CPU
+    /// Load a Docker save or OCI image archive
     Load {
         #[arg(value_parser = archive_file)]
         archive: PathBuf,
         /// Add a reference to the archive's own tags
-        #[arg(long)]
+        #[arg(long, conflicts_with = "ci")]
         tag: Option<String>,
-    },
-    /// Load an archive into the workspace code host's CI runner
-    LoadCi {
-        #[arg(value_parser = archive_file)]
-        archive: PathBuf,
+        /// Also distribute the archive to CI runners of its CPU architecture
+        #[arg(long)]
+        ci: bool,
     },
     /// List eligible local base images
     List {
@@ -72,7 +70,7 @@ pub(crate) enum ImageCommand {
 }
 pub async fn run(command: EnvironmentCommand, workspace: Option<PathBuf>) -> anyhow::Result<()> {
     let data = gb_base::home::data()?;
-    let runtime = data.join("msb");
+    let runtime = gb_environment::runtime::home(&data);
     let language = gb_server::client::language().await;
     let usage = matches!(&command, EnvironmentCommand::Usage { .. });
     match command {
@@ -158,8 +156,10 @@ pub async fn run(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
             }
         }
         EnvironmentCommand::Image { command } => match command {
-            ImageCommand::LoadCi { archive } => {
-                let loaded = gb_server::environment::load_ci(
+            ImageCommand::Load {
+                archive, ci: true, ..
+            } => {
+                let loaded = gb_server::environment::publish_image(
                     &gb_server::workspace::resolve_with_message(
                         &data,
                         workspace,
@@ -179,28 +179,33 @@ pub async fn run(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
                     },
                 )
                 .await?;
-                let Some(loaded) = loaded else {
-                    println!(
-                        "{}",
-                        gb_server::i18n::t(
-                            language,
-                            "intelligences.agent_environment.image.no_ci_runner",
-                            &[],
-                        )
-                    );
-                    return Ok(());
-                };
-                for reference in loaded {
-                    println!("loaded {reference}");
+                match loaded {
+                    Some(loaded) => {
+                        for reference in loaded {
+                            println!("loaded {reference}");
+                        }
+                    }
+                    None if gb_environment::image_archive::architecture(&archive)
+                        .is_ok_and(|arch| arch != gb_environment::image::device_architecture()) =>
+                    {
+                        println!(
+                            "{}",
+                            gb_server::i18n::t(
+                                language,
+                                "intelligences.agent_environment.image.no_ci_runner",
+                                &[],
+                            )
+                        );
+                    }
+                    None => load_local(&runtime, &archive, None, language).await?,
                 }
             }
-            ImageCommand::Load { archive, tag } => {
-                for (reference, digest) in gb_environment::load_image(&runtime, &archive, tag)
-                    .await
-                    .map_err(|sentence| anyhow::anyhow!(gb_server::i18n::say(sentence, language)))?
-                {
-                    println!("loaded {reference} {digest}");
-                }
+            ImageCommand::Load {
+                archive,
+                tag,
+                ci: false,
+            } => {
+                load_local(&runtime, &archive, tag, language).await?;
             }
             ImageCommand::List { format } => {
                 let workspace = gb_server::workspace::resolve(&data, workspace, language)?;
@@ -297,6 +302,21 @@ pub async fn run(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
                 }
             }
         },
+    }
+    Ok(())
+}
+
+async fn load_local(
+    runtime: &Path,
+    archive: &Path,
+    tag: Option<String>,
+    language: &str,
+) -> anyhow::Result<()> {
+    for (reference, digest) in gb_environment::load_image(runtime, archive, tag)
+        .await
+        .map_err(|sentence| anyhow::anyhow!(gb_server::i18n::say(sentence, language)))?
+    {
+        println!("loaded {reference} {digest}");
     }
     Ok(())
 }

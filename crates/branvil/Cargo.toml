@@ -14,7 +14,7 @@ autotests = false
 test-support = []
 
 [dependencies]
-gb-runner = {path="../gb-runner"}
+gb-runner = {path="../gb-runner", features=["host"]}
 regex = "1"
 oci-spec = { version = "0.9.0", default-features = false, features = ["distribution"] }
 gb-base = { path = "../gb-base" }

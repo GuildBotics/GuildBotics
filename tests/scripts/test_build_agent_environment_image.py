@@ -60,15 +60,14 @@ def test_managed_cli_path_with_spaces_is_one_argument(tmp_path, override):
     assert result.returncode == 0, result.stderr
     calls = [json.loads(line) for line in log.read_text().splitlines()]
     assert [call[:3] for call in calls] == [
-        ["environment", "image", "load-ci"],
-        ["environment", "image", "load-ci"],
+        ["environment", "image", "load"],
         ["environment", "image", "load"],
         ["environment", "image", "declare"],
     ]
-    assert calls[0][3].endswith("archive files/local_agent_dev-arm64.tar")
-    assert calls[1][3].endswith("archive files/local_agent_dev-amd64.tar")
-    assert calls[2][3] == calls[0][3]
-    assert calls[3][3:] == [
+    for call, arch in zip(calls[:2], ["arm64", "amd64"], strict=True):
+        assert call[3] == "--ci"
+        assert call[4].endswith(f"archive files/local_agent_dev-{arch}.tar")
+    assert calls[2][3:] == [
         "local/agent:dev",
         "--digest",
         f"arm64=sha256:{'a' * 64}",

@@ -1,0 +1,24 @@
+[package]
+name = "gb-vm"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+description = "Local microVM runtime and lifecycle"
+license = "MIT"
+repository = "https://github.com/GuildBotics/GuildBotics"
+publish = false
+
+[features]
+host = ["dep:microsandbox", "dep:microsandbox-image", "dep:microsandbox-utils", "dep:tokio-util"]
+
+[dependencies]
+gb-base = { path = "../gb-base" }
+microsandbox = { version = "=0.6.17", default-features = false, features = ["net", "prebuilt"], optional = true }
+microsandbox-image = { version = "=0.6.17", optional = true }
+microsandbox-utils = { version = "=0.6.17", optional = true }
+tokio = { version = "1.53.3", features = ["rt", "sync", "time"] }
+tokio-util = { version = "0.7.20", features = ["rt"], optional = true }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1.53.3", features = ["macros"] }

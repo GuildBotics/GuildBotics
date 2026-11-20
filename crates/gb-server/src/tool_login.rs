@@ -2583,7 +2583,7 @@ mod tests {
             let files = credentials("synthetic-real-login");
             let plan =
                 private_plan(&vm, &catalog, files.clone(), argv.clone(), interactive).unwrap();
-            let runtime_home = vm.data.join("msb");
+            let runtime_home = gb_environment::runtime::home(&vm.data);
             let boot = plan.boot(&vm, &runtime_home);
             let process = plan.process();
             assert_eq!(boot.home, runtime_home);
@@ -3201,7 +3201,7 @@ async fn private_run_io(
     io: Option<LoginIo>,
 ) -> Result<(i32, Files, Vec<u8>), PrivateError> {
     let plan = private_plan(&vm, &catalog, files, argv, show)?;
-    let runtime_home = vm.data.join("msb");
+    let runtime_home = gb_environment::runtime::home(&vm.data);
     let boot = plan.boot(&vm, &runtime_home);
     let process = plan.process();
     let (input, sender) = match io {

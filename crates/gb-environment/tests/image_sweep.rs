@@ -1,7 +1,8 @@
-//! The runtime's images go once no snapshot and no microVM uses them. This
+//! The runtime retains tagged images and snapshot bases. This
 //! drives the real runtime store on images and snapshot descriptors written
 //! here, without booting a microVM; one test per process, as the runtime is.
 use gb_environment::{image::device_architecture, runtime, snapshot::snapshots_dir};
+use gb_vm::sdk as microsandbox;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
@@ -100,6 +101,7 @@ async fn held() -> Vec<(String, String)> {
         .await
         .unwrap()
         .iter()
+        .filter(|h| !gb_vm::digest_reference(h.reference()))
         .map(|h| {
             (
                 h.reference().to_owned(),
@@ -112,7 +114,7 @@ async fn held() -> Vec<(String, String)> {
 }
 
 #[tokio::test]
-async fn images_of_snapshots_stay_and_replaced_or_unused_images_go() {
+async fn tagged_and_snapshot_images_stay_and_unused_versions_go() {
     let root = tempfile::Builder::new()
         .prefix("gb")
         .tempdir_in("/tmp")
@@ -131,6 +133,12 @@ async fn images_of_snapshots_stay_and_replaced_or_unused_images_go() {
     let stale = load(&home, &root.path().join("stale.tar")).await;
     let unused_layer = archive(&root.path().join("unused.tar"), "test/unused:x", "unused\n");
     load(&home, &root.path().join("unused.tar")).await;
+    for tag in ["test/stale:x", "test/unused:x"] {
+        microsandbox::Image::remove(tag, false).await.unwrap();
+    }
+    let ci_archive = root.path().join("ci.tar");
+    let ci_layer = archive(&ci_archive, "test/ci:dev", "ci\n");
+    let ci = load(&home, &ci_archive).await;
     // Indexed while it exists, then gone: its row outlives it.
     let gone_path = snapshot(&gone, "guildbotics-cccccccccccccccc", &stale);
     microsandbox::Snapshot::reindex(snapshots_dir(&gone))
@@ -170,10 +178,10 @@ async fn images_of_snapshots_stay_and_replaced_or_unused_images_go() {
     assert!(current.exists() && prebuilt.exists() && shared.exists());
     assert_eq!(
         held().await,
-        vec![("test/stale:x".into(), stale), (TAG.into(), m2.clone())]
+        vec![("test/ci:dev".into(), ci.clone()), (TAG.into(), m2.clone())]
     );
     assert!(layer(&home, &v1), "another workspace's snapshot keeps v1");
-    assert!(!layer(&home, &unused_layer));
+    assert!(layer(&home, &unused_layer));
     assert!(
         rows().await.contains(&gone_path),
         "a building directory keeps its rows"
@@ -190,7 +198,12 @@ async fn images_of_snapshots_stay_and_replaced_or_unused_images_go() {
         "the row of a removed snapshot goes"
     );
     assert!(!layer(&home, &stale_layer));
-    assert_eq!(held().await, vec![(TAG.into(), m2.clone())]);
+    assert!(!layer(&home, &unused_layer));
+    assert!(layer(&home, &ci_layer));
+    assert_eq!(
+        held().await,
+        vec![("test/ci:dev".into(), ci), (TAG.into(), m2.clone())]
+    );
     let base = hex(&tar(&[("base.txt", b"shared base\n")]));
     assert!(layer(&home, &base));
 

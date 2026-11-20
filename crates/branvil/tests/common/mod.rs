@@ -101,7 +101,12 @@ async fn process(args: Vec<String>) -> i32 {
             }
             let parsed = Runner::try_parse_from(&args).unwrap_or_else(|e| e.exit());
             let data = std::env::var_os("BRANVIL_DATA_DIR").unwrap_or_default();
-            branvil::run_runner(parsed.args, String::new(), data.into(), async {
+            let args = if let Some(vm_data) = std::env::var_os("BRANVIL_TEST_VM_DATA") {
+                parsed.args.vm_home(vm_data.into())
+            } else {
+                parsed.args
+            };
+            branvil::run_runner(args, String::new(), data.into(), async {
                 anyhow::bail!("the test runner has no owner token")
             })
             .await
