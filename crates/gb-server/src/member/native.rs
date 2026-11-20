@@ -568,15 +568,6 @@ impl Executor for Native {
                 if reply.exit_code == 0
                     && let Some(download) = reply.metadata.get("download")
                 {
-                    let mut argv = vec![
-                        "python".into(),
-                        "-m".into(),
-                        "guildbotics.guest.artifact_archive".into(),
-                        download["destination"].as_str().unwrap_or(".").into(),
-                    ];
-                    if let Some(values) = download["attachment"].as_array() {
-                        argv.extend(values.iter().filter_map(Value::as_str).map(str::to_owned));
-                    }
                     let bytes = match tokio::fs::read(outgoing).await {
                         Ok(bytes) => bytes,
                         Err(_) => {
@@ -591,30 +582,11 @@ impl Executor for Native {
                         Ok(cwd) => cwd,
                         Err(_) => return broker_failed(),
                     };
-                    let result = native
-                        .guest
-                        .as_ref()
-                        .expect("bound guest channel")
-                        .execute(gb_environment::guest_process::Process {
-                            argv,
-                            cwd,
-                            env: vec![],
-                            stdin: bytes,
-                            limit: 10 * 1024 * 1024,
-                        })
-                        .await;
-                    return match result {
-                        Ok(result) => gb_environment::broker::Result {
-                            exit_code: result.code,
-                            stdout: String::from_utf8_lossy(&result.stdout).into(),
-                            stderr: String::from_utf8_lossy(&result.stderr).into(),
-                        },
-                        Err(_) => gb_environment::broker::Result {
-                            exit_code: 1,
-                            stdout: String::new(),
-                            stderr: crate::i18n::t("en", "cli.member.execution_failed", &[]),
-                        },
-                    };
+                    let guest = native.guest.as_ref().expect("bound guest channel");
+                    return extract_guest_download(download, cwd, bytes, |process| {
+                        guest.execute(process)
+                    })
+                    .await;
                 }
                 gb_environment::broker::Result {
                     exit_code: reply.exit_code,
@@ -796,6 +768,45 @@ impl<'a> Lifecycle<'a> {
 impl Drop for Lifecycle<'_> {
     fn drop(&mut self) {
         self.finish("failed", BTreeMap::new());
+    }
+}
+
+async fn extract_guest_download(
+    download: &Value,
+    cwd: String,
+    bytes: Vec<u8>,
+    execute: impl AsyncFnOnce(
+        gb_environment::guest_process::Process,
+    )
+        -> Result<gb_environment::guest_process::Output, gb_environment::Failure>,
+) -> gb_environment::broker::Result {
+    let mut argv: Vec<_> = gb_environment::python_module("guildbotics.guest.artifact_archive")
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    argv.push(download["destination"].as_str().unwrap_or(".").into());
+    if let Some(values) = download["attachment"].as_array() {
+        argv.extend(values.iter().filter_map(Value::as_str).map(str::to_owned));
+    }
+    match execute(gb_environment::guest_process::Process {
+        argv,
+        cwd,
+        env: vec![],
+        stdin: bytes,
+        limit: 10 * 1024 * 1024,
+    })
+    .await
+    {
+        Ok(result) => gb_environment::broker::Result {
+            exit_code: result.code,
+            stdout: String::from_utf8_lossy(&result.stdout).into(),
+            stderr: String::from_utf8_lossy(&result.stderr).into(),
+        },
+        Err(error) => gb_environment::broker::Result {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: crate::i18n::say(error.sentence(), "en"),
+        },
     }
 }
 
@@ -6044,6 +6055,57 @@ pub(crate) mod tests {
 mod guest_failure_tests {
     use super::*;
     use crate::member::git::Guest as _;
+
+    #[tokio::test]
+    async fn guest_download_uses_the_entry_interpreter_for_artifacts_and_attachments() {
+        for attachment in [vec![], vec!["report image.png", "attachment-id"]] {
+            let download = json!({"destination": "download dir", "attachment": attachment});
+            let result = extract_guest_download(
+                &download,
+                "/clones/work".into(),
+                b"download bytes".to_vec(),
+                async |process| {
+                    let mut expected = gb_environment::ENTRY[..3].to_vec();
+                    expected.extend(["guildbotics.guest.artifact_archive", "download dir"]);
+                    expected.extend_from_slice(&attachment);
+                    assert_eq!(process.argv, expected);
+                    assert_eq!(process.cwd, "/clones/work");
+                    assert!(process.env.is_empty());
+                    assert_eq!(process.stdin, b"download bytes");
+                    Ok(gb_environment::guest_process::Output {
+                        code: 0,
+                        stdout: b"extracted".to_vec(),
+                        stderr: vec![],
+                    })
+                },
+            )
+            .await;
+            assert_eq!(result.exit_code, 0);
+            assert_eq!(result.stdout, "extracted");
+            assert!(result.stderr.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn guest_download_returns_the_start_failure_reason() {
+        let result = extract_guest_download(
+            &json!({"destination": ".", "attachment": []}),
+            "/clones/work".into(),
+            vec![],
+            async |_| {
+                Err(gb_environment::Failure::Command(
+                    gb_environment::Sentence::Key(
+                        "capabilities.member_git.guest_start_failed",
+                        vec![("reason", "synthetic interpreter launch error".into())],
+                    ),
+                ))
+            },
+        )
+        .await;
+        assert_eq!(result.exit_code, 1);
+        assert!(result.stdout.is_empty());
+        assert!(result.stderr.contains("synthetic interpreter launch error"));
+    }
 
     #[tokio::test]
     async fn member_git_preserves_the_localized_guest_failure() {
