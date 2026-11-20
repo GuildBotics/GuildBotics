@@ -75,14 +75,19 @@ pub mod run_files;
 /// GuildBotics' own roots in the microVM: its code, its venv, the home and
 /// its run state. No host path is taken over or under them.
 const RESERVED: [&str; 2] = ["/opt/guildbotics", "/run/guildbotics"];
+/// The argv for running an installed Python module in the microVM.
+pub const fn python_module(module: &str) -> [&str; 4] {
+    [
+        "/opt/guildbotics/venv/bin/python",
+        // Nothing is written beside the read-only code.
+        "-B",
+        "-m",
+        module,
+    ]
+}
+
 /// The command execution machinery's entry inside the microVM.
-pub const ENTRY: &[&str] = &[
-    "/opt/guildbotics/venv/bin/python",
-    // Nothing is written beside the read-only code.
-    "-B",
-    "-m",
-    "guildbotics.guest.entry",
-];
+pub const ENTRY: &[&str] = &python_module("guildbotics.guest.entry");
 /// A sentence a person reads: one of the locale files' (`a.b.c`, with its
 /// parameters), or one given as it is.
 #[derive(Debug, Clone, PartialEq)]
