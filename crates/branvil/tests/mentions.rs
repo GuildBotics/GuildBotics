@@ -284,7 +284,7 @@ async fn upgrade_preserves_resolved_mentions_and_their_index() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-36-")
+                .starts_with("branvil-schema-37-")
         })
         .unwrap();
     assert_eq!(tables(&copy), old);

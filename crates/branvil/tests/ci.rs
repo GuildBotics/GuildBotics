@@ -273,6 +273,7 @@ async fn schema_37_upgrade_preserves_records() {
     as_schema_37(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
+    assert!(!before.contains_key("ix_ci_memory"));
     assert!(
         admin("check")
             .1
@@ -288,6 +289,7 @@ async fn schema_37_upgrade_preserves_records() {
     assert_eq!(records(&db, "repos"), repos);
     assert_eq!(repos[0]["responder"], "aiko");
     assert_eq!(records(&db, "ci_attempts"), attempts);
+    assert!(tables(&db)["ix_ci_memory"].is_empty());
     assert_eq!(records(&db, "ci_runs"), prior_runs);
     let runs = records(&db, "ci_runs");
     assert_eq!(records(&db, "ci_verifications"), verifications);
@@ -311,7 +313,7 @@ async fn schema_37_upgrade_preserves_records() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-36-")
+                .starts_with("branvil-schema-37-")
         })
         .unwrap();
     assert_eq!(tables(&backup), before);

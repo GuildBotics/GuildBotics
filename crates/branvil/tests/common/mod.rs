@@ -815,6 +815,11 @@ pub fn as_schema_37(db: &Path) {
         attempt.remove("allocation");
         attempt.remove("peak_memory_mib");
     });
+    let memory: redb::TableDefinition<&[u8], &[u8]> = redb::TableDefinition::new("ix_ci_memory");
+    let database = redb::Database::open(db).unwrap();
+    let txn = database.begin_write().unwrap();
+    assert!(txn.delete_table(memory).unwrap());
+    txn.commit().unwrap();
 }
 
 /// Every table of a database, by name, as raw keys and values.
