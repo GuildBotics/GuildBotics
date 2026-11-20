@@ -22,6 +22,7 @@ mod integration {
         use executor::ImageLock;
         use std::sync::atomic::AtomicBool;
 
+        #[cfg(feature = "host")]
         #[tokio::test]
         async fn hub_runner_defers_old_versions_to_the_snapshot_sweep() {
             use crate::ci::images;
@@ -805,6 +806,7 @@ fi
                 work_dir: s.dir.path().join("runner"),
                 msb_path: Some(msb.clone()),
                 msb_home: home.clone(),
+                #[cfg(feature = "host")]
                 vm_home: None,
             };
             let serving = tokio::spawn(run(settings));

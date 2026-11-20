@@ -39,8 +39,11 @@ mod util;
 pub mod vault;
 mod webhook;
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+#[cfg(feature = "host")]
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 pub use backup::{request as request_backup, restore};
 pub use runner::{RunnerArgs, main as run_runner};
@@ -49,6 +52,7 @@ pub use upstream::askpass_main;
 
 /// Prepare the service on `data_dir`, creating it on first use, without
 /// binding. All advertised URLs use the host origin `base_url`.
+#[cfg(feature = "host")]
 pub async fn prepare_embedded(
     data_dir: &Path,
     vm_home: PathBuf,

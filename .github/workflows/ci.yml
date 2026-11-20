@@ -97,8 +97,14 @@ jobs:
         shell: msys2 {0}
         if: steps.changes.outputs.rust == 'true'
         run: |
+          client_contracts=(-p guildbotics -p gb-server -p gb-environment -p gb-base -p gb-config)
+          deps=$(cargo tree --locked --prefix none "${client_contracts[@]}" --no-default-features --target x86_64-pc-windows-gnu) || exit 1
+          if grep -E '^microsandbox v' <<<"$deps"; then
+            echo 'Windows client contracts must not build the microsandbox SDK' >&2
+            exit 1
+          fi
           status=0
-          cargo test --locked --no-fail-fast -p guildbotics -p gb-server -p gb-environment -p gb-base -p gb-config --no-default-features --target x86_64-pc-windows-gnu --lib --bins || status=1
+          cargo test --locked --no-fail-fast "${client_contracts[@]}" --no-default-features --target x86_64-pc-windows-gnu --lib --bins || status=1
           cargo test --locked --no-fail-fast -p guildbotics --no-default-features --target x86_64-pc-windows-gnu --test main || status=1
           exit "$status"
       - name: Run without the build checkout
