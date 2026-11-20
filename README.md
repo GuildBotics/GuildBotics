@@ -250,7 +250,7 @@ If you already have a Slack App, choose **Use a registered app** and start from 
 
 The tokens are stored with the member's credentials, shared by every workspace. The channels are stored in the workspace's `member.yml` for the member (`message_channels`).
 
-When ticket or PR work stops for a person's response, Branvil sends one notice to the owner's webhook with a link to the item and, when available, its comment. Set the destination in **Branvil → Settings → Notifications**.
+When ticket or PR work stops for a person's response, Branvil sends one notice to the owner's webhook with a link to the item and, when available, its comment. Set the destination in **Branvil → Settings → Notifications**. For Slack, choose a channel that no member watches.
 
 To receive chat events, start the service with **Event triggers** included on the **Service** screen. Scheduled posts at fixed times (a news digest, for example) go through a separate path: configure `workflows/chat_post_command` as a scheduled command.
 
