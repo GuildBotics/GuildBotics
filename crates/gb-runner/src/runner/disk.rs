@@ -286,6 +286,8 @@ mod tests {
     /// A sparse copy reads only where the image holds data (a file of 64 GiB
     /// with two small blocks of data has a few MiB of ranges to read), and
     /// copies a file with no data, or with data up to its end, whole.
+    // Where `SEEK_DATA` tells the ranges; elsewhere the copy reads it all.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn a_sparse_copy_reads_only_the_data() {
         let dir = tempfile::tempdir().unwrap();
