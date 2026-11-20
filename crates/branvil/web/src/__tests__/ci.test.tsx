@@ -78,6 +78,19 @@ describe("CI settings", () => {
     expect(within(queue).getByRole("link", { name: "acme/demo · rust-test" })).toHaveAttribute("href", "/acme/demo/-/jobs/att_waiting");
     expect(queue).toHaveTextContent("branvil-runner is short by 2 vCPUs and 2048 MiB of memory");
   });
+  it.each([
+    ["en", 1, 0, "branvil-runner has a vCPU shortfall of 1"],
+    ["en", 2, 0, "branvil-runner has a vCPU shortfall of 2"],
+    ["en", 0, 2048, "branvil-runner is short by 2048 MiB of memory"],
+    ["ja", 2, 0, "branvil-runner で vCPU 2 不足"],
+    ["ja", 0, 2048, "branvil-runner でメモリ 2048 MiB 不足"],
+  ] as const)("shows only missing resources in %s when short by %i vCPUs and %i MiB", async (language, cpu_shortfall, memory_shortfall_mib, label) => {
+    const resource_wait = { attempt_id: "att_waiting", repo: "acme/demo", job: "rust-test", cpu_shortfall, memory_shortfall_mib };
+    fakeApi({ ...SHELL, "GET /api/v1/admin/ci": json(200, { ...CI, runner: { ...CI.runner, runners: [{ ...HUB_RUNNER, resource_wait }] } }) });
+    renderApp("/-/settings/ci", language);
+    const link = await screen.findByRole("link", { name: "acme/demo · rust-test" });
+    expect(link.parentElement?.textContent).toBe(`acme/demo · rust-test — ${label}`);
+  });
   it("shows each part of the settings in its own card to the owner", async () => {
     fakeApi({ ...SHELL, "GET /api/v1/admin/ci": json(200, CI) });
     renderApp("/-/settings/ci");

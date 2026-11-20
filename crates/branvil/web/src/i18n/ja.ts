@@ -677,6 +677,8 @@ export const ja: Record<MessageKey, string> = {
   "ci.settings.machineUnknown": "マシンの空きは不明",
   "ci.settings.resourceQueue": "空きを待つ CI ジョブ",
   "ci.settings.resourceWait": "{name} で vCPU {cpus}・メモリ {memory} MiB 不足",
+  "ci.settings.resourceWaitCpu": "{name} で vCPU {cpus} 不足",
+  "ci.settings.resourceWaitMemory": "{name} でメモリ {memory} MiB 不足",
   "ci.settings.images": "イメージ",
   "ci.settings.addImage": "イメージを追加",
   "ci.settings.emptyTitle": "ジョブを動かすイメージを追加してください",

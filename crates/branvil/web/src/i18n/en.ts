@@ -675,6 +675,8 @@ export const en = {
   "ci.settings.machineUnknown": "Machine capacity is unknown",
   "ci.settings.resourceQueue": "CI jobs waiting for capacity",
   "ci.settings.resourceWait": "{name} is short by {cpus} vCPUs and {memory} MiB of memory",
+  "ci.settings.resourceWaitCpu": "{name} has a vCPU shortfall of {cpus}",
+  "ci.settings.resourceWaitMemory": "{name} is short by {memory} MiB of memory",
   "ci.settings.images": "Images",
   "ci.settings.addImage": "Add image",
   "ci.settings.emptyTitle": "Add an image for jobs to run in",
