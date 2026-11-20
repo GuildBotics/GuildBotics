@@ -61,7 +61,7 @@ pub async fn prepare_embedded(
     host: Arc<dyn host::Host>,
     active_agents: agent::ActiveAgents,
 ) -> anyhow::Result<Embedded> {
-    let base_url = config::normalize_base_url(base_url)?;
+    let base_url = loopback_auth::normalize_base_url(base_url).map_err(anyhow::Error::msg)?;
     let embedded = service::prepare(
         service::load_config(data_dir)?,
         vault,

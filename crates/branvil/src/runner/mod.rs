@@ -800,15 +800,16 @@ fi
             .await;
             let msb = s.dir.path().join("msb");
             let home = s.dir.path().join("msb-home");
-            let settings = Settings {
-                url: s.url.clone(),
-                token: Some(s.runner_token.clone()),
-                work_dir: s.dir.path().join("runner"),
-                msb_path: Some(msb.clone()),
-                msb_home: home.clone(),
-                #[cfg(feature = "host")]
-                vm_home: None,
-            };
+            let mut settings = Settings::new(
+                s.url.clone(),
+                Some(s.runner_token.clone()),
+                Some(s.dir.path().join("runner")),
+                None,
+                None,
+            )
+            .unwrap();
+            settings.msb_path = Some(msb.clone());
+            settings.msb_home = home.clone();
             let serving = tokio::spawn(run(settings));
             let sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
             let settled = |sha: String| {
