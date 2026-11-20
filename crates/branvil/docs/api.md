@@ -1375,7 +1375,7 @@ file, and applied without a restart. The Hub uses the shared image store at
   ```json
   {"runner": {"mode": "auto", "state": "ready", "detail": "1 runner(s) connected.", "runners": [...], "queue": {...}},
    "executor": {"msb": "/…/msb", "problem": null, "home": "/…/.guildbotics/data/msb"},
-   "limits": {"max_cpus": 4, "max_memory_mib": 4096, "work_quota_mib": 16384, "max_timeout_secs": 3600, "cache_max_mib": 2048, "max_jobs": 1},
+   "limits": {"max_cpus": 4, "max_memory_mib": 4096, "work_quota_mib": 16384, "max_timeout_secs": 3600, "cache_max_mib": 16384, "max_jobs": 1},
    "images": {"error": null,
               "cached": [{"reference": "guildbotics/agent-environment:dev",
                           "digest": "sha256:…", "size_bytes": 3701474304, "created_at": "…",

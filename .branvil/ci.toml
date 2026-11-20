@@ -120,8 +120,8 @@ commands = [
   "find crates -exec touch -c {} +",
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo clippy --locked --workspace --all-targets -- -D warnings",
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo clippy --locked -p guildbotics --no-default-features --target x86_64-pc-windows-gnu -- -D warnings",
-  "CARGO_HOME=/work/.ci/cargo-home cargo clean --workspace --offline --locked --target x86_64-pc-windows-gnu",
-  "CARGO_HOME=/work/.ci/cargo-home cargo clean --workspace --offline --locked",
+  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= cargo clean --workspace --offline --locked --target x86_64-pc-windows-gnu",
+  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= cargo clean --workspace --offline --locked",
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
@@ -157,7 +157,7 @@ commands = [
   "find crates -exec touch -c {} +",
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked --profile ci --workspace --exclude branvil --exclude loopback-auth",
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked -p guildbotics --no-default-features --test main",
-  "CARGO_HOME=/work/.ci/cargo-home cargo clean --workspace --offline --locked",
+  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= cargo clean --workspace --offline --locked",
 ]
 artifacts = [{ name = "rust-test-results", paths = ["target/nextest/ci/junit.xml"] }]
 timeout_secs = 1800
@@ -180,7 +180,7 @@ image = "guildbotics/agent-environment:dev"
 commands = [
   "find crates -exec touch -c {} +",
   "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked --profile ci -p branvil -p loopback-auth --features branvil/test-support",
-  "CARGO_HOME=/work/.ci/cargo-home cargo clean --workspace --offline --locked",
+  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= cargo clean --workspace --offline --locked",
 ]
 artifacts = [{ name = "test-results", paths = ["target/nextest/ci/junit.xml"] }]
 timeout_secs = 1800

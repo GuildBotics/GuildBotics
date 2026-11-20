@@ -510,7 +510,7 @@ Neither final required-check failures nor automatic recovery send webhook notice
 | jobs at once | 1 (`ci.executor.max_jobs`) | per runner; the runner claims a job only when it can start it, so the others wait in the service's queue. Jobs at once use that many times the CPUs and memory, and the disk of that many `/work` volumes and job directories (each with the checkout and its archive, and the cache's archive while it is restored or saved) |
 | stop wait | 3600 s (`ci.stop_wait_secs`) | how long a stopping service waits for its running jobs ("Stopping the service" above) |
 | job time limit | 3600 s (`ci.executor.max_timeout_secs`) | the limit of a job that gives no `timeout_secs`; a larger `timeout_secs` is lowered to it, and the log says so |
-| dependency cache | 2048 MiB (`ci.executor.cache_max_mib`) | total bytes for pending and published images; see [Dependency cache](#dependency-cache) |
+| dependency cache | 16 GiB (`ci.executor.cache_max_mib`) | total bytes for pending and published images; see [Dependency cache](#dependency-cache) |
 | retention | 30 days (`ci.retention_days`) | logs and artifacts of attempts finished earlier are deleted; the attempt records stay |
 | runners per work directory | 1 | a lock file refuses a second runner |
 
@@ -557,13 +557,16 @@ leaves all eligible PRs before merging. An actual successful execution on a
 protected branch can publish after the Hub accepts its result. Reusing a check
 after the merge does not schedule a separate execution for the cache.
 
-A pending image never serves a restore and staging cannot evict published
-images. The per-runner `cache_max_mib` counts the bytes recorded in
+A pending image never serves a restore. Staging can reclaim superseded and
+pending images. The per-runner `cache_max_mib` counts the bytes recorded in
 `.branvil-data` for both pending and published images. Size it for at least one
 published generation of every cached job plus the largest pending images that
-may coexist on the runner. A publication leaves room for an additional image
-of its size when the budget permits. Published eviction removes superseded
-generations first, oldest use first within each group. Restoring updates the
+may coexist on the runner. Configure the default or a per-runner override in
+**Settings → CI**. The limit does not reserve disk space.
+
+Eviction proceeds from superseded images to pending
+images to the current images of each job, oldest use first within each group.
+Only publication can evict a current image. Restoring updates the
 last-use time only. Generations without matching owner metadata are removed
 at runner startup.
 

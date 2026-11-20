@@ -1585,9 +1585,6 @@ async fn a_head_runs_its_own_pipeline_and_reports_logs_and_artifacts() {
     assert_eq!(diag["runner"]["runners"][0]["name"], "runner1");
 }
 
-/// A fast-forward merge runs no job of the merged head again, but those
-/// with a dependency cache: only a protected branch's run saves the cache, and
-/// a merged head's jobs ran for its pull request.
 #[tokio::test]
 async fn a_merge_keeps_a_running_head_and_can_publish_its_cache_after_success() {
     let w = World::new().await;

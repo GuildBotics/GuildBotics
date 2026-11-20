@@ -109,6 +109,56 @@ fn take(w: &Wtx) -> AppResult<Claimed> {
 }
 
 #[test]
+fn a_successful_head_loses_its_pending_cache_when_the_pull_leaves_it() {
+    use gb_runner::ci::api::CacheDecision::{Discard, Keep};
+    for close in [false, true] {
+        let (_dir, s) = store();
+        s.write_sync(|w| {
+            repo(w, &[], 0)?;
+            let pull = pull(w, 1, "feature", false)?;
+            let reference = Key::new().s("repo_1").s("refs/heads/feature").bytes();
+            w.put(store::REFS, &reference, &"first")?;
+            let mut run = reg("first", "feature", &["build"]);
+            let PipelineState::Jobs { jobs } = &mut run.pipeline else {
+                unreachable!()
+            };
+            jobs[0].cache = Some(super::super::pipeline::CacheDef {
+                paths: vec!["target".into()],
+                key_files: vec![],
+            });
+            register(w, run, 10, T0)?;
+            let c = take(w)?;
+            let id = &c.attempt.id;
+            assert!(keeps_cache(w, &c.attempt)?);
+            finish(
+                w,
+                id,
+                &c.lease,
+                "success",
+                None,
+                ResultInfo {
+                    image_digest: Some(DIGEST.into()),
+                    cache_key: Some("a".repeat(64)),
+                    ..Default::default()
+                },
+                T0,
+            )?;
+            assert!(matches!(cache_decision(w, "runner", id)?, Keep));
+            if close {
+                let mut closed = pull.clone();
+                closed.state = "closed".into();
+                save_pull(w, Some(&pull), &closed)?;
+            } else {
+                w.put(store::REFS, &reference, &"second")?;
+            }
+            assert!(matches!(cache_decision(w, "runner", id)?, Discard));
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
+#[test]
 fn repair_precedes_approved_work_and_refuses_paths_reuse() {
     let (_d, s) = store();
     s.write_sync(|w| {

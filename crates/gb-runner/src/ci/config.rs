@@ -101,7 +101,7 @@ impl Default for ExecutorConfig {
             memory_reserve_percent: memory_reserve_percent(),
             cpu_multiplier_percent: 0,
             max_timeout_secs: 3600,
-            cache_max_mib: 2048,
+            cache_max_mib: 16384,
             artifacts_max_mib: 64,
         }
     }

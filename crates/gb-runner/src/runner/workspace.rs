@@ -589,7 +589,7 @@ impl Cache {
     }
 
     /// Put aside a successful execution before reporting it to the Hub.
-    /// Staging competes only with other pending images for available space.
+    /// Staging can reclaim superseded and pending images.
     pub fn stage(
         &self,
         attempt: &str,
@@ -612,7 +612,7 @@ impl Cache {
         let _writing = self.lock.write().unwrap_or_else(|e| e.into_inner());
         let entry = pending.join(attempt);
         fs::rename(tmp.path(), &entry)?;
-        self.evict_pending(max_bytes)?;
+        evict(&self.root, max_bytes, None)?;
         Ok(entry.is_dir())
     }
 
@@ -637,7 +637,9 @@ impl Cache {
         if !pending.is_dir() {
             return Ok(());
         }
-        if let Some(at) = publish {
+        if let Some(at) = publish
+            && entry_size(&pending) <= max_bytes
+        {
             let key = fs::read_to_string(pending.join(KEY))?;
             let entry = self.root.join(key);
             if saved_at(&entry).is_none_or(|saved| saved < at) {
@@ -647,32 +649,10 @@ impl Cache {
                     fs::remove_dir_all(&entry)?;
                 }
                 fs::rename(&pending, &entry)?;
-                self.evict_pending(max_bytes)?;
-                let budget = max_bytes
-                    .saturating_sub(entry_size(&entry))
-                    .max(entry_size(&entry));
-                evict(&self.root, budget, &entry)?;
-                return self.evict_pending(max_bytes);
+                return evict(&self.root, max_bytes, Some(&entry));
             }
         }
         fs::remove_dir_all(pending)
-    }
-
-    /// Keep staging from evicting any published generation.
-    fn evict_pending(&self, max_bytes: u64) -> io::Result<()> {
-        let used = |path: &PathBuf| entry_size(path);
-        let published = dirs(&self.root)?.iter().map(used).sum::<u64>();
-        let mut pending = dirs(&self.root.join(PENDING))?;
-        pending.sort_by_key(|p| (last_use(p), p.clone()));
-        let mut pending_bytes = pending.iter().map(used).sum::<u64>();
-        for path in pending {
-            if pending_bytes <= max_bytes.saturating_sub(published) {
-                break;
-            }
-            pending_bytes -= entry_size(&path);
-            fs::remove_dir_all(path)?;
-        }
-        Ok(())
     }
 
     #[cfg(test)]
@@ -708,7 +688,7 @@ impl Cache {
         let entry = self.root.join(key);
         let _ = fs::remove_dir_all(&entry);
         fs::rename(tmp.path(), &entry)?;
-        evict(&self.root, max_bytes, &entry)?;
+        evict(&self.root, max_bytes, Some(&entry))?;
         Ok(allocated)
     }
 }
@@ -780,20 +760,32 @@ fn restore_entry(entry: &Path, into: &Path) -> io::Result<Option<u64>> {
     }
 }
 
-fn evict(cache_root: &Path, max_bytes: u64, saved_entry: &Path) -> io::Result<()> {
+/// Only publication may evict a current generation.
+fn evict(cache_root: &Path, max_bytes: u64, saved_entry: Option<&Path>) -> io::Result<()> {
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
+    enum Order {
+        Superseded,
+        Pending,
+        Current,
+    }
     struct Entry {
-        owner: CacheOwner,
+        owner: Option<CacheOwner>,
         used: SystemTime,
         size: u64,
         path: PathBuf,
     }
-    let mut entries = Vec::new();
+    let entry = |path: PathBuf, owner| Entry {
+        used: last_use(&path),
+        size: entry_size(&path),
+        path,
+        owner,
+    };
+    let mut entries: Vec<_> = dirs(&cache_root.join(PENDING))?
+        .into_iter()
+        .map(|path| entry(path, None))
+        .collect();
     let mut current = BTreeMap::new();
-    for e in fs::read_dir(cache_root)?.flatten() {
-        let path = e.path();
-        if e.file_name().to_string_lossy().starts_with('.') {
-            continue;
-        }
+    for path in dirs(cache_root)? {
         let Some(owner) = entry_owner(&path) else {
             // Missing, unreadable, or invalid records cannot be grouped.
             // Remove the entry even below budget so it cannot stall eviction.
@@ -807,28 +799,20 @@ fn evict(cache_root: &Path, max_bytes: u64, saved_entry: &Path) -> io::Result<()
                 *active = candidate;
             }
         }
-        entries.push(Entry {
-            owner,
-            used: last_use(&path),
-            size: entry_size(&path),
-            path,
-        });
+        entries.push(entry(path, Some(owner)));
     }
-    let is_current = |e: &Entry| current.get(&e.owner).is_some_and(|v| v.1 == e.path);
-    // Exhaust superseded generations before evicting any current entry.
+    let order = |e: &Entry| match &e.owner {
+        Some(owner) if current.get(owner).is_some_and(|v| v.1 == e.path) => Order::Current,
+        Some(_) => Order::Superseded,
+        None => Order::Pending,
+    };
     // A save is the latest use when timestamps tie (e.g. on a coarse
     // filesystem). Other ties are broken by key, independently of size.
-    entries.sort_by(|a, b| {
-        (is_current(a), a.used, a.path == saved_entry, &a.path).cmp(&(
-            is_current(b),
-            b.used,
-            b.path == saved_entry,
-            &b.path,
-        ))
-    });
+    let key = |e: &Entry| (order(e), e.used, saved_entry == Some(e.path.as_path()));
+    entries.sort_by(|a, b| key(a).cmp(&key(b)).then_with(|| a.path.cmp(&b.path)));
     let mut total: u64 = entries.iter().map(|e| e.size).sum();
     for entry in entries {
-        if total <= max_bytes {
+        if total <= max_bytes || (saved_entry.is_none() && order(&entry) == Order::Current) {
             break;
         }
         fs::remove_dir_all(&entry.path)?;
@@ -841,6 +825,68 @@ fn evict(cache_root: &Path, max_bytes: u64, saved_entry: &Path) -> io::Result<()
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn superseded_images_make_room_for_pending_before_current_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path().join("cache"));
+        let first = owner("repo", "first");
+        let second = owner("repo", "second");
+        for (key, elapsed) in [("previous", 1), ("current", 2)] {
+            let image = packed(dir.path(), key.as_bytes());
+            assert!(cache.stage(key, key, &first, (&image, 30), 100).unwrap());
+            let at = SystemTime::UNIX_EPOCH + Duration::from_secs(elapsed);
+            cache.settle(key, Some(at), 100).unwrap();
+        }
+        let restored = dir.path().join("restored");
+        assert_eq!(cache.restore("previous", &restored).unwrap(), Some(30));
+        fs::remove_file(&restored).unwrap();
+
+        let image = packed(dir.path(), b"pending");
+        assert!(
+            cache
+                .stage("next", "next", &second, (&image, 50), 100)
+                .unwrap()
+        );
+        assert_eq!(cache.pending().unwrap(), ["next"]);
+        assert!(cache.restore("previous", &restored).unwrap().is_none());
+        assert_eq!(cache.restore("current", &restored).unwrap(), Some(30));
+        fs::remove_file(&restored).unwrap();
+
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(3);
+        cache.settle("next", Some(at), 100).unwrap();
+        assert_eq!(cache.restore("current", &restored).unwrap(), Some(30));
+        fs::remove_file(&restored).unwrap();
+        assert_eq!(cache.restore("next", &restored).unwrap(), Some(50));
+    }
+
+    #[test]
+    fn a_pending_image_larger_than_the_current_limit_leaves_published_data_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path().join("cache"));
+        let owner = owner("repo", "job");
+        let original = packed(dir.path(), b"original");
+        let newer = packed(dir.path(), b"newer");
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        assert!(
+            cache
+                .stage("first", "key", &owner, (&original, 20), 100)
+                .unwrap()
+        );
+        cache.settle("first", Some(at), 100).unwrap();
+        assert!(
+            cache
+                .stage("second", "key", &owner, (&newer, 70), 100)
+                .unwrap()
+        );
+        cache
+            .settle("second", Some(at + Duration::from_secs(1)), 50)
+            .unwrap();
+        let restored = dir.path().join("restored");
+        assert_eq!(cache.restore("key", &restored).unwrap(), Some(20));
+        assert_eq!(fs::read(restored).unwrap(), b"original");
+        assert!(cache.pending().unwrap().is_empty());
+    }
 
     #[test]
     fn pending_images_cannot_be_restored_and_are_evicted_before_saved_images() {
@@ -1607,7 +1653,7 @@ mod tests {
             }
             let superseded = if current == "a" { "b" } else { "a" };
             let budget = tree_size(&root.join(current)) + tree_size(&root.join("saved"));
-            evict(root, budget, &root.join("saved")).unwrap();
+            evict(root, budget, Some(&root.join("saved"))).unwrap();
             assert!(root.join(current).exists(), "current: {current}");
             assert!(!root.join(superseded).exists());
             assert!(root.join("saved").exists());
@@ -1636,7 +1682,7 @@ mod tests {
                 .iter()
                 .map(|k| tree_size(&root.join(k)))
                 .sum();
-            evict(root, total - 1, &root.join("none")).unwrap();
+            evict(root, total - 1, Some(&root.join("none"))).unwrap();
             for key in ["a", "b", "c"] {
                 assert_eq!(root.join(key).exists(), key != if tied { "a" } else { "c" });
             }
@@ -1719,7 +1765,7 @@ mod tests {
             );
             record_use(&entry, SystemTime::UNIX_EPOCH + Duration::from_secs(used)).unwrap();
         }
-        evict(root, tree_size(&root.join("new")), &root.join("new")).unwrap();
+        evict(root, tree_size(&root.join("new")), Some(&root.join("new"))).unwrap();
         assert!(!root.join("old").exists());
         assert!(!root.join("other").exists());
         assert!(root.join("new").exists());
@@ -1746,7 +1792,7 @@ mod tests {
             root,
             tree_size(&root.join("a")) + tree_size(&root.join("b")) + tree_size(&root.join("c"))
                 - 1,
-            &root.join("c"),
+            Some(&root.join("c")),
         )
         .unwrap();
         assert!(!root.join("a").exists(), "equal timestamps evict by key");
@@ -1799,7 +1845,7 @@ mod tests {
         );
 
         // The saved entry is still evicted when it cannot fit the budget.
-        evict(&root, 5, &root.join("a-new")).unwrap();
+        evict(&root, 5, Some(&root.join("a-new"))).unwrap();
         assert!(!root.join("a-new").exists());
     }
 
@@ -1824,7 +1870,7 @@ mod tests {
             root,
             tree_size(&root.join("a")) + tree_size(&root.join("b")) + tree_size(&root.join("c"))
                 - 1,
-            &root.join("c"),
+            Some(&root.join("c")),
         )
         .unwrap();
         assert!(root.join("a").exists());
