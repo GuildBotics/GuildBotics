@@ -1319,7 +1319,11 @@ impl Executor for Microsandbox {
         let needed_mib = |cached: u64| {
             job.work_quota_mib + 2 * checkout.div_ceil(1 << 20) + 256 + cached.div_ceil(1 << 20)
         };
-        let disk_mib = work_disk_mib(job.work_quota_mib, checkout, image.map_or(0, |i| i.1));
+        // No smaller than the entry's image, which an earlier job with more
+        // data or a larger checkout left: its file is sparse, so the room it
+        // keeps takes no blocks, and the entry stays usable.
+        let disk_mib = work_disk_mib(job.work_quota_mib, checkout, image.map_or(0, |i| i.1))
+            .max(image.map_or(0, |i| i.0.div_ceil(1 << 20).next_multiple_of(GROUP_MIB)));
         let name = self.work_volume(job.attempt_id);
         let mut disk = match self.create_disk(&name, disk_mib).await {
             Ok(path) => JobDisk {
@@ -1339,9 +1343,6 @@ impl Executor for Microsandbox {
         // not used: the disk keeps the size the quota gives.
         let mut restore = None;
         match image {
-            Some((len, _, _)) if len > disk_mib << 20 => {
-                say(format!("the cache entry ({} MiB) is larger than /work ({disk_mib} MiB); the job runs without it", len >> 20)).await
-            }
             Some((_, _, None)) => {
                 say("the cache entry holds no ext4 file system; the job runs without it".into())
                     .await
@@ -2753,13 +2754,14 @@ esac
 
     /// A `/work` that cannot be made ends the attempt before any VM, its
     /// volume removed and the cache entry it was given gone; an entry larger
-    /// than the disk the quota gives, or for a cached path through a link of
-    /// the commit, is not used; an entry the preparing VM
+    /// than the disk the quota gives (saved when it held more, or the
+    /// checkout was larger) is used, on a disk of its size; one for a cached
+    /// path through a link of the commit is not used; an entry the preparing VM
     /// drops, or fails on, takes its disk with it: the job gets a new, empty
     /// one of its own name.
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_disk_that_cannot_be_made_or_an_entry_too_large_is_not_used() {
+    async fn how_work_starts_from_the_disk_and_the_entry_it_is_given() {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
         let msb = root.join("msb");
@@ -2777,7 +2779,7 @@ esac
         let job = job_with_returned_archives(&state);
         for case in [
             "inspect-fails",
-            "too-large",
+            "larger",
             "dropped",
             "prep-fails",
             "commit-link",
@@ -2960,22 +2962,24 @@ esac
                 let collect = std::fs::read_to_string(state.join("args-bv-collect-a1")).unwrap();
                 assert!(!collect.contains("BRANVIL:KEEP"), "{collect}");
             } else {
+                // The disk is the entry's size, the entry its content, and its
+                // file system fills it: nothing to grow, nothing dropped.
                 assert_eq!(outcome, Outcome::Exited(0));
-                assert!(
-                    text.contains("the cache entry (4096 MiB) is larger than /work (2432 MiB)"),
-                    "{text}"
-                );
+                let created = std::fs::read_to_string(state.join("created")).unwrap();
                 assert_eq!(
-                    std::fs::metadata(state.join("disks/bv-work-t-a1"))
-                        .unwrap()
-                        .len(),
-                    0
+                    created,
+                    "volume create bv-work-t-a1 --kind disk --size 4096M -q\n"
                 );
+                let disk = state.join("disks/bv-work-t-a1");
+                assert_eq!(std::fs::metadata(&disk).unwrap().len(), 4096 << 20);
+                assert_eq!(&head(&disk)[..8], b"restored");
                 let prep = std::fs::read_to_string(state.join("args-bv-prep-a1")).unwrap();
                 assert!(
-                    !prep.contains("resize2fs") && !prep.contains(CACHE_DROPPED),
+                    !prep.contains("resize2fs") && prep.contains(MEMBERS),
                     "{prep}"
                 );
+                assert!(!text.contains("runs without"), "{text}");
+                assert!(!state.join("args-bv-prep-new-a1").exists());
             }
         }
     }

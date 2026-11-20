@@ -755,8 +755,8 @@ Per job the runner:
    `<work dir>/jobs/<attempt id>/cache-disk.raw`; creates the disk of `/work`
    (`msb volume create bv-work-<runner>-<attempt> --kind disk --size SM`),
    and makes the copy, grown to `S` (the space it gains takes no blocks),
-   that volume's disk (a rename). An entry larger than `S` (a quota that was
-   lowered), or one that holds no ext4 file system, is not used. When a
+   that volume's disk (a rename). An entry that holds no ext4 file system is
+   not used. When a
    cached path goes through a symbolic link of the commit (unpacking the
    checkout over an entry would write through it), the job neither uses nor
    keeps an entry; the runner decides this from the commit's index, byte
