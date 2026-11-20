@@ -25,13 +25,22 @@ export function DeviceSettings() {
         <Stack gap="sm">
           <Title order={4}>{t("setup.device.clientTitle")}</Title>
           <Text size="sm">{t("setup.device.clientBody")}</Text>
-          <Button
-            component="a"
-            href="/-/guildbotics/api/clients/x86_64-pc-windows-gnu/binary"
-            download="guildbotics.exe"
-          >
-            {t("setup.device.clientDownload")}
-          </Button>
+          <Group>
+            <Button
+              component="a"
+              href="/-/guildbotics/api/clients/x86_64-pc-windows-gnu/binary"
+              download="guildbotics.exe"
+            >
+              {t("setup.device.clientDownload")}
+            </Button>
+            <Button
+              component="a"
+              href="/-/guildbotics/api/clients/x86_64-unknown-linux-gnu/binary"
+              download="guildbotics"
+            >
+              {t("setup.device.linuxClientDownload")}
+            </Button>
+          </Group>
         </Stack>
       </Card>
       <RegisteredWorkspacesCard />

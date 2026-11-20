@@ -578,18 +578,24 @@ it never opens the database or the service's repositories (the source arrives
 as a Git bundle made by the service, which the runner checks out with the
 Git of its machine).
 
-### Join a Windows runner
+### Join a Windows or Linux runner
 
 Install the GuildBotics client and [set up SSH forwarding to the Hub](../../../docs/branvil_integration.en.md#set-up-ssh-forwarding-on-another-machine) first.
+Use a Windows x86_64 machine or a Linux x86_64 desktop with glibc 2.36 or later,
+Git, the libcap-ng runtime, an unlocked Secret Service keyring, and read/write
+access to `/dev/kvm`. On Linux, keep the `hub-forward.service` user service
+running. Install Git on Windows as well.
+
 Run `guildbotics runner join` and approve **CI runner** access in the browser.
-The command verifies and installs msb 0.6.17, stores the runner credential in the
-OS keychain, and registers a per-user login task. It never prints the credential.
-Joining again replaces the previous credential for that device. Work is kept
-under the machine's GuildBotics directory, outside the Windows temporary directory.
-The runner checks `/api/v1/runner/health` before claims. A changed Hub version
-is reported without requesting work. The runner drains running attempts and
-exits so the task restarts it;
-the client updater installs the matching Hub build before it resumes.
+The command verifies and installs msb 0.6.17 and stores the runner credential
+in the OS keychain. It registers a Windows login task or a systemd user service
+at `guildbotics-runner-<port>.service`. Joining again replaces the previous
+credential for that device. Work is kept under the machine's GuildBotics directory.
+Check Linux startup and restart logs with
+`journalctl --user -u guildbotics-runner-7878.service` (substitute the forwarded port).
+The runner checks `/api/v1/runner/health` before claims. When the Hub version
+changes, the runner drains its attempts and exits. The login task or user service
+restarts it, and the client installs the matching build before it requests work.
 
 ### Manual runner maintenance
 

@@ -1,5 +1,13 @@
-//! Remote runner enrollment and the per-user Windows service.
+//! Remote runner enrollment and per-user services.
 use std::path::Path;
+
+const WINDOWS_JOIN: bool = cfg!(all(windows, target_arch = "x86_64"));
+const LINUX_JOIN: bool = cfg!(all(
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu"
+));
+
 const SERVICE: &str = "guildbotics-runner";
 fn account(port: u16) -> String {
     format!("127.0.0.1:{port}")
@@ -7,16 +15,19 @@ fn account(port: u16) -> String {
 
 pub async fn join(open: impl FnOnce(&str)) -> anyhow::Result<()> {
     let language = super::language().await;
-    anyhow::ensure!(
-        cfg!(all(windows, target_arch = "x86_64")),
-        crate::i18n::t(language, "cli.server.runner_join_unsupported", &[])
-    );
+    let systemd = join_platform(WINDOWS_JOIN, LINUX_JOIN, language, || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/kvm")
+    })?;
     let port = crate::endpoint::port()?;
     // Prove the forwarded Hub is reachable before opening the consent screen.
     let _ = super::cli_server(&gb_base::home::data()?, language).await?;
     let device = gb_workspace::identity::ensure_device_identity(&gb_base::home::data()?)?;
     let id = device.device_id.replace('-', "");
-    let root = gb_base::home::machine_root()?.join("runner");
+    let machine_root = std::path::absolute(gb_base::home::machine_root()?)?;
+    let root = machine_root.join("runner");
     // The credential and task are per OS user/port, even when a development
     // machine root differs. Coordinate replacements in that same scope.
     let join_lock = gb_base::home::user_home()
@@ -33,23 +44,28 @@ pub async fn join(open: impl FnOnce(&str)) -> anyhow::Result<()> {
         gb_base::files::FileLock::hold(&join_lock, gb_base::files::SHARED_WRITE_TIMEOUT)
     })
     .await??;
+    let executable = std::env::current_exe()?;
+    let unit = if systemd {
+        let unit = service_unit(&executable, port, &machine_root)
+            .ok_or_else(|| service_error(language))?;
+        systemctl(&["show", "--property=Version"], language).await?;
+        Some(unit)
+    } else {
+        None
+    };
     let _ = super::runner_runtime::prepare(&root.join("runtime"), language).await?;
     let token = super::connect::connect_runner(port, &id, language, open).await?;
     gb_config::secrets::keep_os_credential(SERVICE, &account(port), &token)?;
-    let script = service_script(
-        &std::env::current_exe()?,
-        port,
-        &gb_base::home::machine_root()?,
-    );
-    let encoded = encode(&script);
-    let status = tokio::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
-        .status()
-        .await?;
-    anyhow::ensure!(
-        status.success(),
-        crate::i18n::t(language, "cli.server.runner_service_failed", &[])
-    );
+    if let Some(unit) = unit {
+        install_systemd(port, &unit, language).await?;
+    } else {
+        let encoded = encode(&service_script(&executable, port, &machine_root));
+        let status = tokio::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
+            .status()
+            .await?;
+        anyhow::ensure!(status.success(), service_error(language));
+    }
     println!(
         "{}",
         crate::i18n::t(language, "cli.server.runner_joined", &[])
@@ -57,18 +73,112 @@ pub async fn join(open: impl FnOnce(&str)) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn join_platform<T>(
+    windows: bool,
+    linux: bool,
+    language: &str,
+    kvm: impl FnOnce() -> std::io::Result<T>,
+) -> anyhow::Result<bool> {
+    if linux {
+        kvm().map_err(|error| {
+            anyhow::anyhow!(crate::i18n::t(
+                language,
+                "cli.server.runner_kvm_unavailable",
+                &[("reason", &error.to_string())]
+            ))
+        })?;
+    }
+    anyhow::ensure!(
+        windows || linux,
+        crate::i18n::t(language, "cli.server.runner_join_unsupported", &[])
+    );
+    Ok(linux)
+}
+
+fn service_error(language: &str) -> anyhow::Error {
+    anyhow::anyhow!(crate::i18n::t(
+        language,
+        "cli.server.runner_service_failed",
+        &[]
+    ))
+}
+
+async fn systemctl(args: &[&str], language: &str) -> anyhow::Result<()> {
+    let status = tokio::process::Command::new("systemctl")
+        .arg("--user")
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .await
+        .map_err(|_| service_error(language))?;
+    anyhow::ensure!(status.success(), service_error(language));
+    Ok(())
+}
+
+async fn install_systemd(port: u16, unit: &str, language: &str) -> anyhow::Result<()> {
+    let dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| gb_base::home::user_home().map(|home| home.join(".config")))
+        .ok_or_else(|| service_error(language))?
+        .join("systemd/user");
+    let name = format!("{SERVICE}-{port}.service");
+    std::fs::create_dir_all(&dir)?;
+    gb_base::files::atomic_write(&dir.join(&name), unit.as_bytes())?;
+    systemctl(&["daemon-reload"], language).await?;
+    systemctl(&["enable", &name], language).await?;
+    systemctl(&["restart", &name], language).await
+}
+
+/// The unit carries only the connection coordinates. systemd expands specifiers
+/// in both directives, and expands dollar references only in ExecStart.
+fn service_unit(executable: &Path, port: u16, machine_root: &Path) -> Option<String> {
+    let escape = |path: &Path| {
+        let path = path.to_str()?;
+        if path.chars().any(char::is_control) {
+            return None;
+        }
+        Some(
+            path.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('%', "%%"),
+        )
+    };
+    let executable = escape(executable)?.replace('$', "$$");
+    let machine_root = escape(machine_root)?;
+    Some(format!(
+        r#"[Unit]
+Description=GuildBotics CI runner (port {port})
+After=hub-forward.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+Environment="GUILDBOTICS_SERVER_PORT={port}"
+Environment="GUILDBOTICS_HOME={machine_root}"
+UnsetEnvironment=BRANVIL_TOKEN
+ExecStart=/usr/bin/env -- "{executable}" runner
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target
+"#
+    ))
+}
+
 pub async fn run(args: gb_runner::RunnerArgs) -> anyhow::Result<u8> {
     let language = super::language().await;
     let port = crate::endpoint::port()?;
+    let enrolled = args.needs_token();
     let args = resolve_token(args, language, || {
         gb_config::secrets::get_os_credential(SERVICE, &account(port))
     })?;
-    let root = gb_base::home::machine_root()?.join("runner");
-    if cfg!(windows) {
-        gb_runner::set_runtime_binary(
-            super::runner_runtime::prepare(&root.join("runtime"), language).await?,
-        )
-        .map_err(anyhow::Error::msg)?;
+    let root = std::path::absolute(gb_base::home::machine_root()?)?.join("runner");
+    if cfg!(windows) || (LINUX_JOIN && enrolled) {
+        let runtime = super::runner_runtime::prepare(&root.join("runtime"), language).await?;
+        gb_runner::set_runtime_binary(runtime.binary, runtime.firmware)
+            .map_err(anyhow::Error::msg)?;
     }
     gb_runner::run_runner(
         args.default_work(root.join("work")),
@@ -215,7 +325,10 @@ mod tests {
         assert!(resolve_token(args, "ja", || panic!("explicit env token wins")).is_ok());
     }
 
-    #[cfg(not(all(windows, target_arch = "x86_64")))]
+    #[cfg(not(any(
+        all(windows, target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")
+    )))]
     #[tokio::test]
     async fn unsupported_join_explains_the_platform_without_opening_consent() {
         let error = join(|_| panic!("unsupported platform must not connect"))
@@ -228,6 +341,43 @@ mod tests {
             assert!(message.contains("--token"));
             assert!(!message.contains("cli.server."));
         }
+    }
+
+    #[test]
+    fn linux_accepts_enrollment_and_reports_inaccessible_kvm() {
+        assert!(join_platform(false, true, "en", || Ok(())).unwrap());
+        for language in ["en", "ja"] {
+            let error = join_platform(false, true, language, || {
+                Err::<(), _>(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+            })
+            .unwrap_err();
+            assert!(error.to_string().contains("/dev/kvm"));
+            assert!(!error.to_string().contains("cli.server."));
+        }
+    }
+
+    #[test]
+    fn systemd_starts_at_login_and_restarts_without_a_credential() {
+        let unit = service_unit(
+            Path::new(r#"/home/runner/space 東京 "$%"\guildbotics"#),
+            7878,
+            Path::new("/home/runner/data $%"),
+        )
+        .unwrap();
+        for setting in [
+            "After=hub-forward.service",
+            "WantedBy=default.target",
+            "Restart=always",
+            "RestartSec=15",
+            r#"Environment="GUILDBOTICS_SERVER_PORT=7878""#,
+            r#"Environment="GUILDBOTICS_HOME=/home/runner/data $%%""#,
+            r#"ExecStart=/usr/bin/env -- "/home/runner/space 東京 \"$$%%\"\\guildbotics" runner"#,
+        ] {
+            assert!(unit.contains(setting), "{setting}");
+        }
+        assert!(!unit.contains("--token"));
+        assert!(!unit.contains("BRANVIL_TOKEN="));
+        assert!(service_unit(Path::new("/tmp/bad\npath"), 7878, Path::new("/tmp")).is_none());
     }
 
     #[test]

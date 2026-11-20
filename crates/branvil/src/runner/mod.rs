@@ -1190,6 +1190,7 @@ esac
                     .unwrap();
                 assert_eq!(response.status(), 201);
                 let pull: serde_json::Value = response.json().await.unwrap();
+                let number = pull["pull"]["number"].as_u64().unwrap();
                 let head = s.app.git.branch_tips(&s.bare).await.unwrap()[branch].clone();
                 assert!(runner.once(&fake).await.unwrap());
                 let attempt = result_of(&s, &head).await;
@@ -1207,7 +1208,7 @@ esac
                 let action = if merge { "merge" } else { "close" };
                 let response = s
                     .http
-                    .post(format!("{pulls}/{}/{action}", pull["number"]))
+                    .post(format!("{pulls}/{number}/{action}"))
                     .bearer_auth(&s.owner)
                     .json(&if merge {
                         serde_json::json!({"expected_head":head,"expected_base":main})

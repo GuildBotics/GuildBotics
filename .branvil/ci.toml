@@ -10,6 +10,8 @@
 # `uv sync` builds dependencies without a wheel for this Python with Cargo.
 # PR heads select jobs by paths; default-branch verification runs execute
 # every job. test and markdown-links always run, as their inputs span the repo.
+# Add client-linux to the repository CI setting post_merge_jobs before opening
+# a PR containing that job. This keeps release builds out of ordinary PR heads.
 #
 # The Rust jobs check the whole Cargo workspace, its tests in two jobs:
 # rust-test-branvil tests Branvil and loopback-auth; rust-test tests the rest.
@@ -248,5 +250,26 @@ git rev-parse HEAD > client-release/commit
 cargo clean --workspace --offline --locked --target x86_64-pc-windows-gnu --release
 ''']
 artifacts = [{ name = "client-windows", paths = ["client-release/guildbotics.exe", "client-release/sha256", "client-release/commit"] }]
+timeout_secs = 1800
+cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
+
+[[jobs]]
+name = "client-linux"
+image = "guildbotics/agent-environment:dev"
+commands = ['''
+set -eu
+export CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0
+if [ "$(uname -m)" != x86_64 ]; then
+    export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc
+fi
+find crates -exec touch -c {} +
+cargo build --locked -p guildbotics --no-default-features --target x86_64-unknown-linux-gnu --release
+mkdir -p client-release
+cp target/x86_64-unknown-linux-gnu/release/guildbotics client-release/guildbotics
+sha256sum client-release/guildbotics | cut -d ' ' -f 1 > client-release/sha256
+git rev-parse HEAD > client-release/commit
+cargo clean --workspace --offline --locked --target x86_64-unknown-linux-gnu --release
+''']
+artifacts = [{ name = "client-linux", paths = ["client-release/guildbotics", "client-release/sha256", "client-release/commit"] }]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }

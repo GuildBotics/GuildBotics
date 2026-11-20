@@ -131,9 +131,12 @@ describe("registered workspaces", () => {
   });
 });
 
-it("downloads the Windows client through the authenticated Hub session", () => {
+it.each([
+  ["clientDownload", "x86_64-pc-windows-gnu", "guildbotics.exe"],
+  ["linuxClientDownload", "x86_64-unknown-linux-gnu", "guildbotics"],
+])("downloads the client through the authenticated Hub session (%s)", (label, target, file) => {
   renderSettings();
-  const link = screen.getByRole("link", { name: t("setup.device.clientDownload") });
-  expect(link).toHaveAttribute("href", "/-/guildbotics/api/clients/x86_64-pc-windows-gnu/binary");
-  expect(link).toHaveAttribute("download", "guildbotics.exe");
+  const link = screen.getByRole("link", { name: t(`setup.device.${label}`) });
+  expect(link).toHaveAttribute("href", `/-/guildbotics/api/clients/${target}/binary`);
+  expect(link).toHaveAttribute("download", file);
 });
