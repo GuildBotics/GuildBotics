@@ -513,9 +513,10 @@ fi
                         _ => return Outcome::Exited(127),
                     }
                 }
-                // What the VM that collects `/work` packs of the cached paths.
+                // The image of `/work` the collecting VM left for the cache.
                 if job.save_cache && job.job.cache.is_some() {
-                    std::fs::write(job.io.join(executor::CACHE_OUT), b"cached").unwrap();
+                    std::fs::write(job.cache_disk, b"cached").unwrap();
+                    *job.kept_data = Some(6);
                 }
                 Outcome::Exited(0)
             }
@@ -849,7 +850,12 @@ case "$1" in
 --version) echo 'msb 0.6.17' ;;
 doctor) [ ! -f "$MSB_HOME/doctor-fails" ] ;;
 remove) exit 0 ;;
-volume) echo '[]' ;;
+volume)
+  case "$2" in
+  create) : > "$MSB_HOME/disk-$3" ;;
+  inspect) printf 'Path:           %s\n' "$MSB_HOME/disk-$3" ;;
+  *) echo '[]' ;;
+  esac ;;
 image)
   if [ "$2" = list ]; then
     echo '[{"reference":"alpine","digest":"sha256:m"}]'

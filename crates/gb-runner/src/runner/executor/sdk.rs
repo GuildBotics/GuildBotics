@@ -83,6 +83,19 @@ impl Microsandbox {
             .ephemeral(true))
     }
 
+    pub(super) async fn sdk_create_disk(&self, name: &str, mib: u64) -> Result<PathBuf, String> {
+        gb_vm::backend(&self.home).await?;
+        let volume = gb_vm::sdk::Volume::builder(name)
+            .disk()
+            .size(mib as u32)
+            .create()
+            .await
+            .map_err(|error| error.to_string())?;
+        volume
+            .disk_path()
+            .ok_or_else(|| format!("{name} is not a disk volume"))
+    }
+
     pub(super) async fn sdk_helper(
         &self,
         job: &JobRun<'_>,
@@ -101,13 +114,7 @@ impl Microsandbox {
             .max_duration(HELPER_SECS)
             .disable_network()
             .volume(IO_MOUNT, |m| m.bind(job.io).quota(quota_mib as u32))
-            .volume("/work", |m| {
-                if what == "prep" {
-                    m.named_with(&disk.name, |d| d.create().disk().size(disk.mib as u32))
-                } else {
-                    m.named(&disk.name)
-                }
-            });
+            .volume("/work", |m| m.named(&disk.name));
         let vm = OwnedVm::start(builder, ())
             .await
             .map_err(|error| Some(error.to_string()))?;

@@ -30,13 +30,14 @@ const VM_GIT_CONFIG: &str = "[core]\n\tfilemode = true\n\tsymlinks = true\n\tign
 /// the archive `into` for the VM ([`pack_checkout`]). Git runs with
 /// `global_config` (written empty) and writes no reflog, so nothing of this
 /// machine (a path, its user) reaches the job. Git never runs in the work
-/// directory once the job has had it. Returns the archive's size.
+/// directory once the job has had it. Returns the archive's size and what
+/// the commit tracks.
 pub async fn checkout(
     bundle: &Path,
     work: &Path,
     global_config: &Path,
     into: &Path,
-) -> io::Result<u64> {
+) -> io::Result<(u64, Tree)> {
     fs::write(global_config, "")?;
     let mut clone = crate::git::base_command(global_config);
     clone
@@ -77,10 +78,71 @@ pub async fn checkout(
         .append(true)
         .open(work.join(".git/config"))
         .and_then(|mut f| io::Write::write_all(&mut f, VM_GIT_CONFIG.as_bytes()))?;
+    let tree = Tree::from_index(&index)?;
     let (work, into) = (work.to_path_buf(), into.to_path_buf());
-    tokio::task::spawn_blocking(move || pack_checkout(&work, &index, &into))
+    let size = tokio::task::spawn_blocking(move || pack_checkout(&work, &index, &into))
         .await
-        .map_err(io::Error::other)?
+        .map_err(io::Error::other)??;
+    Ok((size, tree))
+}
+
+/// Writes the names of the members of the archive `tar` to `into`, one per
+/// line, as the bytes of their headers (`tar -t` escapes some): what
+/// unpacking it creates. A name that holds a newline, which a line cannot
+/// carry, fails it.
+pub fn list_members(tar: &Path, into: &Path) -> io::Result<()> {
+    let mut out = io::BufWriter::new(fs::File::create(into)?);
+    let mut archive = tar::Archive::new(io::BufReader::new(fs::File::open(tar)?));
+    for entry in archive.entries()? {
+        let entry = entry?;
+        let name = entry.path_bytes();
+        if name.contains(&b'\n') {
+            return Err(io::Error::other(
+                "a name in the checkout holds a newline, which the list of its members cannot carry",
+            ));
+        }
+        io::Write::write_all(&mut out, &name)?;
+        io::Write::write_all(&mut out, b"\n")?;
+    }
+    io::Write::flush(&mut out)
+}
+
+/// What a commit tracks, as its index records it (whatever the machine's
+/// file system could make of it, and byte for byte): the paths of its
+/// symbolic links.
+#[derive(Debug, Default)]
+pub struct Tree {
+    links: std::collections::BTreeSet<String>,
+}
+
+impl Tree {
+    /// From the output of `git ls-files -s -z`.
+    pub fn from_index(index: &[u8]) -> io::Result<Self> {
+        let mut tree = Self::default();
+        for record in index.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+            let record = std::str::from_utf8(record)
+                .map_err(|_| io::Error::other("a tracked path is not valid UTF-8"))?;
+            let (meta, path) = record
+                .split_once('\t')
+                .ok_or_else(|| io::Error::other(format!("unexpected index entry {record:?}")))?;
+            if meta.starts_with("120000 ") {
+                tree.links.insert(path.to_string());
+            }
+        }
+        Ok(tree)
+    }
+
+    /// The first of `cached` that goes through a symbolic link of the
+    /// commit, the last component included.
+    pub fn link_on<'a>(&self, cached: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+        cached.into_iter().find(|p| {
+            let p = p.trim_end_matches('/');
+            p.match_indices('/')
+                .map(|(at, _)| &p[..at])
+                .chain([p])
+                .any(|prefix| self.links.contains(prefix))
+        })
+    }
 }
 
 /// Packs the checkout in `work` into one tar archive: each file Git tracks
@@ -367,17 +429,23 @@ pub fn pack(
 /// The cache key of a job: repository, job, the configuration digest of the
 /// image it runs on (a new version of a tag does not reuse what the previous
 /// one built), the user it runs as (the files keep the owner the VM saw),
-/// cached paths, and the content of the key files.
+/// the runner's work quota (a job's `/work` is no smaller than the entry's
+/// image, so a changed quota takes a new entry), cached paths, and the
+/// content of the key files.
 pub fn cache_key(
     repo: &str,
     job: &JobDef,
     image_digest: &str,
     cache: &CacheDef,
+    work_quota_mib: u64,
     work: &Path,
 ) -> String {
-    let user = super::executor::JOB_USER_ID.to_string();
+    let (user, quota) = (
+        super::executor::JOB_USER_ID.to_string(),
+        work_quota_mib.to_string(),
+    );
     let mut h = Vec::new();
-    for part in [repo, &job.name, image_digest, &user] {
+    for part in [repo, &job.name, image_digest, &user, &quota] {
         h.extend_from_slice(part.as_bytes());
         h.push(0);
     }
@@ -397,6 +465,7 @@ pub fn cache_key(
     crate::util::hex(&crate::util::sha256(&h))
 }
 
+/// What `path` takes on its disk: a sparse image counts its blocks of data.
 fn tree_size(path: &Path) -> u64 {
     let Ok(m) = fs::symlink_metadata(path) else {
         return 0;
@@ -406,15 +475,19 @@ fn tree_size(path: &Path) -> u64 {
             .map(|rd| rd.flatten().map(|e| tree_size(&e.path())).sum())
             .unwrap_or(0)
     } else {
-        m.len()
+        super::disk::allocated(path).unwrap_or(m.len())
     }
 }
 
 const USED: &str = ".branvil-used";
 const SAVED: &str = ".branvil-saved";
 const OWNER: &str = ".branvil-owner";
-/// The archive an entry holds: what the VM packed of the cached paths.
-const ARCHIVE: &str = "cache.tar";
+/// The bytes of data the file system of an entry's image holds, as the VM
+/// that kept its cached paths measured them.
+const DATA: &str = ".branvil-data";
+/// The disk image an entry holds: a job's `/work` that kept only the cached
+/// paths.
+const IMAGE: &str = "disk.raw";
 pub const CACHE_REFRESH_SECS: u64 = 24 * 60 * 60;
 
 /// The repository and job whose cache generations share an eviction priority.
@@ -428,8 +501,8 @@ fn record_use(entry: &Path, used: SystemTime) -> io::Result<()> {
     fs::File::create(entry.join(USED))?.set_modified(used)
 }
 
-/// The runner's dependency cache: per key, the archive a VM packed of the
-/// cached paths, which the host never unpacks. The jobs a runner runs at once
+/// The runner's dependency cache: per key, the disk image of a job's `/work`
+/// that kept only the cached paths, which the host never mounts. The jobs a runner runs at once
 /// share it: a save replaces its entry and evicts others only while no
 /// restore reads from the cache, so a restore gets an entry whole, the old
 /// one or the new one. One runner uses a work directory (`runner.lock`), so a
@@ -457,79 +530,88 @@ impl Cache {
         }
     }
 
-    /// Removes the entries of an earlier form (a tree of the cached paths
-    /// rather than an archive), which no restore reads.
-    pub fn remove_unpacked(&self) -> io::Result<()> {
+    /// Removes the entries of an earlier form (a tree of the cached paths, an
+    /// archive of them), which no restore reads, and what a save that was
+    /// stopped left aside. Only when no save runs (at the runner's start).
+    pub fn remove_earlier_forms(&self) -> io::Result<()> {
         let _writing = self.lock.write().unwrap_or_else(|e| e.into_inner());
         let Ok(entries) = fs::read_dir(&self.root) else {
             return Ok(());
         };
         for e in entries.flatten() {
             let path = e.path();
-            if path.is_dir() && !path.join(ARCHIVE).is_file() {
+            let aside = e.file_name().to_string_lossy().starts_with('.');
+            if path.is_dir() && (aside || !path.join(IMAGE).is_file()) {
                 fs::remove_dir_all(&path)?;
             }
         }
         Ok(())
     }
 
-    /// Puts a copy of the archive of `key`'s entry at `into`, for the VM to
-    /// unpack: that VM can write the directory, so it never gets the entry's
-    /// own file (a link would let it change the entry). Returns its size, or
-    /// none when there is no such entry.
+    /// Puts a copy of the disk image of `key`'s entry at `into`, a path of
+    /// the host that no VM mounts, for the job's `/work` to start from: the
+    /// job writes to that copy only (a clone shares the entry's blocks until
+    /// it is written). Returns the bytes of data its file system holds (what
+    /// the copy takes when the entry does not say), or none when there is no
+    /// such entry.
     pub fn restore(&self, key: &str, into: &Path) -> io::Result<Option<u64>> {
         let _reading = self.lock.read().unwrap_or_else(|e| e.into_inner());
         let entry = self.root.join(key);
-        let archive = entry.join(ARCHIVE);
-        if !archive.is_file() {
+        let image = entry.join(IMAGE);
+        if !fs::symlink_metadata(&image).is_ok_and(|m| m.is_file()) {
             return Ok(None);
         }
-        fs::copy(&archive, into)?;
+        super::disk::copy(&image, into)?;
         record_use(&entry, SystemTime::now())?;
-        Ok(Some(fs::metadata(into)?.len()))
+        let data = fs::read_to_string(entry.join(DATA))
+            .ok()
+            .and_then(|d| d.trim().parse::<u64>().ok());
+        match data {
+            Some(data) => Ok(Some(data)),
+            None => super::disk::allocated(into).map(Some),
+        }
     }
 
-    /// Saves `archive`, the cached paths of a successful job as its VM packed
-    /// them, as the entry of `key` (a copy read as [`open_returned`] reads
-    /// it; the quota of the VM that wrote it bounds its size), then removes
-    /// superseded generations before current entries beyond `max_bytes`.
-    /// Returns its size.
+    /// Saves `image`, the disk image of a successful job's `/work` that kept
+    /// only the cached paths, whose file system holds `data` bytes, as the
+    /// entry of `key` (moved, not copied, where both are on one file system),
+    /// then removes superseded generations before current entries beyond
+    /// `max_bytes`. Returns the bytes the image takes.
     pub fn save(
         &self,
         key: &str,
         owner: &CacheOwner,
-        archive: &Path,
+        (image, data): (&Path, u64),
         max_bytes: u64,
     ) -> io::Result<u64> {
-        self.save_with_clock(key, owner, archive, max_bytes, SystemTime::now)
+        self.save_with_clock(key, owner, (image, data), max_bytes, SystemTime::now)
     }
 
     fn save_with_clock(
         &self,
         key: &str,
         owner: &CacheOwner,
-        archive: &Path,
+        (image, data): (&Path, u64),
         max_bytes: u64,
         now: impl FnOnce() -> SystemTime,
     ) -> io::Result<u64> {
         fs::create_dir_all(&self.root)?;
-        // Put aside without the lock (a copy is the long part), then in
+        // Put aside without the lock (a copy can be the long part), then in
         // place under it.
         let tmp = self
             .root
             .join(format!(".{key}.{}", crate::util::random_secret::<6>()));
         let saved = (|| {
-            let from = open_returned(archive, u64::MAX)?.ok_or_else(|| {
-                io::Error::new(
+            if !fs::symlink_metadata(image).is_ok_and(|m| m.is_file()) {
+                return Err(io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!("{} is missing", archive.display()),
-                )
-            })?;
+                    format!("{} is missing", image.display()),
+                ));
+            }
             fs::create_dir_all(&tmp)?;
-            let total = io::copy(
-                &mut io::BufReader::with_capacity(4 << 20, from),
-                &mut fs::File::create(tmp.join(ARCHIVE))?,
-            )?;
+            super::disk::place(image, &tmp.join(IMAGE))?;
+            let total = super::disk::allocated(&tmp.join(IMAGE))?;
+            fs::write(tmp.join(DATA), data.to_string())?;
             fs::write(tmp.join(OWNER), serde_json::to_vec(owner)?)?;
             let saved_at = now();
             record_use(&tmp, saved_at)?;
@@ -639,18 +721,50 @@ mod tests {
             .unwrap();
     }
 
-    /// An archive a VM packed, holding `content`, ready for a save to copy.
+    impl Cache {
+        /// A save of `image` whose file system holds what the file takes.
+        fn save_taken(
+            &self,
+            key: &str,
+            owner: &CacheOwner,
+            image: &Path,
+            max_bytes: u64,
+        ) -> io::Result<u64> {
+            self.save_taken_with_clock(key, owner, image, max_bytes, SystemTime::now)
+        }
+
+        fn save_taken_with_clock(
+            &self,
+            key: &str,
+            owner: &CacheOwner,
+            image: &Path,
+            max_bytes: u64,
+            now: impl FnOnce() -> SystemTime,
+        ) -> io::Result<u64> {
+            let data = super::super::disk::allocated(image).unwrap_or(0);
+            self.save_with_clock(key, owner, (image, data), max_bytes, now)
+        }
+    }
+
+    /// What a file of `content` takes on the test's disk: whole blocks.
+    fn taken(dir: &Path, content: &[u8]) -> u64 {
+        let path = packed(dir, content);
+        let n = super::super::disk::allocated(&path).unwrap();
+        fs::remove_file(path).unwrap();
+        n
+    }
+
+    /// A disk image holding `content`, ready for a save to take.
     fn packed(dir: &Path, content: &[u8]) -> PathBuf {
         let path = dir.join(format!("packed-{}", crate::util::random_secret::<6>()));
         fs::write(&path, content).unwrap();
         path
     }
 
-    /// Every way the host reads a file a VM returned (the artifacts'
-    /// archive, the cache's) refuses what the VM may have put there instead
-    /// of a regular file, without following a link to the host's file or
-    /// waiting for a FIFO's writer; the artifacts' archive also beyond its
-    /// limit. Nothing of the host's file is read.
+    /// The host takes the artifacts' archive a VM returned, and a disk image
+    /// for the cache, only as a regular file, without following a link to
+    /// the host's file or waiting for a FIFO's writer; the artifacts' archive
+    /// also not beyond its limit. Nothing of the host's file is read.
     #[test]
     fn returned_files_are_read_only_as_regular_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -681,7 +795,8 @@ mod tests {
             for (what, path) in &planted {
                 fs::create_dir_all(&into).unwrap();
                 let unpacked = unpack_returned(path, 1 << 20, &into);
-                let saved = Cache::new(d.join("cache")).save("k", &owner("r", "j"), path, 1 << 20);
+                let saved =
+                    Cache::new(d.join("cache")).save_taken("k", &owner("r", "j"), path, 1 << 20);
                 let restored = Cache::new(d.join("cache")).restore("k", &d.join("given"));
                 done.send((
                     what.to_string(),
@@ -717,14 +832,14 @@ mod tests {
         let saved = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
         assert_eq!(cache.saved_age("k", saved).unwrap(), None);
         cache
-            .save_with_clock("k", &owner("r", "j"), &packed(d, b"x"), 1 << 20, || saved)
+            .save_taken_with_clock("k", &owner("r", "j"), &packed(d, b"x"), 1 << 20, || saved)
             .unwrap();
         let now = saved + Duration::from_secs(CACHE_REFRESH_SECS);
         assert_eq!(
             cache.saved_age("k", now).unwrap(),
             Some(Duration::from_secs(CACHE_REFRESH_SECS))
         );
-        cache.restore("k", &d.join("restored.tar")).unwrap();
+        cache.restore("k", &d.join("restored.raw")).unwrap();
         assert_eq!(
             cache.saved_age("k", now).unwrap(),
             Some(Duration::from_secs(CACHE_REFRESH_SECS))
@@ -740,7 +855,7 @@ mod tests {
         fs::remove_file(cache.root.join("k").join(SAVED)).unwrap();
         assert_eq!(cache.saved_age("k", now).unwrap(), None);
         cache
-            .save_with_clock("k", &owner("r", "j"), &packed(d, b"x"), 0, || now)
+            .save_taken_with_clock("k", &owner("r", "j"), &packed(d, b"x"), 0, || now)
             .unwrap();
         assert_eq!(
             cache.saved_age("k", now).unwrap(),
@@ -749,27 +864,78 @@ mod tests {
         );
     }
 
-    /// An entry of the earlier form (a tree of the cached paths) is never
-    /// restored, and the runner removes it.
+    /// The entries of earlier forms (a tree of the cached paths, an archive
+    /// of them) are never restored, and the runner removes them.
     #[test]
-    fn cache_entries_without_an_archive_are_not_restored_and_are_removed() {
+    fn cache_entries_of_an_earlier_form_are_not_restored_and_are_removed() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
         let cache = Cache::new(d.join("cache"));
         cache
-            .save("new", &owner("r", "j"), &packed(d, b"new"), 1 << 20)
+            .save_taken("new", &owner("r", "j"), &packed(d, b"new"), 1 << 20)
             .unwrap();
-        let old = d.join("cache/old");
-        fs::create_dir_all(old.join("paths/target")).unwrap();
-        fs::write(old.join("paths/target/file"), b"old").unwrap();
-        mark_owner(&old, "r", "old");
-        mark_saved(&old, SystemTime::now());
-        assert_eq!(cache.restore("old", &d.join("old.tar")).unwrap(), None);
-        assert!(!d.join("old.tar").exists());
-        cache.remove_unpacked().unwrap();
-        assert!(!old.exists());
-        assert_eq!(cache.restore("new", &d.join("new.tar")).unwrap(), Some(3));
-        assert_eq!(fs::read(d.join("new.tar")).unwrap(), b"new");
+        let tree = d.join("cache/tree");
+        fs::create_dir_all(tree.join("paths/target")).unwrap();
+        fs::write(tree.join("paths/target/file"), b"old").unwrap();
+        let archive = d.join("cache/archive");
+        fs::create_dir_all(&archive).unwrap();
+        fs::write(archive.join("cache.tar"), b"old").unwrap();
+        for old in [&tree, &archive] {
+            mark_owner(old, "r", "old");
+            mark_saved(old, SystemTime::now());
+            let into = d.join("old.raw");
+            assert_eq!(
+                cache
+                    .restore(&old.file_name().unwrap().to_string_lossy(), &into)
+                    .unwrap(),
+                None
+            );
+            assert!(!into.exists());
+        }
+        // A save that was stopped left its image aside.
+        let aside = d.join("cache/.new.abcdef");
+        fs::create_dir_all(&aside).unwrap();
+        fs::write(aside.join(IMAGE), b"part").unwrap();
+        cache.remove_earlier_forms().unwrap();
+        assert!(!tree.exists() && !archive.exists() && !aside.exists());
+        assert!(cache.restore("new", &d.join("new.raw")).unwrap().is_some());
+        assert_eq!(fs::read(d.join("new.raw")).unwrap(), b"new");
+    }
+
+    /// The members are listed one per line, as their headers' bytes; a name
+    /// with a newline is refused rather than read as two.
+    #[test]
+    fn members_are_listed_as_their_bytes_or_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let (archive, list) = (dir.path().join("c.tar"), dir.path().join("members"));
+        let pack = |names: &[&[u8]]| {
+            let mut tar = tar::Builder::new(Vec::new());
+            for name in names {
+                let mut h = tar::Header::new_gnu();
+                h.set_size(0);
+                h.as_old_mut().name[..name.len()].copy_from_slice(name);
+                h.set_cksum();
+                tar.append(&h, &b""[..]).unwrap();
+            }
+            fs::write(&archive, tar.into_inner().unwrap()).unwrap();
+        };
+        pack(&["日本/a".as_bytes(), b"a\\b"]);
+        list_members(&archive, &list).unwrap();
+        assert_eq!(fs::read(&list).unwrap(), "日本/a\na\\b\n".as_bytes());
+        pack(&[b"a\nb/x"]);
+        assert!(list_members(&archive, &list).is_err());
+    }
+
+    /// The commit's links come from its index, byte for byte: a link the
+    /// machine made a file is a link, and `Target` is not `target`.
+    #[test]
+    fn the_tree_is_the_indexs() {
+        let index = b"120000 aa 0\ttarget\x00100644 bb 0\tvendor/sub/a.rs\x00120000 cc 0\tTop\x00100644 dd 0\tsrc/main.rs\x00160000 ee 0\tdeps/module\x00";
+        let tree = Tree::from_index(index).unwrap();
+        assert_eq!(tree.link_on(["deps", "target/debug"]), Some("target/debug"));
+        assert_eq!(tree.link_on(["target/"]), Some("target/"));
+        assert_eq!(tree.link_on(["top", "vendor", "src/main.rs/x"]), None);
+        assert!(Tree::from_index(b"no tab\x00").is_err());
     }
 
     /// The machine's Git attributes never change the checkout. Git finds
@@ -1075,43 +1241,75 @@ mod tests {
             paths: vec!["target".into()],
             key_files: vec!["Cargo.lock".into()],
         };
-        let k1 = cache_key("acme/demo", &job, IMAGE, &cache, &work);
+        let k1 = cache_key("acme/demo", &job, IMAGE, &cache, 2048, &work);
         assert_ne!(
             k1,
-            cache_key("acme/demo", &job, &IMAGE.replace('1', "2"), &cache, &work),
+            cache_key(
+                "acme/demo",
+                &job,
+                &IMAGE.replace('1', "2"),
+                &cache,
+                2048,
+                &work
+            ),
             "the image's digest is in the key"
+        );
+        assert_ne!(
+            k1,
+            cache_key("acme/demo", &job, IMAGE, &cache, 1024, &work),
+            "the work quota is in the key"
         );
         let archive = packed(dir.path(), b"object");
         Cache::new(root.clone())
-            .save(&k1, &owner("acme/demo", &job.name), &archive, 1 << 20)
+            .save_taken(&k1, &owner("acme/demo", &job.name), &archive, 1 << 20)
             .unwrap();
-        // The entry and what a VM is given are copies: writing the archive
-        // the VM returned, or the one it is given, changes no entry.
+        // The entry and what a job is given are copies: writing the image
+        // saved from, or the one a job is given, changes no entry.
         fs::write(&archive, "changed").unwrap();
         let fresh = dir.path().join("fresh");
         fs::create_dir_all(&fresh).unwrap();
         fs::write(fresh.join("Cargo.lock"), "v1").unwrap();
-        assert_eq!(cache_key("acme/demo", &job, IMAGE, &cache, &fresh), k1);
+        assert_eq!(
+            cache_key("acme/demo", &job, IMAGE, &cache, 2048, &fresh),
+            k1
+        );
         for _ in 0..2 {
             assert_eq!(
                 Cache::new(root.clone())
-                    .restore(&k1, &fresh.join("cache.tar"))
+                    .restore(&k1, &fresh.join("cache.raw"))
                     .unwrap(),
-                Some(6)
+                Some(taken(dir.path(), b"object"))
             );
             assert_eq!(
-                fs::read_to_string(fresh.join("cache.tar")).unwrap(),
+                fs::read_to_string(fresh.join("cache.raw")).unwrap(),
                 "object"
             );
-            fs::write(fresh.join("cache.tar"), "changed").unwrap();
-            fs::remove_file(fresh.join("cache.tar")).unwrap();
+            fs::write(fresh.join("cache.raw"), "changed").unwrap();
+            fs::remove_file(fresh.join("cache.raw")).unwrap();
         }
         fs::write(fresh.join("Cargo.lock"), "v2").unwrap();
-        let k2 = cache_key("acme/demo", &job, IMAGE, &cache, &fresh);
+        // What the saving VM measured its file system holds is what a
+        // restore says, whatever the image takes.
+        Cache::new(root.clone())
+            .save(
+                &k1,
+                &owner("acme/demo", &job.name),
+                (&packed(dir.path(), b"object"), 200 << 20),
+                1 << 30,
+            )
+            .unwrap();
+        assert_eq!(
+            Cache::new(root.clone())
+                .restore(&k1, &fresh.join("cache.raw"))
+                .unwrap(),
+            Some(200 << 20)
+        );
+        fs::remove_file(fresh.join("cache.raw")).unwrap();
+        let k2 = cache_key("acme/demo", &job, IMAGE, &cache, 2048, &fresh);
         assert_ne!(k1, k2, "key files are in the key");
         // A limit that fits only one entry keeps the newest.
         Cache::new(root.clone())
-            .save(
+            .save_taken(
                 &k2,
                 &owner("acme/demo", &job.name),
                 &packed(dir.path(), b"object"),
@@ -1131,17 +1329,17 @@ mod tests {
             let first = owner("r1", "build");
             let time = |n| SystemTime::UNIX_EPOCH + Duration::from_secs(n);
             store
-                .save_with_clock("k1", &first, &packed(d, b"object"), u64::MAX, || time(1))
+                .save_taken_with_clock("k1", &first, &packed(d, b"object"), u64::MAX, || time(1))
                 .unwrap();
             store
-                .save_with_clock("other", &other, &packed(d, b"object"), u64::MAX, || time(2))
+                .save_taken_with_clock("other", &other, &packed(d, b"object"), u64::MAX, || time(2))
                 .unwrap();
             // Restoring an old generation makes it newer by use than the other
             // group's only entry. Plain LRU would evict that current entry.
             record_use(&store.root.join("k1"), time(3)).unwrap();
             let budget = tree_size(&store.root.join("k1")) + tree_size(&store.root.join("other"));
             store
-                .save_with_clock("k2", &first, &packed(d, b"object"), budget, || time(4))
+                .save_taken_with_clock("k2", &first, &packed(d, b"object"), budget, || time(4))
                 .unwrap();
             assert!(!store.root.join("k1").exists());
             assert!(store.root.join("other").exists());
@@ -1156,14 +1354,17 @@ mod tests {
         let store = Cache::new(d.join("cache"));
         let owner = owner("r", "j");
         store
-            .save("old", &owner, &packed(d, b"old"), u64::MAX)
+            .save_taken("old", &owner, &packed(d, b"old"), u64::MAX)
             .unwrap();
         store
-            .save("new", &owner, &packed(d, b"new"), u64::MAX)
+            .save_taken("new", &owner, &packed(d, b"new"), u64::MAX)
             .unwrap();
         assert!(store.root.join("new").exists());
-        assert_eq!(store.restore("old", &d.join("old.tar")).unwrap(), Some(3));
-        assert_eq!(fs::read(d.join("old.tar")).unwrap(), b"old");
+        assert_eq!(
+            store.restore("old", &d.join("old.raw")).unwrap(),
+            Some(taken(d, b"old"))
+        );
+        assert_eq!(fs::read(d.join("old.raw")).unwrap(), b"old");
     }
 
     #[test]
@@ -1174,13 +1375,13 @@ mod tests {
         let owner = owner("r", "j");
         let time = |n| SystemTime::UNIX_EPOCH + Duration::from_secs(n);
         store
-            .save_with_clock("later", &owner, &packed(d, b"object"), u64::MAX, || {
+            .save_taken_with_clock("later", &owner, &packed(d, b"object"), u64::MAX, || {
                 time(20)
             })
             .unwrap();
         let budget = tree_size(&store.root.join("later"));
         store
-            .save_with_clock("saved", &owner, &packed(d, b"object"), budget, || time(10))
+            .save_taken_with_clock("saved", &owner, &packed(d, b"object"), budget, || time(10))
             .unwrap();
         assert!(!store.root.join("later").exists());
         assert!(store.root.join("saved").exists());
@@ -1267,7 +1468,7 @@ mod tests {
                 let root = dir.path().join("cache");
                 let invalid = root.join("invalid");
                 fs::create_dir_all(&invalid).unwrap();
-                fs::write(invalid.join(ARCHIVE), b"old").unwrap();
+                fs::write(invalid.join(IMAGE), b"old").unwrap();
                 mark_saved(&invalid, SystemTime::now());
                 match bad_owner {
                     "missing" => {}
@@ -1289,21 +1490,21 @@ mod tests {
                 for key in ["new", "next"] {
                     assert_eq!(
                         store
-                            .save(
+                            .save_taken(
                                 key,
                                 &owner("r", "j"),
                                 &packed(dir.path(), b"object"),
                                 budget
                             )
                             .unwrap(),
-                        6,
+                        taken(dir.path(), b"object"),
                         "owner: {bad_owner}, budget: {budget}"
                     );
                     assert!(!invalid.exists(), "owner: {bad_owner}, budget: {budget}");
-                    let restored = dir.path().join(format!("restore-{key}.tar"));
+                    let restored = dir.path().join(format!("restore-{key}.raw"));
                     assert_eq!(
                         store.restore(key, &restored).unwrap(),
-                        (budget != 0).then_some(6)
+                        (budget != 0).then(|| taken(dir.path(), b"object"))
                     );
                     if budget != 0 {
                         assert_eq!(fs::read(&restored).unwrap(), b"object");
@@ -1366,13 +1567,13 @@ mod tests {
         let d = dir.path();
         let root = d.join("cache");
         Cache::new(root.clone())
-            .save("z-old", &owner("r", "old"), &packed(d, b"object"), 100)
+            .save_taken("z-old", &owner("r", "old"), &packed(d, b"object"), u64::MAX)
             .unwrap();
         assert_eq!(
             Cache::new(root.clone())
-                .restore("z-old", &d.join("restored.tar"))
+                .restore("z-old", &d.join("restored.raw"))
                 .unwrap(),
-            Some(6)
+            Some(taken(d, b"object"))
         );
         // Fix the restored entry's use time so the test never depends on
         // how far the wall clock advances between restore and save.
@@ -1386,7 +1587,7 @@ mod tests {
         // timestamp, and its key sorts before the restored entry's key.
         assert_eq!(
             Cache::new(root.clone())
-                .save_with_clock(
+                .save_taken_with_clock(
                     "a-new",
                     &owner("r", "new"),
                     &packed(d, b"object"),
@@ -1394,13 +1595,10 @@ mod tests {
                     || restored_at
                 )
                 .unwrap(),
-            6
+            taken(d, b"object")
         );
         assert!(!root.join("z-old").exists());
-        assert_eq!(
-            fs::read(root.join("a-new").join(ARCHIVE)).unwrap(),
-            b"object"
-        );
+        assert_eq!(fs::read(root.join("a-new").join(IMAGE)).unwrap(), b"object");
         assert_eq!(
             fs::metadata(root.join("a-new").join(USED))
                 .unwrap()
@@ -1462,7 +1660,7 @@ mod tests {
                     for _ in 0..10 {
                         let archive = packed(&root, format!("v{n}").repeat(1000).as_bytes());
                         cache
-                            .save("k", &owner("r", "j"), &archive, 1 << 30)
+                            .save_taken("k", &owner("r", "j"), &archive, 1 << 30)
                             .unwrap();
                     }
                 })
@@ -1474,7 +1672,7 @@ mod tests {
                 std::thread::spawn(move || {
                     let mut kept = Vec::new();
                     for i in 0..20 {
-                        let into = root.join(format!("fresh{n}-{i}.tar"));
+                        let into = root.join(format!("fresh{n}-{i}.raw"));
                         if cache.restore("k", &into).unwrap().is_some() {
                             kept.push(into);
                         }
