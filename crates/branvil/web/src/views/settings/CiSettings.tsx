@@ -50,6 +50,7 @@ export function CiSettings() {
       ) : (
         <Stack gap="md">
           <Runner settings={ci.data} selected={runner?.name ?? ""} onSelect={setSelected} />
+          <ResourceQueue runners={runners} />
           <Section title={t("ci.settings.executor")}>
             <dl>
               <dt>{t("ci.settings.msb")}</dt>
@@ -92,6 +93,29 @@ export function CiSettings() {
         </Stack>
       )}
     </Card>
+  );
+}
+
+function ResourceQueue({ runners }: { runners: CiRunner[] }) {
+  const t = useT();
+  const waiting = runners.flatMap((r) => r.resource_wait ? [{ name: r.name, ...r.resource_wait }] : []);
+  if (!waiting.length) return null;
+  return (
+    <Section title={t("ci.settings.resourceQueue")}>
+      <Stack gap="xs">
+        {waiting.map(({ name, repo, job, attempt_id, cpu_shortfall: cpus, memory_shortfall_mib: memory }) => {
+          const message = cpus === 0
+            ? "ci.settings.resourceWaitMemory"
+            : memory === 0 ? "ci.settings.resourceWaitCpu" : "ci.settings.resourceWait";
+          return (
+            <Text size="sm" key={name}>
+              <Link to={href.job(repo, attempt_id)}>{repo} · {job}</Link>
+              {" — "}{t(message, { name, cpus, memory })}
+            </Text>
+          );
+        })}
+      </Stack>
+    </Section>
   );
 }
 
@@ -186,6 +210,9 @@ function RunnerRow({ runner: r }: { runner: CiRunner }) {
               <Text size="xs" c="dimmed">{t("ci.settings.reportedCapacity", { max: r.max_jobs })}</Text>
             )}
             {r.executor_detail && <Text size="xs" c="dimmed">{r.executor_detail}</Text>}
+            <Text size="xs" c="dimmed">
+              {r.machine ? t("ci.settings.machine", { cpus: r.machine.logical_cpus, total: r.machine.total_memory_mib, available: r.machine.available_memory_mib }) : t("ci.settings.machineUnknown")}
+            </Text>
             {!!r.missing_images?.length && (
               <Text size="xs">
                 {t("ci.settings.runnerMissingImages", { cpu: r.architecture ?? "", images: r.missing_images.join(", ") })}
@@ -207,6 +234,8 @@ const LIMIT_FIELDS: { key: keyof CiLimits; label: MessageKey; min: number; max: 
   { key: "max_timeout_secs", label: "ci.settings.maxTimeout", min: 1, max: 86400 },
   { key: "cache_max_mib", label: "ci.settings.cacheMax", min: 0, max: 1048576 },
   { key: "max_jobs", label: "ci.settings.maxJobs", min: 1, max: 64 },
+  { key: "memory_reserve_percent", label: "ci.settings.memoryReserve", min: 0, max: 100 },
+  { key: "cpu_multiplier_percent", label: "ci.settings.cpuMultiplier", min: 0, max: 6400 },
 ];
 
 function Limits({ runner }: { runner: CiRunner }) {
@@ -238,6 +267,8 @@ function Limits({ runner }: { runner: CiRunner }) {
             max_timeout_secs: Number(form.max_timeout_secs),
             cache_max_mib: Number(form.cache_max_mib),
             max_jobs: Number(form.max_jobs),
+            memory_reserve_percent: Number(form.memory_reserve_percent),
+            cpu_multiplier_percent: Number(form.cpu_multiplier_percent),
           });
         }}
       >

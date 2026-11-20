@@ -281,16 +281,16 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     );
     assert!(text(&out).contains(&serves), "{}", text(&out));
 
-    // A backup of the previous schema version: what version 36 wrote.
+    // A backup of the previous schema version: what version 37 wrote.
     let previous = out_dir.path().join("previous");
     copy_backup(&backup, &previous, &manifest);
     let db = previous.join("branvil.redb");
-    as_schema_36(&db);
+    as_schema_37(&db);
     let mut old = manifest.clone();
-    old["schema_version"] = json!(36);
-    // Both files the fixture rewrote: the database and the configuration.
+    old["schema_version"] = json!(37);
+    // Refresh the checksum of the database rewritten by the fixture.
     for f in old["files"].as_array_mut().unwrap() {
-        if f["path"] == "branvil.redb" || f["path"] == "branvil.toml" {
+        if f["path"] == "branvil.redb" {
             let bytes = std::fs::read(previous.join(f["path"].as_str().unwrap())).unwrap();
             f["bytes"] = json!(bytes.len());
             f["sha256"] = json!(
@@ -323,12 +323,12 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("from schema version 36 to 37"),
+        text(&out).contains("from schema version 37 to 38"),
         "{}",
         text(&out)
     );
     assert!(
-        text(&out).contains("removed the browser sessions and revoked 1 owner file token(s)"),
+        text(&out).contains("added CI resource fields"),
         "{}",
         text(&out)
     );
@@ -380,9 +380,8 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(ls_remote(r, &clones, &w.owner_git), original_refs);
-    // The same tokens work (only their hashes were stored), except the
-    // owner file's, which the upgrade revoked.
-    assert_eq!(r.get("/me", &kept).await.0, StatusCode::UNAUTHORIZED);
+    // The previous schema's tokens survive (only their hashes were stored).
+    assert_eq!(r.get("/me", &kept).await.0, StatusCode::OK);
     let ticket = r.ok(&one, &w.aiko).await;
     assert_eq!(ticket["title"], "Back me up");
     assert_eq!(ticket["lane"], "in_progress");

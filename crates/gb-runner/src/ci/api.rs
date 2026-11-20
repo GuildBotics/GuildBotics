@@ -23,6 +23,15 @@ pub struct RunnerReport {
     pub images: Vec<Image>,
     pub accept: bool,
     pub running_jobs: usize,
+    pub machine: Option<Machine>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Machine {
+    pub logical_cpus: u32,
+    pub total_memory_mib: u64,
+    pub available_memory_mib: u64,
 }
 
 impl RunnerReport {

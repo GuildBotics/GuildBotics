@@ -3,6 +3,8 @@
 //! so the service's queue, leases, supersession, checks, and merge gate are
 //! exercised exactly as a real runner would see them.
 
+use std::path::Path;
+
 use crate::common;
 
 use common::*;
@@ -13,6 +15,15 @@ const IMAGE: &str = "docker.io/library/alpine:3.22";
 /// The configuration digest the scripted runner reports for the image.
 pub(crate) const DIGEST: &str =
     "sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8";
+
+fn attempts_with_unknown_resources(db: &Path) -> Vec<Value> {
+    let mut attempts = records(db, "ci_attempts");
+    for attempt in &mut attempts {
+        attempt["allocation"] = Value::Null;
+        attempt["peak_memory_mib"] = Value::Null;
+    }
+    attempts
+}
 
 #[tokio::test]
 async fn post_merge_settings_validate_the_result_atomically_and_require_owner() {
@@ -247,7 +258,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_36_upgrade_preserves_records() {
+async fn schema_37_upgrade_preserves_records() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -309,13 +320,14 @@ async fn schema_36_upgrade_preserves_records() {
     assert_eq!(admin("reindex").0, 0);
     assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
     let verifications = records(&db, "ci_verifications");
-    let attempts = records(&db, "ci_attempts");
+    let attempts = attempts_with_unknown_resources(&db);
     let repos = records(&db, "repos");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let prior_runs = records(&db, "ci_runs");
-    as_schema_36(&db);
+    as_schema_37(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
+    assert!(!before.contains_key("ix_ci_memory"));
     assert!(
         admin("check")
             .1
@@ -323,7 +335,7 @@ async fn schema_36_upgrade_preserves_records() {
     );
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 36 to 37"), "{output}");
+    assert!(output.contains("from schema version 37 to 38"), "{output}");
     assert_eq!(
         tables(&db).get("ix_repair_unnotified"),
         before.get("ix_repair_unnotified")
@@ -331,6 +343,7 @@ async fn schema_36_upgrade_preserves_records() {
     assert_eq!(records(&db, "repos"), repos);
     assert_eq!(repos[0]["responder"], "aiko");
     assert_eq!(records(&db, "ci_attempts"), attempts);
+    assert!(tables(&db)["ix_ci_memory"].is_empty());
     assert_eq!(records(&db, "ci_runs"), prior_runs);
     let runs = records(&db, "ci_runs");
     assert_eq!(records(&db, "ci_verifications"), verifications);
@@ -354,7 +367,7 @@ async fn schema_36_upgrade_preserves_records() {
             p.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("branvil-schema-36-")
+                .starts_with("branvil-schema-37-")
         })
         .unwrap();
     assert_eq!(tables(&backup), before);
@@ -1081,7 +1094,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
     // Preserve both purposes and their association across the previous-schema upgrade.
     w.server.stop();
     let db = w.server.data.join("branvil.redb");
-    let before_attempts = records(&db, "ci_attempts");
+    let before_attempts = attempts_with_unknown_resources(&db);
     assert!(
         before_attempts
             .iter()
@@ -1092,7 +1105,7 @@ async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
             .iter()
             .any(|a| a["cache_refresh"] == refresh_id)
     );
-    as_schema_36(&db);
+    as_schema_37(&db);
     for (command, expected) in [("upgrade", 0), ("check", 0)] {
         let out = branvil_command()
             .args(["admin", command, "--data-dir"])

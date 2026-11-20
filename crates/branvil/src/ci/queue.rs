@@ -17,6 +17,7 @@
 pub use gb_runner::ci::queue::{Basis, ResultInfo, Reuse};
 use std::collections::BTreeMap;
 
+use gb_runner::ci::{api::Machine, config::JobLimits};
 use serde::{Deserialize, Serialize};
 
 use super::pipeline::JobDef;
@@ -191,6 +192,8 @@ pub struct Attempt {
     /// The configuration digest of the image the job ran on, as its runner
     /// reported it (none when it did not get that far).
     pub image_digest: Option<String>,
+    pub allocation: Option<Allocation>,
+    pub peak_memory_mib: Option<u64>,
     /// The actual execution whose result this attempt reused, reported at finish.
     pub reused_from: Option<String>,
     /// The computed dependency-cache key; while a refresh is unfinished,
@@ -224,6 +227,53 @@ pub struct Attempt {
     /// The run's input digest of the job when it was claimed; none for a
     /// job without paths or an attempt claimed before its run had one.
     pub inputs: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct Allocation {
+    pub cpus: u32,
+    pub vm_memory_mib: u64,
+    pub reserved_memory_mib: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ResourceWait {
+    pub attempt_id: String,
+    pub repo: String,
+    pub job: String,
+    pub cpu_shortfall: u64,
+    pub memory_shortfall_mib: u64,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct Resources {
+    cpus: u64,
+    memory: u64,
+}
+
+impl Resources {
+    fn minus(self, other: Self) -> Self {
+        Self {
+            cpus: self.cpus.saturating_sub(other.cpus),
+            memory: self.memory.saturating_sub(other.memory),
+        }
+    }
+
+    fn plus(self, other: Self) -> Self {
+        Self {
+            cpus: self.cpus.saturating_add(other.cpus),
+            memory: self.memory.saturating_add(other.memory),
+        }
+    }
+}
+
+impl From<Allocation> for Resources {
+    fn from(a: Allocation) -> Self {
+        Self {
+            cpus: a.cpus.into(),
+            memory: a.reserved_memory_mib,
+        }
+    }
 }
 
 impl Attempt {
@@ -327,6 +377,22 @@ pub fn attempt_index(a: &Attempt) -> Vec<IxEntry> {
             value: a.id.as_bytes().to_vec(),
         });
     }
+    if a.conclusion.as_deref() == Some("success")
+        && a.reused_from.is_none()
+        && let (Some(allocation), Some(peak), Some(finished)) =
+            (a.allocation, a.peak_memory_mib, a.finished_at.as_deref())
+        && let Ok(time) = chrono::DateTime::parse_from_rfc3339(finished)
+        && let Ok(millis) = u64::try_from(time.timestamp_millis())
+    {
+        out.push(IxEntry {
+            table: store::IX_CI_MEMORY,
+            key: memory_key(a, allocation.cpus, allocation.vm_memory_mib)
+                .u(u64::MAX - millis)
+                .s(&a.id)
+                .bytes(),
+            value: peak.to_be_bytes().to_vec(),
+        });
+    }
     match a.status.as_str() {
         "queued" => out.push(IxEntry {
             table: store::IX_CI_PENDING,
@@ -341,6 +407,14 @@ pub fn attempt_index(a: &Attempt) -> Vec<IxEntry> {
         _ => {}
     }
     out
+}
+
+fn memory_key(a: &Attempt, cpus: u32, memory_mib: u64) -> Key {
+    Key::new()
+        .s(&a.repo)
+        .s(&a.job.name)
+        .u(cpus.into())
+        .u(memory_mib)
 }
 
 /// Every CI index entry the records imply (for `server hub-data check`).
@@ -553,6 +627,8 @@ fn new_job(
         sha: sha.into(),
         job: job.clone(),
         image_digest: None,
+        allocation: None,
+        peak_memory_mib: None,
         reused_from: None,
         cache_key: None,
         allow_reuse: true,
@@ -1159,24 +1235,129 @@ pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Opt
     let Some((a, reuse)) = scheduled(w, true)?.into_iter().next() else {
         return Ok(None);
     };
-    claim_selected(w, runner, lease_secs, now, a, reuse).map(Some)
+    claim_selected(w, runner, lease_secs, now, a, reuse, None).map(Some)
 }
 
-/// Claim only work supported by the runner's advertised inventory.
+/// Choose a compatible attempt and reserve its capacity in the lease transaction.
 pub fn claim_images(
     w: &Wtx,
     runner: &str,
     lease_secs: u64,
     now: &str,
     images: &[super::images::Image],
-) -> AppResult<Option<Claimed>> {
-    let Some((a, reuse)) = scheduled(w, false)?
-        .into_iter()
-        .find(|(a, _)| images.iter().any(|i| i.supports(&a.job.image)))
-    else {
-        return Ok(None);
+    limits: JobLimits,
+    machine: Option<Machine>,
+) -> AppResult<(Option<Claimed>, Option<ResourceWait>)> {
+    let budget = if let Some(machine) = machine {
+        let runner_key = util::fold(runner);
+        let running = active(w)?
+            .into_iter()
+            .filter(|a| a.runner.as_deref().map(util::fold).as_ref() == Some(&runner_key))
+            .collect::<Vec<_>>();
+        if running.len() >= limits.max_jobs as usize {
+            return Ok((None, None));
+        }
+        Some(capacity(machine, limits, &running))
+    } else {
+        None
     };
-    claim_selected(w, runner, lease_secs, now, a, reuse).map(Some)
+    let mut waiting = None;
+    let mut reserve = Resources::default();
+    let mut estimates = BTreeMap::new();
+    for (a, reuse) in scheduled(w, false)? {
+        let Some(image) = images.iter().find(|i| i.supports(&a.job.image)) else {
+            continue;
+        };
+        if reuse
+            .as_ref()
+            .is_some_and(|source| source.image_digest == image.digest)
+        {
+            let claim = claim_selected(w, runner, lease_secs, now, a, reuse, None)?;
+            return Ok((Some(claim), waiting));
+        }
+        let key = (a.repo.clone(), a.job.name.clone());
+        let estimate = match estimates.get(&key) {
+            Some(&mib) => mib,
+            None => {
+                let mib = estimate_memory(w, &a, limits)?;
+                estimates.insert(key, mib);
+                mib
+            }
+        };
+        let allocation = Allocation {
+            cpus: limits.max_cpus,
+            vm_memory_mib: limits.max_memory_mib,
+            reserved_memory_mib: estimate,
+        };
+        let need = Resources::from(allocation);
+        if let Some((total, free)) = budget {
+            let short = need.minus(free.minus(reserve));
+            if short != Resources::default() {
+                waiting.get_or_insert_with(|| ResourceWait {
+                    attempt_id: a.id.clone(),
+                    repo: a.repo_path.clone(),
+                    job: a.job.name.clone(),
+                    cpu_shortfall: short.cpus,
+                    memory_shortfall_mib: short.memory,
+                });
+                if reserve == Resources::default() && need.minus(total) == Resources::default() {
+                    reserve = need;
+                }
+                continue;
+            }
+        }
+        let claim = claim_selected(w, runner, lease_secs, now, a, reuse, Some(allocation))?;
+        return Ok((Some(claim), waiting));
+    }
+    Ok((None, waiting))
+}
+
+fn capacity(machine: Machine, limits: JobLimits, running: &[Attempt]) -> (Resources, Resources) {
+    let logical_cpus = u64::from(machine.logical_cpus);
+    let cpus = match limits.cpu_multiplier_percent {
+        0 => logical_cpus.max(u64::from(limits.max_cpus) * u64::from(limits.max_jobs)),
+        percent => logical_cpus * u64::from(percent) / 100,
+    };
+    let reserve = machine
+        .total_memory_mib
+        .saturating_mul(limits.memory_reserve_percent.into())
+        .div_ceil(100);
+    let total = Resources {
+        cpus,
+        memory: machine.total_memory_mib.saturating_sub(reserve),
+    };
+    let used = running
+        .iter()
+        .filter_map(|a| a.allocation)
+        .fold(Resources::default(), |used, a| used.plus(a.into()));
+    let free = total.minus(used);
+    let available = machine.available_memory_mib.saturating_sub(reserve);
+    (
+        total,
+        Resources {
+            memory: free.memory.min(available),
+            ..free
+        },
+    )
+}
+
+fn estimate_memory(r: &impl Rd, a: &Attempt, limits: JobLimits) -> AppResult<u64> {
+    let prefix = memory_key(a, limits.max_cpus, limits.max_memory_mib).bytes();
+    let mut samples = r
+        .prefix_raw(store::IX_CI_MEMORY, &prefix, None, 20)?
+        .into_iter()
+        .map(|(_, bytes)| {
+            bytes
+                .try_into()
+                .map(u64::from_be_bytes)
+                .map_err(|_| AppError::internal("invalid CI memory sample"))
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    if samples.is_empty() {
+        return Ok(limits.max_memory_mib);
+    }
+    samples.sort_unstable();
+    Ok(samples[(samples.len() * 9).div_ceil(10) - 1])
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -1185,7 +1366,7 @@ pub(crate) fn claim_fixture(w: &Wtx, target: (&str, &str), now: &str) -> AppResu
         .into_iter()
         .find(|(a, _)| a.repo_path == target.0 && a.sha == target.1)
         .ok_or_else(|| AppError::internal("fixture head has no queued check"))?;
-    claim_selected(w, "fixture", 300, now, a, reuse)
+    claim_selected(w, "fixture", 300, now, a, reuse, None)
 }
 
 fn claim_selected(
@@ -1195,6 +1376,7 @@ fn claim_selected(
     now: &str,
     mut a: Attempt,
     reuse: Option<Reuse>,
+    allocation: Option<Allocation>,
 ) -> AppResult<Claimed> {
     let old = get_attempt(w, &a.id)?.unwrap();
     let lease = format!("bvl_{}", util::random_secret::<24>());
@@ -1203,6 +1385,7 @@ fn claim_selected(
     a.lease_hash = Some(lease_hash(&lease));
     a.lease_expires_at = Some(later(now, lease_secs));
     a.runner = Some(runner.to_string());
+    a.allocation = allocation;
     a.started_at = Some(now.to_string());
     put_attempt(w, Some(&old), &a)?;
     Ok(Claimed {
@@ -1281,7 +1464,7 @@ pub fn finish(
     queue_max: usize,
     now: &str,
 ) -> AppResult<Attempt> {
-    if !CONCLUSIONS.contains(&conclusion) {
+    if !CONCLUSIONS.contains(&conclusion) && conclusion != "deferred" {
         return Err(AppError::invalid(format!(
             "conclusion must be one of {}.",
             CONCLUSIONS.join(", ")
@@ -1298,6 +1481,20 @@ pub fn finish(
     }
     let old = leased(w, id, lease, now)?;
     let mut a = old.clone();
+    if conclusion == "deferred" && !a.cancel_requested {
+        if a.allocation.is_some() {
+            return Err(AppError::invalid("An execution cannot defer a held lease."));
+        }
+        // A reuse claim can lose its image between the inventory and lookup.
+        // Return its position; a new claim must admit any actual execution.
+        a.status = "queued".into();
+        a.lease_hash = None;
+        a.lease_expires_at = None;
+        a.runner = None;
+        a.started_at = None;
+        put_attempt(w, Some(&old), &a)?;
+        return Ok(a);
+    }
     if let Some(key) = &info.cache_key
         && (key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit()) || a.job.cache.is_none())
     {
@@ -1342,6 +1539,7 @@ pub fn finish(
         }
     }
     a.image_digest = info.image_digest;
+    a.peak_memory_mib = info.peak_memory_mib.filter(|peak| *peak > 0);
     a.cache_key = info.cache_key;
     if let Some(next) = rerun {
         conclude(
@@ -1842,6 +2040,215 @@ mod tests {
     use super::*;
     use crate::store::Store;
 
+    fn limits() -> JobLimits {
+        JobLimits::from(&gb_runner::ci::config::ExecutorConfig::default())
+    }
+
+    fn held_image() -> super::super::images::Image {
+        super::super::images::Image {
+            reference: job("job").image,
+            architecture: "amd64".into(),
+            digest: format!("sha256:{}", "2".repeat(64)),
+        }
+    }
+
+    #[test]
+    fn resource_claims_route_to_a_runner_that_fits_and_reserve_the_head() {
+        let (_d, s) = store();
+        s.write_sync(|w| {
+            let image = held_image();
+            let limits = JobLimits {
+                memory_reserve_percent: 0,
+                cpu_multiplier_percent: 100,
+                max_jobs: 2,
+                ..limits()
+            };
+            let take = |runner, machine| {
+                claim_images(
+                    w,
+                    runner,
+                    60,
+                    T0,
+                    std::slice::from_ref(&image),
+                    limits,
+                    machine,
+                )
+            };
+            for (name, peak) in [("heavy", 6000), ("light", 3000)] {
+                register(w, reg(name, "sample", &[name]), 10, T0)?;
+                let (claimed, _) = take("sampling", None)?;
+                let claim = claimed.unwrap();
+                finish(
+                    w,
+                    &claim.attempt.id,
+                    &claim.lease,
+                    "success",
+                    None,
+                    ResultInfo {
+                        peak_memory_mib: Some(peak),
+                        ..Default::default()
+                    },
+                    10,
+                    T1,
+                )?;
+            }
+            register(
+                w,
+                reg("queued", "feature", &["heavy", "light", "cold"]),
+                10,
+                T0,
+            )?;
+            let machine = |total, available| {
+                Some(Machine {
+                    logical_cpus: 8,
+                    total_memory_mib: total,
+                    available_memory_mib: available,
+                })
+            };
+            let (blocked, reason) = take("busy-small", machine(8500, 3500))?;
+            assert!(
+                blocked.is_none(),
+                "light would take the head's reserved memory"
+            );
+            let reason = reason.unwrap();
+            assert_eq!(
+                (
+                    reason.job.as_str(),
+                    reason.cpu_shortfall,
+                    reason.memory_shortfall_mib
+                ),
+                ("heavy", 0, 2500)
+            );
+
+            let (temporarily_blocked, _) = take("busy-large", machine(9000, 3500))?;
+            assert!(
+                temporarily_blocked.is_none(),
+                "starting light would consume the head's OS memory reserve"
+            );
+
+            let (light, _) = take("small-machine", machine(5500, 3500))?;
+            let light = light.unwrap().attempt;
+            assert_eq!(light.job.name, "light");
+            assert_eq!(light.allocation.unwrap().reserved_memory_mib, 3000);
+            let (heavy, _) = take("idle", machine(8500, 8500))?;
+            assert_eq!(heavy.unwrap().attempt.job.name, "heavy");
+            let (cold, _) = take("unknown", None)?;
+            assert_eq!(
+                cold.unwrap()
+                    .attempt
+                    .allocation
+                    .unwrap()
+                    .reserved_memory_mib,
+                limits.max_memory_mib
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn resource_claims_count_held_allocations_and_keep_the_default_cpu_capacity() {
+        let (_d, s) = store();
+        s.write_sync(|w| {
+            register(w, reg("queued", "feature", &["a", "b", "c"]), 10, T0)?;
+            let image = [held_image()];
+            let machine = Some(Machine {
+                logical_cpus: 4,
+                total_memory_mib: 20000,
+                available_memory_mib: 20000,
+            });
+            let limits = JobLimits {
+                max_jobs: 3,
+                ..limits()
+            };
+            let first = claim_images(w, "r", 60, T0, &image, limits, machine)?
+                .0
+                .unwrap();
+            assert_eq!(first.attempt.job.name, "a");
+            let explicit = JobLimits {
+                cpu_multiplier_percent: 100,
+                max_cpus: 1,
+                ..limits
+            };
+            let (blocked, reason) = claim_images(w, "r", 60, T0, &image, explicit, machine)?;
+            assert!(blocked.is_none());
+            assert_eq!(reason.unwrap().cpu_shortfall, 1);
+            for name in ["b", "c"] {
+                let (cl, _) = claim_images(w, "r", 60, T0, &image, limits, machine)?;
+                assert_eq!(cl.unwrap().attempt.job.name, name);
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn resource_claims_reuse_without_a_vm_and_return_the_position_if_the_image_changes() {
+        let (_d, s) = store();
+        s.write_sync(|w| {
+            let mut image = held_image();
+            register(w, reg("source", "feature", &["test"]), 10, T0)?;
+            let original =
+                claim_images(w, "r", 60, T0, std::slice::from_ref(&image), limits(), None)?
+                    .0
+                    .unwrap();
+            finish(
+                w,
+                &original.attempt.id,
+                &original.lease,
+                "success",
+                None,
+                ResultInfo {
+                    image_digest: Some(image.digest.clone()),
+                    ..Default::default()
+                },
+                10,
+                T0,
+            )?;
+            let mut next = reg("same-tree", "another", &["test"]);
+            next.tree = Some("tree-source".into());
+            register(w, next, 10, T0)?;
+            let machine = Some(Machine {
+                logical_cpus: 4,
+                total_memory_mib: 8192,
+                available_memory_mib: 0,
+            });
+            let borrowed = claim_images(
+                w,
+                "r",
+                60,
+                T0,
+                std::slice::from_ref(&image),
+                limits(),
+                machine,
+            )?
+            .0
+            .unwrap();
+            assert!(borrowed.reuse.is_some());
+            assert!(borrowed.attempt.allocation.is_none());
+            let pending = finish(
+                w,
+                &borrowed.attempt.id,
+                &borrowed.lease,
+                "deferred",
+                None,
+                ResultInfo::default(),
+                10,
+                T0,
+            )?;
+            assert_eq!(pending.status, "queued");
+            assert_eq!(pending.seq, borrowed.attempt.seq);
+            image.digest = format!("sha256:{}", "3".repeat(64));
+            assert!(
+                claim_images(w, "r", 60, T0, &[image], limits(), machine)?
+                    .0
+                    .is_none()
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
     #[test]
     fn inventory_filters_claims_and_missing_images_expire() {
         let (_d, s) = store();
@@ -1853,13 +2260,16 @@ mod tests {
                 architecture: "arm64".into(),
                 digest: "sha256:test".into(),
             };
-            assert!(claim_images(w, "r", 60, T0, &[])?.is_none());
-            assert!(claim_images(w, "r", 60, T0, &[image.clone()])?.is_none());
+            let take = |images: &[_]| {
+                claim_images(w, "r", 60, T0, images, limits(), None).map(|(claimed, _)| claimed)
+            };
+            assert!(take(&[])?.is_none());
+            assert!(take(std::slice::from_ref(&image))?.is_none());
             image.reference = queued.job.image.clone();
             image.architecture = "ppc64".into();
-            assert!(claim_images(w, "r", 60, T0, &[image.clone()])?.is_none());
+            assert!(take(std::slice::from_ref(&image))?.is_none());
             image.architecture = "amd64".into();
-            assert!(claim_images(w, "r", 60, T0, &[image])?.is_some());
+            assert!(take(&[image])?.is_some());
             register(w, reg("s2", "feature", &["test"]), 10, T0)?;
             let changed = fail_unavailable(w, T1, T2, |a| {
                 Some(format!("Missing image {} for CPU amd64", a.job.image))
@@ -3030,6 +3440,7 @@ mod tests {
                 image_digest: Some(DIGEST.into()),
                 reused_from: Some(second.id.clone()),
                 cache_key: None,
+                peak_memory_mib: None,
                 refresh_cache: false,
             };
             let mut invalid = info.clone();
@@ -3089,6 +3500,7 @@ mod tests {
                     image_digest: Some(DIGEST.into()),
                     reused_from: Some(source.id.clone()),
                     cache_key: None,
+                    peak_memory_mib: None,
                     refresh_cache: false,
                 },
                 10,
@@ -3148,6 +3560,7 @@ mod tests {
                 image_digest: Some(DIGEST.into()),
                 reused_from: Some(source.id.clone()),
                 cache_key: None,
+                peak_memory_mib: None,
                 refresh_cache: false,
             };
             assert!(finish(w, &c.attempt.id, &c.lease, "success", None, info, 10, T1).is_err());

@@ -369,6 +369,7 @@ pub async fn check(
                     &conclusion,
                     None,
                     ResultInfo {
+                        peak_memory_mib: None,
                         image_digest: Some(format!("sha256:{}", "2".repeat(64))),
                         reused_from: None,
                         cache_key: None,

@@ -101,6 +101,7 @@ pub struct Health {
 /// One job, with the CPUs, memory, and time limit the runner gives it.
 pub struct JobRun<'a> {
     pub attempt_id: &'a str,
+    pub peak_memory_mib: &'a mut Option<u64>,
     /// Run by its `image`, the tag `Executor::resolve_image` checked.
     pub job: &'a JobDef,
     /// The lock that came with the image's check, held until the VM has
@@ -155,6 +156,9 @@ pub struct Inventory {
 
 pub trait Executor: Send + Sync {
     fn name(&self) -> &'static str;
+    fn machine(&self) -> Option<crate::ci::api::Machine> {
+        None
+    }
     fn inventory(
         &self,
         api: &super::Api,
@@ -924,6 +928,10 @@ impl JobLog<'_> {
 }
 
 impl Executor for Microsandbox {
+    fn machine(&self) -> Option<crate::ci::api::Machine> {
+        super::machine::sample()
+    }
+
     fn needs_resolution(&self) -> bool {
         matches!(self.msb, Msb::Missing(_))
     }
@@ -1085,7 +1093,7 @@ impl Executor for Microsandbox {
                 ))
                 .await;
                 self.run_job(
-                    &job,
+                    &mut job,
                     (&disk, &log_dir),
                     output,
                     image_lock,
@@ -1252,7 +1260,7 @@ impl Microsandbox {
     /// image lock goes once the commands started.
     async fn run_job(
         &self,
-        job: &JobRun<'_>,
+        job: &mut JobRun<'_>,
         (disk, log_dir): (&str, &str),
         mut output: tokio::fs::File,
         image_lock: ImageLock,
@@ -1444,25 +1452,23 @@ impl Microsandbox {
             );
             let _ = log.send(note.into_bytes()).await;
         }
-        log_peak_memory(log, peak_kib).await;
+        *job.peak_memory_mib = log_peak_memory(log, peak_kib).await;
         outcome
     }
 }
 
 /// Reports memory only when a positive sample was collected. A short-lived
-/// process can exit before `ps` sees it; zero is not a measured peak.
-async fn log_peak_memory(log: &mpsc::Sender<Vec<u8>>, peak_kib: u64) {
-    if peak_kib > 0 {
-        let note = format!(
-            "[branvil] peak memory of msb run and its VM: {} MiB\n",
-            peak_kib.div_ceil(1024)
-        );
-        let _ = log.send(note.into_bytes()).await;
-    }
+/// process can exit before a sample sees it; zero is not a measured peak.
+async fn log_peak_memory(log: &mpsc::Sender<Vec<u8>>, peak_kib: u64) -> Option<u64> {
+    let mib = (peak_kib > 0).then(|| peak_kib.div_ceil(1024))?;
+    let note = format!("[branvil] peak memory of msb run and its VM: {mib} MiB\n");
+    let _ = log.send(note.into_bytes()).await;
+    Some(mib)
 }
 
 /// The resident memory of process `pid` and all its descendants, in KiB,
-/// from `ps` (none when it cannot tell).
+/// or none when the process has exited or the OS will not report it.
+#[cfg(not(windows))]
 async fn tree_rss_kib(pid: Option<u32>) -> Option<u64> {
     let out = tokio::process::Command::new("ps")
         .args(["-A", "-o", "pid=,ppid=,rss="])
@@ -1475,35 +1481,110 @@ async fn tree_rss_kib(pid: Option<u32>) -> Option<u64> {
     tree_rss(&String::from_utf8_lossy(&out.stdout), pid?)
 }
 
+#[cfg(windows)]
+async fn tree_rss_kib(pid: Option<u32>) -> Option<u64> {
+    let root = pid?;
+    tokio::task::spawn_blocking(move || windows_tree_rss(root))
+        .await
+        .ok()
+        .flatten()
+}
+
+#[cfg(windows)]
+fn windows_tree_rss(root: u32) -> Option<u64> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::{
+        Foundation::INVALID_HANDLE_VALUE,
+        System::{
+            Diagnostics::ToolHelp::{
+                CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+                TH32CS_SNAPPROCESS,
+            },
+            ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
+            Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+        },
+    };
+
+    // ToolHelp returns an owned snapshot; the process rows are copied out.
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot) };
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut processes = Vec::new();
+    let mut has_row = unsafe { Process32FirstW(snapshot.as_raw_handle(), &mut entry) };
+    while has_row != 0 {
+        processes.push((entry.th32ProcessID, entry.th32ParentProcessID));
+        has_row = unsafe { Process32NextW(snapshot.as_raw_handle(), &mut entry) };
+    }
+    let mut total = 0;
+    for pid in process_tree(&processes, root)? {
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            return None;
+        }
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+        let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        let mut counters = PROCESS_MEMORY_COUNTERS {
+            cb: size,
+            ..Default::default()
+        };
+        if unsafe { K32GetProcessMemoryInfo(handle.as_raw_handle(), &mut counters, size) } == 0 {
+            return None;
+        }
+        total += (counters.WorkingSetSize as u64).div_ceil(1024);
+    }
+    Some(total)
+}
+
 /// Sums the `rss` of `root` and its descendants in `pid ppid rss` lines;
 /// none when `root` is not listed.
+#[cfg(any(not(windows), test))]
 fn tree_rss(ps: &str, root: u32) -> Option<u64> {
-    let procs: Vec<[u64; 3]> = ps
+    let procs: Vec<(u32, u32, u64)> = ps
         .lines()
         .filter_map(|l| {
-            let mut f = l.split_whitespace().map(|v| v.parse::<u64>().ok());
-            Some([f.next()??, f.next()??, f.next()??])
+            let mut f = l.split_whitespace();
+            Some((
+                f.next()?.parse().ok()?,
+                f.next()?.parse().ok()?,
+                f.next()?.parse().ok()?,
+            ))
         })
         .collect();
-    let mut tree = vec![u64::from(root)];
-    let mut i = 0;
-    while let Some(&p) = tree.get(i) {
-        tree.extend(
-            procs
-                .iter()
-                .filter(|q| q[1] == p && q[0] != p)
-                .map(|q| q[0]),
-        );
-        i += 1;
-    }
-    let listed = procs.iter().any(|q| q[0] == u64::from(root));
-    listed.then(|| {
+    let parents = procs
+        .iter()
+        .map(|&(pid, parent, _)| (pid, parent))
+        .collect::<Vec<_>>();
+    let tree = process_tree(&parents, root)?;
+    Some(
         procs
             .iter()
-            .filter(|q| tree.contains(&q[0]))
-            .map(|q| q[2])
-            .sum()
-    })
+            .filter(|(id, _, _)| tree.contains(id))
+            .map(|&(_, _, rss)| rss)
+            .sum(),
+    )
+}
+
+fn process_tree(processes: &[(u32, u32)], root: u32) -> Option<Vec<u32>> {
+    if !processes.iter().any(|&(pid, _)| pid == root) {
+        return None;
+    }
+    let mut tree = vec![root];
+    let mut i = 0;
+    while let Some(&p) = tree.get(i) {
+        for &(pid, parent) in processes {
+            if parent == p && !tree.contains(&pid) {
+                tree.push(pid)
+            }
+        }
+        i += 1;
+    }
+    Some(tree)
 }
 
 fn tail(bytes: &[u8], n: usize) -> String {
@@ -1582,7 +1663,7 @@ pub(crate) mod tests {
         // of a real process decides which branch this test exercises.
         for (peak_kib, expected) in [(0, None), (1, Some(1)), (1024, Some(1)), (1025, Some(2))] {
             let (log, mut logs) = mpsc::channel(2);
-            log_peak_memory(&log, peak_kib).await;
+            assert_eq!(log_peak_memory(&log, peak_kib).await, expected);
             drop(log);
             assert_eq!(
                 logs.recv().await,
@@ -1765,6 +1846,7 @@ esac
         let running = tokio::spawn(async move {
             let job = JobRun {
                 attempt_id: "a1",
+                peak_memory_mib: &mut None,
                 job: &job,
                 image_lock,
                 cpus: 1,
@@ -2032,6 +2114,7 @@ esac
                     .run(
                         JobRun {
                             attempt_id: "a1",
+                            peak_memory_mib: &mut None,
                             job,
                             image_lock: ImageLock::default(),
                             cpus: 1,
@@ -2189,6 +2272,7 @@ esac
                 .run(
                     JobRun {
                         attempt_id: "a1",
+                        peak_memory_mib: &mut None,
                         job: &job,
                         image_lock: ImageLock::default(),
                         cpus: 1,

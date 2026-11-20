@@ -1855,7 +1855,7 @@ esac
                     "job":{"name":"test", "image":"alpine", "commands":["true"], "paths":[],
                         "timeout_secs":null, "artifacts":[], "cache":null, "verified_sha":declared},
                     "verified_sha":verified, "cache_scope":"protected", "network":false,
-                    "queued_secs":0, "reuse":null,
+                    "queued_secs":0, "reuse":null, "reuse_only":false,
                     "limits": crate::ci::config::JobLimits::from(&crate::ci::config::ExecutorConfig::default()),
                     "artifacts_max_mib":64
                 }))

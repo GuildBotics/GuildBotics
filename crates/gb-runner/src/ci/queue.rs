@@ -23,6 +23,7 @@ pub enum Basis {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct ResultInfo {
     pub image_digest: Option<String>,
+    pub peak_memory_mib: Option<u64>,
     pub reused_from: Option<String>,
     pub cache_key: Option<String>,
     #[serde(default)]
