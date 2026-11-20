@@ -1123,7 +1123,7 @@ attempts are not interrupted by changes in class.
   when the runner did not ask for work, the version differs, the executor is
   unavailable, the Hub's current concurrency has been reached, no compatible
   attempt fits the reported capacity, or the service is stopping. Otherwise it returns:
-  `{"attempt_id","purpose","lease","expires_at","lease_secs","repo","sha","attempt","verified_sha":"<latest verified sha>"|null,"job":{"verified_sha":false,"name","image","commands","paths","timeout_secs"|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_scope":"protected"|"branch:<name>"|"probe","network":false,"queued_secs","reuse","limits","artifacts_max_mib"}`.
+  `{"attempt_id","purpose","lease","expires_at","lease_secs","repo","sha","attempt","verified_sha":"<latest verified sha>"|null,"job":{"verified_sha":false,"name","image","commands","paths","timeout_secs"|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_scope":"protected"|"branch:<name>"|"probe","network":false,"queued_secs","reuse","reuse_only","limits","artifacts_max_mib"}`.
   `limits` contains the effective job resources for this attempt (see
   [CI settings](#ci-settings)). `timeout_secs` is `null` when the pipeline
   gives none. `cache_scope` is `protected` for a run a protected branch asked
