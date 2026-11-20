@@ -34,9 +34,12 @@ mod integration {
             let first = ms.images().await.unwrap().pop().unwrap();
             let pin = format!("docker.io/test/image@{}", first.digest);
 
-            ms.load(images::tests::docker(images::architecture(), "2").path())
-                .await
-                .unwrap();
+            let second = images::tests::docker_tagged(
+                images::architecture(),
+                "2",
+                "docker.io/test/image:dev",
+            );
+            ms.load(second.path()).await.unwrap();
             let current = ms.inspect(&first.reference).await.unwrap().unwrap();
             assert_ne!(current.digest, first.digest);
             let alias = ms
@@ -52,6 +55,28 @@ mod integration {
                 ms.inspect(&pin).await.unwrap().unwrap().digest,
                 first.digest
             );
+
+            // An interrupted GuildBotics registration can leave the runtime's
+            // cache updated with one spelling while another catalog row is stale.
+            let third = images::tests::docker_tagged(
+                images::architecture(),
+                "3",
+                "docker.io/test/image:dev",
+            );
+            let output = ms
+                .command()
+                .unwrap()
+                .args(["load", "--quiet", "--input"])
+                .arg(third.path())
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(ms.inspect(&first.reference).await.is_err());
         }
 
         #[cfg(unix)]

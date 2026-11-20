@@ -175,16 +175,21 @@ pub fn save(root: &Path, source: &Path) -> anyhow::Result<Archive> {
 pub(crate) mod tests {
     use super::*;
     pub fn docker(architecture: &str, version: &str) -> tempfile::NamedTempFile {
+        docker_tagged(architecture, version, "test/image:dev")
+    }
+    pub fn docker_tagged(architecture: &str, version: &str, tag: &str) -> tempfile::NamedTempFile {
         let file = tempfile::NamedTempFile::new().unwrap();
         let config = serde_json::json!({
             "architecture": architecture, "os": "linux", "version": version,
             "rootfs": {"type": "layers", "diff_ids": []}, "config": {},
         })
         .to_string();
-        let manifest = r#"[{"Config":"config.json","RepoTags":["test/image:dev"],"Layers":[]}]"#;
+        let manifest =
+            serde_json::json!([{"Config": "config.json", "RepoTags": [tag], "Layers": []}])
+                .to_string();
         let mut tar = tar::Builder::new(file.reopen().unwrap());
         for (name, value) in [
-            ("manifest.json", manifest),
+            ("manifest.json", manifest.as_str()),
             ("config.json", config.as_str()),
         ] {
             let mut h = tar::Header::new_gnu();

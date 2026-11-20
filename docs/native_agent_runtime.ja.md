@@ -100,6 +100,19 @@ wheelが無いPythonの依存をビルドする`gcc`・`g++`・`make`）と、
 imageのものを優先し、Debianの0.8.0ではhelperをexecできずセッションを開始できません
 （`libwebkit2gtk`などが依存で引き込むので、入った場合はbinaryを消します）。読み込んだimageはregistryへ問い合わせずに使います（pull policy `never`）。HubのCIでも同じイメージを使えます。別マシンのCIランナーにも配る場合は、Hubで`guildbotics environment image load --ci <アーカイブ>`を使います。GuildBotics自身の開発では、`scripts/build-agent-environment-image.sh`でCPUごとのイメージをビルドし、Hubへ登録します。
 
+### 古いイメージのタグを削除する
+
+`guildbotics environment prune` は古いスナップショットと、タグやスナップショット、VMが使わなくなったイメージの版を掃除します。タグは、隔離環境とCIのどちらからでも使えるため残します。例えばNode.jsの更新でタグ自体が変わった場合は、旧タグを手動で削除できます。
+
+登録済みの各ワークスペースで `guildbotics environment --workspace <path> prune` を実行します。CIと隔離コマンドを止め、現在の宣言・CI設定・スナップショットのいずれも削除対象のイメージを参照していないことを確認します。次の例では、共有ストアのスナップショットを一覧し、不要と確認したタグを1つ削除します。データディレクトリを変更している場合は実際のパスを指定します。
+
+```sh
+store="$HOME/.guildbotics/data/msb"
+MSB_HOME="$store" "$store/bin/msb" snapshot list --format json
+# Confirm that no snapshot, workspace declaration, or CI job uses this image.
+MSB_HOME="$store" "$store/bin/msb" image remove example/base:old
+```
+
 macOS では、**システム設定 → プライバシーとセキュリティ → ファイルとフォルダ**で、GuildBotics を起動しているアプリに書類フォルダへのアクセスを一度許可してください（ターミナルで `guildbotics server start` を実行したときは、そのターミナルのアプリです）。環境の状態表示と turn の開始前にディレクトリへのアクセスを確認し、許可がなければ CLI と画面に同じ拒否理由を表示します。
 
 hostのマウント元は、読み取りや作成の前に、パスの各要素をリンクを辿らずに開いて確認します。

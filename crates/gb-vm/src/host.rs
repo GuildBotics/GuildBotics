@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use microsandbox::{LocalBackend, Sandbox};
+use microsandbox::{Image, ImageHandle, LocalBackend, Sandbox};
+use microsandbox_image::{CachedImageMetadata, GlobalCache, Reference};
 use tokio::sync::OnceCell;
 
 use crate::{RUNTIME_VERSION, digest_reference};
@@ -93,12 +94,8 @@ pub async fn backend(home: &Path) -> Result<(), String> {
 
 /// Import an archive into the already selected local store. The caller holds
 /// the image lock while changing references.
-pub async fn load_image(
-    path: &Path,
-    tags: Vec<String>,
-) -> Result<Vec<microsandbox::ImageHandle>, String> {
-    use microsandbox::Image;
-    use microsandbox_image::{GlobalCache, ImageLoadOptions, Reference, load_archive};
+pub async fn load_image(path: &Path, tags: Vec<String>) -> Result<Vec<ImageHandle>, String> {
+    use microsandbox_image::{ImageLoadOptions, load_archive};
 
     let backend = microsandbox::default_backend();
     let local = backend
@@ -119,30 +116,95 @@ pub async fn load_image(
     let mut handles = Vec::with_capacity(images.len());
     for image in images {
         let reference: Reference = image.reference.parse().map_err(|e| format!("{e}"))?;
-        let pin = Reference::with_digest(
-            reference.registry().to_owned(),
-            reference.repository().to_owned(),
-            image.metadata.manifest_digest.to_string(),
-        );
-        // Keep a removable reference when the tag moves. The manifest could
-        // still be in use by a VM or snapshot at that point.
-        cache
-            .write_image_metadata_async(&pin, &image.metadata)
-            .await
-            .map_err(|e| e.to_string())?;
-        Image::persist(local, &pin.whole(), image.metadata.clone())
-            .await
-            .map_err(|e| e.to_string())?;
-        Image::persist(local, &image.reference, image.metadata)
-            .await
-            .map_err(|e| e.to_string())?;
+        register_image(local, &cache, &reference, &image.reference, image.metadata).await?;
         handles.push(
-            Image::get(&image.reference)
+            Image::get_local(local, &image.reference)
                 .await
                 .map_err(|e| e.to_string())?,
         );
     }
     Ok(handles)
+}
+
+/// Register the alias and digest reference of a just-pulled image under the
+/// same exclusive lock as an archive import.
+pub async fn register_pulled_image(name: &str) -> Result<(), String> {
+    let backend = microsandbox::default_backend();
+    let local = backend
+        .as_local()
+        .ok_or("The runtime has no local image store")?;
+    let cache = GlobalCache::new(&local.cache_dir()).map_err(|e| e.to_string())?;
+    let reference: Reference = name.parse().map_err(|e| format!("{e}"))?;
+    let metadata = cache
+        .read_image_metadata_async(&reference)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("The runtime has no metadata for {name}"))?;
+    register_image(local, &cache, &reference, name, metadata).await
+}
+
+/// Refuse a catalog entry that disagrees with the OCI metadata used to boot.
+pub async fn verify_cached_image(image: &ImageHandle) -> Result<(), String> {
+    let backend = microsandbox::default_backend();
+    let local = backend
+        .as_local()
+        .ok_or("The runtime has no local image store")?;
+    let cache = GlobalCache::new(&local.cache_dir()).map_err(|e| e.to_string())?;
+    let name = image.reference();
+    let reference: Reference = name.parse().map_err(|e| format!("{e}"))?;
+    let manifest = cache
+        .read_image_metadata_async(&reference)
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|metadata| metadata.manifest_digest.to_string());
+    if manifest.is_some() && manifest.as_deref() == image.manifest_digest() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Cached image {name} is not registered at the version used by the runtime; load or pull it again"
+        ))
+    }
+}
+
+async fn register_image(
+    local: &LocalBackend,
+    cache: &GlobalCache,
+    reference: &Reference,
+    name: &str,
+    metadata: CachedImageMetadata,
+) -> Result<(), String> {
+    let pin = Reference::with_digest(
+        reference.registry().to_owned(),
+        reference.repository().to_owned(),
+        metadata.manifest_digest.to_string(),
+    );
+    // Keep a removable reference when the tag moves. The manifest could
+    // still be in use by a VM or snapshot at that point.
+    cache
+        .write_image_metadata_async(&pin, &metadata)
+        .await
+        .map_err(|e| e.to_string())?;
+    Image::persist(local, &pin.whole(), metadata.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    // The SDK looks up the raw tag in its database, but boots the image using
+    // the canonical OCI reference in its cache. Update both spellings together.
+    for alias in Image::list_local(local).await.map_err(|e| e.to_string())? {
+        let alias = alias.reference();
+        if alias != name
+            && alias
+                .parse::<Reference>()
+                .is_ok_and(|key| &key == reference)
+        {
+            Image::persist(local, alias, metadata.clone())
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Image::persist(local, name, metadata)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Drop old digest-only references without deleting tags or the base image
@@ -153,11 +215,14 @@ pub async fn collect_images() -> Result<(), String> {
     use std::collections::HashSet;
 
     let images = Image::list().await.map_err(|e| e.to_string())?;
-    let mut keep: HashSet<_> = images
+    let mut keep = HashSet::new();
+    for image in images
         .iter()
-        .filter(|i| !digest_reference(i.reference()))
-        .filter_map(|i| i.manifest_digest().map(str::to_owned))
-        .collect();
+        .filter(|image| !digest_reference(image.reference()))
+    {
+        verify_cached_image(image).await?;
+        keep.extend(image.manifest_digest().map(str::to_owned));
+    }
     for snapshot in Snapshot::list().await.map_err(|e| e.to_string())? {
         let Ok(opened) = Snapshot::open(snapshot.path().to_string_lossy()).await else {
             // The build holding this directory may be replacing its snapshot.

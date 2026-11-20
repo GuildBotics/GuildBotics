@@ -64,6 +64,7 @@ en:
     unreadable_archive: "Could not read image archive %{path}: %{reason}"
     wrong_architecture: "The archive %{path} holds an image built for %{architecture}, which this device (%{device}) cannot run."
     no_ci_runner: "The workspace's code host has no CI runner GuildBotics loads images into; there is nothing to load."
+    ci_local_only: "Loaded the image on this device only. CI distribution is unavailable for this workspace."
     loading_ci: "Waiting for the CI runner to load %{archive}..."
   snapshot:
     next_retry: "Next automatic build: %{time}"

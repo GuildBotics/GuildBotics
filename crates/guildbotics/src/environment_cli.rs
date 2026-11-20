@@ -17,7 +17,7 @@ pub(crate) enum EnvironmentCommand {
         #[arg(long)]
         force: bool,
     },
-    /// Remove obsolete snapshots and cached image versions after a successful Hub activation
+    /// Remove obsolete snapshots and unreferenced image versions, retaining tags
     Prune,
     /// Remove device snapshots while preserving provider logins
     Remove,
@@ -185,8 +185,11 @@ pub async fn run(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
                             println!("loaded {reference}");
                         }
                     }
-                    None if gb_environment::image_archive::architecture(&archive)
-                        .is_ok_and(|arch| arch != gb_environment::image::device_architecture()) =>
+                    None if gb_environment::image_archive::architecture(&archive).is_ok_and(
+                        |arch| {
+                            !arch.is_empty() && arch != gb_environment::image::device_architecture()
+                        },
+                    ) =>
                     {
                         println!(
                             "{}",
@@ -197,7 +200,17 @@ pub async fn run(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
                             )
                         );
                     }
-                    None => load_local(&runtime, &archive, None, language).await?,
+                    None => {
+                        load_local(&runtime, &archive, None, language).await?;
+                        println!(
+                            "{}",
+                            gb_server::i18n::t(
+                                language,
+                                "intelligences.agent_environment.image.ci_local_only",
+                                &[],
+                            )
+                        );
+                    }
                 }
             }
             ImageCommand::Load {

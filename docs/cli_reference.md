@@ -165,7 +165,7 @@ Usage: guildbotics environment [OPTIONS] <COMMAND>
 Commands:
   status  Read the device's environment and refusal or warning
   build   Build the declared environment on this device
-  prune   Remove obsolete snapshots and cached image versions after a successful Hub activation
+  prune   Remove obsolete snapshots and unreferenced image versions, retaining tags
   remove  Remove device snapshots while preserving provider logins
   login   Log in to a provider in its private environment
   usage   Probe provider usage in its private environment
@@ -216,7 +216,7 @@ Options:
 ## guildbotics environment prune
 
 ```text
-Remove obsolete snapshots and cached image versions after a successful Hub activation
+Remove obsolete snapshots and unreferenced image versions, retaining tags
 
 Usage: guildbotics environment prune
 

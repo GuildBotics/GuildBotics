@@ -121,6 +121,44 @@ fn loads_and_reloads_real_archives_without_booting_a_vm() {
             }
         }
     }
+
+    let workspace = dir.path().join("workspace");
+    let team = workspace.join(".guildbotics/config/team");
+    std::fs::create_dir_all(&team).unwrap();
+    std::fs::write(team.join("project.yml"), "name: Test\n").unwrap();
+    for (language, notice) in [
+        (
+            "en",
+            "Loaded the image on this device only. CI distribution is unavailable for this workspace.",
+        ),
+        (
+            "ja",
+            "この端末にイメージを読み込みました。このワークスペースではCIに配布できません。",
+        ),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_guildbotics"))
+            .env("HOME", dir.path())
+            .env("GUILDBOTICS_HOME", dir.path())
+            .env("MSB_CONFIG_PATH", dir.path().join("no-config.json"))
+            .env("LANGUAGE", language)
+            .args(["environment", "--workspace"])
+            .arg(&workspace)
+            .args(["image", "load", "--ci"])
+            .arg(dir.path().join("image.tar"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            text.contains(&format!("loaded local/agent:1 {digest}")),
+            "{text}"
+        );
+        assert!(text.contains(notice), "{text}");
+    }
 }
 
 #[test]

@@ -608,7 +608,7 @@ pub async fn pull(settings: &Settings, image: &str) -> anyhow::Result<()> {
     if !status.success() {
         bail!("msb pull {image} failed ({status})");
     }
-    ms.pin(image, None).await;
+    ms.register_pull(image).await.map_err(anyhow::Error::msg)?;
     ms.collect().await;
     Ok(())
 }

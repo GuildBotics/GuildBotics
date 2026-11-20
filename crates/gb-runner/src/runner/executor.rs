@@ -442,8 +442,8 @@ impl Microsandbox {
     /// moves the tag leaves the old version in the cache for good. The tag
     /// has moved either way, so a failure is a warning, not the transfer's.
     pub async fn pin(&self, name: &str, archive: Option<&Path>) {
-        // On the Hub, the archive importer already protects each imported version.
-        if self.uses_sdk() && archive.is_some() {
+        // SDK imports and pulls already register their digest references.
+        if self.uses_sdk() {
             return;
         }
         if let Err(e) = self.try_pin(name, archive).await {
@@ -562,6 +562,14 @@ impl Microsandbox {
             self.output_within(&["pull", "--quiet", reference], IMAGE_TRANSFER)
                 .await?,
         )?;
+        self.register_pull(reference).await
+    }
+
+    pub(super) async fn register_pull(&self, reference: &str) -> Result<(), String> {
+        #[cfg(feature = "host")]
+        if self.sdk {
+            return self.sdk_register_pulled_image(reference).await;
+        }
         self.pin(reference, None).await;
         Ok(())
     }

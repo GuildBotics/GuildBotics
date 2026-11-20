@@ -57,6 +57,7 @@ ja:
     unreadable_archive: "イメージアーカイブ %{path} を読み取れませんでした。%{reason}"
     wrong_architecture: "アーカイブ %{path} の image は %{architecture} 向けで、この端末（%{device}）では動きません。"
     no_ci_runner: "ワークスペースのコードホストには GuildBotics が image を読み込む CI ランナーがありません。読み込むものはありません。"
+    ci_local_only: "この端末にイメージを読み込みました。このワークスペースではCIに配布できません。"
     loading_ci: "CI ランナーが %{archive} を読み込むのを待っています..."
   snapshot:
     next_retry: "次の自動作成: %{time}"

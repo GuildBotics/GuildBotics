@@ -1,6 +1,8 @@
 use super::*;
 use gb_vm::sdk::sandbox::{PullPolicy, SandboxBuilder};
-use gb_vm::sdk::{ExecEvent, Image, MicrosandboxError, RegistryAuth, Sandbox};
+use gb_vm::sdk::{
+    ExecEvent, Image, MicrosandboxError, NetworkPolicy, NetworkProfile, RegistryAuth, Sandbox,
+};
 use gb_vm::{OwnedVm, owned_boot};
 
 impl Microsandbox {
@@ -26,6 +28,7 @@ impl Microsandbox {
             Err(error) => return Err(error.to_string()),
         };
         let handle = detail.handle;
+        gb_vm::verify_cached_image(&handle).await?;
         let config = detail
             .config
             .ok_or_else(|| format!("Missing image configuration for {reference}"))?;
@@ -60,6 +63,11 @@ impl Microsandbox {
         gb_vm::backend(&self.home).await?;
         gb_vm::load_image(archive, tags).await?;
         Ok(())
+    }
+
+    pub(super) async fn sdk_register_pulled_image(&self, name: &str) -> Result<(), String> {
+        gb_vm::backend(&self.home).await?;
+        gb_vm::register_pulled_image(name).await
     }
 
     async fn builder(&self, job: &JobRun<'_>, name: &str) -> Result<SandboxBuilder, String> {
@@ -146,7 +154,10 @@ impl Microsandbox {
                 })
             });
         let builder = if job.network {
-            builder
+            // Allow public destinations only; the host and private networks stay blocked.
+            builder.network(|network| {
+                network.policy(NetworkPolicy::from_profiles([NetworkProfile::Public]))
+            })
         } else {
             builder.disable_network()
         };

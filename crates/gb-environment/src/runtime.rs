@@ -119,6 +119,9 @@ pub async fn images(
             ) {
                 continue;
             }
+            gb_vm::verify_cached_image(&detail.handle)
+                .await
+                .map_err(failed)?;
             if let Some(config) = detail.config.filter(|c| !c.digest.is_empty()) {
                 found.push((
                     handle.reference().to_owned(),

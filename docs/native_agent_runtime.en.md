@@ -143,6 +143,26 @@ run `guildbotics environment image load --ci <archive>` on the Hub. The
 `scripts/build-agent-environment-image.sh` script builds the images for GuildBotics
 development and registers the archive for each CPU with the Hub.
 
+### Remove an old image tag
+
+`guildbotics environment prune` removes obsolete snapshots and image versions
+unused by tags, snapshots, or VMs. Tags stay because either an isolated
+environment or a CI job may use them. When a recipe changes tags, the old tag
+can be removed manually.
+
+Run `guildbotics environment --workspace <path> prune` for each registered
+workspace. Stop CI and isolated commands. Check the current declarations,
+CI configuration, and the snapshot list before removing an image they no longer
+use. The example lists snapshots in the default store and removes one old tag.
+Use your actual data directory if it differs.
+
+```sh
+store="$HOME/.guildbotics/data/msb"
+MSB_HOME="$store" "$store/bin/msb" snapshot list --format json
+# Confirm that no snapshot, workspace declaration, or CI job uses this image.
+MSB_HOME="$store" "$store/bin/msb" image remove example/base:old
+```
+
 On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics server start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
 
 Every host mount source is opened one path component at a time without following

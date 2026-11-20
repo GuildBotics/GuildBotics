@@ -218,7 +218,10 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   lock). Settings → CI shows the tag to write and the digest of
   every cached image. (A runner started by hand on another machine loads such
   an archive with `msb load` under its own `MSB_HOME`.)
-- A pull or a load also names the version the tag now points to by its
+- The Hub loads each archive image with a manifest digest reference. Only the
+  snapshot-aware sweep removes unused versions from the shared store. Tags stay
+  available for future jobs and isolated commands.
+- An external runner also names the version a pull or load now points to by its
   manifest digest (`<name>@sha256:…`), as msb cannot remove a version that no
   reference names. After a pull or a load, and before each job, the runner
   removes the versions no tag points to anymore, with their layers; msb
@@ -859,13 +862,11 @@ External runners read job output live from the mounted log file.
 The job gets private disks at `/work` and `/tmp`. A preparation VM uses the
 job's `io` directory to put the checkout into `/work`. On an external runner the
 job also gets an empty log directory at `/.branvil-log`. The job cannot access
-the host home, Docker socket, code host data, or secrets. Network: denied
-(`--no-net`: the guest has an interface, but the host-side network stack
-refuses every connection and DNS answers nothing; verified to a public host
-name, a public IP, and the host gateway). With `ci_network = true` (the owner
-only) a job gets `--net public`: public destinations only, never the host or
-private networks; microsandbox's hostname filtering is best effort and not
-used as a guarantee.
+the host home, Docker socket, code host data, or secrets. By default the Hub
+disables the VM network device and external runners pass `--no-net`. With
+`ci_network = true` set by the owner, the Public policy allows only public
+destinations and blocks the host and private networks. The policy does not
+rely on hostname filtering.
 
 ### Host prerequisites
 
