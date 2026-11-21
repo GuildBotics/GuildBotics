@@ -16,7 +16,11 @@ impl CodeAgent {
     }
 }
 impl CodeAgent {
-    pub fn retry_job<'a>(&'a self, url: &'a str) -> ServiceFuture<'a, String> {
+    pub fn retry_job<'a>(
+        &'a self,
+        url: &'a str,
+        selection: crate::ci::queue::RunnerSelection,
+    ) -> ServiceFuture<'a, String> {
         Box::pin(async move {
             self.fault("retry_job", url).await?;
             let path = url
@@ -34,7 +38,7 @@ impl CodeAgent {
             let attempt = self
                 .member()
                 .await?
-                .job_retry(repo, id)
+                .job_retry(repo, id, selection)
                 .await
                 .map_err(|e| error(e, "job_retry"))?;
             Ok(format!(

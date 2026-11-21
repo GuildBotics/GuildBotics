@@ -80,6 +80,12 @@ pub struct Check {
     /// The runner that claimed this attempt, if any.
     pub runner: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub runner_recovery: Option<queue::RunnerRecovery>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_decision: Option<queue::RetryDecision>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_wait: Option<api::RetryWait>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub details_url: Option<String>,
     /// Why the check is where it is (a failure reason, "superseded", "no
     /// runner", "waiting for room in the queue", ...).
@@ -268,6 +274,9 @@ impl Ci {
             attempt_id: Some(a.id.clone()),
             attempt: Some(a.number),
             runner: a.runner.clone(),
+            runner_recovery: None,
+            retry_decision: a.retry_decision.clone(),
+            retry_wait: self.retry_wait(a),
             details_url: Some(self.job_url(&a.repo_path, &a.id)),
             details: a.display_details(),
             artifact_names: if source.files_pruned {
@@ -325,7 +334,7 @@ impl Ci {
         let (id, s) = (repo.id.clone(), sha.to_string());
         // Attempts of a job the pipeline no longer has, or had with another
         // definition, are history, not checks.
-        let (run, latest, priority) = self
+        let (run, latest, priority, recoveries, queued_details) = self
             .inner
             .store
             .read(move |r| {
@@ -336,10 +345,30 @@ impl Ci {
                     }
                     _ => Vec::new(),
                 };
+                let history = if latest
+                    .iter()
+                    .any(|a| a.number > 1 && a.conclusion.as_deref() == Some("success"))
+                {
+                    queue::attempts_of(r, &id, &s)?
+                } else {
+                    Vec::new()
+                };
+                let mut recoveries = BTreeMap::new();
+                let mut queued_details = BTreeMap::new();
+                let mut schedule = priority::Snapshot::default();
                 let latest = latest
                     .into_iter()
                     .map(|a| {
                         let source = queue::source_of(r, &a)?;
+                        if a.status == "queued" {
+                            let details = schedule
+                                .class_of(r, &a)?
+                                .details(a.display_details(), false);
+                            queued_details.insert(a.id.clone(), details);
+                        }
+                        if let Some(recovery) = a.runner_recovery(&history) {
+                            recoveries.insert(a.id.clone(), recovery);
+                        }
                         Ok((a, source))
                     })
                     .collect::<AppResult<Vec<_>>>()?;
@@ -347,7 +376,7 @@ impl Ci {
                     .as_ref()
                     .map(|run| priority::run_class(r, run))
                     .transpose()?;
-                Ok((run, latest, priority))
+                Ok((run, latest, priority, recoveries, queued_details))
             })
             .await?;
         let mut checks = Vec::new();
@@ -373,6 +402,12 @@ impl Ci {
             });
         };
         let mut report = self.run_checks(repo, &run, latest)?;
+        for check in &mut report.checks {
+            check.runner_recovery = check
+                .attempt_id
+                .as_ref()
+                .and_then(|id| recoveries.get(id).cloned());
+        }
         if report
             .checks
             .iter()
@@ -389,10 +424,10 @@ impl Ci {
         if let Some(priority) = priority {
             for check in &mut report.checks {
                 if check.status == "queued" {
-                    check.details = priority.details(
-                        check.details.take(),
-                        run.waiting && check.attempt_id.is_none(),
-                    );
+                    check.details = match &check.attempt_id {
+                        Some(id) => queued_details.get(id).cloned().flatten(),
+                        None => priority.details(check.details.take(), run.waiting),
+                    };
                 }
             }
         }
@@ -884,6 +919,95 @@ impl Ci {
         }
     }
 
+    fn reported_runners(&self, r: &impl Rd) -> AppResult<Vec<RunnerSeen>> {
+        let reports = self.inner.runners.lock().unwrap().clone();
+        let mut runners = Vec::new();
+        for (_, mut seen) in reports {
+            if !seen.report.can_run()
+                || !r
+                    .get::<Member>(store::MEMBERS, &Member::key(&seen.name))?
+                    .is_some_and(|member| member.kind == MemberKind::Runner)
+            {
+                continue;
+            }
+            seen.report.images = images::current(&self.inner.layout.root, seen.report.images)
+                .map_err(AppError::internal)?;
+            runners.push(seen);
+        }
+        Ok(runners)
+    }
+
+    fn ready_alternatives(&self, r: &impl Rd, runner: &str) -> AppResult<Vec<queue::ClaimRunner>> {
+        let settings = self.settings();
+        let absent = Duration::from_secs(self.inner.config.runner_absent_secs);
+        let own = util::fold(runner);
+        Ok(self
+            .reported_runners(r)?
+            .into_iter()
+            .filter_map(|seen| {
+                let (limits, _) = settings.runner_limits(&seen.name);
+                (util::fold(&seen.name) != own
+                    && seen.online(absent)
+                    && seen.report.accept
+                    && seen.report.running_jobs < limits.max_jobs as usize)
+                    .then_some(queue::ClaimRunner {
+                        name: seen.name,
+                        images: seen.report.images,
+                        limits,
+                        machine: seen.report.machine,
+                    })
+            })
+            .collect())
+    }
+
+    fn matching_runners(&self, r: &impl Rd, image: &str) -> AppResult<Vec<String>> {
+        Ok(self
+            .reported_runners(r)?
+            .into_iter()
+            .filter(|seen| seen.report.images.iter().any(|i| i.supports(image)))
+            .map(|seen| seen.name)
+            .collect())
+    }
+
+    fn retry_wait(&self, attempt: &Attempt) -> Option<api::RetryWait> {
+        use api::RetryWait;
+        if attempt.status != "queued" {
+            return None;
+        }
+        let retry = attempt.retry_decision.as_ref()?;
+        if let Some(name) = &retry.selection.runner {
+            let reports = self.inner.runners.lock().unwrap();
+            let absent = Duration::from_secs(self.inner.config.runner_absent_secs);
+            let seen = reports
+                .get(&util::fold(name))
+                .filter(|seen| seen.online(absent));
+            return Some(match seen {
+                None => RetryWait::Offline,
+                Some(seen) if !seen.report.can_run() => RetryWait::Unavailable,
+                Some(seen) => match &seen.resource_wait {
+                    Some(wait) if wait.attempt_id == attempt.id => {
+                        RetryWait::Resources(wait.clone())
+                    }
+                    _ => {
+                        let (limits, _) = self.settings().runner_limits(name);
+                        if seen.report.running_jobs >= limits.max_jobs as usize {
+                            RetryWait::Busy
+                        } else {
+                            RetryWait::Waiting
+                        }
+                    }
+                },
+            });
+        }
+        retry
+            .prefer_other_until
+            .as_ref()
+            .filter(|until| util::now() < **until)
+            .map(|until| RetryWait::PreferOther {
+                until: until.clone(),
+            })
+    }
+
     pub fn report_runner(&self, name: &str, report: RunnerReport) -> Instant {
         let seen = Instant::now();
         self.inner.runners.lock().unwrap().insert(
@@ -1048,7 +1172,7 @@ impl Ci {
                 "executor_state": report.map(|r| r.executor_state),
                 "executor_detail": report.and_then(|r| r.executor_detail.as_ref()),
                 "architecture": report.map(|r| &r.architecture),
-                "machine": report.and_then(|r| r.machine),
+                "machine": report.and_then(|r| r.machine.as_ref()),
                 "resource_wait": resource_waits.get(&key).filter(|_| connection == "online"),
                 "missing_images": missing_images,
                 "limits": limits,

@@ -55,10 +55,7 @@ struct Classifier {
 }
 
 pub fn class_of(r: &impl Rd, attempt: &queue::Attempt) -> AppResult<Priority> {
-    if attempt.purpose == queue::Purpose::Probe {
-        return Ok(Priority::new(Class::Landing));
-    }
-    Classifier::default().run(r, attempt)
+    Snapshot::default().class_of(r, attempt)
 }
 
 impl Snapshot {
@@ -72,6 +69,13 @@ impl Snapshot {
     pub(crate) fn class_of(&mut self, r: &impl Rd, a: &queue::Attempt) -> AppResult<Priority> {
         if a.purpose == queue::Purpose::Probe {
             return Ok(Priority::new(Class::Landing));
+        }
+        if a.retry_decision
+            .as_ref()
+            .is_some_and(|retry| retry.after_failure)
+            && super::verify::get(r, &a.repo)?.is_some_and(|v| v.sha == a.sha)
+        {
+            return Ok(Priority::new(Class::Protected));
         }
         let key = (a.repo.clone(), a.sha.clone());
         if let Some(p) = self.runs.get(&key) {
@@ -120,29 +124,10 @@ impl Classifier {
             && let Some(v) = super::verify::get(r, &repo.id)?
             && v.sha == run.sha
         {
-            let failed = queue::attempts_of(r, &repo.id, &run.sha)?.iter().any(|a| {
-                a.purpose == queue::Purpose::Check
-                    && (a.status == "completed"
-                        && matches!(
-                            a.conclusion.as_deref(),
-                            Some("failure" | "timed_out" | "startup_failure")
-                        )
-                        || (a.after_interrupt
-                            && a.status == "completed"
-                            && a.conclusion.as_deref() == Some("cancelled")
-                            && !a.cancel_requested
-                            && !a.superseded))
-            });
-            return Ok(
-                if v.failing_since.is_some() || (v.state == "running" && failed) {
-                    Priority::new(Class::Protected)
-                } else {
-                    Priority::reason(
-                        Class::Verify,
-                        "main is verified after the jobs that lead to a merge",
-                    )
-                },
-            );
+            return Ok(Priority::reason(
+                Class::Verify,
+                "main is verified after the jobs that lead to a merge",
+            ));
         }
         if repo.is_protected(branch) {
             return Ok(Priority::new(Class::Protected));

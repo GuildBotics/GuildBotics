@@ -1,14 +1,15 @@
 // The checks of a pull request's head or of a commit: rows on the page, and one
 // check's details, actions, and log in a drawer.
 
-import { Anchor, Box, Button, Card, Drawer, Group, Select, Stack, Text } from "@mantine/core";
+import { Anchor, Box, Button, Card, Drawer, Group, MultiSelect, Select, Stack, Text } from "@mantine/core";
 import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { ChevronRight, CircleCheck, CircleDashed, CircleX, ExternalLink } from "lucide-react";
 import { useEffect, useState } from "react";
 import * as api from "../../api/endpoints";
-import type { Check, CheckSet, PathSkip, PullRequest, ReusedFrom } from "../../api/types";
+import type { Check, CheckSet, Job, PathSkip, PullRequest, ReusedFrom, RunnerRecovery, RunnerSelection } from "../../api/types";
 import { ErrorMessage, Loading, Sha, StateBadge, Time, type Tone } from "../../components/common";
 import { useT } from "../../i18n";
+import { resourceShortfallText } from "../../i18n/resourceShortfall";
 import { useChecks, useCommitChecks, useJob, useJobLog } from "../../query/hooks";
 import { keys } from "../../query/keys";
 import { Link } from "../../router/Router";
@@ -95,6 +96,11 @@ export function RunTime({ startedAt, finishedAt, expectedSecs }: { startedAt: st
 
 /** A check of the upstream host has an id but no Branvil attempt; its page is on the host. */
 const isHosted = (c: Check) => !!c.attempt_id && c.attempt === undefined;
+
+export function RunnerRecoveryLink({ repo, recovery }: { repo: string; recovery: RunnerRecovery }) {
+  const t = useT();
+  return <Link to={href.job(repo, recovery.failed_attempt)}>{t("ci.runnerRecovery", { from: recovery.failed_runner, to: recovery.successful_runner })}</Link>;
+}
 
 /** The checks of the pull request's head; a row opens its drawer. */
 export function ChecksCard({ repo, pull, requiredChecks, onOpen }: { repo: string; pull: PullRequest; requiredChecks: string[]; onOpen: (check: Check) => void }) {
@@ -228,6 +234,9 @@ function CheckRow({ check, repo, required, onOpen }: { check: Check; repo: strin
           {t("ci.reason")}: {reason}
         </Text>
       )}
+      {check.runner_recovery && (
+        <Text size="xs" ml={24} mb={4}><RunnerRecoveryLink repo={repo} recovery={check.runner_recovery} /></Text>
+      )}
       {check.reused_from && (
         <Text size="xs" ml={24} mb={4}>
           <Link to={href.job(repo, check.reused_from.attempt_id)}>
@@ -280,6 +289,57 @@ export function LogViewer({ repo, attemptId, action }: { repo: string; attemptId
   );
 }
 
+function RetryDetails({ repo, job }: { repo: string; job: Job }) {
+  const t = useT();
+  const retry = job.retry_decision;
+  if (!retry) return null;
+  const { runner, exclude_runners } = retry.selection;
+  const wait = job.retry_wait;
+  return (
+    <>
+      <dt>{t("ci.retryRequestedBy")}</dt>
+      <dd>
+        {retry.requested_by ?? t("ci.automaticRetry")}{" · "}
+        <Link to={href.job(repo, retry.source_attempt)}>{t("ci.previousAttempt")}</Link>
+      </dd>
+      {runner && <><dt>{t("ci.retryRunner")}</dt><dd>{runner}</dd></>}
+      {!!exclude_runners?.length && <><dt>{t("ci.excludeRunners")}</dt><dd>{exclude_runners.join(", ")}</dd></>}
+      {wait && (
+        <>
+          <dt>{t("ci.reason")}</dt>
+          <dd>
+            {wait.reason === "prefer_other" ? t("ci.retryWait.prefer_other", { name: retry.failed_runner ?? "", until: new Date(wait.until).toLocaleTimeString() }) :
+              wait.reason === "resources" ? resourceShortfallText(t, runner ?? "", wait) :
+              t(`ci.retryWait.${wait.reason}`, { name: runner ?? "" })}
+          </dd>
+        </>
+      )}
+    </>
+  );
+}
+
+function RetryControls({ job, onRetry, pending }: { job: Job; onRetry: (selection: RunnerSelection) => void; pending: boolean }) {
+  const t = useT();
+  const [runner, setRunner] = useState<string | null>(null);
+  const [excluded, setExcluded] = useState<string[]>([]);
+  const options = job.retry_runners ?? [];
+  const choices = Array.from(new Set([...options, ...excluded, ...(runner ? [runner] : [])]))
+    .map((name) => ({ value: name, label: name, disabled: !options.includes(name) }));
+  return (
+    <>
+      {choices.length > 0 && (
+        <>
+          <Select size="xs" aria-label={t("ci.retryRunner")} placeholder={t("ci.retryRunner")} data={choices.filter(({ value }) => !excluded.includes(value))} value={runner} onChange={setRunner} clearable />
+          <MultiSelect size="xs" aria-label={t("ci.excludeRunners")} placeholder={t("ci.excludeRunners")} data={choices.filter(({ value }) => value !== runner)} value={excluded} onChange={setExcluded} clearable />
+        </>
+      )}
+      <Button size="xs" variant="default" onClick={() => onRetry({ runner: runner ?? undefined, exclude_runners: excluded })} disabled={pending || job.retry_supported === false || job.status !== "completed"}>
+        {t("ci.retry")}
+      </Button>
+    </>
+  );
+}
+
 /** One attempt of a Branvil job: status, commit, times, reason, artifacts, retry/cancel, log. */
 function JobDetails({ repo, attemptId, onAttempt }: { repo: string; attemptId: string; onAttempt: (id: string) => void }) {
   const t = useT();
@@ -290,7 +350,7 @@ function JobDetails({ repo, attemptId, onAttempt }: { repo: string; attemptId: s
     void client.invalidateQueries({ queryKey: ["repo", repo, "pull"] });
     if (job.data) void client.invalidateQueries({ queryKey: keys.commitChecks(repo, job.data.sha) });
   };
-  const retry = useMutation({ mutationFn: () => api.jobs.retry(repo, attemptId), onSuccess: (j) => onAttempt(j.id), onSettled: settle });
+  const retry = useMutation({ mutationFn: (selection: RunnerSelection) => api.jobs.retry(repo, attemptId, selection), onSuccess: (j) => onAttempt(j.id), onSettled: settle });
   const cancel = useMutation({ mutationFn: () => api.jobs.cancel(repo, attemptId), onSettled: settle });
   if (job.isPending) return <Loading />;
   if (job.isError) return <ErrorMessage error={job.error} />;
@@ -331,6 +391,17 @@ function JobDetails({ repo, attemptId, onAttempt }: { repo: string; attemptId: s
             <dd>{j.details}</dd>
           </>
         )}
+        <RetryDetails repo={repo} job={j} />
+        {Object.entries(j.runner_deferrals ?? {}).map(([name, wait]) => (
+          <div key={name}>
+            <dt>{t("ci.runnerDeferral")}</dt>
+            <dd>
+              <Time value={wait.at} />{" · "}
+              {resourceShortfallText(t, name, wait)}
+            </dd>
+          </div>
+        ))}
+        {j.runner_recovery && <><dt>{t("ci.runnerChange")}</dt><dd><RunnerRecoveryLink repo={repo} recovery={j.runner_recovery} /></dd></>}
         <dt>{t("ci.artifacts")}</dt>
         <dd>
           {j.artifact_names.length === 0 ? (
@@ -354,9 +425,7 @@ function JobDetails({ repo, attemptId, onAttempt }: { repo: string; attemptId: s
         attemptId={attemptId}
         action={
           <>
-            <Button size="xs" variant="default" onClick={() => retry.mutate()} disabled={retry.isPending || j.retry_supported === false}>
-              {t("ci.retry")}
-            </Button>
+            <RetryControls key={attemptId} job={j} onRetry={retry.mutate} pending={retry.isPending} />
             <Button size="xs" variant="default" onClick={() => cancel.mutate()} disabled={cancel.isPending || j.status === "completed"}>
               {t("ci.cancel")}
             </Button>

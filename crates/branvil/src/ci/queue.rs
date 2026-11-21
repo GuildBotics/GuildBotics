@@ -36,6 +36,7 @@ pub const CONCLUSIONS: [&str; 6] = [
 ];
 
 pub const MAX_AUTO_RETRIES: u64 = 3;
+const RUNNER_RETRY_GRACE_SECS: u64 = 30;
 
 const MAX_DETAILS: usize = 4 << 10;
 
@@ -175,6 +176,75 @@ pub struct AutoRetry {
     pub number: u64,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerSelection {
+    pub runner: Option<String>,
+    #[serde(default)]
+    pub exclude_runners: Vec<String>,
+}
+
+impl RunnerSelection {
+    pub fn is_empty(&self) -> bool {
+        self.runner.is_none() && self.exclude_runners.is_empty()
+    }
+
+    fn allows(&self, runner: &str) -> bool {
+        let key = util::fold(runner);
+        self.runner
+            .as_ref()
+            .is_none_or(|name| util::fold(name) == key)
+            && !self
+                .exclude_runners
+                .iter()
+                .any(|name| util::fold(name) == key)
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RetryDecision {
+    pub source_attempt: String,
+    /// None is a scheduling decision by Branvil.
+    pub requested_by: Option<String>,
+    pub selection: RunnerSelection,
+    pub after_failure: bool,
+    pub failed_runner: Option<String>,
+    pub prefer_other_until: Option<String>,
+}
+
+impl RetryDecision {
+    fn of(old: &Attempt, requested_by: Option<String>, selection: RunnerSelection) -> Self {
+        Self {
+            source_attempt: old.id.clone(),
+            requested_by,
+            selection,
+            after_failure: old.failed(),
+            failed_runner: old.runner.clone().filter(|_| old.failed()),
+            prefer_other_until: None,
+        }
+    }
+
+    fn is_failed_runner(&self, runner: &str) -> bool {
+        self.failed_runner
+            .as_ref()
+            .is_some_and(|name| util::fold(name) == util::fold(runner))
+    }
+
+    fn after_interruption(&self) -> Self {
+        Self {
+            prefer_other_until: None,
+            ..self.clone()
+        }
+    }
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct RunnerRecovery {
+    pub failed_attempt: String,
+    pub failed_runner: String,
+    pub successful_runner: String,
+}
+
 /// One try of one job.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Attempt {
@@ -183,6 +253,8 @@ pub struct Attempt {
     pub id: String,
     pub purpose: Purpose,
     pub auto_retry: Option<AutoRetry>,
+    pub retry_decision: Option<RetryDecision>,
+    pub runner_deferrals: BTreeMap<String, ResourceDeferral>,
     /// An absence retry stays queued until a runner claims it.
     pub wait_for_runner: bool,
     pub repo: String,
@@ -235,13 +307,21 @@ pub struct Allocation {
     pub reserved_memory_mib: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ResourceWait {
     pub attempt_id: String,
     pub repo: String,
     pub job: String,
     pub cpu_shortfall: u64,
     pub memory_shortfall_mib: u64,
+    pub commit_shortfall_mib: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ResourceDeferral {
+    pub at: String,
+    #[serde(flatten)]
+    pub wait: ResourceWait,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -276,6 +356,38 @@ impl From<Allocation> for Resources {
 }
 
 impl Attempt {
+    pub fn failed(&self) -> bool {
+        matches!(
+            self.conclusion.as_deref(),
+            Some("failure" | "timed_out" | "startup_failure")
+        )
+    }
+
+    pub fn runner_recovery(&self, history: &[Attempt]) -> Option<RunnerRecovery> {
+        let runner = self.runner.as_ref()?;
+        if self.conclusion.as_deref() != Some("success") || self.reused_from.is_some() {
+            return None;
+        }
+        let failed = history
+            .iter()
+            .rev()
+            .find(|a| {
+                a.purpose == Purpose::Check
+                    && a.job == self.job
+                    && a.number < self.number
+                    && (a.failed() || a.conclusion.as_deref() == Some("success"))
+                    && a.runner.is_some()
+                    && a.reused_from.is_none()
+            })
+            .filter(|a| a.failed())?;
+        let failed_runner = failed.runner.as_ref()?;
+        (util::fold(failed_runner) != util::fold(runner)).then(|| RunnerRecovery {
+            failed_attempt: failed.id.clone(),
+            failed_runner: failed_runner.clone(),
+            successful_runner: runner.clone(),
+        })
+    }
+
     fn recovery_hint(&self, next: Option<&Attempt>) -> String {
         if let Some(next) = next
             && let Some(retry) = &next.auto_retry
@@ -688,6 +800,8 @@ fn new_job(
         id: util::new_id("att"),
         purpose: Purpose::Check,
         auto_retry: None,
+        retry_decision: None,
+        runner_deferrals: BTreeMap::new(),
         wait_for_runner: false,
         repo: repo.into(),
         repo_path: path.into(),
@@ -814,6 +928,26 @@ pub fn register(w: &Wtx, reg: Registration, queue_max: usize, now: &str) -> AppR
     } else {
         reg.selection
     };
+    if run.cache_scope == "protected"
+        && old
+            .as_ref()
+            .is_some_and(|old| old.cache_scope != "protected")
+    {
+        for a in attempts_of(w, &run.repo, &run.sha)? {
+            if a.retry_decision
+                .as_ref()
+                .is_some_and(|retry| !retry.selection.is_empty())
+            {
+                stop(
+                    w,
+                    &a,
+                    "Stopped: protected-branch checks select their runner automatically.",
+                    true,
+                    now,
+                )?;
+            }
+        }
+    }
     // Skipped attempts consume no queue capacity, including while waiting.
     let mut skipped = false;
     if let PipelineState::Jobs { jobs } = &run.pipeline {
@@ -1293,81 +1427,198 @@ pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Opt
     claim_selected(w, runner, lease_secs, now, a, reuse, None).map(Some)
 }
 
+pub struct ClaimRunner {
+    pub name: String,
+    pub images: Vec<super::images::Image>,
+    pub limits: JobLimits,
+    pub machine: Option<Machine>,
+}
+
+impl ClaimRunner {
+    fn budget(&self, active: &[Attempt]) -> Option<Budget> {
+        let Some(machine) = &self.machine else {
+            return Some(Budget::default());
+        };
+        let key = util::fold(&self.name);
+        let running = active
+            .iter()
+            .filter(|a| a.runner.as_deref().map(util::fold).as_ref() == Some(&key))
+            .collect::<Vec<_>>();
+        if running.len() >= self.limits.max_jobs as usize {
+            return None;
+        }
+        let commit = machine.commit.as_ref().map(|commit| {
+            running
+                .iter()
+                .filter(|a| !commit.started_attempts.contains(&a.id))
+                .filter_map(|a| a.allocation)
+                .fold(commit.available_mib, |free, a| {
+                    free.saturating_sub(a.vm_memory_mib)
+                })
+        });
+        Some(Budget {
+            physical: Some(capacity(machine, self.limits, &running)),
+            commit,
+        })
+    }
+}
+
+#[derive(Default)]
+struct Budget {
+    physical: Option<(Resources, Resources)>,
+    commit: Option<u64>,
+}
+
+impl Budget {
+    fn shortfall(&self, allocation: Allocation, reserve: Resources) -> (Resources, u64) {
+        let physical = self.physical.map_or_else(Resources::default, |(_, free)| {
+            Resources::from(allocation).minus(free.minus(reserve))
+        });
+        let commit = self
+            .commit
+            .map_or(0, |free| allocation.vm_memory_mib.saturating_sub(free));
+        (physical, commit)
+    }
+}
+
+fn allocation(r: &impl Rd, a: &Attempt, limits: JobLimits) -> AppResult<Allocation> {
+    Ok(Allocation {
+        cpus: limits.max_cpus,
+        vm_memory_mib: limits.max_memory_mib,
+        reserved_memory_mib: estimate_memory(r, a, limits)?,
+    })
+}
+
 /// Choose a compatible attempt and reserve its capacity in the lease transaction.
 pub fn claim_images(
     w: &Wtx,
-    runner: &str,
+    runner: ClaimRunner,
     lease_secs: u64,
     now: &str,
-    images: &[super::images::Image],
-    limits: JobLimits,
-    machine: Option<Machine>,
+    alternatives: impl FnOnce() -> AppResult<Vec<ClaimRunner>>,
 ) -> AppResult<(Option<Claimed>, Option<ResourceWait>)> {
-    let budget = if let Some(machine) = machine {
-        let runner_key = util::fold(runner);
-        let running = active(w)?
-            .into_iter()
-            .filter(|a| a.runner.as_deref().map(util::fold).as_ref() == Some(&runner_key))
-            .collect::<Vec<_>>();
-        if running.len() >= limits.max_jobs as usize {
-            return Ok((None, None));
-        }
-        Some(capacity(machine, limits, &running))
-    } else {
-        None
+    let active = active(w)?;
+    let Some(budget) = runner.budget(&active) else {
+        return Ok((None, None));
     };
+    let mut alternatives = Some(alternatives);
+    let mut other_runners = Vec::new();
     let mut waiting = None;
     let mut reserve = Resources::default();
     let mut estimates = BTreeMap::new();
     for (a, reuse) in scheduled(w, false)? {
-        let Some(image) = images.iter().find(|i| i.supports(&a.job.image)) else {
+        let Some(image) = runner.images.iter().find(|i| i.supports(&a.job.image)) else {
             continue;
         };
+        if let Some(retry) = &a.retry_decision {
+            if !retry.selection.allows(&runner.name) {
+                continue;
+            }
+            if let Some(until) = retry.prefer_other_until.as_deref()
+                && retry.is_failed_runner(&runner.name)
+            {
+                if now < until {
+                    continue;
+                }
+                if let Some(reports) = alternatives.take() {
+                    other_runners = reports()?;
+                }
+                if alternative_can_run(w, &a, &other_runners, &active)? {
+                    continue;
+                }
+            }
+        }
         if reuse
             .as_ref()
             .is_some_and(|source| source.image_digest == image.digest)
         {
-            let claim = claim_selected(w, runner, lease_secs, now, a, reuse, None)?;
+            let claim = claim_selected(w, &runner.name, lease_secs, now, a, reuse, None)?;
             return Ok((Some(claim), waiting));
         }
         let key = (a.repo.clone(), a.job.name.clone());
-        let estimate = match estimates.get(&key) {
-            Some(&mib) => mib,
+        let allocation = match estimates.get(&key) {
+            Some(&allocation) => allocation,
             None => {
-                let mib = estimate_memory(w, &a, limits)?;
-                estimates.insert(key, mib);
-                mib
+                let allocation = allocation(w, &a, runner.limits)?;
+                estimates.insert(key, allocation);
+                allocation
             }
         };
-        let allocation = Allocation {
-            cpus: limits.max_cpus,
-            vm_memory_mib: limits.max_memory_mib,
-            reserved_memory_mib: estimate,
-        };
-        let need = Resources::from(allocation);
-        if let Some((total, free)) = budget {
-            let short = need.minus(free.minus(reserve));
-            if short != Resources::default() {
-                waiting.get_or_insert_with(|| ResourceWait {
-                    attempt_id: a.id.clone(),
-                    repo: a.repo_path.clone(),
-                    job: a.job.name.clone(),
-                    cpu_shortfall: short.cpus,
-                    memory_shortfall_mib: short.memory,
-                });
-                if reserve == Resources::default() && need.minus(total) == Resources::default() {
-                    reserve = need;
-                }
-                continue;
+        let (short, commit_shortfall_mib) = budget.shortfall(allocation, reserve);
+        if short != Resources::default() || commit_shortfall_mib != 0 {
+            let wait = ResourceWait {
+                attempt_id: a.id.clone(),
+                repo: a.repo_path.clone(),
+                job: a.job.name.clone(),
+                cpu_shortfall: short.cpus,
+                memory_shortfall_mib: short.memory,
+                commit_shortfall_mib,
+            };
+            if (commit_shortfall_mib > 0
+                || a.retry_decision
+                    .as_ref()
+                    .is_some_and(|retry| retry.selection.runner.is_some()))
+                && a.runner_deferrals
+                    .get(&runner.name)
+                    .is_none_or(|previous| previous.wait != wait)
+            {
+                // Only the diagnostics change; the scheduling copy has updated
+                // run-derived fields and must not be persisted here.
+                let mut stored = get_attempt(w, &a.id)?
+                    .ok_or_else(|| AppError::internal("pending attempt is missing"))?;
+                stored.runner_deferrals.insert(
+                    runner.name.clone(),
+                    ResourceDeferral {
+                        at: now.into(),
+                        wait: wait.clone(),
+                    },
+                );
+                w.put(store::CI_ATTEMPTS, &Attempt::key(&a.id), &stored)?;
             }
+            waiting.get_or_insert(wait);
+            let need = Resources::from(allocation);
+            if reserve == Resources::default()
+                && let Some((total, _)) = budget.physical
+                && need.minus(total) == Resources::default()
+            {
+                reserve = need;
+            }
+            continue;
         }
-        let claim = claim_selected(w, runner, lease_secs, now, a, reuse, Some(allocation))?;
+        let claim = claim_selected(w, &runner.name, lease_secs, now, a, reuse, Some(allocation))?;
         return Ok((Some(claim), waiting));
     }
     Ok((None, waiting))
 }
 
-fn capacity(machine: Machine, limits: JobLimits, running: &[Attempt]) -> (Resources, Resources) {
+fn alternative_can_run(
+    r: &impl Rd,
+    attempt: &Attempt,
+    alternatives: &[ClaimRunner],
+    active: &[Attempt],
+) -> AppResult<bool> {
+    for runner in alternatives {
+        let jobs = active
+            .iter()
+            .filter(|a| {
+                a.runner
+                    .as_deref()
+                    .is_some_and(|name| util::fold(name) == util::fold(&runner.name))
+            })
+            .count();
+        if jobs < runner.limits.max_jobs as usize
+            && runner.images.iter().any(|i| i.supports(&attempt.job.image))
+            && let Some(budget) = runner.budget(active)
+            && budget.shortfall(allocation(r, attempt, runner.limits)?, Resources::default())
+                == (Resources::default(), 0)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn capacity(machine: &Machine, limits: JobLimits, running: &[&Attempt]) -> (Resources, Resources) {
     let logical_cpus = u64::from(machine.logical_cpus);
     let cpus = match limits.cpu_multiplier_percent {
         0 => logical_cpus.max(u64::from(limits.max_cpus) * u64::from(limits.max_jobs)),
@@ -1607,7 +1858,7 @@ pub fn finish(
         conclude(&mut a, conclusion, details, now);
         a.reused_from = info.reused_from;
     }
-    let next = if matches!(a.conclusion.as_deref(), Some("failure" | "timed_out")) {
+    let next = if a.failed() {
         prepare_auto_retry(w, &a, false, now)?
     } else {
         None
@@ -1661,6 +1912,15 @@ fn prepare_auto_retry(
             .map_or_else(|| old.id.clone(), |r| r.root_attempt.clone()),
         number,
     });
+    let mut decision = RetryDecision::of(old, None, RunnerSelection::default());
+    decision.after_failure |= old
+        .retry_decision
+        .as_ref()
+        .is_some_and(|retry| retry.after_failure);
+    if decision.failed_runner.is_some() {
+        decision.prefer_other_until = Some(later(now, RUNNER_RETRY_GRACE_SECS));
+    }
+    next.retry_decision = Some(decision);
     next.allow_reuse = false;
     next.wait_for_runner = wait_for_runner;
     Ok(Some(next))
@@ -1702,7 +1962,35 @@ pub fn cancel(w: &Wtx, id: &str, who: &str, now: &str) -> AppResult<Attempt> {
 
 /// Queues a new attempt of the same job (with the same recorded definition)
 /// after the job's latest current attempt (`current_attempts`) completed.
+#[cfg(any(test, feature = "test-support"))]
 pub fn retry(w: &Wtx, id: &str, queue_max: usize, now: &str) -> AppResult<Attempt> {
+    retry_selected(w, id, queue_max, now, "fixture", RunnerSelection::default())
+}
+
+pub fn runner_selection_supported(r: &impl Rd, run: &Run) -> AppResult<bool> {
+    if run.cache_scope == "protected" {
+        return Ok(false);
+    }
+    for branch in &run.branches {
+        let prefix = Key::new().s(&run.repo).s(branch).bytes();
+        if !r
+            .prefix_raw(store::IX_OPEN_PULLS, &prefix, None, 1)?
+            .is_empty()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub fn retry_selected(
+    w: &Wtx,
+    id: &str,
+    queue_max: usize,
+    now: &str,
+    who: &str,
+    selection: RunnerSelection,
+) -> AppResult<Attempt> {
     let old =
         get_attempt(w, id)?.ok_or_else(|| AppError::not_found(format!("No CI attempt {id}.")))?;
     if old.purpose != Purpose::Check {
@@ -1731,8 +2019,17 @@ pub fn retry(w: &Wtx, id: &str, queue_max: usize, now: &str) -> AppResult<Attemp
             old.job.name
         )));
     }
+    if !selection.is_empty() && !runner_selection_supported(w, &run)? {
+        return Err(AppError::conflict_code(
+            "retry_pr_head_required",
+            "Runner selection requires a current, unprotected pull request head.",
+        ));
+    }
+    let decision = RetryDecision::of(&old, Some(who.into()), selection);
     let mut snapshot = super::priority::Snapshot::retrying(&old.id);
-    let class = snapshot.class_of(w, &old)?.class;
+    let mut replacement = old.clone();
+    replacement.retry_decision = Some(decision.clone());
+    let class = snapshot.class_of(w, &replacement)?.class;
     let reopen = super::verify::get(w, &old.repo)?.filter(|v| {
         v.state == "failed" && v.sha == old.sha && old.conclusion.as_deref() != Some("success")
     });
@@ -1773,6 +2070,7 @@ pub fn retry(w: &Wtx, id: &str, queue_max: usize, now: &str) -> AppResult<Attemp
     let network = network_of(w, &old.repo)?;
     let mut a = new_attempt(w, &run, &old.job, network, now)?;
     a.allow_reuse = false;
+    a.retry_decision = Some(decision);
     put_attempt(w, None, &a)?;
     Ok(a)
 }
@@ -1845,6 +2143,10 @@ fn replacement(w: &Wtx, run: &Run, old: &Attempt, now: &str) -> AppResult<Attemp
     next.seq = old.seq;
     next.allow_reuse = old.allow_reuse;
     next.auto_retry = old.auto_retry.clone();
+    next.retry_decision = old
+        .retry_decision
+        .as_ref()
+        .map(RetryDecision::after_interruption);
     next.purpose = old.purpose;
     next.cache_key = old.cache_key.clone();
     next.cache_scope = old.cache_scope.clone();
@@ -1911,6 +2213,10 @@ fn interrupt(w: &Wtx, old: &Attempt, why: &str, now: &str) -> AppResult<()> {
         next.seq = old.seq;
         next.allow_reuse = old.allow_reuse;
         next.auto_retry = old.auto_retry.clone();
+        next.retry_decision = old
+            .retry_decision
+            .as_ref()
+            .map(RetryDecision::after_interruption);
         next.purpose = old.purpose;
         next.cache_key = old.cache_key.clone();
         next.after_interrupt = true;
@@ -1967,20 +2273,25 @@ pub fn fail_unavailable(
         };
         // Automatic retries wait for a runner instead of exhausting their
         // entire budget while no runner is available.
-        if old.wait_for_runner || old.created_at.as_str() >= before {
+        if old.wait_for_runner
+            || old
+                .retry_decision
+                .as_ref()
+                .is_some_and(|retry| retry.selection.runner.is_some())
+            || old.created_at.as_str() >= before
+        {
             continue;
         }
         let Some(details) = reason(&old) else {
             continue;
         };
-        let next = prepare_auto_retry(w, &old, true, now)?;
         let mut a = old.clone();
-        conclude(
-            &mut a,
-            "startup_failure",
-            Some(format!("{details}; {}.", old.recovery_hint(next.as_ref()))),
-            now,
-        );
+        conclude(&mut a, "startup_failure", None, now);
+        let next = prepare_auto_retry(w, &a, true, now)?;
+        a.details = Some(cut(&format!(
+            "{details}; {}.",
+            old.recovery_hint(next.as_ref())
+        )));
         put_attempt(w, Some(&old), &a)?;
         if let Some(next) = next {
             put_attempt(w, None, &next)?;
@@ -2033,6 +2344,29 @@ mod tests {
     use super::*;
     use crate::store::Store;
 
+    fn claim_images(
+        w: &Wtx,
+        name: &str,
+        lease_secs: u64,
+        now: &str,
+        images: &[super::super::images::Image],
+        limits: JobLimits,
+        machine: Option<Machine>,
+    ) -> AppResult<(Option<Claimed>, Option<ResourceWait>)> {
+        super::claim_images(
+            w,
+            ClaimRunner {
+                name: name.into(),
+                images: images.to_vec(),
+                limits,
+                machine,
+            },
+            lease_secs,
+            now,
+            || Ok(Vec::new()),
+        )
+    }
+
     fn limits() -> JobLimits {
         JobLimits::from(&gb_runner::ci::config::ExecutorConfig::default())
     }
@@ -2043,6 +2377,166 @@ mod tests {
             architecture: "amd64".into(),
             digest: format!("sha256:{}", "2".repeat(64)),
         }
+    }
+
+    #[test]
+    fn windows_commit_admission_reserves_the_full_vm_until_it_starts() {
+        use gb_runner::ci::api::CommitMemory;
+
+        let (_d, store) = store();
+        store
+            .write_sync(|w| {
+                require_test(w)?;
+                let limits = JobLimits {
+                    max_jobs: 2,
+                    max_memory_mib: 8192,
+                    memory_reserve_percent: 0,
+                    ..limits()
+                };
+                let image = [held_image()];
+                let claim = |now: &str, available_mib, started_attempts| {
+                    claim_images(
+                        w,
+                        "windows",
+                        60,
+                        now,
+                        &image,
+                        limits,
+                        Some(Machine {
+                            logical_cpus: 16,
+                            total_memory_mib: 32768,
+                            available_memory_mib: 24576,
+                            commit: Some(CommitMemory {
+                                available_mib,
+                                started_attempts,
+                            }),
+                        }),
+                    )
+                };
+                register(w, reg("sha", "main", &["first", "second"]), 10, T0)?;
+                let (unclaimed, wait) = claim(T0, 8191, vec![])?;
+                assert!(unclaimed.is_none());
+                let wait = wait.unwrap();
+                assert_eq!(
+                    (
+                        wait.cpu_shortfall,
+                        wait.memory_shortfall_mib,
+                        wait.commit_shortfall_mib
+                    ),
+                    (0, 0, 1)
+                );
+
+                let first = claim(T0, 12288, vec![])?.0.unwrap().attempt;
+                let (unclaimed, wait) = claim(T0, 12288, vec![])?;
+                assert!(unclaimed.is_none());
+                assert_eq!(wait.unwrap().commit_shortfall_mib, 4096);
+
+                let same = claim(&later(T0, 2), 12288, vec![])?.1.unwrap();
+                let unchanged = get_attempt(w, &same.attempt_id)?.unwrap();
+                assert_eq!(unchanged.runner_deferrals["windows"].at, T0);
+                assert_eq!(same.commit_shortfall_mib, 4096);
+
+                let updated_at = later(T0, 4);
+                let changed = claim(&updated_at, 13312, vec![])?.1.unwrap();
+                assert_eq!(changed.commit_shortfall_mib, 3072);
+                let second = claim(&later(T0, 6), 8192, vec![first.id])?
+                    .0
+                    .unwrap()
+                    .attempt;
+                assert_ne!(second.job.name, first.job.name);
+                let deferral = &second.runner_deferrals["windows"];
+                assert_eq!(deferral.at, updated_at);
+                assert_eq!(deferral.wait.commit_shortfall_mib, 3072);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn protected_runner_startup_failure_retries_elsewhere_before_falling_back() {
+        let (_d, store) = store();
+        store
+            .write_sync(|w| {
+                require_test(w)?;
+                register(w, reg("sha", "main", &["test"]), 10, T0)?;
+                let runner = |name: &str, machine| ClaimRunner {
+                    name: name.into(),
+                    images: vec![held_image()],
+                    limits: limits(),
+                    machine,
+                };
+                let empty = || Ok(Vec::new());
+                let first = super::claim_images(w, runner("windows", None), 60, T0, empty)?
+                    .0
+                    .unwrap();
+                finish(
+                    w,
+                    &first.attempt.id,
+                    &first.lease,
+                    "startup_failure",
+                    None,
+                    ResultInfo::default(),
+                    T0,
+                )?;
+                let until = later(T0, RUNNER_RETRY_GRACE_SECS);
+                assert!(
+                    super::claim_images(w, runner("windows", None), 60, T0, empty)?
+                        .0
+                        .is_none()
+                );
+                assert!(
+                    super::claim_images(w, runner("windows", None), 60, &until, || Ok(vec![
+                        runner("linux", None)
+                    ]))?
+                    .0
+                    .is_none()
+                );
+
+                let second = super::claim_images(w, runner("linux", None), 60, T0, empty)?
+                    .0
+                    .unwrap();
+                assert_eq!(second.attempt.auto_retry.as_ref().unwrap().number, 1);
+                let ended = finish(
+                    w,
+                    &second.attempt.id,
+                    &second.lease,
+                    "success",
+                    None,
+                    ResultInfo::default(),
+                    T0,
+                )?;
+                let history = attempts_of(w, "repo_1", "sha")?;
+                let recovery = ended.runner_recovery(&history).unwrap();
+                assert_eq!(recovery.failed_attempt, first.attempt.id);
+                assert_eq!(recovery.failed_runner, "windows");
+                assert_eq!(recovery.successful_runner, "linux");
+
+                register(w, reg("solo", "main", &["test"]), 10, T0)?;
+                let first = super::claim_images(w, runner("windows", None), 60, T0, empty)?
+                    .0
+                    .unwrap();
+                finish(
+                    w,
+                    &first.attempt.id,
+                    &first.lease,
+                    "timed_out",
+                    None,
+                    ResultInfo::default(),
+                    T0,
+                )?;
+                assert!(
+                    super::claim_images(w, runner("windows", None), 60, T0, empty)?
+                        .0
+                        .is_none()
+                );
+                let fallback = super::claim_images(w, runner("windows", None), 60, &until, empty)?
+                    .0
+                    .unwrap();
+                assert_eq!(fallback.attempt.auto_retry.as_ref().unwrap().number, 1);
+                assert_eq!(fallback.attempt.runner.as_deref(), Some("windows"));
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]
@@ -2095,6 +2589,7 @@ mod tests {
                     logical_cpus: 8,
                     total_memory_mib: total,
                     available_memory_mib: available,
+                    commit: None,
                 })
             };
             let (blocked, reason) = take("busy-small", machine(8500, 3500))?;
@@ -2148,12 +2643,13 @@ mod tests {
                 logical_cpus: 4,
                 total_memory_mib: 20000,
                 available_memory_mib: 20000,
+                commit: None,
             });
             let limits = JobLimits {
                 max_jobs: 3,
                 ..limits()
             };
-            let first = claim_images(w, "r", 60, T0, &image, limits, machine)?
+            let first = claim_images(w, "r", 60, T0, &image, limits, machine.clone())?
                 .0
                 .unwrap();
             assert_eq!(first.attempt.job.name, "a");
@@ -2162,11 +2658,12 @@ mod tests {
                 max_cpus: 1,
                 ..limits
             };
-            let (blocked, reason) = claim_images(w, "r", 60, T0, &image, explicit, machine)?;
+            let (blocked, reason) =
+                claim_images(w, "r", 60, T0, &image, explicit, machine.clone())?;
             assert!(blocked.is_none());
             assert_eq!(reason.unwrap().cpu_shortfall, 1);
             for name in ["b", "c"] {
-                let (cl, _) = claim_images(w, "r", 60, T0, &image, limits, machine)?;
+                let (cl, _) = claim_images(w, "r", 60, T0, &image, limits, machine.clone())?;
                 assert_eq!(cl.unwrap().attempt.job.name, name);
             }
             Ok(())
@@ -2203,6 +2700,7 @@ mod tests {
                 logical_cpus: 4,
                 total_memory_mib: 8192,
                 available_memory_mib: 0,
+                commit: None,
             });
             let borrowed = claim_images(
                 w,
@@ -2211,7 +2709,7 @@ mod tests {
                 T0,
                 std::slice::from_ref(&image),
                 limits(),
-                machine,
+                machine.clone(),
             )?
             .0
             .unwrap();
@@ -2420,7 +2918,7 @@ mod tests {
                         .iter()
                         .filter(|a| a.auto_retry.is_some())
                         .count(),
-                    usize::from(case == "optional"),
+                    usize::from(matches!(case, "optional" | "startup")),
                     "{case}"
                 );
                 Ok(())
@@ -2943,7 +3441,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_schema_keeps_old_executions_and_stops_queued_cache_work() {
+    fn previous_schema_keeps_executions_and_pending_attempts_with_no_retry_decision() {
         let dir = tempfile::tempdir().unwrap();
         let layout = crate::config::Layout::new(dir.path());
         let path = layout.db();
@@ -2955,8 +3453,8 @@ mod tests {
                 let pending = attempts_of(w, &source.repo, "pending")?.remove(0);
                 for a in [&source, &pending] {
                     let mut record = serde_json::to_value(a).map_err(AppError::internal)?;
-                    record["purpose"] = "cache_refresh".into();
-                    record["cache_refresh"] = serde_json::Value::Null;
+                    record.as_object_mut().unwrap().remove("retry_decision");
+                    record.as_object_mut().unwrap().remove("runner_deferrals");
                     w.put(store::CI_ATTEMPTS, &Attempt::key(&a.id), &record)?;
                 }
                 w.put(
@@ -2973,14 +3471,9 @@ mod tests {
         assert!(changed.copy.is_file());
         let db = Store::open(&path, 1 << 20, 1).unwrap();
         db.read_sync(|r| {
-            let mut completed = get_attempt(r, &source.id)?.unwrap();
-            assert_eq!(completed.purpose, Purpose::Historical);
-            completed.purpose = source.purpose;
-            assert_eq!(completed, source);
-            let retired = get_attempt(r, &pending.id)?.unwrap();
-            assert_eq!(retired.purpose, Purpose::Historical);
-            assert_eq!(retired.conclusion.as_deref(), Some("cancelled"));
-            assert_eq!(pending_count(r, 10)?, 0);
+            assert_eq!(get_attempt(r, &source.id)?.unwrap(), source);
+            assert_eq!(get_attempt(r, &pending.id)?.unwrap(), pending);
+            assert_eq!(pending_count(r, 10)?, 1);
             assert!(crate::model::index_problems(r)?.is_empty());
             Ok(())
         })
@@ -3968,7 +4461,7 @@ mod tests {
     }
 
     #[test]
-    fn verification_claims_latest_sha_and_escalates_nonrequired_failures() {
+    fn verification_promotes_only_the_failed_jobs_retry() {
         let (_d, s) = store();
         s.write_sync(|w| {
             require_test(w)?;
@@ -4021,9 +4514,9 @@ mod tests {
             )?;
             let next = latest_attempts(w, "repo_1", "sha")?.remove(0);
             assert_eq!(next.status, "queued");
-            assert_eq!(next.auto_retry.unwrap().number, 1);
+            assert_eq!(next.auto_retry.as_ref().unwrap().number, 1);
             assert_eq!(
-                super::super::priority::class_of(w, &c.attempt)?.class,
+                super::super::priority::class_of(w, &next)?.class,
                 super::super::priority::Class::Protected
             );
             assert_eq!(

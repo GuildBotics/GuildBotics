@@ -133,7 +133,11 @@ impl Session<'_> {
         answer.payload = match p.command.as_str() {
             "checks retry" => {
                 self.repository.guard.ensure_current()?;
-                json!({"url": self.repository.services.code()?.retry_job(p.text("job-url")).await.map_err(MemberError::from)?})
+                let selection = branvil::api::RunnerSelection {
+                    runner: p.optional("runner"),
+                    exclude_runners: p.list("exclude-runner"),
+                };
+                json!({"url": self.repository.services.code()?.retry_job(p.text("job-url"), selection).await.map_err(MemberError::from)?})
             }
             "context" => {
                 let mut context = self.context.clone();

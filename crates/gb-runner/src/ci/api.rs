@@ -37,12 +37,22 @@ pub struct RunnerReport {
     pub machine: Option<Machine>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Machine {
     pub logical_cpus: u32,
     pub total_memory_mib: u64,
     pub available_memory_mib: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<CommitMemory>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CommitMemory {
+    pub available_mib: u64,
+    /// Active allocations already reflected in this sample.
+    pub started_attempts: Vec<String>,
 }
 
 impl RunnerReport {

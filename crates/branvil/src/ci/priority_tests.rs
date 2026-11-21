@@ -109,6 +109,106 @@ fn take(w: &Wtx) -> AppResult<Claimed> {
 }
 
 #[test]
+fn protected_registration_replaces_a_queued_pr_retry_with_runner_selection() {
+    let (_d, store) = store();
+    store
+        .write_sync(|w| {
+            repo(w, &[], 1)?;
+            pull(w, 1, "feature", false)?;
+            enqueue(w, "head", "feature")?;
+            let c = take(w)?;
+            let old = finish(
+                w,
+                &c.attempt.id,
+                &c.lease,
+                "failure",
+                None,
+                ResultInfo::default(),
+                T0,
+            )?;
+            let selected = retry_selected(
+                w,
+                &old.id,
+                100,
+                T0,
+                "author",
+                RunnerSelection {
+                    runner: Some("other".into()),
+                    exclude_runners: Vec::new(),
+                },
+            )?;
+            enqueue(w, "head", "main")?;
+            let cancelled = get_attempt(w, &selected.id)?.unwrap();
+            assert_eq!(cancelled.conclusion.as_deref(), Some("cancelled"));
+            assert_eq!(cancelled.retry_decision, selected.retry_decision);
+            let protected = take(w)?.attempt;
+            assert_eq!(protected.cache_scope, "protected");
+            assert!(protected.retry_decision.is_none());
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn only_retries_of_failed_main_jobs_run_before_pr_checks() {
+    for manual in [false, true] {
+        let (_d, store) = store();
+        store
+            .write_sync(|w| {
+                repo(w, &[], 1)?;
+                let verification = crate::ci::verify::Verification {
+                    sha: "main-sha".into(),
+                    base: None,
+                    state: "running".into(),
+                    started_at: T0.into(),
+                    finished_at: None,
+                    failed_jobs: vec![],
+                    failing_since: Some("earlier-failure".into()),
+                    last_verified: None,
+                };
+                w.put(
+                    store::CI_VERIFICATIONS,
+                    &Key::new().s("repo_1").bytes(),
+                    &verification,
+                )?;
+                register(w, reg("main-sha", "main", &["test", "lint"]), 10, T0)?;
+                let tries = if manual { 1 + MAX_AUTO_RETRIES } else { 1 };
+                for n in 0..tries {
+                    let c = claim_fixture(w, ("acme/demo", "main-sha"), T0)?;
+                    let old = finish(
+                        w,
+                        &c.attempt.id,
+                        &c.lease,
+                        "failure",
+                        None,
+                        ResultInfo::default(),
+                        T0,
+                    )?;
+                    if manual && n + 1 == tries {
+                        retry(w, &old.id, 10, T0)?;
+                    }
+                }
+                pull(w, 1, "pr", false)?;
+                enqueue(w, "pr-sha", "pr")?;
+                for (sha, job) in [
+                    ("main-sha", "test"),
+                    ("pr-sha", "test"),
+                    ("main-sha", "lint"),
+                ] {
+                    let a = take(w)?.attempt;
+                    assert_eq!(
+                        (a.sha.as_str(), a.job.name.as_str()),
+                        (sha, job),
+                        "manual retry: {manual}"
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+}
+
+#[test]
 fn a_successful_head_loses_its_pending_cache_when_the_pull_leaves_it() {
     use gb_runner::ci::api::CacheDecision::{Discard, Keep};
     for close in [false, true] {

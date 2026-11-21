@@ -283,6 +283,7 @@ pub struct Microsandbox {
     /// Label value that marks this runner's sandboxes.
     runner: String,
     health: tokio::sync::Mutex<Option<(Instant, Health)>>,
+    started: std::sync::Mutex<std::collections::BTreeSet<String>>,
     #[cfg(feature = "host")]
     sdk: bool,
 }
@@ -294,6 +295,7 @@ impl Microsandbox {
             home,
             runner: runner.to_string(),
             health: tokio::sync::Mutex::new(None),
+            started: std::sync::Mutex::new(Default::default()),
             #[cfg(feature = "host")]
             sdk: false,
         }
@@ -1175,7 +1177,8 @@ impl std::fmt::Display for JobDisk {
 
 impl Executor for Microsandbox {
     fn machine(&self) -> Option<crate::ci::api::Machine> {
-        super::machine::sample()
+        let started = self.started.lock().unwrap();
+        super::machine::sample(|| started.iter().cloned().collect())
     }
 
     fn needs_resolution(&self) -> bool {
@@ -1763,8 +1766,11 @@ impl Microsandbox {
                 _ = tail.tick() => {
                     job_log.read_from(&mut output).await;
                     // The commands run in the VM: msb has picked the image.
-                    if job_log.started.is_some() {
-                        drop(image_lock.take());
+                    if job_log.started.is_some() && let Some(lock) = image_lock.take() {
+                        drop(lock);
+                        if cfg!(windows) {
+                            self.started.lock().unwrap().insert(job.attempt_id.into());
+                        }
                     }
                 }
                 _ = memory.tick() => {
@@ -1800,6 +1806,11 @@ impl Microsandbox {
                     }
                 }
             }
+        }
+        // Reserve the allocation again before stopping this VM or preparing
+        // the next helper VM, which has not committed its memory yet.
+        if cfg!(windows) {
+            self.started.lock().unwrap().remove(job.attempt_id);
         }
         // Started or not, the VM is past picking an image.
         drop(image_lock);

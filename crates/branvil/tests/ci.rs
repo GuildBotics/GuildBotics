@@ -273,7 +273,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_38_upgrade_preserves_records() {
+async fn schema_39_upgrade_preserves_records() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -292,7 +292,7 @@ async fn schema_38_upgrade_preserves_records() {
     set_required(&w, &["test"]).await;
     for c in &claimed {
         let conclusion = if c["job"]["name"] == "test" {
-            "startup_failure"
+            "cancelled"
         } else {
             "success"
         };
@@ -339,11 +339,8 @@ async fn schema_38_upgrade_preserves_records() {
     let repos = records(&db, "repos");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let indexed_memory = tables(&db)["ix_ci_memory"].clone();
-    let mut prior_runs = records(&db, "ci_runs");
-    for run in &mut prior_runs {
-        run["cache_landed_at"] = Value::Null;
-    }
-    as_schema_38(&db);
+    let prior_runs = records(&db, "ci_runs");
+    as_schema_39(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
     assert_eq!(before["ix_ci_memory"], indexed_memory);
@@ -354,7 +351,7 @@ async fn schema_38_upgrade_preserves_records() {
     );
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 38 to 39"), "{output}");
+    assert!(output.contains("from schema version 39 to 40"), "{output}");
     assert_eq!(
         tables(&db).get("ix_repair_unnotified"),
         before.get("ix_repair_unnotified")
@@ -363,11 +360,7 @@ async fn schema_38_upgrade_preserves_records() {
     assert_eq!(repos[0]["responder"], "aiko");
     assert_eq!(records(&db, "ci_attempts"), attempts);
     assert_eq!(tables(&db)["ix_ci_memory"], indexed_memory);
-    let mut upgraded_runs = records(&db, "ci_runs");
-    for run in &mut upgraded_runs {
-        run["cache_landed_at"] = Value::Null;
-    }
-    assert_eq!(upgraded_runs, prior_runs);
+    assert_eq!(records(&db, "ci_runs"), prior_runs);
     let runs = records(&db, "ci_runs");
     assert_eq!(records(&db, "ci_verifications"), verifications);
     let run = runs.iter().find(|r| r["sha"] == head).unwrap();
@@ -405,10 +398,13 @@ async fn protected_required_retries_are_visible_as_queued_checks_until_exhausted
     )
     .await;
     set_required(&w, &["test"]).await;
+    let alternate = Runner::new(&w, "runner2").await;
     let root = runner.claim().await.unwrap();
     let mut current = root.clone();
+    let mut runners = [&runner, &alternate].into_iter().cycle();
+    let mut selected = runners.next().unwrap();
     for n in 1..=4 {
-        let (st, result) = runner.finish(&current, "failure").await;
+        let (st, result) = selected.finish(&current, "failure").await;
         assert_eq!(st, 200, "{result}");
         let report = w
             .server
@@ -426,7 +422,9 @@ async fn protected_required_retries_are_visible_as_queued_checks_until_exhausted
                 root["attempt_id"].as_str().unwrap()
             );
             assert!(check["details"].as_str().unwrap().contains(&label));
-            current = runner.claim().await.unwrap();
+            assert!(selected.claim().await.is_none());
+            selected = runners.next().unwrap();
+            current = selected.claim().await.unwrap();
             assert!(current["reuse"].is_null());
             let view = w
                 .server
@@ -445,6 +443,18 @@ async fn protected_required_retries_are_visible_as_queued_checks_until_exhausted
             assert!(runner.claim().await.is_none());
         }
     }
+    let retry_url = format!(
+        "{}/jobs/{}/retry",
+        w.repo_path(),
+        current["attempt_id"].as_str().unwrap()
+    );
+    assert_eq!(
+        w.server
+            .post(&retry_url, &w.owner, json!({"runner":"runner1"}))
+            .await
+            .0,
+        409
+    );
     let (st, manual) = w
         .server
         .post(
@@ -462,6 +472,86 @@ async fn protected_required_retries_are_visible_as_queued_checks_until_exhausted
         manual["details"].is_null(),
         "manual retry has its own budget"
     );
+}
+
+#[tokio::test]
+async fn pr_retry_routes_only_to_selected_runners_and_reports_recovery() {
+    let w = World::new().await;
+    let first = Runner::new(&w, "runner1").await;
+    let second = Runner::new(&w, "runner2").await;
+    let third = Runner::new(&w, "runner3").await;
+    assert!(second.claim().await.is_none());
+    assert!(third.claim().await.is_none());
+    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
+    let head = w.push_change("feature", ".branvil/ci.toml", &pipeline(&["test"]));
+    w.open_pull("feature", json!([])).await;
+    let a = first.next_claim().await;
+    assert_eq!(a["sha"], head);
+    assert_eq!(first.finish(&a, "failure").await.0, 200);
+
+    let job_url = |id: &Value| format!("{}/jobs/{}", w.repo_path(), id.as_str().unwrap());
+    let url = job_url(&a["attempt_id"]);
+    let view = w.server.ok(&url, &w.aiko).await;
+    assert_eq!(
+        view["retry_runners"],
+        json!(["runner1", "runner2", "runner3"])
+    );
+    for selection in [
+        json!({"runner":"unknown"}),
+        json!({"runner":"runner2", "exclude_runners":["RUNNER2"]}),
+    ] {
+        assert_eq!(
+            w.server
+                .post(&format!("{url}/retry"), &w.aiko, selection)
+                .await
+                .0,
+            400
+        );
+    }
+
+    let (status, pinned) = w
+        .server
+        .post(
+            &format!("{url}/retry"),
+            &w.aiko,
+            json!({"runner":"runner2"}),
+        )
+        .await;
+    assert_eq!(status, 200, "{pinned}");
+    assert_eq!(pinned["retry_decision"]["requested_by"], "aiko");
+    assert_eq!(pinned["retry_decision"]["selection"]["runner"], "runner2");
+    assert!(first.claim().await.is_none());
+    assert!(third.claim().await.is_none());
+    let b = second.next_claim().await;
+    assert_eq!(b["attempt_id"], pinned["id"]);
+    assert_eq!(second.finish(&b, "failure").await.0, 200);
+
+    let (status, excluded) = w
+        .server
+        .post(
+            &format!("{}/retry", job_url(&b["attempt_id"])),
+            &w.aiko,
+            json!({"exclude_runners":["runner1", "runner2"]}),
+        )
+        .await;
+    assert_eq!(status, 200, "{excluded}");
+    assert_eq!(
+        excluded["retry_decision"]["selection"]["exclude_runners"],
+        json!(["runner1", "runner2"])
+    );
+    assert!(first.claim().await.is_none());
+    assert!(second.claim().await.is_none());
+    let c = third.next_claim().await;
+    assert_eq!(c["attempt_id"], excluded["id"]);
+    let (status, passed) = third.finish(&c, "success").await;
+    assert_eq!(status, 200, "{passed}");
+    let recovery = json!({"failed_attempt":b["attempt_id"], "failed_runner":"runner2", "successful_runner":"runner3"});
+    assert_eq!(passed["runner_recovery"], recovery);
+    let check_view = w
+        .server
+        .ok(&format!("{}/commits/{head}/checks", w.repo_path()), &w.aiko)
+        .await;
+    assert_eq!(check(&check_view, "test")["runner_recovery"], recovery);
 }
 
 pub(crate) fn pipeline(jobs: &[&str]) -> String {
@@ -1302,8 +1392,12 @@ async fn checks_say_when_they_ran_and_how_long_the_job_took_where_it_last_succee
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     runner.finish(&main_test, "success").await;
     runner.finish(&main_lint, "failure").await;
-    // Main retries every failed job before head work while verification is broken.
-    assert_eq!(runner.drain("failure").await, 3);
+    let alternate = Runner::new(&w, "runner2").await;
+    for runner in [&alternate, &runner, &alternate] {
+        let retry = runner.next_claim().await;
+        assert_eq!(retry["job"]["name"], "lint");
+        assert_eq!(runner.finish(&retry, "failure").await.0, 200);
+    }
     let tip = main_test["sha"].as_str().unwrap();
     let on_main = w
         .server
@@ -2987,14 +3081,20 @@ async fn verification_api_auth_first_parent_and_cursor_pages() {
         w.server.ok(&format!("{url}/commits"), &w.aiko).await["items"][0]["mark"],
         "verifying"
     );
+    let alternate = Runner::new(&w, "runner2").await;
     let mut last = Value::Null;
-    for n in 0..=3 {
+    for (n, runner) in [&runner, &alternate]
+        .into_iter()
+        .cycle()
+        .take(4)
+        .enumerate()
+    {
         let c = runner.next_claim().await;
         assert_eq!(runner.finish(&c, "failure").await.0, 200);
         eventually("retry projection", || async {
             let v = w.server.ok(&url, &w.owner).await;
             if n < 3 {
-                v["current"]["retry"]["number"] == n + 1
+                v["current"]["retry"]["number"] == json!(n + 1)
             } else {
                 v["state"] == "failing"
             }
@@ -3042,6 +3142,14 @@ async fn verification_api_auth_first_parent_and_cursor_pages() {
         w.server.ok(&url, &w.owner).await["state"] == "verified"
     })
     .await;
+    let state = w.server.ok(&url, &w.owner).await;
+    assert_eq!(
+        state["runner_recoveries"],
+        json!([{
+            "name":"verify", "failed_attempt":last["attempt_id"], "failed_runner":"runner2",
+            "successful_runner":"verification-reader"
+        }])
+    );
     let repaired = w.server.ok(&repair_url, &w.owner).await;
     assert_eq!(repaired["state"], "closed");
     assert_eq!(repaired["state_reason"], "completed");
@@ -3120,7 +3228,8 @@ async fn verification_api_auth_first_parent_and_cursor_pages() {
         )
         .await;
     assert_eq!(status, 200, "{body}");
-    for _ in 0..=3 {
+    let alternate = Runner::new(&w, "probe-retry-runner").await;
+    for runner in [&runner, &alternate].into_iter().cycle().take(4) {
         let c = runner.next_claim().await;
         assert!(c.get("purpose").is_none());
         assert_eq!(runner.finish(&c, "failure").await.0, 200);

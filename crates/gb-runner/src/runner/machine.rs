@@ -1,18 +1,23 @@
-use crate::ci::api::Machine;
+use crate::ci::api::{CommitMemory, Machine};
 
-pub(super) fn sample() -> Option<Machine> {
-    let (total, available) = memory_mib()?;
+pub(super) fn sample(started_attempts: impl FnOnce() -> Vec<String>) -> Option<Machine> {
+    let (total, available, commit) = memory_mib()?;
     let logical_cpus = u32::try_from(std::thread::available_parallelism().ok()?.get()).ok()?;
     (total > 0 && available <= total).then_some(Machine {
         logical_cpus,
         total_memory_mib: total,
         available_memory_mib: available,
+        commit: commit.map(|available_mib| CommitMemory {
+            available_mib,
+            started_attempts: started_attempts(),
+        }),
     })
 }
 
 #[cfg(target_os = "linux")]
-fn memory_mib() -> Option<(u64, u64)> {
-    parse_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)
+fn memory_mib() -> Option<(u64, u64, Option<u64>)> {
+    let (total, available) = parse_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)?;
+    Some((total, available, None))
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -27,7 +32,7 @@ fn parse_meminfo(text: &str) -> Option<(u64, u64)> {
 }
 
 #[cfg(target_os = "macos")]
-fn memory_mib() -> Option<(u64, u64)> {
+fn memory_mib() -> Option<(u64, u64, Option<u64>)> {
     use std::ffi::CStr;
 
     fn read<T: Copy + Default>(key: &CStr) -> Option<T> {
@@ -48,11 +53,11 @@ fn memory_mib() -> Option<(u64, u64)> {
 
     let total = read::<u64>(c"hw.memsize")? >> 20;
     let percent = u64::from(read::<u32>(c"kern.memorystatus_level")?);
-    Some((total, total.checked_mul(percent)? / 100))
+    Some((total, total.checked_mul(percent)? / 100, None))
 }
 
 #[cfg(windows)]
-fn memory_mib() -> Option<(u64, u64)> {
+fn memory_mib() -> Option<(u64, u64, Option<u64>)> {
     #[repr(C)]
     struct MemoryStatus {
         length: u32,
@@ -74,12 +79,15 @@ fn memory_mib() -> Option<(u64, u64)> {
     // All fields are integers. The API requires an initialized length.
     let mut status: MemoryStatus = unsafe { std::mem::zeroed() };
     status.length = std::mem::size_of::<MemoryStatus>() as u32;
-    (unsafe { GlobalMemoryStatusEx(&mut status) } != 0)
-        .then_some((status.total_phys >> 20, status.avail_phys >> 20))
+    (unsafe { GlobalMemoryStatusEx(&mut status) } != 0).then_some((
+        status.total_phys >> 20,
+        status.avail_phys >> 20,
+        Some(status.avail_page_file >> 20),
+    ))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-fn memory_mib() -> Option<(u64, u64)> {
+fn memory_mib() -> Option<(u64, u64, Option<u64>)> {
     None
 }
 

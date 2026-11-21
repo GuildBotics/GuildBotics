@@ -73,6 +73,13 @@ pub struct RepairTicket {
 }
 
 #[derive(Debug, Serialize)]
+pub struct VerificationRecovery {
+    pub name: String,
+    #[serde(flatten)]
+    pub recovery: queue::RunnerRecovery,
+}
+
+#[derive(Debug, Serialize)]
 pub struct MainState {
     pub repair: Option<RepairTicket>,
     pub branch: String,
@@ -81,6 +88,7 @@ pub struct MainState {
     pub ahead: Option<u64>,
     pub latest_verified: Option<LatestVerified>,
     pub current: Option<Current>,
+    pub runner_recoveries: Vec<VerificationRecovery>,
     pub failing_since: Option<String>,
 }
 
@@ -95,7 +103,7 @@ pub async fn main_state(app: &crate::app::App, repo: &Repo) -> AppResult<MainSta
         .get(&repo.default_branch)
         .cloned();
     let id = repo.id.clone();
-    let (record, number, repair) = app
+    let (record, number, repair, runner_recoveries) = app
         .store
         .read(move |r| {
             let record = get(r, &id)?;
@@ -108,7 +116,39 @@ pub async fn main_state(app: &crate::app::App, repo: &Repo) -> AppResult<MainSta
                     .max()
                     .unwrap_or(0);
             }
-            Ok((record, number, crate::repair::open_ticket(r, &id)?))
+            let mut recoveries = Vec::new();
+            if let Some(v) = &record {
+                let mut shas = vec![v.sha.as_str()];
+                if let Some(last) = &v.last_verified
+                    && last.sha != v.sha
+                {
+                    shas.push(&last.sha);
+                }
+                for sha in shas {
+                    let Some(queue::Run {
+                        pipeline: queue::PipelineState::Jobs { jobs },
+                        ..
+                    }) = queue::get_run(r, &id, sha)?
+                    else {
+                        continue;
+                    };
+                    let history = queue::attempts_of(r, &id, sha)?;
+                    for a in queue::current_attempts(r, &id, sha, &jobs)? {
+                        if let Some(recovery) = a.runner_recovery(&history) {
+                            recoveries.push(VerificationRecovery {
+                                name: a.job.name,
+                                recovery,
+                            });
+                        }
+                    }
+                }
+            }
+            Ok((
+                record,
+                number,
+                crate::repair::open_ticket(r, &id)?,
+                recoveries,
+            ))
         })
         .await?;
     let latest_verified = record
@@ -171,6 +211,7 @@ pub async fn main_state(app: &crate::app::App, repo: &Repo) -> AppResult<MainSta
             },
         }),
         failing_since,
+        runner_recoveries,
     })
 }
 

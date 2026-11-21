@@ -912,7 +912,12 @@ impl Runner {
                 images,
                 accept,
                 running_jobs,
-                machine: executor.machine(),
+                machine: executor.machine().map(|mut machine| {
+                    if !accept {
+                        machine.commit = None;
+                    }
+                    machine
+                }),
             })
             .await?;
         Ok(claim.map(|c| (c, health)))

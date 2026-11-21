@@ -9,7 +9,7 @@ import { useT } from "../../i18n";
 import { keys } from "../../query/keys";
 import { Link } from "../../router/Router";
 import { href } from "../../router/routes";
-import { CheckDrawer, CommitChecksCard, drawerTarget } from "../pull/Checks";
+import { CheckDrawer, CommitChecksCard, RunnerRecoveryLink, drawerTarget } from "../pull/Checks";
 
 const CI_BUDGET = 30;
 type TipStatus = VerificationState | "loading" | "error";
@@ -40,6 +40,9 @@ function RepositoryTipChecks({ tip }: { tip: Tip }) {
       {data.state === "empty" && <Text size="sm" c="dimmed">{t("repo.noTip", { branch: data.branch })}</Text>}
       {data.state !== "verified" && data.state !== "empty" && <Text size="sm">{data.latest_verified ? t("verification.ahead", { count: data.ahead ?? 0 }) : t("verification.noVerified")}</Text>}
       {data.current && ["verifying", "failing"].includes(data.state) && <CommitChecksCard repo={tip.path} sha={data.current.sha} title={t("repo.tipChecks", { branch: data.branch })} embedded onOpen={(c) => setCheck(drawerTarget(c))} />}
+      {data.runner_recoveries?.map((recovery) => <Text size="sm" key={recovery.failed_attempt}>
+        {recovery.name} · <RunnerRecoveryLink repo={tip.path} recovery={recovery} />
+      </Text>)}
       {data.tip && <VerificationHistory repo={tip.path} />}
       <CheckDrawer repo={tip.path} check={check} onClose={() => setCheck(null)} />
     </Stack>

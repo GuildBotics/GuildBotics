@@ -54,7 +54,7 @@
 - `guildbotics member memory promote --person <person> --id <doc-id>` — Move a personal memory into team memory without changing the document id.
 
 ### Run completion — workflow and command runs only
-- `guildbotics member checks retry --person <person> --job-url <URL>` — Retry a CI job by its page URL; return the new attempt URL.
+- `guildbotics member checks retry --person <person> --job-url <URL> [--runner <name>] [--exclude-runner <name> ...]` — Retry a CI job by its page URL; return the new attempt URL. Runner selection is available only for a pull request head.
 - `guildbotics member chat noop --person <person> --content-file <file>` — Record a deliberate no-op for the chat run's event.
 - `guildbotics member chat complete --person <person> --status done|asking|blocked --content-file <file>` — Finish the chat workflow run on its event with evidence.
 - `guildbotics member task complete --person <person> --status done|asking|blocked [--waiting-for <person_id> ...] [--work-remains] --content-file <file>` — Finish a run other than a chat event's with evidence, checking required head checks before accepting done. For asking/blocked, use the context roster: name the next member to act by person_id and address them on the item with their service mention spelling. The CLI validates whether their patrol receives any item you commented on. Human members are recorded and notified; omit only for people outside the team. Without a recipient, the CLI says the owner will be notified.

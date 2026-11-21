@@ -191,14 +191,15 @@ async fn hold_blocks_local_merge_until_verification_succeeds() {
 async fn fail_main(w: &World, runner: &crate::ci::Runner) -> Value {
     use crate::ci::eventually;
     let verify_url = format!("{}/verification", w.repo_path());
+    let alternate = crate::ci::Runner::new(w, "retry-runner").await;
     let mut last = Value::Null;
-    for n in 0..=3 {
+    for (n, runner) in [runner, &alternate].into_iter().cycle().take(4).enumerate() {
         let c = runner.next_claim().await;
         assert_eq!(runner.finish(&c, "failure").await.0, 200);
         eventually("main failure retry", || async {
             let v = w.server.ok(&verify_url, &w.owner).await;
             if n < 3 {
-                v["current"]["retry"]["number"] == n + 1
+                v["current"]["retry"]["number"] == json!(n + 1)
             } else {
                 v["state"] == "failing"
             }

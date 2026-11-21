@@ -13,7 +13,7 @@ use tokio::io::AsyncWriteExt;
 
 use super::files::{artifact_attempt, valid_attempt_id};
 use super::pipeline::JobDef;
-use super::queue::{self, ArtifactMeta, Attempt};
+use super::queue::{self, ArtifactMeta, Attempt, RunnerSelection};
 use crate::app::Shared;
 use crate::auth::Caller;
 use crate::error::{AppError, AppResult};
@@ -39,11 +39,27 @@ fn json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> AppResult<T> {
 
 // ---------------------------------------------------------------- views
 
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum RetryWait {
+    Offline,
+    Unavailable,
+    Resources(queue::ResourceWait),
+    Busy,
+    Waiting,
+    PreferOther { until: String },
+}
+
 #[derive(Serialize, Debug)]
 pub struct AttemptView {
     pub path_skip: Option<queue::PathSkip>,
     pub id: String,
     pub retry_supported: bool,
+    pub retry_runners: Vec<String>,
+    pub retry_decision: Option<queue::RetryDecision>,
+    pub retry_wait: Option<RetryWait>,
+    pub runner_deferrals: std::collections::BTreeMap<String, queue::ResourceDeferral>,
+    pub runner_recovery: Option<queue::RunnerRecovery>,
     pub url: String,
     pub repository: String,
     pub job: String,
@@ -67,12 +83,30 @@ pub struct AttemptView {
 
 pub(crate) async fn view(app: &Shared, a: &Attempt) -> AppResult<AttemptView> {
     let own = a.clone();
-    let (source, details) = app
+    let ci = app.ci.clone();
+    let (source, details, runners, recovery) = app
         .store
         .read(move |r| {
+            let runners = match queue::get_run(r, &own.repo, &own.sha)? {
+                Some(run)
+                    if own.status == "completed"
+                        && own.purpose == queue::Purpose::Check
+                        && queue::runner_selection_supported(r, &run)? =>
+                {
+                    ci.matching_runners(r, &own.job.image)?
+                }
+                _ => Vec::new(),
+            };
+            let recovery = if own.number > 1 && own.conclusion.as_deref() == Some("success") {
+                own.runner_recovery(&queue::attempts_of(r, &own.repo, &own.sha)?)
+            } else {
+                None
+            };
             Ok((
                 queue::source_of(r, &own)?,
                 super::priority::attempt_details(r, &own)?,
+                runners,
+                recovery,
             ))
         })
         .await?;
@@ -80,6 +114,11 @@ pub(crate) async fn view(app: &Shared, a: &Attempt) -> AppResult<AttemptView> {
         path_skip: a.path_skip.clone(),
         id: a.id.clone(),
         retry_supported: a.purpose == queue::Purpose::Check,
+        retry_runners: runners,
+        retry_decision: a.retry_decision.clone(),
+        retry_wait: app.ci.retry_wait(a),
+        runner_deferrals: a.runner_deferrals.clone(),
+        runner_recovery: recovery,
         url: format!("{}/{}/-/jobs/{}", app.base_url, a.repo_path, a.id),
         repository: a.repo_path.clone(),
         job: a.job.name.clone(),
@@ -187,8 +226,9 @@ async fn job_retry(
     State(app): State<Shared>,
     c: Caller,
     Path((repo, id)): Path<(String, String)>,
+    body: axum::body::Bytes,
 ) -> R {
-    Ok(ok(data_job_retry(&app, &c, &repo, &id).await?))
+    Ok(ok(data_job_retry(&app, &c, &repo, &id, json(&body)?).await?))
 }
 
 pub(crate) async fn data_job_retry(
@@ -196,16 +236,56 @@ pub(crate) async fn data_job_retry(
     c: &Caller,
     repo: &str,
     id: &str,
+    mut selection: RunnerSelection,
 ) -> AppResult<AttemptView> {
     let (repo, a) = attempt_of(app, c, repo, id).await?;
     // Ref cleanup may still be cancelling work after its landing state
     // became visible. A new explicit retry must follow that cleanup.
-    let id = a.id.clone();
+    let who = c.name().to_string();
     let new = app
         .locked(&repo.id, move |app| async move {
             let (queue_max, now) = (app.ci.config().queue_max, util::now());
+            let ci = app.ci.clone();
             app.store
-                .write(move |w| queue::retry(w, &id, queue_max, &now))
+                .write(move |w| {
+                    if !selection.is_empty() {
+                        let names = ci.matching_runners(w, &a.job.image)?;
+                        let canonical = |name: &str| {
+                            names
+                                .iter()
+                                .find(|candidate| util::fold(candidate) == util::fold(name))
+                                .cloned()
+                                .ok_or_else(|| {
+                                    AppError::new(
+                                        StatusCode::BAD_REQUEST,
+                                        "retry_runner_ineligible",
+                                        "Select a runner with the job's image and the Hub version.",
+                                    )
+                                })
+                        };
+                        selection.runner =
+                            selection.runner.as_deref().map(canonical).transpose()?;
+                        selection.exclude_runners = selection
+                            .exclude_runners
+                            .iter()
+                            .map(|name| canonical(name))
+                            .collect::<AppResult<_>>()?;
+                        selection.exclude_runners.sort_unstable();
+                        selection.exclude_runners.dedup();
+                        if selection
+                            .runner
+                            .as_ref()
+                            .is_some_and(|name| selection.exclude_runners.contains(name))
+                        {
+                            return Err(AppError::new(
+                                StatusCode::BAD_REQUEST,
+                                "retry_runner_excluded",
+                                "The selected runner is also excluded.",
+                            ));
+                        }
+                    }
+                    queue::retry_selected(w, &a.id, queue_max, &now, &who, selection)
+                })
                 .await
         })
         .await?;
@@ -436,7 +516,7 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     report
         .images
         .retain(|i| i.architecture == report.architecture);
-    report.machine = report.machine.filter(|machine| {
+    report.machine = report.machine.take().filter(|machine| {
         machine.logical_cpus > 0
             && machine.total_memory_mib > 0
             && machine.available_memory_mib <= machine.total_memory_mib
@@ -445,7 +525,7 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     let accept =
         report.accept && report.can_run() && report.running_jobs < limits.max_jobs as usize;
     let held = accept.then(|| report.images.clone());
-    let machine = report.machine;
+    let machine = report.machine.clone();
     let reported_at = app.ci.report_runner(c.name(), report);
     let Some(held) = held else {
         return Ok(StatusCode::NO_CONTENT.into_response());
@@ -466,8 +546,18 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
             if ci.stopping() {
                 return Ok((None, None, false));
             }
-            let (claimed, waiting) =
-                queue::claim_images(w, &runner, lease_secs, &at, &images, limits, machine)?;
+            let (claimed, waiting) = queue::claim_images(
+                w,
+                queue::ClaimRunner {
+                    name: runner.clone(),
+                    images,
+                    limits,
+                    machine,
+                },
+                lease_secs,
+                &at,
+                || ci.ready_alternatives(w, &runner),
+            )?;
             let cache_write = match claimed.as_ref() {
                 Some(claim) if limits.cache_max_mib > 0 => queue::keeps_cache(w, &claim.attempt)?,
                 _ => false,
@@ -976,6 +1066,7 @@ mod tests {
                 State(app.clone()),
                 c,
                 Path((repo.path.clone(), failed.id.clone())),
+                axum::body::Bytes::new(),
             ));
             assert!(
                 tokio::time::timeout(Duration::from_millis(50), retry.as_mut())

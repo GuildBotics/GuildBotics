@@ -8,6 +8,7 @@ import type { CachedImage, CiLimits, CiRunner, CiSettings as Settings, ImageOper
 import { ErrorMessage, Loading, Notice, Refusal, StateBadge, Time, type Tone } from "../../components/common";
 import { PanelHeader } from "../../components/PanelHeader";
 import { useT, type MessageKey } from "../../i18n";
+import { resourceShortfallText } from "../../i18n/resourceShortfall";
 import { useCiSettings } from "../../query/hooks";
 import { keys } from "../../query/keys";
 import { Link } from "../../router/Router";
@@ -103,14 +104,12 @@ function ResourceQueue({ runners }: { runners: CiRunner[] }) {
   return (
     <Section title={t("ci.settings.resourceQueue")}>
       <Stack gap="xs">
-        {waiting.map(({ name, repo, job, attempt_id, cpu_shortfall: cpus, memory_shortfall_mib: memory }) => {
-          const message = cpus === 0
-            ? "ci.settings.resourceWaitMemory"
-            : memory === 0 ? "ci.settings.resourceWaitCpu" : "ci.settings.resourceWait";
+        {waiting.map(({ name, repo, job, attempt_id, ...shortfall }) => {
+          const message = resourceShortfallText(t, name, shortfall);
           return (
             <Text size="sm" key={name}>
               <Link to={href.job(repo, attempt_id)}>{repo} · {job}</Link>
-              {" — "}{t(message, { name, cpus, memory })}
+              {message && ` — ${message}`}
             </Text>
           );
         })}

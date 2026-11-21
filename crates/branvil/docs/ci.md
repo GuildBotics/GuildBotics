@@ -57,15 +57,13 @@ it atomically only while main still points to that SHA. This retry bypasses queu
 capacity, preserves `failing_since`, and clears the failed-job list. Other manual
 retries change neither the verification record nor its verified ref.
 
-Verification attempts normally use class **4m**, after merge-directed work
+Verification attempts use class **4m**, after merge-directed work
 (classes 1–3 and 4a), before drafts (4b). They display
 `Deferred: main is verified after the jobs that lead to a merge.` They do not
-consume admission capacity for any class. If `failing_since` is set, or any attempt
-of the running verification has failed, timed out, lacked a runner, or exhausted
-interruption recovery, all verification jobs use class **1** and count in ordinary
-class 1–3 admission. Other protected branches always retain class 1.
-This batches merges without a fixed delay while main is healthy; when it might
-be broken, verification and repair become part of the path to merging.
+consume admission capacity for any class. Manual and automatic retries of a
+failed job of the current verification use class **1** and count in ordinary
+class 1–3 admission. Other jobs keep class 4m across failed attempts and subsequent
+verifications. Other protected branches retain class 1.
 
 Jobs declaring `verified_sha = true` record the latest verified SHA when claimed,
 return it in the claim response, and receive `BRANVIL_VERIFIED_SHA` (empty before
@@ -122,7 +120,7 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   | --- | --- | --- |
   | Attempt | Probe (even with a protected run, or without a run) | 2 |
   | Run | Missing run or repository, or no branches want the commit | 4b |
-  | Branch | Protected, except healthy default-branch verification (4m) | 1 |
+  | Branch | Protected, except ordinary default-branch verification (4m) | 1 |
   | Branch | No open PR using this head branch | 4b |
   | PR | Draft | 4b |
   | PR | A required check completed without satisfying the head, including a missing required job | 4a (deferred) |
@@ -469,17 +467,33 @@ No runner, no executor:
   and actions in Settings → CI / `image load --ci` / `runner pull`. The same details remain
   visible in runner diagnostics.
 
+Windows runners report remaining commit headroom from `GlobalMemoryStatusEx`.
+Each execution needs enough headroom for the full VM allocation. The Hub
+deducts the allocations of claims whose VMs have yet to start. The runner's
+`resource_wait` includes the shortfall in MiB when commit headroom is insufficient.
+
 Cancel and retry: `POST …/jobs/{id}/cancel` concludes a queued attempt
 `cancelled` at once and asks a running one to stop; `POST …/jobs/{id}/retry`
 queues the next attempt number of the latest check attempt, once completed,
 with the same job definition. Retry takes the repository lock used for ref changes.
+On a current pull request head, the retry form and `guildbotics member checks retry`
+accept a runner and repeatable exclusions. Choices have the job's image for their CPU
+and match the Hub version. The attempt records the requester and choices. A pinned
+attempt waits for that runner and shows whether it is offline, unavailable, busy, or
+short of resources. The default branch and other protected branches accept retries
+with automatic runner selection.
 
 ## Automatic retries
 
 Every job of a protected run automatically retries up to three times
 after its initial failure. Eligible endings are command failure, timeout,
-no runner contacting the service, and the second interruption of an attempt.
-Automatic retries are limited to these endings on protected-branch checks.
+runner-reported startup failure, runner absence, and the second interruption of
+an attempt. A retry after a runner failure first waits for another runner. The
+previous runner may claim it after 30 seconds if no alternative reports
+compatible images, the Hub version, and enough capacity. Interruptions and
+runner absence keep their existing routing. Attempt and check details identify
+a successful execution on a different runner after a failure. The verification
+view also shows these recoveries for current and most recently verified work.
 
 The failed attempt and the next queued attempt are recorded in one transaction:
 commit checks show the queued retry without an intervening failed check.

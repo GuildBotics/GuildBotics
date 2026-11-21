@@ -165,7 +165,10 @@ export const useChecks = (repo: string, number: number, enabled = true) =>
   useQuery({ queryKey: keys.pullPart(repo, number, "checks"), queryFn: () => api.pulls.checks(repo, number), enabled });
 
 export const useJob = (repo: string, id: string, enabled = true) =>
-  useQuery({ queryKey: keys.job(repo, id), queryFn: () => api.jobs.get(repo, id), enabled });
+  useQuery({
+    queryKey: keys.job(repo, id), queryFn: () => api.jobs.get(repo, id), enabled,
+    refetchInterval: (query) => query.state.data?.retry_wait ? 5000 : false,
+  });
 
 export const useJobLog = (repo: string, id: string, tail: number, enabled = true) =>
   useQuery({ queryKey: keys.jobLog(repo, id, tail), queryFn: () => api.jobs.log(repo, id, tail), enabled });

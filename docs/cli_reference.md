@@ -741,6 +741,8 @@ Retry a CI job by its page URL.
 Usage: guildbotics member checks retry [OPTIONS]
   --person <VALUE>  Person ID or name of the member. [required]
   --job-url <VALUE>  Page URL of the CI job to retry. [required]
+  --runner <VALUE>  Run this pull request check on the named runner.
+  --exclude-runner <VALUE>  Exclude the named runner from this pull request check. (repeatable)
   --format <json|text> [default: json]  Output format.
   --help  Print help
 ```
