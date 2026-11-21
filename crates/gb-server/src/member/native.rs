@@ -5,6 +5,7 @@ use super::{
     repository::{Repository, RepositoryServices},
     session::Session,
 };
+use crate::ticket_selector::MentionCompletions;
 use branvil::agent::port::*;
 use branvil::agent::{CodeAgent, TicketAgent};
 use gb_base::shared_writes::SharedWrites;
@@ -213,6 +214,7 @@ impl Native {
         let result: anyhow::Result<Reply> = async {
         let peer = Peers {
             project: &project,
+            workspace: &self.workspace,
             branvil: self.branvil.clone(),
             roster: &roster,
             eligible: team.members.iter().filter(|m| gb_config::resolved_guest::member(&roots,&self.identity_root,&m.person_id).ok().is_some_and(|v|v["routine_commands"].as_array().is_some_and(|a|a.iter().any(|x|x=="workflows/ticket_driven_workflow")))).map(|m|m.person_id.clone()).collect(),
@@ -1005,6 +1007,7 @@ impl crate::member::git::Guest for Guest<'_> {
 }
 struct Peers<'a> {
     project: &'a Value,
+    workspace: &'a Path,
     branvil: Option<branvil::api::DataApi>,
     roster: &'a [PublicMember],
     eligible: std::collections::BTreeSet<String>,
@@ -1038,11 +1041,15 @@ impl Recipients for Peers<'_> {
             match result {
                 Ok(value) => Ok(value),
                 Err(error) if error.is_not_found() => {
-                    let result = agents.tickets()?.can_receive_work(subject).await;
-                    match result {
-                        Err(error) if error.is_not_found() => Ok(false),
-                        result => Ok(result?),
-                    }
+                    let task = match agents.tickets()?.receive_candidate(subject).await {
+                        Err(error) if error.is_not_found() => None,
+                        result => result?,
+                    };
+                    let completions =
+                        MentionCompletions::read(task.as_slice(), &person.person_id, || {
+                            RunStore::open(self.workspace).records()
+                        })?;
+                    Ok(task.is_some_and(|task| !completions.is_processed(&task)))
                 }
                 Err(error) => Err(error.into()),
             }
@@ -5032,6 +5039,7 @@ pub(crate) mod tests {
         let project = json!({"services":{"ticket_service":{"workspace":"acme"},"code_hosting_service":{"workspace":"acme"}}});
         let mut peers = Peers {
             project: &project,
+            workspace: &native.workspace,
             branvil: native.branvil.clone(),
             roster: &roster,
             eligible: Default::default(),
@@ -5039,6 +5047,78 @@ pub(crate) mod tests {
         assert!(!peers.receives("aiko", &ticket.target.url).await.unwrap());
         peers.eligible.insert("aiko".into());
         assert!(peers.receives("aiko", &ticket.target.url).await.unwrap());
+
+        let url = &ticket.target.url;
+        tickets
+            .update_ticket(
+                url,
+                UpdateTicket {
+                    assignee: Some(ActorName("yuki".into())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let sender = TicketAgent::new(
+            native.branvil.clone().unwrap(),
+            "acme".into(),
+            "yuki".into(),
+            "Yuki".into(),
+        );
+        let mention = sender
+            .comment(url, "@aiko Please check.", None)
+            .await
+            .unwrap();
+        let record: RunRecord = serde_json::from_value(json!({
+            "run_id": "received-mention", "work_kind": "ticket_mention",
+            "work_identity": {"ticket_url": url}, "member_id": "aiko", "device_id": "fixture",
+            "execution_mode": "autonomous", "started_at": mention.view.created_at,
+            "provider_evidence": [{"type":"reaction_add"}],
+        }))
+        .unwrap();
+        let writes =
+            SharedWrites::new(native.identity_root.clone(), Some(native.workspace.clone()));
+        let store = RunStore::open(&native.workspace);
+        let redactor = Redactor::default();
+        writes
+            .transaction(|writer| store.start(writer, record.clone(), &redactor))
+            .unwrap();
+        assert!(peers.receives("aiko", url).await.unwrap());
+
+        use gb_observability::runs::{Completion, RunCompletion, RunResult};
+        writes
+            .transaction(|writer| {
+                store.record_completion(
+                    writer,
+                    &record.run_id,
+                    RunCompletion {
+                        result: RunResult {
+                            subject_type: "ticket_mention".into(),
+                            subject_id: url.clone(),
+                            subject_url: url.clone(),
+                            status: Completion::Done,
+                            waiting_for: vec![],
+                        },
+                        member_id: "aiko",
+                        summary: "Acknowledged.",
+                        now: &chrono::Utc::now().to_rfc3339(),
+                    },
+                    &redactor,
+                )
+            })
+            .unwrap();
+        assert!(!peers.receives("aiko", url).await.unwrap());
+
+        // Branvil records comment times to the millisecond.
+        let started_at = gb_base::service::parse_timestamp(&record.started_at).unwrap();
+        while chrono::Utc::now().timestamp_millis() <= started_at.timestamp_millis() {
+            tokio::task::yield_now().await;
+        }
+        sender
+            .comment(url, "@aiko Please check the new details.", None)
+            .await
+            .unwrap();
+        assert!(peers.receives("aiko", url).await.unwrap());
     }
     #[tokio::test]
     async fn ticket_mentions_keep_their_origin_in_completion_and_status() {

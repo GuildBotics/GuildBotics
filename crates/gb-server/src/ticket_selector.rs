@@ -170,8 +170,9 @@ impl Selector<'_> {
             }
         }
         candidates.extend(self.ticket.candidates().await?);
-        let completions = self.mention_completions(&candidates)?;
-        candidates.retain(|task| !mention_processed(task, &completions));
+        let completions =
+            MentionCompletions::read(&candidates, self.person, || self.runner.records())?;
+        candidates.retain(|task| !completions.is_processed(task));
         candidates.sort_by_key(|task| !task.repair);
         Ok(candidates)
     }
@@ -186,8 +187,11 @@ impl Selector<'_> {
             self.ticket.refresh(task).await?
         };
         let Some(task) = task else { return Ok(None) };
-        let completions = self.mention_completions(std::slice::from_ref(&task))?;
-        if mention_processed(&task, &completions) {
+        let completions =
+            MentionCompletions::read(std::slice::from_ref(&task), self.person, || {
+                self.runner.records()
+            })?;
+        if completions.is_processed(&task) {
             return Ok(None);
         }
         if task.trigger_reason.as_deref() == Some(REVIEW_LIMIT) {
@@ -216,33 +220,6 @@ impl Selector<'_> {
             }
         }
         Ok(Some(invocation))
-    }
-
-    fn mention_completions(
-        &self,
-        tasks: &[Task],
-    ) -> Result<BTreeMap<String, DateTime<Utc>>, ServiceError> {
-        let mut latest = BTreeMap::new();
-        if !tasks.iter().any(|task| task.mention_at.is_some()) {
-            return Ok(latest);
-        }
-        let records = self.runner.records().map_err(|error| {
-            tracing::warn!(?error, "Could not read ticket mention run history");
-            ServiceError::Failed
-        })?;
-        for record in records {
-            if record.member_id == self.person
-                && record.work_kind == "ticket_mention"
-                && record.result.is_some()
-                && let Some(mut identity) = record.work_identity
-                && let Some(url) = identity.remove("ticket_url")
-                && let Some(started_at) = parse_timestamp(&record.started_at)
-            {
-                let previous = latest.entry(url).or_insert(started_at);
-                *previous = started_at.max(*previous);
-            }
-        }
-        Ok(latest)
     }
 
     async fn defer_ready(&self, task: &Task) -> bool {
@@ -577,14 +554,47 @@ impl Selector<'_> {
     }
 }
 
-fn mention_processed(task: &Task, completions: &BTreeMap<String, DateTime<Utc>>) -> bool {
-    task.mention_at
-        .zip(task.url.as_deref())
-        .is_some_and(|(mentioned_at, url)| {
-            completions
-                .get(url)
-                .is_some_and(|started_at| *started_at >= mentioned_at)
-        })
+/// The latest completed mention run per ticket for one member.
+pub(crate) struct MentionCompletions(BTreeMap<String, DateTime<Utc>>);
+
+impl MentionCompletions {
+    pub(crate) fn read(
+        tasks: &[Task],
+        person: &str,
+        records: impl FnOnce() -> anyhow::Result<Vec<RunRecord>>,
+    ) -> Result<Self, ServiceError> {
+        let mut latest = BTreeMap::new();
+        if !tasks.iter().any(|task| task.mention_at.is_some()) {
+            return Ok(Self(latest));
+        }
+        let records = records().map_err(|error| {
+            tracing::warn!(?error, "Could not read ticket mention run history");
+            ServiceError::Failed
+        })?;
+        for record in records {
+            if record.member_id == person
+                && record.work_kind == "ticket_mention"
+                && record.result.is_some()
+                && let Some(mut identity) = record.work_identity
+                && let Some(url) = identity.remove("ticket_url")
+                && let Some(started_at) = parse_timestamp(&record.started_at)
+            {
+                let previous = latest.entry(url).or_insert(started_at);
+                *previous = started_at.max(*previous);
+            }
+        }
+        Ok(Self(latest))
+    }
+
+    pub(crate) fn is_processed(&self, task: &Task) -> bool {
+        task.mention_at
+            .zip(task.url.as_deref())
+            .is_some_and(|(mentioned_at, url)| {
+                self.0
+                    .get(url)
+                    .is_some_and(|started_at| *started_at >= mentioned_at)
+            })
+    }
 }
 
 pub fn task_attributes(task: &Task) -> serde_json::Map<String, Value> {

@@ -289,11 +289,12 @@ impl TicketAgent {
         .await
     }
     pub async fn can_receive_work(&self, url: &str) -> Result<bool, ServiceError> {
+        Ok(self.receive_candidate(url).await?.is_some())
+    }
+    /// Return a candidate without settling the ticket's lane.
+    pub async fn receive_candidate(&self, url: &str) -> Result<Option<Task>, ServiceError> {
         self.fault("can_receive_work", url).await?;
-        Ok(self
-            .select_card(&self.ticket_card(url).await?, false)
-            .await?
-            .is_some())
+        self.select_card(&self.ticket_card(url).await?, false).await
     }
     pub async fn move_ticket(&self, task: &Task, lane: MoveLane) -> Result<bool, ServiceError> {
         self.fault("move_ticket", task.url.as_deref().unwrap_or(""))
