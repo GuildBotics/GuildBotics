@@ -551,9 +551,10 @@ read.
 
 ## Dependency cache
 
-A cache is a private copy of a published disk image of `/work`. The runner
-never mounts the published image. The work disk starts as a clone on file
-systems that can share blocks, or as a sparse copy with the same holes.
+A cache entry is a disk image containing the job's cached paths. The runner
+never mounts the published image. On restore, the work disk starts as a
+clone on file systems that can share blocks, or as a sparse copy with the
+same holes.
 
 The runner first looks up the exact key. It hashes the repository, job name,
 image configuration digest, user ID, work quota, `cache.paths`, and the names
@@ -562,6 +563,9 @@ generation for the same repository, job, user ID, and cache paths. The image
 digest, quota, and key files may differ. The job uses the current source and
 toolchain, and its work volume can grow to fit the restored image and checkout.
 The job log identifies the exact or fallback key, or says there was no entry.
+If preparation successfully uses the exact key for `/work`, the runner
+skips saving on that attempt. A miss, a fallback generation, or an unusable
+exact-key image still allows saving on a successful eligible attempt.
 
 A successful execution on the head of a PR targeting a protected branch
 can keep a pending disk image on its runner. When the Hub records that exact
@@ -699,10 +703,11 @@ Per job the runner:
 3. when the cache has an entry for the job, puts a copy of its image at
    `<work dir>/jobs/<attempt id>/cache-disk.raw`; creates the disk of `/work`
    (`msb volume create bv-work-<runner>-<attempt> --kind disk --size SM`),
-   and makes the copy, grown to `S` (the space it gains takes no blocks),
-   that volume's disk (a rename). An entry that holds no ext4 file system is
-   not used. When a
-   cached path goes through a symbolic link of the commit (unpacking the
+   grows the copy to `S` (the space it gains takes no blocks), then tries
+   to rename it into place as the volume's disk and falls back to copying
+   if the rename fails.
+   An entry that holds no ext4 file system is not used. When a cached path
+   goes through a symbolic link of the commit (unpacking the
    checkout over an entry would write through it), the job neither uses nor
    keeps an entry; the runner decides this from the commit's index, byte
    for byte, not from what its machine's file system made of the checkout,
@@ -749,7 +754,7 @@ Per job the runner:
    ends the VM through its parent watchdog, so every process in it stops),
    keeps what the job wrote up to then, and removes its sandbox. Once the
    job's VM ended by exit or timeout, and the job declares artifacts or
-   succeeded in a protected branch's run with a cache, a VM like the one
+   is eligible to save a new cache image, a VM like the one
    that prepared `/work` (`bv-collect-<attempt>`, started under the shared
    image lock as the job's VM is, a cancel ending the wait for it, `io`
    mounted with `quota=S`) packs the artifacts' paths into
@@ -758,30 +763,35 @@ Per job the runner:
    in large blocks and flushed (`dd … conv=fsync`, so a write that does not
    reach `io` fails). The archive is written as `<archive>.part` and renamed
    once `tar` and `dd` succeeded, so one whose packing failed is not there
-   (the log says so). For the cache, the VM then, in a shell of its own
-   (`sh -e`), leaves only the cached paths of `/work` and the directories
-   above them (a cached path that goes through a symbolic link loses the
-   link), flushes, and gives the freed blocks back to the disk's image
-   (`fstrim`); only when every step succeeded does the runner take a copy
-   of the disk to `cache-disk.raw` (after flushing the image's file on the
-   host). Otherwise the log says `/work` is not kept: what was removed
-   could still be read from the disk, and the image would hold every block
-   ever written. A failure of those steps keeps the disk out of the cache
-   and nothing else: the artifacts' archive stays. The mark of success
-   holds what the disk's file system then holds, which the entry records.
+   (the log says so). For a cache save, the runner first creates an empty
+   disk volume `bv-cache-<runner>-<attempt>` of the same capacity as
+   `/work`. The CLI and SDK both mount it at `/.branvil-cache` in the
+   collecting VM only. The VM streams the selected `cache.paths` through
+   `tar -cf - … | tar -xpf - -C /.branvil-cache`, using the same path
+   selection as artifacts and leaving `/work` intact. When both tar
+   commands and `sync` succeed, the VM records the KiB used on the new
+   file system. After the VM ends, the runner flushes the image file and
+   hard-links it to `cache-disk.raw`. The volume image under the
+   microsandbox home (`MSB_HOME` on external runners) and the `jobs/`
+   and `cache/` subdirectories of the runner's work directory must be on
+   the same file system so the runner can link and stage the image. If disk
+   creation, the copy inside the VM, or the link fails, the runner logs the
+   skipped save. Artifact collection and the job conclusion are independent
+   of those failures.
    A failure of the script itself (a `/work` that is not there, a mark that
    cannot be removed, a rename) fails the VM (`set -e`). The artifacts' archive is named only once it was packed
    whole, so it stays even when the VM failed or was stopped later; the
-   copy of the disk is not taken then. A stop makes the attempt `cancelled`
+   cache image is discarded then. A stop makes the attempt `cancelled`
    when the job declares artifacts (a stop while only the cache is
    collected leaves its end as it was). It then removes
-   every sandbox of the attempt (by its `branvil.job` label) and the `/tmp`
-   and `/work` volumes (which outlive the sandboxes), warning only about one
-   that exists and could not be removed, and, for a job with artifacts,
+   every sandbox of the attempt (by its `branvil.job` label) and the
+   `/tmp`, `/work`, and cache volumes (which outlive the sandboxes), warning
+   about any that could not be removed. The runner also sweeps leftover
+   volumes at startup. For a job with artifacts, it then
    empties the work directory and unpacks the artifacts' archive into it
    (see "Artifacts"): nothing of the checkout is taken for an artifact;
-5. uploads artifacts, saves `cache-disk.raw` as the cache entry after a
-   success of a protected branch's run, reports the conclusion with the
+5. uploads artifacts, stages `cache-disk.raw` if collected after a successful
+   eligible run, reports the conclusion with the
    image's configuration digest, and deletes the job's directories.
 
 `S` is `ci.executor.work_quota_mib`, plus twice the size of the checkout's
@@ -799,10 +809,9 @@ on the host (a Rust workspace's build passed its time limit), while a disk
 is as fast as the VM's own. What crosses the boundary is one archive at a
 time. The image needs `/bin/sh`, `tar`, `chown`, `find`, `dd` (with `obs=`
 and `conv=fsync`), `rm`, `mv`, and `sync` for this, `mkdir` when it gives
-the job's user no home it can write, and, for a job with a cache, `fstrim`
-to save an entry, `awk` and `find` to use one, and `df`, `awk`, and
-`resize2fs` to grow an entry's file
-system to `S`, and to measure what an entry holds. Without `resize2fs`, an
+the job's user no home it can write. For a cache, it also needs `df` and
+`awk` to measure what the new disk holds, and `awk`, `find`, `df`, and
+`resize2fs` to prepare and grow a restored file system. Without `resize2fs`, an
 entry's file system is kept as it is only when it still leaves the quota
 (the log says so), and the job runs without the cache otherwise.
 Without `sync`, preparing `/work` fails for every job, so an image that ran

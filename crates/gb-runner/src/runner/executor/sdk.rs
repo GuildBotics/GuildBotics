@@ -5,6 +5,14 @@ use gb_vm::sdk::{
 };
 use gb_vm::{OwnedVm, owned_boot};
 
+impl HelperDisks<'_> {
+    fn attach_to_sdk(&self, builder: SandboxBuilder) -> SandboxBuilder {
+        self.mounts().fold(builder, |builder, (at, disk)| {
+            builder.volume(at, |mount| mount.named(&disk.name))
+        })
+    }
+}
+
 impl Microsandbox {
     pub(super) async fn sdk_inspect(&self, reference: &str) -> Result<Option<ImageInfo>, String> {
         gb_vm::backend(&self.home).await?;
@@ -101,7 +109,7 @@ impl Microsandbox {
         job: &JobRun<'_>,
         what: &str,
         quota_mib: u64,
-        disk: &JobDisk,
+        disks: HelperDisks<'_>,
         script: &str,
         cancel: &mut watch::Receiver<bool>,
     ) -> Result<(), Option<String>> {
@@ -113,8 +121,8 @@ impl Microsandbox {
             .user("0:0")
             .max_duration(HELPER_SECS)
             .disable_network()
-            .volume(IO_MOUNT, |m| m.bind(job.io).quota(quota_mib as u32))
-            .volume("/work", |m| m.named(&disk.name));
+            .volume(IO_MOUNT, |m| m.bind(job.io).quota(quota_mib as u32));
+        let builder = disks.attach_to_sdk(builder);
         let vm = OwnedVm::start(builder, ())
             .await
             .map_err(|error| Some(error.to_string()))?;
@@ -263,4 +271,49 @@ async fn stream_job(
     }
     *job.peak_memory_mib = log_peak_memory(log, peak_kib).await;
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gb_vm::sdk::sandbox::{SandboxConfig, VolumeMount};
+
+    #[tokio::test]
+    async fn the_sdk_mounts_the_cache_disk_only_when_collecting_a_save() {
+        let disk = |name: &str| JobDisk {
+            name: name.into(),
+            mib: 128,
+            path: PathBuf::new(),
+        };
+        let (work, cache) = (disk("work"), disk("cache"));
+        for saving in [false, true] {
+            let mut config = SandboxConfig::default();
+            config.spec.name = "helper".into();
+            let builder = SandboxBuilder::from(config).image("img:dev");
+            let config = HelperDisks {
+                work: &work,
+                cache: saving.then_some(&cache),
+            }
+            .attach_to_sdk(builder)
+            .build()
+            .await
+            .unwrap();
+            let mut expected = vec![("/work", "work")];
+            if saving {
+                expected.push(("/.branvil-cache", "cache"));
+            }
+            let mut mounts: Vec<_> = config
+                .spec
+                .mounts
+                .iter()
+                .map(|mount| match mount {
+                    VolumeMount::Named { guest, name, .. } => (guest.as_str(), name.as_str()),
+                    other => panic!("unexpected mount: {other:?}"),
+                })
+                .collect();
+            expected.sort_unstable();
+            mounts.sort_unstable();
+            assert_eq!(mounts, expected);
+        }
+    }
 }

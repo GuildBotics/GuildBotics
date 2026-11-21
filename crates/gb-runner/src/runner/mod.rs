@@ -1289,10 +1289,11 @@ impl Runner {
                 };
                 (key, owner)
             });
-            // Never mounted: the disk image `/work` starts from, and the one
-            // it leaves for the cache.
+            // Never mounted: the image `/work` starts from, then the link to
+            // the image the collecting VM filled for the cache.
             let cache_disk = dir.join("cache-disk.raw");
             let (mut cache_data, mut kept_data) = (None, None);
+            let mut exact_cache = false;
             if let Some((key, owner)) = &cache_entry {
                 let restoring = Instant::now();
                 let (store, into, lookup, owner) = (
@@ -1304,7 +1305,8 @@ impl Runner {
                 match blocking(move || store.restore_generation(&lookup, &owner, &into)).await {
                     Ok(Some((generation, bytes))) => {
                         cache_data = Some(bytes);
-                        let from = if &generation == key {
+                        exact_cache = &generation == key;
+                        let from = if exact_cache {
                             format!("exact key {key}")
                         } else {
                             format!("latest generation {generation} (requested {key})")
@@ -1336,6 +1338,7 @@ impl Runner {
                         cache_disk: &cache_disk,
                         tree: &tree,
                         cache_data,
+                        exact_cache,
                         kept_data: &mut kept_data,
                         save_cache: c.cache_write,
                         work: &work,
