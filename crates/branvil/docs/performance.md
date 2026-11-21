@@ -483,7 +483,7 @@ branches' entries the cold run saved.
 
 These runs predate the rule that only a protected branch's run saves the
 cache (`docs/ci.md`, "Dependency cache"): a pull request's run, like the warm
-one, now restores the cache and saves nothing.
+one, restores the published cache. A successful head may leave a pending image; the runner publishes it after the merge.
 
 Every job: the source fetched in 16–46 ms (a bundle of 0.9 MB), checked out
 in 76–127 ms, its sandbox started in 252–553 ms and removed in 40–66 ms.

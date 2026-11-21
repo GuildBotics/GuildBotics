@@ -3,8 +3,6 @@
 //! so the service's queue, leases, supersession, checks, and merge gate are
 //! exercised exactly as a real runner would see them.
 
-use std::path::Path;
-
 use crate::common;
 
 use common::*;
@@ -15,15 +13,6 @@ const IMAGE: &str = "docker.io/library/alpine:3.22";
 /// The configuration digest the scripted runner reports for the image.
 pub(crate) const DIGEST: &str =
     "sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8";
-
-fn attempts_with_unknown_resources(db: &Path) -> Vec<Value> {
-    let mut attempts = records(db, "ci_attempts");
-    for attempt in &mut attempts {
-        attempt["allocation"] = Value::Null;
-        attempt["peak_memory_mib"] = Value::Null;
-    }
-    attempts
-}
 
 #[tokio::test]
 async fn post_merge_settings_validate_the_result_atomically_and_require_owner() {
@@ -284,7 +273,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_37_upgrade_preserves_records() {
+async fn schema_38_upgrade_preserves_records() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -346,14 +335,18 @@ async fn schema_37_upgrade_preserves_records() {
     assert_eq!(admin("reindex").0, 0);
     assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
     let verifications = records(&db, "ci_verifications");
-    let attempts = attempts_with_unknown_resources(&db);
+    let attempts = records(&db, "ci_attempts");
     let repos = records(&db, "repos");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
-    let prior_runs = records(&db, "ci_runs");
-    as_schema_37(&db);
+    let indexed_memory = tables(&db)["ix_ci_memory"].clone();
+    let mut prior_runs = records(&db, "ci_runs");
+    for run in &mut prior_runs {
+        run["cache_landed_at"] = Value::Null;
+    }
+    as_schema_38(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
-    assert!(!before.contains_key("ix_ci_memory"));
+    assert_eq!(before["ix_ci_memory"], indexed_memory);
     assert!(
         admin("check")
             .1
@@ -361,7 +354,7 @@ async fn schema_37_upgrade_preserves_records() {
     );
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 37 to 38"), "{output}");
+    assert!(output.contains("from schema version 38 to 39"), "{output}");
     assert_eq!(
         tables(&db).get("ix_repair_unnotified"),
         before.get("ix_repair_unnotified")
@@ -369,8 +362,12 @@ async fn schema_37_upgrade_preserves_records() {
     assert_eq!(records(&db, "repos"), repos);
     assert_eq!(repos[0]["responder"], "aiko");
     assert_eq!(records(&db, "ci_attempts"), attempts);
-    assert!(tables(&db)["ix_ci_memory"].is_empty());
-    assert_eq!(records(&db, "ci_runs"), prior_runs);
+    assert_eq!(tables(&db)["ix_ci_memory"], indexed_memory);
+    let mut upgraded_runs = records(&db, "ci_runs");
+    for run in &mut upgraded_runs {
+        run["cache_landed_at"] = Value::Null;
+    }
+    assert_eq!(upgraded_runs, prior_runs);
     let runs = records(&db, "ci_runs");
     assert_eq!(records(&db, "ci_verifications"), verifications);
     let run = runs.iter().find(|r| r["sha"] == head).unwrap();
@@ -386,16 +383,7 @@ async fn schema_37_upgrade_preserves_records() {
         assert!(!tables(&db).contains_key(name));
     }
     assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
-    let backup = std::fs::read_dir(&data)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .find(|p| {
-            p.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("branvil-schema-37-")
-        })
-        .unwrap();
+    let backup = previous_schema_backup(&data);
     assert_eq!(tables(&backup), before);
     let (code, output) = admin("check");
     assert_eq!(code, 0, "{output}");
@@ -1044,111 +1032,6 @@ async fn a_reused_success_counts_for_required_checks_and_not_for_duration_estima
 }
 
 #[tokio::test]
-async fn cache_refresh_never_changes_main_checks_or_required_readiness() {
-    let mut w = World::new().await;
-    let runner = Runner::new(&w, "runner1").await;
-    let cached_pipeline =
-        pipeline(&["test"]).replace("commands =", "cache = { paths = [\"target\"] }\ncommands =");
-    land(&w, "setup", &[(".branvil/ci.toml", &cached_pipeline)], None).await;
-    runner.drain("success").await;
-    sync_main(&w);
-    w.push_change("source", "source.txt", "source change");
-    w.open_pull("source", json!([])).await;
-    let source = runner.claim().await.unwrap();
-    let key = "a".repeat(64);
-    let (st, result) = runner.post(&source, "finish", json!({"lease": source["lease"], "conclusion": "success", "image_digest": DIGEST, "cache_key": key})).await;
-    assert_eq!(st, 200, "{result}");
-    set_required(&w, &["test"]).await;
-    sync_main(&w);
-    git_ok(&w.work, &["checkout", "-q", "source"]);
-    git_ok(&w.work, &["checkout", "-qb", "same"]);
-    git_ok(&w.work, &["commit", "--allow-empty", "-qm", "same tree"]);
-    git_as_ok(&w.work, "aiko", &w.aiko, &["push", "-q", "origin", "same"]);
-    let p = w.open_pull("same", json!([])).await;
-    let c = runner.claim().await.unwrap();
-    assert_eq!(c["reuse"]["attempt_id"], source["attempt_id"]);
-    assert_eq!(runner.post(&c, "finish", json!({"lease": c["lease"], "conclusion": "success", "image_digest": DIGEST, "reused_from": source["attempt_id"]})).await.0, 200);
-    let n = p["number"].as_u64().unwrap();
-    let (st, result) = w
-        .server
-        .post(
-            &format!("{}/pulls/{n}/merge", w.repo_path()),
-            &w.owner,
-            json!({"expected_head": p["head_sha"], "expected_base": p["base_sha"]}),
-        )
-        .await;
-    assert_eq!(st, 200, "{result}");
-    let c = runner.claim().await.unwrap();
-    assert_eq!(c["purpose"], "check");
-    let (st, result) = runner.post(&c, "finish", json!({"lease": c["lease"], "conclusion": "success", "image_digest": DIGEST, "reused_from": source["attempt_id"], "refresh_cache": true})).await;
-    assert_eq!(st, 200, "{result}");
-    let refresh_id = result["cache_refresh"].as_str().unwrap().to_owned();
-    let sha = c["sha"].as_str().unwrap();
-    let checks_path = format!("{}/commits/{sha}/checks", w.repo_path());
-    let before = w.server.ok(&checks_path, &w.aiko).await;
-    assert_eq!(before["checks"].as_array().unwrap().len(), 1);
-    assert_eq!(before["checks"][0]["status"], "completed");
-    assert_eq!(before["checks"][0]["conclusion"], "success");
-    assert_eq!(before["checks"][0]["cache_refresh"], refresh_id);
-    assert!(
-        before["checks"][0]["details"]
-            .as_str()
-            .unwrap()
-            .contains(&format!("/-/jobs/{refresh_id}"))
-    );
-    let refresh = runner.claim().await.unwrap();
-    assert_eq!(refresh["attempt_id"], refresh_id);
-    assert_eq!(refresh["purpose"], "cache_refresh");
-    assert_eq!(refresh["cache_scope"], "protected");
-    assert!(refresh["reuse"].is_null());
-    assert_eq!(w.server.ok(&checks_path, &w.aiko).await, before);
-    assert_eq!(runner.finish(&refresh, "failure").await.0, 200);
-    assert_eq!(w.server.ok(&checks_path, &w.aiko).await, before);
-    let (st, refused) = w
-        .server
-        .post(
-            &format!("{}/jobs/{refresh_id}/retry", w.repo_path()),
-            &w.aiko,
-            json!({}),
-        )
-        .await;
-    assert_eq!(st, 409, "refresh retry cannot become a check");
-    assert_eq!(
-        refused["error"]["message"],
-        "Cache refresh attempts cannot be manually retried."
-    );
-    // Preserve both purposes and their association across the previous-schema upgrade.
-    w.server.stop();
-    let db = w.server.data.join("branvil.redb");
-    let before_attempts = attempts_with_unknown_resources(&db);
-    assert!(
-        before_attempts
-            .iter()
-            .any(|a| a["purpose"] == "cache_refresh")
-    );
-    assert!(
-        before_attempts
-            .iter()
-            .any(|a| a["cache_refresh"] == refresh_id)
-    );
-    as_schema_37(&db);
-    for (command, expected) in [("upgrade", 0), ("check", 0)] {
-        let out = branvil_command()
-            .args(["admin", command, "--data-dir"])
-            .arg(&w.server.data)
-            .output()
-            .unwrap();
-        assert_eq!(
-            out.status.code(),
-            Some(expected),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-    assert_eq!(records(&db, "ci_attempts"), before_attempts);
-}
-
-#[tokio::test]
 async fn next_claim_retries_empty_responses_until_a_job_is_registered() {
     use axum::{Json, Router, response::IntoResponse, routing::post};
     use std::sync::{
@@ -1529,7 +1412,7 @@ async fn a_head_runs_its_own_pipeline_and_reports_logs_and_artifacts() {
     assert!(c["job"].get("cpus").is_none(), "{c}");
     assert_eq!(c["repo"], REPO);
     assert_eq!(c["network"], false);
-    assert_eq!(c["cache_scope"], "branch:feature");
+    assert_eq!(c["cache_write"], false);
     assert!(c["queued_secs"].is_u64(), "{c}");
     assert_eq!(check(&checks(&w, n).await, "test")["status"], "in_progress");
 
@@ -1719,11 +1602,8 @@ async fn a_head_runs_its_own_pipeline_and_reports_logs_and_artifacts() {
     assert_eq!(diag["runner"]["runners"][0]["name"], "runner1");
 }
 
-/// A fast-forward merge runs no job of the merged head again, but those
-/// with a dependency cache: only a protected branch's run saves the cache, and
-/// a merged head's jobs ran for its pull request.
 #[tokio::test]
-async fn a_merge_runs_the_jobs_with_a_cache_again_as_the_default_branchs() {
+async fn a_merge_keeps_a_running_head_and_can_publish_its_cache_after_success() {
     let w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let jobs = format!(
@@ -1734,7 +1614,7 @@ async fn a_merge_runs_the_jobs_with_a_cache_again_as_the_default_branchs() {
     // Merged while its jobs waited, the setup's commit runs them as main's.
     for _ in 0..2 {
         let c = runner.claim().await.unwrap();
-        assert_eq!(c["cache_scope"], "protected", "{c}");
+        assert_eq!(c["cache_write"], c["job"]["name"] == "build", "{c}");
         assert_eq!(runner.finish(&c, "success").await.0, 200);
     }
 
@@ -1756,7 +1636,7 @@ async fn a_merge_runs_the_jobs_with_a_cache_again_as_the_default_branchs() {
     // `build` still runs for the pull request when it is merged.
     let running = runner.next_claim().await;
     assert_eq!(running["job"]["name"], "build");
-    assert_eq!(running["cache_scope"], "branch:feature", "{running}");
+    assert_eq!(running["cache_write"], true, "{running}");
     let lint = runner.claim().await.unwrap();
     assert_eq!(runner.finish(&lint, "success").await.0, 200);
     let (st, v) = w
@@ -1768,28 +1648,42 @@ async fn a_merge_runs_the_jobs_with_a_cache_again_as_the_default_branchs() {
         )
         .await;
     assert_eq!(st, 200, "{v}");
-    // The pull request's run of it is asked to stop; main's runs instead.
-    assert_eq!(runner.heartbeat(&running).await.1["cancel"], true);
-    let c = runner.claim().await.expect("build runs again as main's");
-    assert_eq!(
-        (
-            &c["job"]["name"],
-            &c["sha"],
-            &c["attempt"],
-            &c["cache_scope"]
-        ),
-        (
-            &json!("build"),
-            &json!(head),
-            &json!(2),
-            &json!("protected")
+    let id = running["attempt_id"].as_str().unwrap();
+    assert_eq!(runner.heartbeat(&running).await.1["cancel"], false);
+    assert!(runner.claim().await.is_none());
+    let poll = || w.server.post("/runner/cache", &runner.token, json!([id]));
+    assert_eq!(poll().await, (StatusCode::OK, json!({ (id): "keep" })));
+    let (status, _) = runner
+        .post(
+            &running,
+            "finish",
+            json!({
+                "lease": running["lease"], "conclusion": "success", "image_digest": DIGEST,
+                "cache_key": "a".repeat(64),
+            }),
         )
+        .await;
+    assert_eq!(status, 200);
+    let (status, decisions) = poll().await;
+    assert_eq!(status, 200);
+    assert!(decisions[id]["publish"].is_string(), "{decisions}");
+    assert_eq!(
+        w.server
+            .post("/runner/cache", &w.owner, json!([id]))
+            .await
+            .0,
+        403
     );
-    assert!(runner.claim().await.is_none(), "lint has no cache");
-    assert_eq!(runner.finish(&c, "success").await.0, 200);
+    let other = Runner::new(&w, "runner2").await;
+    assert_eq!(
+        w.server
+            .post("/runner/cache", &other.token, json!([id]))
+            .await,
+        (StatusCode::OK, json!({ (id): "discard" }))
+    );
     let v = checks(&w, n).await;
     assert_eq!(check(&v, "build")["conclusion"], "success", "{v}");
-    assert_eq!(check(&v, "build")["attempt"], 2, "{v}");
+    assert_eq!(check(&v, "build")["attempt"], 1, "{v}");
     assert_eq!(check(&v, "lint")["attempt"], 1, "{v}");
 }
 
@@ -3228,20 +3122,23 @@ async fn verification_api_auth_first_parent_and_cursor_pages() {
     assert_eq!(status, 200, "{body}");
     for _ in 0..=3 {
         let c = runner.next_claim().await;
-        assert_eq!(c["purpose"], "check");
+        assert!(c.get("purpose").is_none());
         assert_eq!(runner.finish(&c, "failure").await.0, 200);
     }
     let probe = runner.next_claim().await;
-    assert_eq!(probe["purpose"], "probe");
+    assert!(probe.get("purpose").is_none());
+    assert_eq!(probe["cache_write"], false);
     assert_eq!(probe["sha"], base);
-    assert_eq!(probe["cache_scope"], "probe");
     assert!(probe["reuse"].is_null());
     let job_url = format!(
         "/repos/{}/jobs/{}",
         encode(path),
         probe["attempt_id"].as_str().unwrap()
     );
-    assert_eq!(w.server.ok(&job_url, &w.aiko).await["purpose"], "probe");
+    assert_eq!(
+        w.server.ok(&job_url, &w.aiko).await["retry_supported"],
+        false
+    );
     assert_eq!(
         w.server.get(&format!("{job_url}/log"), &w.aiko).await.0,
         200

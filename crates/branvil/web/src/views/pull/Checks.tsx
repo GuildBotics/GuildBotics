@@ -236,11 +236,6 @@ function CheckRow({ check, repo, required, onOpen }: { check: Check; repo: strin
         </Text>
       )}
       {check.path_skip && <Box ml={24} mb={4}><PathSkipReason repo={repo} skip={check.path_skip} /></Box>}
-      {check.cache_refresh && (
-        <Text size="xs" ml={24} mb={4}>
-          <Link to={href.job(repo, check.cache_refresh)}>{t("ci.cacheRefresh")}</Link>
-        </Text>
-      )}
     </>
   );
 }
@@ -303,12 +298,6 @@ function JobDetails({ repo, attemptId, onAttempt }: { repo: string; attemptId: s
   return (
     <Stack gap="md">
       {j.path_skip && <PathSkipReason repo={repo} skip={j.path_skip} />}
-      {j.purpose === "cache_refresh" && (
-        <Stack gap="xs">
-          <Text fw={600}>{t("ci.cacheRefresh")}</Text>
-          <Text size="sm" c="dimmed">{t("ci.cacheRefreshEffect")}</Text>
-        </Stack>
-      )}
       <dl>
         <dt>{t("ci.commit")}</dt>
         <dd>
@@ -334,12 +323,6 @@ function JobDetails({ repo, attemptId, onAttempt }: { repo: string; attemptId: s
                 {j.reused_from.attempt_id}
               </Link>{" "}· <Sha repo={repo} value={j.reused_from.sha} />
             </dd>
-          </>
-        )}
-        {j.cache_refresh && (
-          <>
-            <dt>{t("ci.cacheRefresh")}</dt>
-            <dd><Link to={href.job(repo, j.cache_refresh)}>{j.cache_refresh}</Link></dd>
           </>
         )}
         {j.details && (
@@ -371,7 +354,7 @@ function JobDetails({ repo, attemptId, onAttempt }: { repo: string; attemptId: s
         attemptId={attemptId}
         action={
           <>
-            <Button size="xs" variant="default" onClick={() => retry.mutate()} disabled={retry.isPending || j.purpose === "cache_refresh"}>
+            <Button size="xs" variant="default" onClick={() => retry.mutate()} disabled={retry.isPending || j.retry_supported === false}>
               {t("ci.retry")}
             </Button>
             <Button size="xs" variant="default" onClick={() => cancel.mutate()} disabled={cancel.isPending || j.status === "completed"}>

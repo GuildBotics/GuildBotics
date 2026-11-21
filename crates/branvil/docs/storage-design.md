@@ -60,7 +60,7 @@ to remain unchanged when the version stays at the verified version. It skips
 the comparison when no verified commit exists, it is not an ancestor of the
 checkout, or it predates the guard script.
 
-`meta["schema_version"]` is written on creation (currently `36`). The current
+`meta["schema_version"]` is written on creation (currently `39`). The current
 format includes per-pull landing conditions, each merged pull request's original
 reviewed head distinct from its merge commit, and per-head notification and
 automatic failure state. CI runs hold their commit's pipeline and tree;
@@ -118,7 +118,7 @@ check did not change stored records or raise the version.
 | `idempotency` | `(fold(member), key)` | request hash, status, response body, time | API middleware | API middleware |
 | `ci_narrowings` | `(repo id, base sha, job name)` | failed SHA, first-parent history, observations and attempt IDs, pending probe, conclusion, boundary/reason, start and finish times | failed verification, check event, reconciler | repair hints |
 | `ci_runs` | `(repo id, sha)` | branches that want CI of the commit, tree (unset only for upgraded runs with missing commits), the commit's pipeline (absent / invalid + message / job definitions), cache scope, waiting, superseded by, protected-branch history, input digest of each job with `paths` (`inputs`: SHA-256 of `git diff-tree -r -z --no-renames --raw <empty tree> <sha> -- <the job's paths>`, replaced at every registration; kept without Git while the pipeline is the same) | ref recording (`Ci::on_ref_changes`), PR open/reopen, reconciler, queue admission | checks, claims, retries |
-| `ci_attempts` | `(attempt id)` | purpose (`check`, `cache_refresh`, `probe`), job definition (snapshot), image configuration digest, actual source attempt if reused, cache key of an actual execution, reuse permission (manual retries execute), number, queue sequence, status, conclusion, details, SHA-256 of the lease, lease expiry, cancel requested, runner, cache scope, network, times, interrupted/superseded flags, artifact names and sizes, files pruned, the run's input digest of the job when claimed (`inputs`, none for a job without `paths`) | registration, claim, heartbeat, finish, cancel, retry, sweeps | checks, job API, runner API, artifacts |
+| `ci_attempts` | `(attempt id)` | kind (`check`, `probe`, or `historical`), job definition (snapshot), image configuration digest, actual source attempt if reused, cache key of an actual execution, reuse permission (manual retries execute), number, queue sequence, status, conclusion, details, SHA-256 of the lease, lease expiry, cancel requested, runner, cache scope, network, times, interrupted/superseded flags, artifact names and sizes, files pruned, the run's input digest of the job when claimed (`inputs`, none for a job without `paths`) | registration, claim, heartbeat, finish, cancel, retry, sweeps | checks, job API, runner API, artifacts |
 
 Each comment, review, and inline comment is its own record, so adding one never
 rewrites a history; a reaction rewrites only its target entry.

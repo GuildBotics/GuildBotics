@@ -26,7 +26,7 @@ const CACHED = {
   ],
 };
 
-const LIMITS = { max_cpus: 4, max_memory_mib: 4096, work_quota_mib: 16384, max_timeout_secs: 3600, cache_max_mib: 2048, max_jobs: 1, memory_reserve_percent: 10, cpu_multiplier_percent: 0 };
+const LIMITS = { max_cpus: 4, max_memory_mib: 4096, work_quota_mib: 16384, max_timeout_secs: 3600, cache_max_mib: 16384, max_jobs: 1, memory_reserve_percent: 10, cpu_multiplier_percent: 0 };
 const HUB_RUNNER: CiRunner = {
   name: "branvil-runner", connection: "online", last_seen_at: "2026-10-18T05:00:00.000Z",
   executor: "microsandbox", executor_state: "ready", executor_detail: null, architecture: "arm64",

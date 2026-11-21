@@ -107,7 +107,6 @@ impl Fixture {
                     conclusion,
                     None,
                     queue::ResultInfo::default(),
-                    0,
                     &util::now(),
                 )
             })

@@ -313,8 +313,6 @@ export const ja: Record<MessageKey, string> = {
   "ci.showLog": "ログを表示",
   "ci.hideLog": "ログを隠す",
   "ci.reason": "理由",
-  "ci.cacheRefresh": "キャッシュの更新",
-  "ci.cacheRefreshEffect": "この結果はチェックと自動更新に影響しません。",
   "ci.reused": "再利用元",
   "ci.reusedPaths": "再利用元（paths が同じ）",
   "ci.log": "ログ",

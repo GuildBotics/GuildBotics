@@ -58,7 +58,7 @@ capacity, preserves `failing_since`, and clears the failed-job list. Other manua
 retries change neither the verification record nor its verified ref.
 
 Verification attempts normally use class **4m**, after merge-directed work
-(classes 1–3 and 4a), before drafts and cache refresh (4b). They display
+(classes 1–3 and 4a), before drafts (4b). They display
 `Deferred: main is verified after the jobs that lead to a merge.` They do not
 consume admission capacity for any class. If `failing_since` is set, or any attempt
 of the running verification has failed, timed out, lacked a runner, or exhausted
@@ -114,13 +114,12 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   checks' estimates. If Git cannot read history, pipeline order is used.
   Registering the same run again does not change existing attempts or their
   sequence numbers. Waiting runs receive this order when admitted; individual
-  retries, interrupted attempts, and cache refreshes keep their existing rules.
+  retries and interrupted attempts keep their existing rules.
   At each claim the service derives a class from current store records, without
   Git or a saved priority. The first matching rule wins:
 
   | Scope | Condition | Class |
   | --- | --- | --- |
-  | Attempt | Cache refresh | 4b (last) |
   | Attempt | Probe (even with a protected run, or without a run) | 2 |
   | Run | Missing run or repository, or no branches want the commit | 4b |
   | Branch | Protected, except healthy default-branch verification (4m) | 1 |
@@ -140,7 +139,7 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   A run takes the highest class of its branches; a branch takes the highest
   class of its open PRs. Review verdicts, approvals, unanswered statements, and
   required checks use the same rules as PR readiness and landing. Reasons for
-  4a/4b distinguish cache refresh, missing records, unwanted commits, no open
+  4a/4b distinguish missing records, unwanted commits, no open
   PR, drafts, the failed required check, and the reviewer requesting changes
   (with the approval count).
 
@@ -342,9 +341,8 @@ Local merges use the local merge policy; artifact jobs run for the new SHA.
 ## Runs, attempts, and states
 
 A **run** is the CI of one commit of one repository; an **attempt** is one try
-of one job (`att_<ULID>`, numbered 1, 2, … per job). An attempt's `purpose`
-is `check`, `cache_refresh`, or `probe`; all purposes share the job's attempt numbers.
-For example, check #1 followed by refresh #2 makes a manual check retry #3.
+of one job (`att_<ULID>`). Checks, probes, and historical attempts share
+the job's sequence of attempt numbers.
 Checks show the latest `check` attempt of each job: a pull request's page
 shows its head's, a commit's page that commit's, and the pull request list's header the default branch tips'
 (`GET …/pulls/{number}/checks`, `GET …/commits/{sha}/checks`).
@@ -399,8 +397,7 @@ Leases and interruptions:
   the interrupted one had in the queue, ahead of the jobs queued after it. A
   second interruption ends that attempt. Eligible protected required checks
   then use the automatic retry budget below; other checks require a manual
-  retry. Cache refreshes need no manual retry: a later check requests a new
-  refresh if the cache still needs one.
+  retry.
 - A restart of the service is handled the same way: leases are stored, so a
   runner on another machine that keeps working through a short restart keeps
   its attempt, and attempts whose lease ran out while the service was down
@@ -430,10 +427,6 @@ successfully so launchd leaves it stopped.
   `stopping` meanwhile, and the GUI shows the owner a warning on every page; the
   service's log says how many jobs it waits for, and its standard output says
   `branvil stopping: waiting for …` when running Branvil on its own.
-- Cache-refresh attempts are interrupted immediately when stopping starts;
-  they do not use the wait period. The first interruption requeues them with
-  their purpose and cache key. A second interruption ends them and releases
-  the key for a later check's refresh request. Checks use the wait period.
 - A check still running when that time is up is interrupted ("Interrupted:
   Branvil stopped …; queued again in its place") and queued again in its place,
   so the next start runs it before the jobs queued after it (one already
@@ -468,8 +461,7 @@ No runner, no executor:
   `startup_failure` ("No CI runner has contacted Branvil …"). Its details ask
   the owner to start the runner. Eligible protected-run checks queue an automatic
   retry that waits until a runner claims it; this wait does not exhaust the
-  retry budget. Other checks require a manual retry; cache refreshes explain
-  that a later check can request another refresh.
+  retry budget. Other checks require a manual retry.
 - A runner whose executor is unusable advertises no images and leaves attempts
   for other ready runners. When no ready runner has an attempt's image, the same
   timeout concludes it `startup_failure`, naming the missing image and CPU.
@@ -480,17 +472,14 @@ No runner, no executor:
 Cancel and retry: `POST …/jobs/{id}/cancel` concludes a queued attempt
 `cancelled` at once and asks a running one to stop; `POST …/jobs/{id}/retry`
 queues the next attempt number of the latest check attempt, once completed,
-with the same job definition (the pipeline is not read again). Cache refreshes
-cannot be retried. Retry takes the repository lock used for ref changes.
+with the same job definition. Retry takes the repository lock used for ref changes.
 
 ## Automatic retries
 
 Every job of a protected run automatically retries up to three times
 after its initial failure. Eligible endings are command failure, timeout,
 no runner contacting the service, and the second interruption of an attempt.
-Other startup failures (such as a missing image), requested cancellations,
-supersession, pull-request runs, and cache refreshes do
-not trigger automatic retries.
+Automatic retries are limited to these endings on protected-branch checks.
 
 The failed attempt and the next queued attempt are recorded in one transaction:
 commit checks show the queued retry without an intervening failed check.
@@ -521,7 +510,7 @@ Neither final required-check failures nor automatic recovery send webhook notice
 | jobs at once | 1 (`ci.executor.max_jobs`) | per runner; the runner claims a job only when it can start it, so the others wait in the service's queue. Jobs at once use that many times the CPUs and memory, and the disk of that many `/work` volumes and job directories (each with the checkout and its archive, and the cache's archive while it is restored or saved) |
 | stop wait | 3600 s (`ci.stop_wait_secs`) | how long a stopping service waits for its running jobs ("Stopping the service" above) |
 | job time limit | 3600 s (`ci.executor.max_timeout_secs`) | the limit of a job that gives no `timeout_secs`; a larger `timeout_secs` is lowered to it, and the log says so |
-| dependency cache | 2048 MiB (`ci.executor.cache_max_mib`) | superseded generations are removed before current entries; least recently used first within each group |
+| dependency cache | 16 GiB (`ci.executor.cache_max_mib`) | total bytes for pending and published images; see [Dependency cache](#dependency-cache) |
 | retention | 30 days (`ci.retention_days`) | logs and artifacts of attempts finished earlier are deleted; the attempt records stay |
 | runners per work directory | 1 | a lock file refuses a second runner |
 
@@ -548,104 +537,38 @@ read.
 
 ## Dependency cache
 
-`cache.paths` are restored into `/work` before the job, and saved after a
-successful job of a run that a protected branch asked for (its cache scope is
-`protected`). An entry is the disk image of such a job's `/work` that kept
-only the cached paths (links, hard links, owners and modes included); a job's
-`/work` starts as a copy of it, and the runner never mounts it. On a file
-system that shares blocks between copies (APFS), a restore and a save write
-none of the entry's data: a job writes only what it changes. Elsewhere a copy
-writes the blocks that hold data, and leaves the rest holes. When a protected branch comes to want a commit whose
-jobs ran for a pull request, jobs with a cache get
-protected attempts (one still running for the pull request is stopped), and an
-attempt still queued takes its run's scope when a runner claims it. These
-check attempts execute only when they cannot reuse a result. Reused protected
-checks request separate cache-refresh attempts when their cache needs a save.
-The service records the successful check and enqueues its refresh in the same
-transaction. At most one queued or running refresh exists per repository,
-job name, and cache key, even across commits. A full queue skips the refresh;
-a later request can enqueue it. The check links to the new or existing refresh.
+A cache is a private copy of a published disk image of `/work`. The runner
+never mounts the published image. The work disk starts as a clone on file
+systems that can share blocks, or as a sparse copy with the same holes.
 
-Refresh attempts always execute in protected scope and save after success.
-They never appear in commit checks, required checks, readiness;
-their waiting, execution, or failure therefore does not delay automatic updates.
-They survive branch movement. Successful refreshes can supply reuse results
-and duration estimates. They share queue limits and file retention with checks.
-Their pages identify them as cache refreshes; manual retry is only for checks.
-If an image tag changes before execution, the refresh computes and saves the
-key for the image it actually runs.
+The runner first looks up the exact key. It hashes the repository, job name,
+image configuration digest, user ID, work quota, `cache.paths`, and the names
+and contents of `cache.key_files`. On a miss it restores the latest published
+generation for the same repository, job, user ID, and cache paths. The image
+digest, quota, and key files may differ. The job uses the current source and
+toolchain, and its work volume can grow to fit the restored image and checkout.
+The job log identifies the exact or fallback key, or says there was no entry.
 
-A pull request's run (`branch:<name>`) restores the same entries and save nothing (their logs
-say `cache not saved`): they cannot plant a cache entry that the default branch
-would use, and never push out the entries every run restores. The key is the SHA-256
-of the repository, the job name, the configuration digest of the image the
-job runs on (a new version of the tag does not reuse what the previous one
-built), the user the job runs as (the image keeps the owner of each file),
-the runner's `work_quota_mib` (a job's `/work` is no smaller than the
-entry's image, so a changed quota starts a new entry), the cached paths, and
-the content of `cache.key_files`. The cache lives in
-`<runner work dir>/cache/`, an entry's image in `<key>/disk.raw`. A restore
-copies the image to a path of the job's directory that no VM mounts, which
-then becomes the disk of the job's `/work`, so no VM ever has an entry's own
-file; a save takes a copy of that disk once the VM that kept the cached
-paths ended (a regular file only), and replaces the entry, which is never
-changed in place. An entry also records the bytes of data its file system
-holds, as the VM that kept the cached paths measured them (`df`): `cache
-restored … bytes` and the size of the next `/work` use it. The cache counts
-an entry by the blocks its files take (`cache_max_mib`, `cache saved …
-bytes`). Entries of an earlier form (an archive of the cached paths) are
-removed when the runner starts.
+A successful execution on the head of a PR targeting a protected branch
+can keep a pending disk image on its runner. When the Hub records that exact
+head as merged into a protected branch, the runner publishes it after the
+Hub has accepted the attempt as a success. It discards the image if the head
+leaves all eligible PRs before merging. An actual successful execution on a
+protected branch can publish after the Hub accepts its result. Reusing a check
+after the merge does not schedule a separate execution for the cache.
 
-A job finds no entry (`no cache entry yet`) when no protected branch's run
-has saved one for its key yet, or the entry was evicted. Changing a lock file
-or image version needs a matching protected save before pull requests can
-restore it. A pull request with an older lock file can still restore an older
-generation while that entry remains in the cache.
-The cache can hold multiple generations for each repository and job the runner
-serves. Set `cache_max_mib` to at least the total size of one generation of all
-cached jobs: below that, even current entries can be evicted. Extra capacity
-keeps older generations for pull requests that have not taken a lock-file
-change and for protected branches with different lock files.
+A pending image never serves a restore. Staging can reclaim superseded and
+pending images. The per-runner `cache_max_mib` counts the bytes recorded in
+`.branvil-data` for both pending and published images. Size it for at least one
+published generation of every cached job plus the largest pending images that
+may coexist on the runner. Configure the default or a per-runner override in
+**Settings → CI**. The limit does not reserve disk space.
 
-Each complete save records its time alongside the cached contents before
-they replace the old entry. Restoring updates the last-use time for eviction
-but never the save time. A protected reused job requests a refresh when its
-save is more than 24 hours old (`CACHE_REFRESH_SECS`); a missing save timestamp,
-an evicted entry, a future timestamp, or an unreadable save also requests a
-refresh. A matching tree and image imply the
-same key, so this check uses the source execution's recorded key without
-fetching or checking out the source.
-
-Each entry records its repository and job alongside its contents, in the same
-temporary directory that replaces the entry on save. For each repository and
-job, the entry just saved is current, even if another generation has a later
-save timestamp (the timestamp is recorded before acquiring the write lock).
-For other repository/job pairs, the latest save timestamp selects the current
-entry, with the greatest cache key breaking ties. Entries without a save
-timestamp are superseded.
-
-When the byte limit is exceeded, eviction removes superseded generations
-first, then current entries only after no superseded generations remain.
-Restoring and saving both explicitly record the last-use time. Within each
-of these two groups, eviction removes the oldest last-use timestamps first.
-For equal timestamps, the entry just saved is removed last; other entries
-are removed in cache-key order, regardless of size.
-The byte limit still applies to the saved entry: an entry larger than the limit
-is removed too.
-
-Protected branches with different lock files share a repository/job pair:
-the last save becomes current and the other generation becomes superseded.
-The same applies when an older commit's save or retry finishes after a newer
-commit's save. Both generations remain while capacity permits; under pressure
-the superseded one goes first. Entries of deleted or renamed repositories and
-jobs remain current because nothing supersedes them. They are evicted only
-after all superseded entries, when the limit still requires it.
-
-On the first save after upgrading to a runner that records each entry's
-repository and job, entries without that record are removed even below the
-limit. Each cached job must rebuild its cache once after the upgrade.
-Entries with unreadable or invalid records are also removed on the next save,
-so a damaged record cannot stop eviction of other entries.
+Eviction proceeds from superseded images to pending
+images to the current images of each job, oldest use first within each group.
+Only publication can evict a current image. Restoring updates the
+last-use time only. Generations without matching owner metadata are removed
+at runner startup.
 
 ## The runner
 
@@ -880,20 +803,18 @@ ms` (the VM that unpacks the checkout), `sandbox started in … ms` (from VM cre
 to the start of the guest command), `commands ran for … ms`, `/work
 collected in … ms` (a job whose artifacts or cache are collected),
 `sandbox removed in … ms` (from the job's end, the collecting included),
-`artifacts handled in … ms` (a job that declares artifacts), and `cache saved
-in … ms` (with the bytes the image takes). `peak memory: … MiB` is the highest resident memory sample recorded while the
+`artifacts handled in … ms` (a job that declares artifacts), and `cache staged
+in … ms` (with the bytes of data in the image). `peak memory: … MiB` is the highest resident memory sample recorded while the
 job ran. The Hub uses the SDK's VM metrics. An external runner samples the
 `msb run` process tree. A short job can finish before there is a sample.
 
 A reused attempt instead logs `reused result of <attempt> (<commit>, the same
-tree), image <digest>` (`the same contents of paths` for the paths basis) and `job ended: success (reused)`, with the cache key
-and save age when checked. It has no `source fetched`, `sandbox started`, or
+tree), image <digest>` (`the same contents of paths` for the paths basis) and `job ended: success (reused)`. It has no `source fetched`, `sandbox started`, or
 `commands ran for` line. `reuse declined` identifies the source and reason
-(digest mismatch, missing cache key/save, or save older than 86400 seconds)
+(such as a digest mismatch)
 before normal execution; `reuse unavailable: no reuse offered` means the
 service supplied no source, including for manual retries and upgraded old
-attempts. These lines distinguish reused work from cache refreshes when
-measuring queue time and execution time.
+attempts.
 
 At start it removes every sandbox labelled with its own name and every volume
 named `bv-tmp-<its name>-<attempt id>`, `bv-work-<its name>-<attempt id>`,
@@ -1055,7 +976,7 @@ advance searches while holding the repository lock.
 
 Probes create attempts without registering runs. They never affect commit checks,
 verified refs, required checks, failure notifications, landing or member readiness.
-They always execute (`allow_reuse=false`), read caches with `cache_scope=probe`,
+They always execute (`allow_reuse=false`) and read published caches,
 and never save them. Claim copies cache scope from a run only for `check`; input
 digests are copied for every purpose when a run exists. Successful actual probes
 can supply tree and paths reuse to checks. Intermediate commits without runs are

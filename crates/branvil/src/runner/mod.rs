@@ -1159,226 +1159,85 @@ esac
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-        async fn protected_reuse_refreshes_separately_from_checks() {
-            let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write target/out built\"]\ncache = { paths = [\"target\"] }\n").await;
+        async fn runner_publishes_only_the_merged_heads_pending_image() {
+            let s = service("[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write target/out built\"]\ncache = { paths = [\"target\"], key_files = [\"Cargo.lock\"] }\n").await;
+            let settings = s
+                .http
+                .patch(format!("{}/api/v1/repos/acme%2Fdemo", s.url))
+                .bearer_auth(&s.owner)
+                .json(&serde_json::json!({"revision":s.repo.revision,"required_approvals":0}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(settings.status(), 200, "{}", settings.text().await.unwrap());
             let runner = Runner::new(
                 Api::new(&s.url, &s.runner_token),
                 s.dir.path().join("runner"),
             );
             let fake = Fake::new();
-            runner.once(&fake).await.unwrap();
-            let sha = empty_main(&s, "fresh cache").await;
-            runner.once(&fake).await.unwrap();
-            assert!(result_of(&s, &sha).await.reused_from.is_some());
-            assert_eq!(fake.ran.lock().unwrap().len(), 1);
-            let original_sha = git(&s.dir.path().join("work"), &["rev-parse", "HEAD^"])
-                .trim()
-                .to_string();
-            let original = result_of(&s, &original_sha).await;
-            let key = original.cache_key.unwrap();
-            let entry = runner.work_dir.join("cache").join(&key);
-            let saved = entry.join(".branvil-saved");
-            std::fs::File::options()
-                .write(true)
-                .open(&saved)
-                .unwrap()
-                .set_modified(
-                    std::time::SystemTime::now()
-                        - Duration::from_secs(workspace::CACHE_REFRESH_SECS + 60),
-                )
-                .unwrap();
-            runner
-                .test_cache()
-                .restore(&key, &s.dir.path().join("restored.tar"))
-                .unwrap();
-            let sha = empty_main(&s, "old save despite fresh restore").await;
-            runner.once(&fake).await.unwrap();
-            let reused = result_of(&s, &sha).await;
-            assert!(reused.reused_from.is_some());
-            assert_eq!(
-                fake.ran.lock().unwrap().len(),
-                1,
-                "reused check starts no VM"
-            );
-            let refresh_id = reused.cache_refresh.unwrap();
-            assert!(
-                s.app
-                    .ci
-                    .head_checks(&s.repo, &sha)
+            assert!(runner.once(&fake).await.unwrap());
+            let main = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
+            let published = result_of(&s, &main).await.cache_key.unwrap();
+            let work = s.dir.path().join("work");
+            let cache = runner.test_cache();
+            let restored = s.dir.path().join("restored");
+            for (branch, merge) in [("abandoned", false), ("landed", true)] {
+                git(&work, &["checkout", "-qb", branch, "main"]);
+                std::fs::write(work.join("Cargo.lock"), branch).unwrap();
+                git(&work, &["add", "."]);
+                git(&work, &["commit", "-qm", branch]);
+                git(&work, &["push", "-q", s.bare.to_str().unwrap(), branch]);
+                crate::refs::record_refs(&s.app, &s.repo).await.unwrap();
+                let pulls = format!("{}/api/v1/repos/acme%2Fdemo/pulls", s.url);
+                let response = s
+                    .http
+                    .post(&pulls)
+                    .bearer_auth(&s.owner)
+                    .json(&serde_json::json!({"title": branch, "head": branch, "base": "main"}))
+                    .send()
                     .await
-                    .unwrap()
-                    .checks
-                    .iter()
-                    .all(|c| c.succeeded())
-            );
-            runner.once(&fake).await.unwrap();
-            let refreshed = s
-                .app
-                .store
-                .read(move |r| crate::ci::queue::get_attempt(r, &refresh_id))
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(refreshed.purpose, crate::ci::queue::Purpose::CacheRefresh);
-            assert!(refreshed.reused_from.is_none());
-            assert_eq!(refreshed.cache_key.as_deref(), Some(key.as_str()));
-            let log = s.app.ci.log_tail(&refreshed.id, 1 << 20).await.unwrap().0;
-            assert!(log.contains("cache saved"), "{log}");
-            let mut timed = refreshed.clone();
-            timed.started_at = Some("2026-10-14T10:00:00.000Z".into());
-            timed.finished_at = Some("2026-10-14T10:00:42.000Z".into());
-            s.app
-                .store
-                .write(move |w| {
-                    w.put(
-                        crate::store::CI_ATTEMPTS,
-                        &crate::ci::queue::Attempt::key(&timed.id),
-                        &timed,
-                    )
-                })
-                .await
-                .unwrap();
-            let mut estimates = vec![crate::ci::Check {
-                name: "build".into(),
-                status: "in_progress".into(),
-                attempt_id: Some("running".into()),
-                ..Default::default()
-            }];
-            s.app.ci.estimate(&s.repo, &sha, &mut estimates).await;
-            assert_eq!(
-                estimates[0].expected_secs,
-                Some(42),
-                "refresh execution supplies estimates"
-            );
-            let sha = empty_main(&s, "after refresh").await;
-            runner.once(&fake).await.unwrap();
-            assert!(result_of(&s, &sha).await.reused_from.is_some());
-            assert_eq!(fake.ran.lock().unwrap().len(), 2);
-
-            std::fs::remove_dir_all(&entry).unwrap();
-            let sha = empty_main(&s, "missing save").await;
-            runner.once(&fake).await.unwrap();
-            let missing = result_of(&s, &sha).await;
-            assert!(missing.reused_from.is_some());
-            assert_eq!(fake.ran.lock().unwrap().len(), 2);
-            assert!(missing.cache_refresh.is_some());
-            let log = s.app.ci.log_tail(&missing.id, 1 << 20).await.unwrap().0;
-            assert!(log.contains("has no complete save"), "{log}");
-
-            runner.once(&fake).await.unwrap();
-            assert_eq!(fake.ran.lock().unwrap().len(), 3);
-            std::fs::remove_dir_all(&entry).unwrap();
-            let sha = empty_main(&s, "branch reuse needs no save").await;
-            let (repo, commit) = (s.repo.id.clone(), sha.clone());
-            s.app
-                .store
-                .write(move |w| {
-                    let old = crate::ci::queue::get_run(w, &repo, &commit)?.unwrap();
-                    let mut run = old.clone();
-                    run.cache_scope = "branch:feature".into();
-                    crate::ci::queue::put_run(w, &run)
-                })
-                .await
-                .unwrap();
-            runner.once(&fake).await.unwrap();
-            assert!(result_of(&s, &sha).await.reused_from.is_some());
-            assert_eq!(fake.ran.lock().unwrap().len(), 3);
-        }
-
-        /// The run of a protected branch saves the cache; a pull request's run
-        /// restores that entry and saves nothing.
-        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-        async fn only_a_protected_branch_saves_the_cache() {
-            let Service {
-            dir,
-            app,
-            url,
-            owner,
-            runner_token,
-            http,
-            repo,
-            bare,
-        } = service(
-            "[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"write target/out built\"]\ncache = { paths = [\"target\"] }\n",
-        )
-        .await;
-            let runner = Runner::new(Api::new(&url, &runner_token), dir.path().join("runner"));
-            let fake = Fake::new();
-            let log_of = |sha: String| {
-                let (app, repo) = (app.clone(), repo.clone());
-                async move {
-                    let checks = app.ci.head_checks(&repo, &sha).await.unwrap().checks;
-                    let id = checks[0].attempt_id.clone().unwrap();
-                    app.ci.log_tail(&id, 1 << 20).await.unwrap().0
-                }
-            };
-            let main = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
-            assert!(runner.once(&fake).await.unwrap());
-            let log = log_of(main).await;
-            assert!(log.contains("[branvil] no cache entry yet\n"), "{log}");
-            assert!(log.contains("[branvil] cache saved in "), "{log}");
-
-            let work = dir.path().join("work");
-            git(&work, &["checkout", "-qb", "feature"]);
-            std::fs::write(work.join("feature.txt"), "feature").unwrap();
-            git(&work, &["add", "."]);
-            git(&work, &["commit", "-q", "-m", "feature"]);
-            git(&work, &["push", "-q", bare.to_str().unwrap(), "feature"]);
-            crate::refs::record_refs(&app, &repo).await.unwrap();
-            let resp = http
-                .post(format!("{url}/api/v1/repos/acme%2Fdemo/pulls"))
-                .bearer_auth(&owner)
-                .json(&serde_json::json!({"title": "feature", "head": "feature", "base": "main"}))
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(resp.status(), 201);
-            let feature = app.git.branch_tips(&bare).await.unwrap()["feature"].clone();
-            assert!(runner.once(&fake).await.unwrap());
-            let log = log_of(feature).await;
-            assert!(log.contains("[branvil] cache restored in "), "{log}");
-            assert!(
-                log.contains(
-                    "[branvil] cache not saved (only a protected branch's run saves it)\n"
-                ) && !log.contains("cache saved"),
-                "{log}"
-            );
-            let entries = std::fs::read_dir(dir.path().join("runner/cache"))
-                .unwrap()
-                .count();
-            assert_eq!(entries, 1, "the pull request added no entry");
-
-            // A fast-forward merge queues the cache job as protected, but the
-            // same commit's PR execution and the existing recent save avoid a VM.
-            git(&work, &["checkout", "-q", "main"]);
-            git(&work, &["merge", "--ff-only", "feature"]);
-            git(&work, &["push", "-q", bare.to_str().unwrap(), "main"]);
-            crate::refs::record_refs(&app, &repo).await.unwrap();
-            assert!(runner.once(&fake).await.unwrap());
-            let feature = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
-            let log = log_of(feature).await;
-            assert!(
-                log.contains("reused result of") && log.contains("reuse cache"),
-                "{log}"
-            );
-            assert!(!log.contains("source fetched"), "{log}");
-            assert_eq!(fake.ran.lock().unwrap().len(), 2);
-
-            // main's next commit restores the entry and saves it again.
-            git(&work, &["checkout", "-q", "main"]);
-            std::fs::write(work.join("next.txt"), "next").unwrap();
-            git(&work, &["add", "."]);
-            git(&work, &["commit", "-q", "-m", "next"]);
-            git(&work, &["push", "-q", bare.to_str().unwrap(), "main"]);
-            crate::refs::record_refs(&app, &repo).await.unwrap();
-            let next = app.git.branch_tips(&bare).await.unwrap()["main"].clone();
-            assert!(runner.once(&fake).await.unwrap());
-            let log = log_of(next).await;
-            assert!(
-                log.contains("[branvil] cache restored in ")
-                    && log.contains("[branvil] cache saved in "),
-                "{log}"
-            );
+                    .unwrap();
+                assert_eq!(response.status(), 201);
+                let pull: serde_json::Value = response.json().await.unwrap();
+                let number = pull["pull"]["number"].as_u64().unwrap();
+                let head = s.app.git.branch_tips(&s.bare).await.unwrap()[branch].clone();
+                assert!(runner.once(&fake).await.unwrap());
+                let attempt = result_of(&s, &head).await;
+                let key = attempt.cache_key.unwrap();
+                assert_ne!(key, published);
+                assert_eq!(
+                    cache.pending().unwrap().as_slice(),
+                    std::slice::from_ref(&attempt.id)
+                );
+                assert!(cache.restore(&key, &restored).unwrap().is_none());
+                assert_eq!(cache.restore(&published, &restored).unwrap(), Some(6));
+                std::fs::remove_file(&restored).unwrap();
+                let log = s.app.ci.log_tail(&attempt.id, 1 << 20).await.unwrap().0;
+                assert!(
+                    log.contains(&format!("latest generation {published} (requested {key})")),
+                    "{log}"
+                );
+                let action = if merge { "merge" } else { "close" };
+                let response = s
+                    .http
+                    .post(format!("{pulls}/{number}/{action}"))
+                    .bearer_auth(&s.owner)
+                    .json(&if merge {
+                        serde_json::json!({"expected_head":head,"expected_base":main})
+                    } else {
+                        serde_json::json!({})
+                    })
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), 200, "{}", response.text().await.unwrap());
+                let executions = fake.ran.lock().unwrap().len();
+                runner.once(&fake).await.unwrap();
+                assert!(!runner.once(&fake).await.unwrap());
+                assert_eq!(fake.ran.lock().unwrap().len(), executions);
+                assert!(cache.pending().unwrap().is_empty());
+                assert_eq!(cache.restore(&key, &restored).unwrap(), merge.then_some(6));
+            }
         }
 
         /// Up to `max_jobs` attempts run at once, each to its own end. The
@@ -1921,7 +1780,7 @@ esac
                     "repo":"acme/demo", "sha":"head", "attempt":1,
                     "job":{"name":"test", "image":"alpine", "commands":["true"], "paths":[],
                         "timeout_secs":null, "artifacts":[], "cache":null, "verified_sha":declared},
-                    "verified_sha":verified, "cache_scope":"protected", "network":false,
+                    "verified_sha":verified, "cache_write":true, "network":false,
                     "queued_secs":0, "reuse":null, "reuse_only":false,
                     "limits": crate::ci::config::JobLimits::from(&crate::ci::config::ExecutorConfig::default()),
                     "artifacts_max_mib":64

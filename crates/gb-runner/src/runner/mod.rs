@@ -252,7 +252,7 @@ pub struct Claim {
     pub attempt: u64,
     pub job: JobDef,
     pub verified_sha: Option<String>,
-    pub cache_scope: String,
+    pub cache_write: bool,
     pub network: bool,
     pub queued_secs: u64,
     pub reuse: Option<Reuse>,
@@ -449,6 +449,22 @@ impl Api {
         resp.json().await.map(Some).map_err(Self::net)
     }
 
+    async fn cache_decisions(
+        &self,
+        ids: &[String],
+    ) -> Result<std::collections::BTreeMap<String, crate::ci::api::CacheDecision>, ApiError> {
+        let response = self
+            .http
+            .post(self.at("/runner/cache"))
+            .bearer_auth(&self.token)
+            .json(ids)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(Self::net)?;
+        Self::check(response).await?.json().await.map_err(Self::net)
+    }
+
     /// Writes the commit's Git bundle to `dest`; returns its size.
     pub async fn source(&self, c: &Claim, dest: &Path) -> Result<u64, ApiError> {
         use tokio::io::AsyncWriteExt;
@@ -528,9 +544,11 @@ impl Api {
             .http
             .post(self.at(&format!("/runner/attempts/{}/finish", c.attempt_id)))
             .bearer_auth(&self.token)
-            .json(&serde_json::json!({"lease": c.lease, "conclusion": conclusion, "details": details,
+            .json(
+                &serde_json::json!({"lease": c.lease, "conclusion": conclusion, "details": details,
                 "image_digest": info.image_digest, "peak_memory_mib": info.peak_memory_mib,
-                "reused_from": info.reused_from, "cache_key": info.cache_key, "refresh_cache": info.refresh_cache}))
+                "reused_from": info.reused_from, "cache_key": info.cache_key}),
+            )
             .send()
             .await
             .map_err(Self::net)?;
@@ -761,6 +779,9 @@ impl Runner {
             let result = async {
                 let hub = self.api.health().await?;
                 version_changed = hub.version != gb_base::BUILD_VERSION;
+                if !version_changed && let Some(max) = hub.cache_max_mib {
+                    self.reconcile_cache(max << 20).await?;
+                }
                 let Some(max_jobs) = hub.max_jobs else {
                     if version_changed {
                         return Ok(None);
@@ -901,6 +922,13 @@ impl Runner {
     #[cfg(any(test, feature = "test-support"))]
     pub async fn once<E: Executor>(&self, executor: &E) -> Result<bool, ApiError> {
         let hub = self.api.health().await?;
+        let max_bytes = hub
+            .cache_max_mib
+            .filter(|_| hub.version == gb_base::BUILD_VERSION)
+            .map(|mib| mib << 20);
+        if let Some(max) = max_bytes {
+            self.reconcile_cache(max).await?;
+        }
         let max_jobs = hub
             .max_jobs
             .ok_or_else(|| ApiError::Other("Hub did not report runner capacity".into()))?;
@@ -911,7 +939,50 @@ impl Runner {
             return Ok(false);
         };
         self.run(executor, &health, claim).await?;
+        if let Some(max) = max_bytes {
+            self.reconcile_cache(max).await?;
+        }
         Ok(true)
+    }
+
+    async fn reconcile_cache(&self, max_bytes: u64) -> Result<(), ApiError> {
+        use crate::ci::api::{CACHE_DECISION_BATCH, CacheDecision};
+        let cache = self.cache.clone();
+        let ids = match blocking(move || cache.pending()).await {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!("cannot list pending cache images: {e}");
+                return Ok(());
+            }
+        };
+        for ids in ids.chunks(CACHE_DECISION_BATCH) {
+            let mut decisions = match self.api.cache_decisions(ids).await {
+                Ok(decisions) => decisions,
+                Err(ApiError::Unauthorized) => return Err(ApiError::Unauthorized),
+                Err(e) => {
+                    tracing::warn!("cannot reconcile pending cache images: {e}");
+                    return Ok(());
+                }
+            };
+            let ids = ids.to_vec();
+            let cache = self.cache.clone();
+            blocking(move || {
+                for id in ids {
+                    let publish = match decisions.remove(&id) {
+                        Some(CacheDecision::Publish(at)) => Some(at.into()),
+                        Some(CacheDecision::Discard) => None,
+                        _ => continue,
+                    };
+                    if let Err(e) = cache.settle(&id, publish, max_bytes) {
+                        tracing::warn!("{id}: cannot settle pending cache image: {e}");
+                    }
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|e| ApiError::Other(e.to_string()))?;
+        }
+        Ok(())
     }
 
     /// Runs a claimed attempt with its Hub-provided resources and removes its directory.
@@ -1080,45 +1151,6 @@ impl Runner {
                     source.image_digest
                 ))
             } else {
-                if job.cache.is_some()
-                    && c.cache_scope == "protected"
-                    && let Some(key) = &source.cache_key
-                {
-                    info.refresh_cache = match self
-                        .cache
-                        .saved_age(key, std::time::SystemTime::now())
-                    {
-                        Ok(Some(age))
-                            if age <= Duration::from_secs(workspace::CACHE_REFRESH_SECS) =>
-                        {
-                            say(format!(
-                                "reuse cache {key}: saved {} s ago (within {} s)",
-                                age.as_secs(),
-                                workspace::CACHE_REFRESH_SECS
-                            ))
-                            .await;
-                            false
-                        }
-                        Ok(Some(age)) => {
-                            say(format!("cache {key} last saved {} s ago (older than {} s); requesting refresh", age.as_secs(), workspace::CACHE_REFRESH_SECS)).await;
-                            true
-                        }
-                        Ok(None) => {
-                            say(format!(
-                                "cache {key} has no complete save; requesting refresh"
-                            ))
-                            .await;
-                            true
-                        }
-                        Err(e) => {
-                            say(format!(
-                                "cache {key} save cannot be checked: {e}; requesting refresh"
-                            ))
-                            .await;
-                            true
-                        }
-                    };
-                }
                 None
             };
             if let Some(reason) = reason {
@@ -1235,22 +1267,46 @@ impl Runner {
                     Some(format!("Unsafe work directory: {e}")),
                 );
             }
-            let key = job.cache.as_ref().map(|cache| {
-                workspace::cache_key(&c.repo, job, &digest, cache, limits.work_quota_mib, &work)
+            let cache_entry = job.cache.as_ref().map(|cache| {
+                let key = workspace::cache_key(
+                    &c.repo,
+                    job,
+                    &digest,
+                    cache,
+                    limits.work_quota_mib,
+                    &work,
+                );
+                let owner = workspace::CacheOwner {
+                    repo: c.repo.clone(),
+                    job: job.name.clone(),
+                    user: executor::JOB_USER_ID,
+                    paths: cache.paths.clone(),
+                };
+                (key, owner)
             });
             // Never mounted: the disk image `/work` starts from, and the one
             // it leaves for the cache.
             let cache_disk = dir.join("cache-disk.raw");
             let (mut cache_data, mut kept_data) = (None, None);
-            if let Some(key) = &key {
+            if let Some((key, owner)) = &cache_entry {
                 let restoring = Instant::now();
-                let (store, into, key) = (self.cache.clone(), cache_disk.clone(), key.clone());
-                match blocking(move || store.restore(&key, &into)).await {
-                    Ok(Some(bytes)) => {
+                let (store, into, lookup, owner) = (
+                    self.cache.clone(),
+                    cache_disk.clone(),
+                    key.clone(),
+                    owner.clone(),
+                );
+                match blocking(move || store.restore_generation(&lookup, &owner, &into)).await {
+                    Ok(Some((generation, bytes))) => {
                         cache_data = Some(bytes);
+                        let from = if &generation == key {
+                            format!("exact key {key}")
+                        } else {
+                            format!("latest generation {generation} (requested {key})")
+                        };
                         say(format!(
-                            "cache restored in {} ({bytes} bytes)",
-                            ms(restoring)
+                            "cache restored in {} ({bytes} bytes) from {from}",
+                            ms(restoring),
                         ))
                         .await
                     }
@@ -1259,7 +1315,7 @@ impl Runner {
                 }
             }
             let env = job_environment(c);
-            info.cache_key = key.clone();
+            info.cache_key = cache_entry.as_ref().map(|(key, _)| key.clone());
             let outcome = executor
                 .run(
                     JobRun {
@@ -1276,7 +1332,7 @@ impl Runner {
                         tree: &tree,
                         cache_data,
                         kept_data: &mut kept_data,
-                        save_cache: c.cache_scope == "protected",
+                        save_cache: c.cache_write,
                         work: &work,
                         log_dir: &log_dir,
                         network: c.network,
@@ -1344,27 +1400,23 @@ impl Runner {
                 }
                 say(format!("artifacts handled in {}", ms(collecting))).await;
             }
-            // Only the runs of protected branches write the cache, which every
-            // run reads: a pull request plants nothing, and pushes none of
-            // its entries out.
-            if conclusion == "success" && job.cache.is_some() && c.cache_scope != "protected" {
-                say("cache not saved (only a protected branch's run saves it)".into()).await;
-            } else if conclusion == "success"
-                && let Some(key) = &key
+            if conclusion == "success"
+                && let Some((key, owner)) = cache_entry
                 && let Some(data) = kept_data
             {
                 let saving = Instant::now();
-                let (store, from, key) = (self.cache.clone(), cache_disk.clone(), key.clone());
+                let (store, attempt) = (self.cache.clone(), c.attempt_id.clone());
                 let max = limits.cache_max_mib << 20;
-                let owner = workspace::CacheOwner {
-                    repo: c.repo.clone(),
-                    job: job.name.clone(),
-                };
-                match blocking(move || store.save(&key, &owner, (&from, data), max)).await {
-                    Ok(bytes) => {
-                        say(format!("cache saved in {} ({bytes} bytes)", ms(saving))).await
+                match blocking(move || {
+                    store.stage(&attempt, &key, &owner, (&cache_disk, data), max)
+                })
+                .await
+                {
+                    Ok(true) => say(format!("cache staged in {} ({data} bytes)", ms(saving))).await,
+                    Ok(false) => {
+                        say("cache not staged: pending cache budget exhausted".into()).await
                     }
-                    Err(e) => say(format!("cache save failed: {e}")).await,
+                    Err(e) => say(format!("cache staging failed: {e}")).await,
                 }
             }
             (conclusion, details)
@@ -1538,6 +1590,7 @@ mod tests {
                     Json(RunnerHealth {
                         version: "different-build".into(),
                         max_jobs: Some(2),
+                        cache_max_mib: None,
                     })
                 }),
             )

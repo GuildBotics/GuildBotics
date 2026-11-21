@@ -4,11 +4,22 @@ use serde::{Deserialize, Serialize};
 
 use super::{config::JobLimits, images::Image};
 
+pub const CACHE_DECISION_BATCH: usize = 128;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheDecision {
+    Keep,
+    Discard,
+    Publish(chrono::DateTime<chrono::Utc>),
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct RunnerHealth {
     pub version: String,
     /// A Hub from a different build may only return the version.
     pub max_jobs: Option<u32>,
+    pub cache_max_mib: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

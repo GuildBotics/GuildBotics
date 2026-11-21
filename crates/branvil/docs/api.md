@@ -995,12 +995,10 @@ head directly replaces the host branch after checking the same conditions.
   and image digest (`docs/ci.md`, "Trust"). Such a check includes
   `reused_from: {"attempt_id","url","sha","basis"}` linking its source;
   `basis` is `tree` when the source's commit has the check's tree, otherwise
-  `paths` (derived, not stored). Its
-  Jobs declaring artifacts reuse executions only of the same commit, since a
+  `paths` (derived, not stored). Jobs declaring artifacts reuse executions
+  only of the same commit, since a
   distributed executable can embed its commit identity even with identical trees.
-  `artifact_names` resolve to the source's unpruned artifacts. Cache refresh
-  attempts are excluded from every checks response, including required checks
-  while their actual executions count toward estimates.
+  `artifact_names` resolve to the source's unpruned artifacts.
 - `checks_expected` is true when the head has a pipeline (valid or not) or
   Branvil cannot read whether it has one, or when the repository has required
   checks: a head without checks is then "not
@@ -1046,7 +1044,7 @@ is not the full sha of a commit of the repository.
 ### CI attempts
 
 - `GET /api/v1/repos/{repo}/jobs/{attempt_id}` →
-  `{"id","purpose","cache_refresh","url","repository","job","attempt","runner","allocation","peak_memory_mib","sha","image_digest","reused_from","status","conclusion","path_skip","details","cancel_requested","created_at","started_at","finished_at","artifact_names","log_bytes"}`.
+  `{"id","retry_supported","url","repository","job","attempt","runner","allocation","peak_memory_mib","sha","image_digest","reused_from","status","conclusion","path_skip","details","cancel_requested","created_at","started_at","finished_at","artifact_names","log_bytes"}`.
   `path_skip` has the same shape as on checks and is `null` for an attempt
   that was not skipped by the service's path selection.
   `runner` is the member name of the runner that claimed this attempt, or
@@ -1056,9 +1054,8 @@ is not the full sha of a commit of the repository.
   resource fields may be `null`.
   `image_digest` is the configuration digest (`sha256:…`) of the image the
   job ran on, as its runner reported it; `null` when the job did not get that
-  far. `purpose` is `check`, `cache_refresh`, or `probe`. `cache_refresh` is the ID of
-  the refresh requested by a reused check, or `null`. Refreshes never count as
-  checks and cannot be manually retried. `reused_from` is `null` for an actual
+  far. `retry_supported` is true for check attempts.
+  `reused_from` is `null` for an actual
   execution, otherwise
   `{"attempt_id","url","sha","basis"}` of its source execution (`basis` as in
   the checks). Its own log explains
@@ -1085,9 +1082,7 @@ is not the full sha of a commit of the repository.
   attempt (`200`, `status: "queued"`, the job's next `attempt` number, the
   same job definition). Only the latest check attempt of its job as the commit's
   pipeline defines it, once completed, can be retried (`409 conflict`
-  otherwise, also for an attempt of another definition). Cache-refresh attempts
-  always return `409 conflict` with "Cache refresh attempts cannot be manually
-  retried.", whatever their status; a full queue is
+  otherwise); a full queue is
   `503 unavailable`. The new attempt always executes; it never reuses a
   result, including when requeued after interruption. A manual retry starts
   a fresh automatic retry budget. Retry waits for ongoing
@@ -1116,8 +1111,8 @@ one class, available reusable results precede other attempts, with `seq` as the
 tie-breaker. See [CI scheduling](ci.md) for the classification rules. Running
 attempts are not interrupted by changes in class.
 
-- `GET /health` → `{"version","max_jobs"}`, the Hub build and the authenticated
-  runner's effective concurrency. The runner checks for a version change before
+- `GET /health` → `{"version","max_jobs","cache_max_mib"}`, the Hub build and the authenticated
+  runner's effective concurrency and total cache budget in MiB. The runner checks for a version change before
   it claims.
 - `POST /claim` `{"architecture":"arm64"|"amd64","version","max_jobs","running_jobs","accept":true|false,"executor":"microsandbox","executor_state":"ready"|"unavailable","executor_detail"?:"...","images":[{"reference":"tag","architecture":"arm64"|"amd64","digest":"sha256:..."}]}`
   also takes `machine`, either `null` (unknown) or `{"logical_cpus",
@@ -1128,34 +1123,33 @@ attempts are not interrupted by changes in class.
   when the runner did not ask for work, the version differs, the executor is
   unavailable, the Hub's current concurrency has been reached, no compatible
   attempt fits the reported capacity, or the service is stopping. Otherwise it returns:
-  `{"attempt_id","purpose","lease","expires_at","lease_secs","repo","sha","attempt","verified_sha":"<latest verified sha>"|null,"job":{"verified_sha":false,"name","image","commands","paths","timeout_secs"|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_scope":"protected"|"branch:<name>"|"probe","network":false,"queued_secs","reuse","reuse_only","limits","artifacts_max_mib"}`.
+  `{"attempt_id","lease","expires_at","lease_secs","repo","sha","attempt","verified_sha":"<latest verified sha>"|null,"job":{"verified_sha":false,"name","image","commands","paths","timeout_secs"|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_write":true|false,"network":false,"queued_secs","reuse","reuse_only","limits","artifacts_max_mib"}`.
   `limits` contains the effective job resources for this attempt (see
   [CI settings](#ci-settings)). `timeout_secs` is `null` when the pipeline
-  gives none. `cache_scope` is `protected` for a run a protected branch asked
-  for, the only runs that save the dependency cache (`docs/ci.md`).
+  gives none. A claim with `cache_write` may stage an image if it executes successfully.
   `queued_secs` is how long the attempt waited in the queue.
-  `purpose` is `check`, `cache_refresh`, or `probe`; refreshes always execute with
-  protected scope and `reuse: null`.
-  `reuse` is `null` or `{"attempt_id","sha","image_digest","cache_key","basis"}`
+  `reuse` is `null` or `{"attempt_id","sha","image_digest","basis"}`
   of the latest finished actual successful execution whose files have not
   been pruned, with the same repository, job definition, and network, and
   with the same tree (`basis: "tree"`) or the same input digest of the job's
   `paths` (`basis: "paths"`, `docs/ci.md`, "Trust": only for a non-protected,
   attempt of a job with paths whose run has its digest). The runner
-  logs which one it reused. `cache_key` is present for cached jobs,
-  otherwise `null`. Manual retries, automatic retries, and refresh attempts
-  receive no reuse offer.
+  logs which one it reused. Manual and automatic retries always execute.
   The claim sets `reuse_only` when it reserves no VM capacity. The runner may
   finish such a claim with `conclusion: "deferred"` if its image changes,
   releasing the lease and restoring the attempt to its queue position.
   The runner compares the current image digest before fetching source. A match
-  succeeds without a VM. Protected cached jobs set `refresh_cache: true` at
-  finish if the save is absent, unreadable, or older than 24 hours. The executor
+  succeeds without a VM. The executor
   state appears in diagnostics. Runners advertise only locally cached images for their CPU;
   the service selects the highest-priority compatible attempt, leaving incompatible work queued.
   Hub-managed tags must match the currently published digest for that CPU. An unavailable
   executor advertises an empty inventory. If no live, ready runner has the image for
   `runner_absent_secs`, queued work ends with `startup_failure` naming the missing tag and CPU.
+- `POST /cache` takes an array of up to 128 pending attempt IDs and returns an
+  object keyed by those IDs. A decision is `"keep"`, `"discard"`, or
+  `{"publish":"<RFC 3339 timestamp>"}`. The Hub authorizes publication only
+  for the runner that executed the successful attempt, after the exact head is
+  merged or the protected branch execution has succeeded.
 - `GET /images?architecture=arm64|amd64` → an array of
   `{"id":"<archive SHA-256>","images":[{"reference","architecture","digest"}]}`.
   Only archives for that CPU are returned. `digest` is the image configuration digest,
@@ -1178,19 +1172,13 @@ attempts are not interrupted by changes in class.
 - `PUT /attempts/{id}/artifacts/{name}` zip bytes → `{"name","bytes"}`. The name
   must be one the job declares; `400 invalid` for anything not starting like a
   zip archive, `413 too_large` above `ci.artifact_max_mib`.
-- `POST /attempts/{id}/finish` `{"lease","conclusion","details"?,"image_digest"?,"peak_memory_mib"?,"reused_from"?,"cache_key"?,"refresh_cache"?}`
+- `POST /attempts/{id}/finish` `{"lease","conclusion","details"?,"image_digest"?,"peak_memory_mib"?,"reused_from"?,"cache_key"?}`
   → the attempt. `image_digest` is the configuration digest of the image the
   job ran on (`sha256:<64 hex>`, `400 invalid` otherwise), recorded on the
   attempt. An actual execution of a cached job reports its computed
   `cache_key` (64 hex characters); other jobs leave it `null`. A reused success
   reports the source attempt ID as `reused_from` and leaves `cache_key` and
   `details` null; the source is already identified by `reused_from` and the log.
-  `refresh_cache` defaults to false and is allowed only for a reused successful
-  protected job with a cache. When true, the same transaction enqueues a
-  `cache_refresh` attempt, or links the existing unfinished refresh for the
-  repository/job/cache key. A full queue skips it without delaying success.
-  The check includes `cache_refresh` (the attempt ID) and a link in `details`
-  when a refresh exists.
   The service validates that the source is an actual successful execution of
   the same repository, job, network, and image, with the same tree or input
   digest as the claim's `basis` allowed, and that reuse is allowed;
@@ -1362,7 +1350,7 @@ statements block it. Manual publications and local merges send no such notice.
 Required protected checks automatically retry command failures, timeouts,
 runner absence, and second interruptions up to three times, keeping the same
 commit and definition. Other startup failures, requested cancellation,
-supersession, optional jobs, PR runs, and cache refreshes are excluded.
+supersession, optional jobs, and PR runs are excluded.
 The failed attempt and queued retry commit atomically; commit checks show
 the retry as queued. Retries caused by runner absence wait until claimed.
 
@@ -1387,7 +1375,7 @@ file, and applied without a restart. The Hub uses the shared image store at
   ```json
   {"runner": {"mode": "auto", "state": "ready", "detail": "1 runner(s) connected.", "runners": [...], "queue": {...}},
    "executor": {"msb": "/…/msb", "problem": null, "home": "/…/.guildbotics/data/msb"},
-   "limits": {"max_cpus": 4, "max_memory_mib": 4096, "work_quota_mib": 16384, "max_timeout_secs": 3600, "cache_max_mib": 2048, "max_jobs": 1},
+   "limits": {"max_cpus": 4, "max_memory_mib": 4096, "work_quota_mib": 16384, "max_timeout_secs": 3600, "cache_max_mib": 16384, "max_jobs": 1},
    "images": {"error": null,
               "cached": [{"reference": "guildbotics/agent-environment:dev",
                           "digest": "sha256:…", "size_bytes": 3701474304, "created_at": "…",
@@ -1536,7 +1524,7 @@ The run's best class across all requesting branches and PRs decides eligibility,
 including drafts and required-check failures. Current running check attempts
 that are neither cancelling nor superseded are cancelled and replaced atomically
 with queued attempts at their original queue positions; queue capacity is not
-rechecked. Queued attempts and cache refreshes are untouched. Cancellation of an
+rechecked. Queued attempts are untouched. Cancellation of an
 old attempt does not retry or replace the new current check. Repeated calls only
 affect attempts running at the time of each call. Check events announce changes.
 

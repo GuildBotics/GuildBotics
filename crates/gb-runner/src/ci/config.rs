@@ -83,9 +83,8 @@ pub struct ExecutorConfig {
     /// The time limit of a job that gives none, and the cap of a pipeline's
     /// `timeout_secs`.
     pub max_timeout_secs: u64,
-    /// Dependency cache size; superseded generations are removed before current
-    /// entries, least recently used first within each group. Allow at least one
-    /// generation of all cached jobs; extra capacity retains older generations.
+    /// Total dependency-cache data. Size it for pending images as well as
+    /// at least one published generation of all cached jobs.
     pub cache_max_mib: u64,
     /// Total size of one attempt's artifacts before zipping.
     pub artifacts_max_mib: u64,
@@ -102,7 +101,7 @@ impl Default for ExecutorConfig {
             memory_reserve_percent: memory_reserve_percent(),
             cpu_multiplier_percent: 0,
             max_timeout_secs: 3600,
-            cache_max_mib: 2048,
+            cache_max_mib: 16384,
             artifacts_max_mib: 64,
         }
     }
