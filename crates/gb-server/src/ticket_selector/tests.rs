@@ -412,6 +412,9 @@ impl Runner for FakeRunner {
             .find(|r| r.run_id == id)
             .cloned())
     }
+    fn records(&self) -> anyhow::Result<Vec<RunRecord>> {
+        Ok(self.records.lock().unwrap().clone())
+    }
     fn activity(&self, trace: &Trace, kind: &str, payload: Value) {
         self.activity
             .lock()
@@ -860,8 +863,175 @@ async fn mention_preserves_lane_and_assignee_and_uses_a_distinct_conversation_ki
             )
             .await
             .unwrap();
-        assert!(selector.refresh(task).await.unwrap().is_none());
+        assert!(
+            !f.ticket
+                .can_receive_work(task.url.as_deref().unwrap())
+                .await
+                .unwrap()
+        );
     }
+}
+
+#[tokio::test]
+async fn workflow_status_does_not_trigger_or_consume_an_unassigned_mention() {
+    let f = Fixture::new().await;
+    let ticket = f
+        .embedded
+        .owner
+        .tickets_create_ticket(
+            "acme/repo",
+            branvil::test_support::input(json!({"title":"Provide context"})),
+        )
+        .await
+        .unwrap();
+    let task = Task {
+        url: Some(ticket.url),
+        ..Task::default()
+    };
+    let url = task.url.as_deref().unwrap();
+    f.embedded
+        .owner
+        .tickets_set_assignee("acme/repo", "1", Some("yuki".into()))
+        .await
+        .unwrap();
+    let yuki = TicketAgent::new(
+        f.embedded.data(),
+        "acme".into(),
+        "yuki".into(),
+        "Yuki".into(),
+    );
+    let status = WorkflowStatus::from_payload(&json!({
+        "kind": "workflow_error", "reason": "asking", "person_id": "yuki", "run_id": "notice"
+    }))
+    .unwrap();
+    yuki.comment(url, "@aiko Waiting for an answer.", Some(&status))
+        .await
+        .unwrap();
+    let selector = f.selector("routine");
+    assert!(selector.next().await.unwrap().is_none());
+    assert!(selector.refresh(&task).await.unwrap().is_none());
+    assert!(!f.ticket.can_receive_work(url).await.unwrap());
+    assert!(f.runner.calls.lock().unwrap().is_empty());
+    assert!(
+        !f.root
+            .path()
+            .join(".guildbotics/local/run/diagnostics.jsonl")
+            .exists()
+    );
+
+    f.embedded
+        .owner
+        .tickets_add_comment(
+            "acme/repo",
+            "1",
+            branvil::test_support::input(json!({"body":"@aiko Please provide context."})),
+        )
+        .await
+        .unwrap();
+    yuki.comment(url, "@aiko Waiting for an answer.", Some(&status))
+        .await
+        .unwrap();
+    // The notice still addresses the human author of the ticket.
+    let notice = f.comments(&task).await.pop().unwrap();
+    assert!(notice["body"].as_str().unwrap().starts_with("@owner\n"));
+    f.ticket
+        .comment(url, "Run interrupted.", Some(&status))
+        .await
+        .unwrap();
+    assert!(f.ticket.can_receive_work(url).await.unwrap());
+    let (selected, invocation) = selector.next().await.unwrap().unwrap();
+    assert_eq!(selected.url, task.url);
+    assert_eq!(invocation.work.unwrap().kind, "ticket_mention");
+}
+
+async_cases! { mention_run_results, mention_run_result;
+    reaction_only("reaction_add");
+    pr_comment_only("pr_comment");
+}
+
+async fn mention_run_result(evidence: &str) {
+    let f = Fixture::new().await;
+    let task = f.task().await;
+    let url = task.url.as_deref().unwrap();
+    f.embedded
+        .owner
+        .tickets_set_assignee("acme/repo", "1", Some("yuki".into()))
+        .await
+        .unwrap();
+    let mention = || {
+        f.embedded.owner.tickets_add_comment(
+            "acme/repo",
+            "1",
+            branvil::test_support::input(json!({"body":"@aiko Please provide context."})),
+        )
+    };
+    let first = mention().await.unwrap();
+    let selector = f.selector("routine");
+    let (selected, _) = selector.next().await.unwrap().unwrap();
+    let seed: RunRecord = serde_json::from_value(json!({
+        "run_id": "mention", "work_kind": "ticket_mention", "member_id": "aiko",
+        "work_identity": {"ticket_url": url}, "device_id": "device",
+        "execution_mode": "autonomous", "started_at": first.created_at,
+        "provider_evidence": [{"type": evidence}],
+    }))
+    .unwrap();
+    let result: gb_observability::runs::RunResult = serde_json::from_value(json!({
+        "subject_type": "ticket", "subject_id": url, "subject_url": url, "status": "done",
+    }))
+    .unwrap();
+    {
+        use gb_observability::runs::RunState::*;
+        let mut records = f.runner.records.lock().unwrap();
+        records.extend(
+            [Failed, Cancelled, Interrupted, Deferred].map(|status| RunRecord {
+                status,
+                ..seed.clone()
+            }),
+        );
+        records.extend([
+            RunRecord {
+                member_id: "yuki".into(),
+                result: Some(result.clone()),
+                ..seed.clone()
+            },
+            RunRecord {
+                work_kind: "ticket".into(),
+                result: Some(result.clone()),
+                ..seed.clone()
+            },
+            RunRecord {
+                work_identity: Some([("ticket_url".into(), format!("{url}0"))].into()),
+                result: Some(result.clone()),
+                ..seed.clone()
+            },
+        ]);
+    }
+    assert_eq!(selector.candidates().await.unwrap().len(), 1);
+    assert!(selector.refresh(&selected).await.unwrap().is_some());
+
+    f.runner.records.lock().unwrap().push(RunRecord {
+        result: Some(result),
+        ..seed
+    });
+    assert!(selector.candidates().await.unwrap().is_empty());
+    assert!(selector.refresh(&selected).await.unwrap().is_none());
+
+    // A later mention is eligible even when it arrived before the run finished.
+    let later = mention().await.unwrap();
+    assert!(later.created_at > first.created_at);
+    f.ticket
+        .comment(url, "Answer to the earlier mention.", None)
+        .await
+        .unwrap();
+    f.runner
+        .records
+        .lock()
+        .unwrap()
+        .last_mut()
+        .unwrap()
+        .finished_at = Some(later.created_at);
+    assert_eq!(selector.candidates().await.unwrap().len(), 1);
+    assert!(selector.refresh(&selected).await.unwrap().is_some());
 }
 
 async_cases! { safe_failure_and_timeout_are_voiced_and_only_autonomous_failures_announce_cases, safe_failure_and_timeout_are_voiced_and_only_autonomous_failures_announce;
