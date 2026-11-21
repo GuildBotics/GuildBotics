@@ -1565,7 +1565,7 @@ impl Executor for Microsandbox {
                         let (from, to) = (disk.path.clone(), job.cache_disk.to_path_buf());
                         let copied = super::blocking(move || {
                             // What the VM wrote last reaches the file first.
-                            std::fs::File::open(&from)?.sync_all()?;
+                            super::disk::flush(&from)?;
                             super::disk::copy(&from, &to)
                         })
                         .await;

@@ -1578,7 +1578,9 @@ mod tests {
         // Fix the restored entry's use time so the test never depends on
         // how far the wall clock advances between restore and save.
         let restored_at = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
-        fs::File::open(root.join("z-old").join(USED))
+        fs::File::options()
+            .write(true)
+            .open(root.join("z-old").join(USED))
             .unwrap()
             .set_modified(restored_at)
             .unwrap();
