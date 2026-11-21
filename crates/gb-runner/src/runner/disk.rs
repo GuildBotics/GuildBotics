@@ -31,6 +31,12 @@ pub fn allocated(path: &Path) -> io::Result<u64> {
     }
 }
 
+/// Makes what was written to `path` reach the file before it is read
+/// elsewhere. Windows flushes only through a handle that may write.
+pub fn flush(path: &Path) -> io::Result<()> {
+    fs::OpenOptions::new().write(true).open(path)?.sync_all()
+}
+
 /// Makes `to`, which must not exist, a copy of `from`.
 pub fn copy(from: &Path, to: &Path) -> io::Result<()> {
     #[cfg(target_os = "macos")]
@@ -256,6 +262,16 @@ mod tests {
         let mut h = [0u8; 4];
         fs::File::open(path).unwrap().read_exact(&mut h).unwrap();
         h
+    }
+
+    /// An image another process wrote and closed can be flushed.
+    #[test]
+    fn a_closed_image_can_be_flushed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("disk.raw");
+        image(&path);
+        flush(&path).unwrap();
+        assert_eq!(head(&path), *b"head");
     }
 
     /// A copy has the image's content and size, and takes no more of the
