@@ -5,10 +5,19 @@ use gb_vm::sdk::{
 };
 use gb_vm::{OwnedVm, owned_boot};
 
+impl DiskMount<'_> {
+    fn attach_to_sdk(self, builder: SandboxBuilder, at: &str) -> SandboxBuilder {
+        match self {
+            Self::Named { name, .. } => builder.volume(at, |m| m.named(name)),
+            Self::Overlay(path) => builder.volume(at, |m| m.disk(path).fstype("ext4")),
+        }
+    }
+}
+
 impl HelperDisks<'_> {
     fn attach_to_sdk(&self, builder: SandboxBuilder) -> SandboxBuilder {
         self.mounts().fold(builder, |builder, (at, disk)| {
-            builder.volume(at, |mount| mount.named(&disk.name))
+            disk.attach_to_sdk(builder, at)
         })
     }
 }
@@ -145,7 +154,7 @@ impl Microsandbox {
     pub(super) async fn sdk_job(
         &self,
         job: &mut JobRun<'_>,
-        disk: &JobDisk,
+        disk: DiskMount<'_>,
         image_lock: ImageLock,
         log: &mpsc::Sender<Vec<u8>>,
         cancel: &mut watch::Receiver<bool>,
@@ -156,13 +165,13 @@ impl Microsandbox {
             Ok(builder) => builder,
             Err(error) => return Outcome::StartupFailure(error),
         };
-        let builder = builder
+        let builder = disk
+            .attach_to_sdk(builder, "/work")
             .cpus(job.cpus as u8)
             .memory(job.memory_mib as u32)
             .user(format!("{JOB_USER_ID}:{JOB_USER_ID}"))
             .workdir("/work")
             .max_duration(job.timeout_secs + 60)
-            .volume("/work", |m| m.named(&disk.name))
             .volume("/tmp", |m| {
                 m.named_with(self.tmp_volume(job.attempt_id), |v| {
                     v.create().disk().size(4096)
@@ -279,41 +288,71 @@ mod tests {
     use gb_vm::sdk::sandbox::{SandboxConfig, VolumeMount};
 
     #[tokio::test]
-    async fn the_sdk_mounts_the_cache_disk_only_when_collecting_a_save() {
-        let disk = |name: &str| JobDisk {
-            name: name.into(),
+    async fn sdk_mounts_use_the_same_work_disk_for_preparation_job_and_collection() {
+        use gb_vm::sdk::sandbox::DiskImageFormat;
+
+        let dir = tempfile::tempdir().unwrap();
+        let overlay = dir.path().join("work.qcow2");
+        crate::runner::disk::create_work_overlay(&overlay, 128 << 20).unwrap();
+        let cache = JobDisk {
+            name: "cache".into(),
             mib: 128,
             path: PathBuf::new(),
         };
-        let (work, cache) = (disk("work"), disk("cache"));
-        for saving in [false, true] {
-            let mut config = SandboxConfig::default();
-            config.spec.name = "helper".into();
-            let builder = SandboxBuilder::from(config).image("img:dev");
-            let config = HelperDisks {
-                work: &work,
-                cache: saving.then_some(&cache),
+        for work in [
+            DiskMount::Named {
+                name: "work",
+                mib: 128,
+            },
+            DiskMount::Overlay(&overlay),
+        ] {
+            for phase in ["prep", "job", "collect"] {
+                let mut config = SandboxConfig::default();
+                config.spec.name = phase.into();
+                let builder = SandboxBuilder::from(config).image("img:dev");
+                let builder = if phase == "job" {
+                    work.attach_to_sdk(builder, "/work")
+                } else {
+                    HelperDisks {
+                        work,
+                        cache: (phase == "collect").then_some(&cache),
+                    }
+                    .attach_to_sdk(builder)
+                };
+                let config = builder.build().await.unwrap();
+                let mounts = &config.spec.mounts;
+                let collecting = phase == "collect";
+                assert_eq!(mounts.len(), 1 + usize::from(collecting));
+                let work_mount = mounts
+                    .iter()
+                    .find(|mount| mount.guest() == "/work")
+                    .unwrap();
+                match (work, work_mount) {
+                    (DiskMount::Named { .. }, VolumeMount::Named { name, .. }) => {
+                        assert_eq!(name, "work");
+                    }
+                    (
+                        DiskMount::Overlay(_),
+                        VolumeMount::DiskImage {
+                            host,
+                            format,
+                            fstype,
+                            ..
+                        },
+                    ) => {
+                        assert_eq!(host, &overlay);
+                        assert_eq!(*format, DiskImageFormat::Qcow2);
+                        assert_eq!(fstype.as_deref(), Some("ext4"));
+                    }
+                    (_, other) => panic!("unexpected /work mount: {other:?}"),
+                }
+                if collecting {
+                    let mount = mounts.iter().find(|mount| mount.guest() == CACHE_MOUNT);
+                    assert!(
+                        matches!(mount, Some(VolumeMount::Named { name, .. }) if name == "cache")
+                    );
+                }
             }
-            .attach_to_sdk(builder)
-            .build()
-            .await
-            .unwrap();
-            let mut expected = vec![("/work", "work")];
-            if saving {
-                expected.push(("/.branvil-cache", "cache"));
-            }
-            let mut mounts: Vec<_> = config
-                .spec
-                .mounts
-                .iter()
-                .map(|mount| match mount {
-                    VolumeMount::Named { guest, name, .. } => (guest.as_str(), name.as_str()),
-                    other => panic!("unexpected mount: {other:?}"),
-                })
-                .collect();
-            expected.sort_unstable();
-            mounts.sort_unstable();
-            assert_eq!(mounts, expected);
         }
     }
 }

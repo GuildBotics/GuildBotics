@@ -1289,8 +1289,7 @@ impl Runner {
                 };
                 (key, owner)
             });
-            // Never mounted: the image `/work` starts from, then the link to
-            // the image the collecting VM filled for the cache.
+            let cache_base = dir.join(disk::CACHE_BASE);
             let cache_disk = dir.join("cache-disk.raw");
             let (mut cache_data, mut kept_data) = (None, None);
             let mut exact_cache = false;
@@ -1298,7 +1297,7 @@ impl Runner {
                 let restoring = Instant::now();
                 let (store, into, lookup, owner) = (
                     self.cache.clone(),
-                    cache_disk.clone(),
+                    cache_base.clone(),
                     key.clone(),
                     owner.clone(),
                 );
@@ -1318,7 +1317,12 @@ impl Runner {
                         .await
                     }
                     Ok(None) => say("no cache entry yet".into()).await,
-                    Err(e) => say(format!("cache restore failed: {e}")).await,
+                    Err(e) => {
+                        say(format!(
+                            "cache restore failed: {e}; the job runs without it"
+                        ))
+                        .await
+                    }
                 }
             }
             let env = job_environment(c);
@@ -1335,6 +1339,7 @@ impl Runner {
                         work_quota_mib: limits.work_quota_mib,
                         timeout_secs,
                         io: &io,
+                        cache_base: cache_data.map(|_| cache_base.as_path()),
                         cache_disk: &cache_disk,
                         tree: &tree,
                         cache_data,

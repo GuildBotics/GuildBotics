@@ -119,9 +119,9 @@ pub struct JobRun<'a> {
     /// host and `/work`, a disk of the job's own: it holds [`CHECKOUT`] and
     /// receives [`ARTIFACTS`]. Never mounted where the job's commands run.
     pub io: &'a Path,
-    /// A host path of this job only that no VM mounts: the disk image of a
-    /// cache entry, when there is one, which `/work` starts from; later, a
-    /// link to the new cache image when the job saves one.
+    /// A hard link to the published raw image, used only as read-only backing.
+    pub cache_base: Option<&'a Path>,
+    /// A host path for the new raw image when the job saves one.
     pub cache_disk: &'a Path,
     /// What the commit tracks, as its index records it.
     pub tree: &'a super::workspace::Tree,
@@ -727,7 +727,7 @@ impl Microsandbox {
                 &format!("{io}:{IO_MOUNT}:quota={quota_mib}M"),
             ]);
         for (at, disk) in disks.mounts() {
-            cmd.args(["--mount-named", &disk.mount(at)]);
+            disk.attach_to_cli(&mut cmd, at);
         }
         cmd.args(["--max-duration", &format!("{HELPER_SECS}s")])
             .arg("--no-net")
@@ -1155,22 +1155,49 @@ struct JobDisk {
     path: PathBuf,
 }
 
-impl JobDisk {
-    fn mount(&self, at: &str) -> String {
-        format!("{}:{at}:kind=disk,size={}M", self.name, self.mib)
+#[derive(Clone, Copy)]
+enum DiskMount<'a> {
+    Named { name: &'a str, mib: u64 },
+    Overlay(&'a Path),
+}
+
+impl DiskMount<'_> {
+    fn attach_to_cli(self, cmd: &mut tokio::process::Command, at: &str) {
+        match self {
+            Self::Named { name, mib } => {
+                cmd.args([
+                    "--mount-named",
+                    &format!("{name}:{at}:kind=disk,size={mib}M"),
+                ]);
+            }
+            Self::Overlay(path) => {
+                cmd.args([
+                    "--mount-disk",
+                    &format!("{}:{at}:fstype=ext4", path.display()),
+                ]);
+            }
+        }
     }
 }
 
 struct HelperDisks<'a> {
-    work: &'a JobDisk,
+    work: DiskMount<'a>,
     cache: Option<&'a JobDisk>,
 }
 
 impl<'a> HelperDisks<'a> {
-    fn mounts(&self) -> impl Iterator<Item = (&'static str, &'a JobDisk)> + use<'a> {
+    fn mounts(&self) -> impl Iterator<Item = (&'static str, DiskMount<'a>)> + use<'a> {
         [
             Some(("/work", self.work)),
-            self.cache.map(|disk| (CACHE_MOUNT, disk)),
+            self.cache.map(|disk| {
+                (
+                    CACHE_MOUNT,
+                    DiskMount::Named {
+                        name: &disk.name,
+                        mib: disk.mib,
+                    },
+                )
+            }),
         ]
         .into_iter()
         .flatten()
@@ -1310,88 +1337,77 @@ impl Executor for Microsandbox {
         let linked = job.tree.link_on(cached_paths.iter().copied());
         if let Some(p) = linked {
             say(format!("the cached path {p} goes through a symbolic link of the commit, which unpacking the checkout over the cache entry would write through; the job runs without the cache")).await;
-            let _ = std::fs::remove_file(job.cache_disk);
         }
-        // The cache entry's image: its length, the bytes of data its file
-        // system holds (what the copy takes when the entry does not say),
-        // and the size of its file system.
-        let image = std::fs::symlink_metadata(job.cache_disk)
-            .ok()
-            .filter(|m| m.is_file())
-            .map(|m| {
-                let data = job
-                    .cache_data
-                    .unwrap_or_else(|| super::disk::allocated(job.cache_disk).unwrap_or(m.len()));
-                let fs = super::disk::ext4_bytes(job.cache_disk).ok();
-                (m.len(), data, fs)
-            });
         let needed_mib = |cached: u64| {
             job.work_quota_mib + 2 * checkout.div_ceil(1 << 20) + 256 + cached.div_ceil(1 << 20)
         };
-        // No smaller than the entry's image, which an earlier job with more
-        // data or a larger checkout left: its file is sparse, so the room it
-        // keeps takes no blocks, and the entry stays usable.
-        let disk_mib = work_disk_mib(job.work_quota_mib, checkout, image.map_or(0, |i| i.1))
-            .max(image.map_or(0, |i| i.0.div_ceil(1 << 20).next_multiple_of(GROUP_MIB)));
+        let fresh_mib = work_disk_mib(job.work_quota_mib, checkout, 0);
+        let mut disk_mib = fresh_mib;
         let name = self.work_volume(job.attempt_id);
-        let mut disk = match self.create_disk(&name, disk_mib).await {
-            Ok(path) => JobDisk {
-                name,
-                mib: disk_mib,
-                path,
-            },
-            Err(e) => {
-                let _ = std::fs::remove_file(job.cache_disk);
+        let overlay = job.cache_base.map(|base| base.with_file_name("work.qcow2"));
+        let mut restore = None;
+        if let (Some(base), Some(overlay), None) = (job.cache_base, &overlay, linked) {
+            let (base, overlay) = (base.to_path_buf(), overlay.clone());
+            let (archive, members) = (job.io.join(CHECKOUT), job.io.join(MEMBERS));
+            let quota = job.work_quota_mib;
+            let data = job.cache_data;
+            let cli = !self.uses_sdk();
+            match super::blocking(move || {
+                use std::io::{Error, ErrorKind};
+                if cli
+                    && overlay
+                        .to_str()
+                        .is_none_or(|s| after_drive(s).contains([':', ',']))
+                {
+                    return Err(Error::new(
+                        ErrorKind::InvalidInput,
+                        "the overlay path cannot be passed to msb",
+                    ));
+                }
+                let len = std::fs::metadata(&base)?.len();
+                let fs = super::disk::ext4_bytes(&base)?;
+                let data = data.unwrap_or_else(|| super::disk::allocated(&base).unwrap_or(len));
+                // Keep at least the capacity of a prior, larger work disk.
+                let mib = work_disk_mib(quota, checkout, data)
+                    .max(len.div_ceil(1 << 20).next_multiple_of(GROUP_MIB));
+                super::workspace::list_members(&archive, &members)?;
+                super::disk::create_work_overlay(&overlay, mib << 20)?;
+                Ok((mib, fs, data))
+            })
+            .await
+            {
+                Ok((mib, fs, data)) => {
+                    disk_mib = mib;
+                    restore = Some(Restore {
+                        grow: fs < mib << 20,
+                        // Without growing, it still leaves the quota.
+                        ungrown_fits: fs >= needed_mib(data) << 20,
+                        fs_mib: fs >> 20,
+                    });
+                }
+                Err(e) => {
+                    say(format!(
+                        "the cache entry could not become /work ({e}); the job runs without it"
+                    ))
+                    .await
+                }
+            }
+        }
+        let mut disk = if let Some(overlay) = overlay.as_deref().filter(|_| restore.is_some()) {
+            DiskMount::Overlay(overlay)
+        } else {
+            if let Err(e) = self.create_disk(&name, disk_mib).await {
                 self.remove_volumes(|n| n == name).await;
                 return Outcome::StartupFailure(format!("Creating /work failed: {e}"));
             }
+            DiskMount::Named {
+                name: &name,
+                mib: disk_mib,
+            }
         };
-        // The disk becomes the entry's image, grown to its size: a rename or
-        // a clone, no copy of its data where the file system shares blocks.
-        // An image larger than the disk, or with no file system to grow, is
-        // not used: the disk keeps the size the quota gives.
-        let mut restore = None;
-        match image {
-            Some((_, _, None)) => {
-                say("the cache entry holds no ext4 file system; the job runs without it".into())
-                    .await
-            }
-            Some((_, data, Some(fs))) => {
-                let (from, to, size) = (
-                    job.cache_disk.to_path_buf(),
-                    disk.path.clone(),
-                    disk_mib << 20,
-                );
-                let (archive, members) = (job.io.join(CHECKOUT), job.io.join(MEMBERS));
-                match super::blocking(move || {
-                    super::workspace::list_members(&archive, &members)?;
-                    super::disk::grow(&from, size)?;
-                    super::disk::place(&from, &to)
-                })
-                .await
-                {
-                    Ok(()) => {
-                        restore = Some(Restore {
-                            grow: fs < disk_mib << 20,
-                            // Without growing, it still leaves the quota.
-                            ungrown_fits: fs >= needed_mib(data) << 20,
-                            fs_mib: fs >> 20,
-                        })
-                    }
-                    Err(e) => {
-                        say(format!(
-                            "the cache entry could not become /work ({e}); the job runs without it"
-                        ))
-                        .await
-                    }
-                }
-            }
-            None => {}
-        }
-        let _ = std::fs::remove_file(job.cache_disk);
-        // What the collecting VM may add to `io`: the artifacts' archive of
-        // `/work`'s files.
+        // The collecting VM may add an archive of /work's files to io.
         let collect_mib = disk_mib;
+        let fresh_name = Self::fresh_volume(&name);
         let image_lock = std::mem::take(&mut job.image_lock);
         let preparing = Instant::now();
         let mut prepared = self
@@ -1401,16 +1417,16 @@ impl Executor for Microsandbox {
                 // It writes no more than a mark.
                 1,
                 HelperDisks {
-                    work: &disk,
+                    work: disk,
                     cache: None,
                 },
                 &prepare_script("/work", IO_MOUNT, restore.as_ref()),
                 &mut cancel,
             )
             .await;
-        // A disk the entry left unusable is not carried on: a new, empty
-        // one of the size the quota gives, under a name of its own (the old
-        // one may outlive its removal), prepared without the entry.
+        // When preparation drops the overlay, prepare an empty named
+        // volume. The attempt directory keeps the overlay and its backing
+        // file until all of the VMs have ended.
         let ungrown = std::fs::remove_file(job.io.join(CACHE_UNGROWN)).is_ok();
         let dropped = match &prepared {
             Ok(()) if std::fs::remove_file(job.io.join(CACHE_DROPPED)).is_ok() => {
@@ -1429,21 +1445,20 @@ impl Executor for Microsandbox {
         if dropped && *cancel.borrow() {
             prepared = Err(None);
         } else if dropped {
-            self.remove_volumes(|n| n == disk.name).await;
-            let (name, mib) = (
-                Self::fresh_volume(&disk.name),
-                work_disk_mib(job.work_quota_mib, checkout, 0),
-            );
-            prepared = match self.create_disk(&name, mib).await {
-                Ok(path) => {
-                    disk = JobDisk { name, mib, path };
+            disk_mib = fresh_mib;
+            prepared = match self.create_disk(&fresh_name, disk_mib).await {
+                Ok(_) => {
+                    disk = DiskMount::Named {
+                        name: &fresh_name,
+                        mib: disk_mib,
+                    };
                     // A sandbox of its own name too.
                     self.helper(
                         &job,
                         "prep-new",
                         1,
                         HelperDisks {
-                            work: &disk,
+                            work: disk,
                             cache: None,
                         },
                         &prepare_script("/work", IO_MOUNT, None),
@@ -1476,7 +1491,7 @@ impl Executor for Microsandbox {
                     Some(output) => {
                         self.run_job(
                             &mut job,
-                            (&disk.mount("/work"), &log_dir),
+                            (disk, &log_dir),
                             output,
                             image_lock,
                             &log,
@@ -1486,7 +1501,7 @@ impl Executor for Microsandbox {
                     }
                     #[cfg(feature = "host")]
                     None => {
-                        self.sdk_job(&mut job, &disk, image_lock, &log, &mut cancel)
+                        self.sdk_job(&mut job, disk, image_lock, &log, &mut cancel)
                             .await
                     }
                     #[cfg(not(feature = "host"))]
@@ -1519,10 +1534,10 @@ impl Executor for Microsandbox {
                 say("cache save skipped: /work used the exact key".into()).await;
                 None
             } else {
-                match self.create_disk(&cache_name, disk.mib).await {
+                match self.create_disk(&cache_name, disk_mib).await {
                     Ok(path) => Some(JobDisk {
                         name: cache_name.clone(),
-                        mib: disk.mib,
+                        mib: disk_mib,
                         path,
                     }),
                     Err(e) => {
@@ -1568,7 +1583,7 @@ impl Executor for Microsandbox {
                         "collect",
                         collect_mib,
                         HelperDisks {
-                            work: &disk,
+                            work: disk,
                             cache: cache.as_ref(),
                         },
                         &script,
@@ -1726,7 +1741,7 @@ impl Microsandbox {
     async fn run_job(
         &self,
         job: &mut JobRun<'_>,
-        (disk, log_dir): (&str, &str),
+        (disk, log_dir): (DiskMount<'_>, &str),
         mut output: tokio::fs::File,
         image_lock: ImageLock,
         log: &mpsc::Sender<Vec<u8>>,
@@ -1739,13 +1754,13 @@ impl Microsandbox {
         let tmp = self.tmp_volume(job.attempt_id);
         let owner = format!("uid={JOB_USER_ID},gid={JOB_USER_ID}");
         let j = job.job;
-        cmd.args(["run", "--name", &name, "--quiet", "--pull", "never"])
-            .args(["--label", &format!("branvil.runner={}", self.runner)])
+        cmd.args(["run", "--name", &name, "--quiet", "--pull", "never"]);
+        disk.attach_to_cli(&mut cmd, "/work");
+        cmd.args(["--label", &format!("branvil.runner={}", self.runner)])
             .args(["--label", &format!("branvil.job={}", job.attempt_id)])
             .args(["--cpus", &job.cpus.to_string()])
             .args(["--memory", &format!("{}M", job.memory_mib)])
             .args(["--user", &format!("{JOB_USER_ID}:{JOB_USER_ID}")])
-            .args(["--mount-named", disk])
             // What the job writes to the host is bounded as `/work` is.
             .args([
                 "--mount-dir",
@@ -2389,6 +2404,7 @@ esac
                 work_quota_mib: 2048,
                 timeout_secs: 60,
                 io: &io,
+                cache_base: None,
                 cache_disk: &cache_disk,
                 tree: &Default::default(),
                 cache_data: None,
@@ -2612,8 +2628,8 @@ esac
         }
     }
 
-    /// `/work` starts from the cache entry's image it was given, grown to the
-    /// disk's size, and is collected once the job's VM ended, by exit or by
+    /// `/work` starts from an overlay on the restored image or an empty
+    /// volume, and is collected once the job's VM ended, by exit or by
     /// timeout, never after a stop: the artifacts' paths, and the cached
     /// paths when a successful job needs a new cache entry. The host stages
     /// the new disk by link, independently of artifact collection.
@@ -2642,6 +2658,8 @@ esac
         for (ending, collected, created_cache, mounted_cache, kept) in [
             ("fallback", true, true, true, true),
             ("miss", true, true, true, true),
+            ("restore-link-fails", true, true, true, true),
+            ("overlay-fails", true, true, true, true),
             ("pending-only", true, true, true, true),
             ("exact", true, false, false, false),
             ("exact-invalid", true, true, true, true),
@@ -2671,6 +2689,7 @@ esac
                 tar::Builder::new(Vec::new()).into_inner().unwrap(),
             )
             .unwrap();
+            let cache_base = at.join(super::super::disk::CACHE_BASE);
             let cache_disk = at.join("cache-disk.raw");
             let cache = Cache::new(at.join("cache"));
             let owner = CacheOwner {
@@ -2703,12 +2722,18 @@ esac
                         .unwrap();
                 }
             }
-            let restored = cache
-                .restore_generation("requested", &owner, &cache_disk)
-                .unwrap();
+            if ending == "restore-link-fails" {
+                std::fs::create_dir(&cache_base).unwrap();
+            }
+            if ending == "overlay-fails" {
+                std::fs::write(at.join("work.qcow2"), b"existing").unwrap();
+            }
+            let restored = cache.restore_generation("requested", &owner, &cache_base);
+            assert_eq!(restored.is_err(), ending == "restore-link-fails");
+            let restored = restored.ok().flatten();
             let exact_cache = restored.as_ref().is_some_and(|(key, _)| key == "requested");
             let cache_data = restored.as_ref().map(|(_, bytes)| *bytes);
-            let head_of_entry = cache_disk.is_file().then(|| head(&cache_disk));
+            let head_of_entry = cache_base.is_file().then(|| head(&cache_base));
             // What an earlier VM with `io` left there counts for nothing.
             std::fs::write(io.join(CACHE_KEPT), "999").unwrap();
             let _ = std::fs::remove_file(state.join("returned").join(CACHE_KEPT));
@@ -2771,6 +2796,7 @@ esac
                 &job
             };
             let (work_dir, io_dir, kept_disk) = (work.clone(), io.clone(), cache_disk.clone());
+            let base = restored.as_ref().map(|_| cache_base.clone());
             let running = async move {
                 let mut kept = None;
                 let outcome = runner
@@ -2791,6 +2817,7 @@ esac
                                 60
                             },
                             io: &io_dir,
+                            cache_base: base.as_deref(),
                             cache_disk: &kept_disk,
                             tree: &Default::default(),
                             cache_data,
@@ -2866,19 +2893,45 @@ esac
                 ending == "timeout-unflushed",
                 "{ending}: {text}"
             );
-            // The cache source for /work and the disk it returns are distinct.
-            let disk = state.join("disks/bv-work-t-a1");
-            let prep = std::fs::read_to_string(state.join("args-bv-prep-a1")).unwrap();
+            // Preparation, the job and collection share the overlay. On
+            // misses and dropped entries, the job and collection use a volume.
+            let args = |phase: &str| {
+                std::fs::read_to_string(state.join(format!("args-bv-{phase}-a1"))).unwrap()
+            };
+            let prep = args("prep");
             assert!(!prep.contains(CACHE_MOUNT), "{prep}");
-            let used_image = restored.is_some() && ending != "exact-invalid";
+            let used_image =
+                restored.is_some() && !matches!(ending, "exact-invalid" | "overlay-fails");
+            let dropped = matches!(ending, "exact-dropped" | "exact-prep-fails");
             assert_eq!(prep.contains("resize2fs"), used_image, "{prep}");
+            let overlay = at.join("work.qcow2");
+            let overlay_mount = format!("--mount-disk\n{}:/work:fstype=ext4", overlay.display());
+            assert_eq!(prep.contains(&overlay_mount), used_image, "{prep}");
+            let mount = if used_image && !dropped {
+                overlay_mount
+            } else {
+                let suffix = if dropped { "-new" } else { "" };
+                format!("--mount-named\nbv-work-t-a1{suffix}:/work:kind=disk,size=2432M")
+            };
+            assert!(args("job").contains(&mount), "{ending}");
+            if collected {
+                assert!(args("collect").contains(&mount), "{ending}");
+            }
             if used_image {
+                let header = head(&overlay);
                 assert_eq!(
-                    std::fs::metadata(&disk).unwrap().len(),
-                    2432 << 20,
-                    "{ending}"
+                    u64::from_be_bytes(header[24..32].try_into().unwrap()),
+                    2432 << 20
                 );
-                assert_eq!(Some(head(&disk)), head_of_entry, "{ending}");
+                assert_eq!(Some(head(&cache_base)), head_of_entry, "{ending}");
+                assert_eq!(std::fs::metadata(&cache_base).unwrap().len(), 128 << 20);
+            }
+            if ending == "overlay-fails" {
+                assert_eq!(std::fs::read(&overlay).unwrap(), b"existing");
+                assert!(
+                    text.contains("the cache entry could not become /work"),
+                    "{text}"
+                );
             }
             for message in [
                 ("exact", "cache save skipped: /work used the exact key"),
@@ -2932,7 +2985,14 @@ esac
                     "{ending}"
                 );
             }
-            let created = std::fs::read_to_string(state.join("created")).unwrap();
+            let created = std::fs::read_to_string(state.join("created")).unwrap_or_default();
+            assert_eq!(
+                created
+                    .lines()
+                    .any(|line| line.starts_with("volume create bv-work-t-a1 ")),
+                !used_image,
+                "{ending}: {created}"
+            );
             let create = "volume create bv-cache-t-a1 --kind disk --size 2432M -q";
             assert_eq!(
                 created.lines().any(|line| line == create),
@@ -2997,13 +3057,10 @@ esac
         }
     }
 
-    /// A `/work` that cannot be made ends the attempt before any VM, its
-    /// volume removed and the cache entry it was given gone; an entry larger
-    /// than the disk the quota gives (saved when it held more, or the
-    /// checkout was larger) is used, on a disk of its size; one for a cached
-    /// path through a link of the commit is not used; an entry the preparing VM
-    /// drops, or fails on, takes its disk with it: the job gets a new, empty
-    /// one of its own name.
+    /// A volume that cannot be made ends the attempt before any VM. The
+    /// overlay fits a larger entry from a prior attempt. The job uses an
+    /// empty volume if the commit links a cached path or preparation drops
+    /// the entry.
     #[cfg(unix)]
     #[tokio::test]
     async fn how_work_starts_from_the_disk_and_the_entry_it_is_given() {
@@ -3039,18 +3096,21 @@ esac
                 tar::Builder::new(Vec::new()).into_inner().unwrap(),
             )
             .unwrap();
+            let cache_base = at.join(super::super::disk::CACHE_BASE);
             let cache_disk = at.join("cache-disk.raw");
-            ext4_image(&cache_disk, 4096, b"restored");
+            if case != "inspect-fails" {
+                ext4_image(&cache_base, 4096, b"restored");
+            }
             let _ = std::fs::remove_file(state.join("removed"));
             let _ = std::fs::remove_file(state.join("created"));
             let _ = std::fs::remove_file(state.join("args-bv-prep-a1"));
             let _ = std::fs::remove_file(state.join("args-bv-prep-new-a1"));
             let _ = std::fs::remove_file(state.join("args-bv-collect-a1"));
             if case == "commit-link" {
-                ext4_image(&cache_disk, 128, b"restored");
+                ext4_image(&cache_base, 128, b"restored");
             }
             if case == "dropped" || case == "prep-fails" {
-                ext4_image(&cache_disk, 512, b"restored");
+                ext4_image(&cache_base, 512, b"restored");
                 let mark = if case == "dropped" {
                     "prep-drops"
                 } else {
@@ -3078,6 +3138,7 @@ esac
                         work_quota_mib: 2048,
                         timeout_secs: 60,
                         io: &io,
+                        cache_base: (case != "inspect-fails").then_some(cache_base.as_path()),
                         cache_disk: &cache_disk,
                         tree: &super::super::workspace::Tree::from_index(
                             if case == "commit-link" {
@@ -3111,23 +3172,10 @@ esac
                 text.push_str(&String::from_utf8_lossy(&bytes));
             }
             let removed = std::fs::read_to_string(state.join("removed")).unwrap_or_default();
-            assert!(
-                removed.contains("volume remove -q bv-work-t-a1"),
-                "{case}: {removed}"
-            );
-            // The new one too, whichever exists, once the job ran.
-            assert!(
-                case == "inspect-fails"
-                    || removed
-                        .lines()
-                        .last()
-                        .is_some_and(|l| l.ends_with("bv-work-t-a1 bv-work-t-a1-new")),
-                "{case}: {removed}"
-            );
-            // Nothing is left for the cache: the entry was used or dropped,
-            // and a run that does not save keeps nothing.
             assert!(!cache_disk.exists(), "{case}");
+            assert_eq!(cache_base.exists(), case != "inspect-fails");
             if case == "inspect-fails" {
+                assert!(removed.contains("volume remove -q bv-work-t-a1"));
                 assert!(
                     matches!(&outcome, Outcome::StartupFailure(m) if m.starts_with("Creating /work failed")),
                     "{outcome:?}"
@@ -3143,18 +3191,10 @@ esac
                 };
                 assert!(text.contains(why), "{text}");
                 assert_eq!(text.matches("the job runs without it").count(), 1, "{text}");
-                // Removed before the job, and made again; the job's disk is
-                // the new one, prepared without the entry.
-                let at = |line: &str| removed.find(line).unwrap();
-                assert!(at("volume remove -q bv-work-t-a1") < at("remove --force -q bv-job-a1"));
                 let created = std::fs::read_to_string(state.join("created")).unwrap();
-                assert!(
-                    created.contains("volume create bv-work-t-a1 --kind disk --size 2560M"),
-                    "{created}"
-                );
-                assert!(
-                    created.contains("volume create bv-work-t-a1-new "),
-                    "{created}"
+                assert_eq!(
+                    created,
+                    "volume create bv-work-t-a1-new --kind disk --size 2432M -q\n"
                 );
                 let new = state.join("disks/bv-work-t-a1-new");
                 assert_eq!(std::fs::metadata(new).unwrap().len(), 0);
@@ -3167,7 +3207,7 @@ esac
                 // The runner listed the members for it.
                 assert!(io.join(MEMBERS).is_file());
                 assert!(
-                    first.contains("bv-work-t-a1:/work:kind=disk,size=2560M"),
+                    first.contains("--mount-disk") && !first.contains("--mount-named"),
                     "{first}"
                 );
                 let prep = std::fs::read_to_string(state.join("args-bv-prep-new-a1")).unwrap();
@@ -3211,14 +3251,14 @@ esac
                 // The disk is the entry's size, the entry its content, and its
                 // file system fills it: nothing to grow, nothing dropped.
                 assert_eq!(outcome, Outcome::Exited(0));
-                let created = std::fs::read_to_string(state.join("created")).unwrap();
+                assert!(!state.join("created").exists());
+                let overlay = at.join("work.qcow2");
+                let header = head(&overlay);
                 assert_eq!(
-                    created,
-                    "volume create bv-work-t-a1 --kind disk --size 4096M -q\n"
+                    u64::from_be_bytes(header[24..32].try_into().unwrap()),
+                    4096 << 20
                 );
-                let disk = state.join("disks/bv-work-t-a1");
-                assert_eq!(std::fs::metadata(&disk).unwrap().len(), 4096 << 20);
-                assert_eq!(&head(&disk)[..8], b"restored");
+                assert_eq!(&head(&cache_base)[..8], b"restored");
                 let prep = std::fs::read_to_string(state.join("args-bv-prep-a1")).unwrap();
                 assert!(
                     !prep.contains("resize2fs") && prep.contains(MEMBERS),
@@ -3272,6 +3312,7 @@ esac
                         work_quota_mib: 2048,
                         timeout_secs: 60,
                         io: &io,
+                        cache_base: None,
                         cache_disk: &at.join("cache-disk.raw"),
                         tree: &Default::default(),
                         cache_data: None,

@@ -2200,6 +2200,7 @@ dependencies = [
  "gb-vm",
  "getrandom 0.4.3",
  "libc",
+ "msb-imago",
  "oci-spec 0.9.0",
  "percent-encoding",
  "reqwest",

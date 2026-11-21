@@ -551,10 +551,13 @@ read.
 
 ## Dependency cache
 
-A cache entry is a disk image containing the job's cached paths. The runner
-never mounts the published image. On restore, the work disk starts as a
-clone on file systems that can share blocks, or as a sparse copy with the
-same holes.
+A cache entry is a raw ext4 disk image containing the job's cached paths.
+On restore, the runner hard-links the published image into the attempt
+directory as `cache-base.raw`. The job's `work.qcow2` uses that link as
+read-only raw backing and stores guest writes in the overlay. The link
+keeps the backing file available until the attempt ends, even if the
+published entry is evicted during the job. If either file cannot be set up,
+the runner logs the reason and uses an empty named volume for `/work`.
 
 The runner first looks up the exact key. It hashes the repository, job name,
 image configuration digest, user ID, work quota, `cache.paths`, and the names
@@ -700,12 +703,17 @@ Per job the runner:
    `out` (opened once, before the VM exists), and checks that no component
    below the runner's directory is a symbolic link. Git never runs in the
    work directory once a VM has had what it holds;
-3. when the cache has an entry for the job, puts a copy of its image at
-   `<work dir>/jobs/<attempt id>/cache-disk.raw`; creates the disk of `/work`
-   (`msb volume create bv-work-<runner>-<attempt> --kind disk --size SM`),
-   grows the copy to `S` (the space it gains takes no blocks), then tries
-   to rename it into place as the volume's disk and falls back to copying
-   if the rename fails.
+3. when the cache has an entry for the job, hard-links its published
+   `disk.raw` to `<work dir>/jobs/<attempt id>/cache-base.raw` under the
+   cache read lock and creates `work.qcow2` beside it. The overlay has
+   virtual capacity `S` and records `cache-base.raw` as a relative path
+   with backing format `raw`. Preparation, the job, and collection all
+   attach it at `/work`, with `--mount-disk <work.qcow2>:/work:fstype=ext4`
+   on external runners and a disk image mount with filesystem type
+   `ext4` in the Hub SDK. With no usable entry, the runner creates a
+   named volume (`msb volume create bv-work-<runner>-<attempt> --kind disk
+   --size SM`) and attaches it with `--mount-named
+   bv-work-<runner>-<attempt>:/work:kind=disk,size=SM`.
    An entry that holds no ext4 file system is not used. When a cached path
    goes through a symbolic link of the commit (unpacking the
    checkout over an entry would write through it), the job neither uses nor
@@ -713,7 +721,7 @@ Per job the runner:
    for byte, not from what its machine's file system made of the checkout,
    so the entry's own links, which a job left there, do not count. It then
    prepares `/work` in a VM of the job's image:
-   `msb run --name bv-prep-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --user 0:0 --mount-dir <io>:/.branvil-io:quota=1M --mount-named bv-work-<runner>-<attempt>:/work:kind=disk,size=SM --max-duration 3600s --no-net <image> -- /bin/sh -c <grow the file system to the disk; unpack the checkout into /work; chown -R 1000:1000 /work; sync>`,
+   `msb run --name bv-prep-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --user 0:0 --mount-dir <io>:/.branvil-io:quota=1M <work mount> --max-duration 3600s --no-net <image> -- /bin/sh -c <grow the file system to the disk; unpack the checkout into /work; chown -R 1000:1000 /work; sync>`,
    removes that sandbox, and runs the job. The file system of an entry is
    grown only when it is smaller than `S` (its size is read from the
    image's superblock). The cache entry is not kept when its file system
@@ -723,14 +731,12 @@ Per job the runner:
    `io/checkout.members`, the members' names as the bytes of their headers,
    which the runner writes, with the links `find` lists, whatever their
    number; a `find` that fails, and a link whose path holds a newline
-   anywhere, count as links there; a checkout with such a name gets no entry), or the
-   checkout does not
-   unpack over the cached paths: the VM stops there, and the runner removes that disk,
-   creates a new, empty one of the size the quota gives
-   (`bv-work-<runner>-<attempt>-new`, as the old one may outlive its
-   removal), and prepares it without the entry; the log says the job runs
-   without the cache. A preparing VM that fails on an entry is handled the
-   same way. The second preparing VM has a name of its own
+   anywhere, count as links there; a checkout with such a name gets no
+   entry), or the checkout does not unpack over the cached paths. The
+   runner logs the reason, switches to an empty named volume of the size
+   the quota gives (`bv-work-<runner>-<attempt>-new`), and prepares it
+   without the entry. A preparing VM that fails on an entry is handled
+   the same way. The second preparing VM has a name of its own
    (`bv-prep-new-<attempt>`). An entry's links that no member of the
    checkout goes through stay as they are.
    Every VM of the job flushes before its command ends: microsandbox stops
@@ -738,7 +744,7 @@ Per job the runner:
    `/work` or `io` by then can be lost (a lost `chown` left the checkout
    unwritable to the job).
    The job:
-   `msb run --name bv-job-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --cpus N --memory NM --user 1000:1000 --mount-named bv-work-<runner>-<attempt>:/work:kind=disk,size=SM --mount-dir <log>:/.branvil-log:uid=1000,gid=1000,quota=QM --mount-named bv-tmp-<runner>-<attempt>:/tmp:kind=disk,size=4G --workdir /work --max-duration <timeout+60>s --no-net <image> -- /bin/sh -c <script>`
+   `msb run --name bv-job-<attempt> --label branvil.runner=<runner> --label branvil.job=<attempt> --pull never --cpus N --memory NM --user 1000:1000 <work mount> --mount-dir <log>:/.branvil-log:uid=1000,gid=1000,quota=QM --mount-named bv-tmp-<runner>-<attempt>:/tmp:kind=disk,size=4G --workdir /work --max-duration <timeout+60>s --no-net <image> -- /bin/sh -c <script>`
    (`N` and `M` the runner's CPUs and memory, `S` the size of `/work`, `Q`
    `ci.executor.work_quota_mib`: what the job may write to the host);
    the script first flushes when it exits (`trap sync EXIT`), sends its stdout and stderr
@@ -787,7 +793,8 @@ Per job the runner:
    every sandbox of the attempt (by its `branvil.job` label) and the
    `/tmp`, `/work`, and cache volumes (which outlive the sandboxes), warning
    about any that could not be removed. The runner also sweeps leftover
-   volumes at startup. For a job with artifacts, it then
+   volumes at startup. The overlay and its backing link remain in the
+   attempt directory until it is cleaned up. For a job with artifacts, it then
    empties the work directory and unpacks the artifacts' archive into it
    (see "Artifacts"): nothing of the checkout is taken for an artifact;
 5. uploads artifacts, stages `cache-disk.raw` if collected after a successful
