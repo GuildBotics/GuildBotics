@@ -503,8 +503,8 @@ fn record_use(entry: &Path, used: SystemTime) -> io::Result<()> {
     fs::File::create(entry.join(USED))?.set_modified(used)
 }
 
-/// The runner's dependency cache: per key, the disk image of a job's `/work`
-/// that kept only the cached paths, which the host never mounts. The jobs a runner runs at once
+/// The runner's dependency cache: per key, a disk image containing cached
+/// paths from a job's `/work`, which the host never mounts. The jobs a runner runs at once
 /// share it: a save replaces its entry and evicts others only while no
 /// restore reads from the cache, so a restore gets an entry whole, the old
 /// one or the new one. One runner uses a work directory (`runner.lock`), so a
@@ -716,7 +716,9 @@ fn write_entry(entry: &Path, owner: &CacheOwner, image: &Path, data: u64) -> io:
             format!("{} is missing", image.display()),
         ));
     }
-    super::disk::place(image, &entry.join(IMAGE))?;
+    // The attempt image and cache are under the same runner work directory.
+    // Staging must not fall back to copying the entire image.
+    fs::rename(image, entry.join(IMAGE))?;
     fs::write(entry.join(DATA), data.to_string())?;
     fs::write(entry.join(OWNER), serde_json::to_vec(owner)?)
 }
