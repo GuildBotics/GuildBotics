@@ -109,6 +109,56 @@ fn take(w: &Wtx) -> AppResult<Claimed> {
 }
 
 #[test]
+fn a_successful_head_loses_its_pending_cache_when_the_pull_leaves_it() {
+    use gb_runner::ci::api::CacheDecision::{Discard, Keep};
+    for close in [false, true] {
+        let (_dir, s) = store();
+        s.write_sync(|w| {
+            repo(w, &[], 0)?;
+            let pull = pull(w, 1, "feature", false)?;
+            let reference = Key::new().s("repo_1").s("refs/heads/feature").bytes();
+            w.put(store::REFS, &reference, &"first")?;
+            let mut run = reg("first", "feature", &["build"]);
+            let PipelineState::Jobs { jobs } = &mut run.pipeline else {
+                unreachable!()
+            };
+            jobs[0].cache = Some(super::super::pipeline::CacheDef {
+                paths: vec!["target".into()],
+                key_files: vec![],
+            });
+            register(w, run, 10, T0)?;
+            let c = take(w)?;
+            let id = &c.attempt.id;
+            assert!(keeps_cache(w, &c.attempt)?);
+            finish(
+                w,
+                id,
+                &c.lease,
+                "success",
+                None,
+                ResultInfo {
+                    image_digest: Some(DIGEST.into()),
+                    cache_key: Some("a".repeat(64)),
+                    ..Default::default()
+                },
+                T0,
+            )?;
+            assert!(matches!(cache_decision(w, "runner", id)?, Keep));
+            if close {
+                let mut closed = pull.clone();
+                closed.state = "closed".into();
+                save_pull(w, Some(&pull), &closed)?;
+            } else {
+                w.put(store::REFS, &reference, &"second")?;
+            }
+            assert!(matches!(cache_decision(w, "runner", id)?, Discard));
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
+#[test]
 fn repair_precedes_approved_work_and_refuses_paths_reuse() {
     let (_d, s) = store();
     s.write_sync(|w| {
@@ -142,7 +192,7 @@ fn repair_precedes_approved_work_and_refuses_paths_reuse() {
         };
         register(w, source(), 100, T0)?;
         let c = take(w)?;
-        finish(w, &c.attempt.id, &c.lease, "success", None, ResultInfo {image_digest:Some(DIGEST.into()), ..Default::default()}, 100, T0)?;
+        finish(w, &c.attempt.id, &c.lease, "success", None, ResultInfo {image_digest:Some(DIGEST.into()), ..Default::default()}, T0)?;
         let mut dest = source(); dest.sha = "dest".into(); dest.branch = "fix".into(); dest.tree = Some("different-tree".into());
         register(w, dest, 100, T0)?;
         let c = take(w)?;
@@ -231,7 +281,6 @@ fn classes_override_registration_order_and_do_not_cancel_running_work() {
                 "success",
                 None,
                 ResultInfo::default(),
-                100,
                 T0
             )?
             .conclusion
@@ -300,7 +349,6 @@ fn required_failures_missing_jobs_and_manual_retry_share_check_rules() {
             "failure",
             None,
             ResultInfo::default(),
-            100,
             T0,
         )?;
         assert_eq!(class(w, "sha")?, Class::Deferred);
@@ -332,7 +380,6 @@ fn required_failures_missing_jobs_and_manual_retry_share_check_rules() {
             "failure",
             None,
             ResultInfo::default(),
-            100,
             T0,
         )?;
         assert_eq!(class(w, "sha")?, Class::Normal);
@@ -390,7 +437,6 @@ fn reuse_is_preferred_only_within_class_and_retries_must_execute() {
                 image_digest: Some(DIGEST.into()),
                 ..Default::default()
             },
-            100,
             T0,
         )?;
         enqueue(w, "older", "older")?;
@@ -408,7 +454,6 @@ fn reuse_is_preferred_only_within_class_and_retries_must_execute() {
             "success",
             None,
             ResultInfo::default(),
-            100,
             T0,
         )?;
         retry(w, &reused.attempt.id, 100, T0)?;
@@ -440,7 +485,7 @@ fn reuse_is_preferred_only_within_class_and_retries_must_execute() {
 }
 
 #[test]
-fn unconsumed_results_and_refreshes_are_last_with_specific_reasons() {
+fn unconsumed_results_are_last_with_specific_reasons() {
     let (_d, s) = store();
     s.write_sync(|w| {
         enqueue(w, "sha", "feature")?;
@@ -468,18 +513,7 @@ fn unconsumed_results_and_refreshes_are_last_with_specific_reasons() {
             class_of(w, &retried)?.reason.as_deref(),
             Some("no branch wants this commit")
         );
-        enqueue(w, "protected", "main")?;
-        let mut refresh = attempts_of(w, "repo_1", "protected")?.remove(0);
-        let old = refresh.clone();
-        refresh.purpose = Purpose::CacheRefresh;
-        put_attempt(w, Some(&old), &refresh)?;
-        assert_eq!(
-            class_of(w, &refresh)?.reason.as_deref(),
-            Some("cache refresh")
-        );
-        // Last-class FIFO still works, including a retry of an unwanted commit.
         assert_eq!(take(w)?.attempt.id, retried.id);
-        assert_eq!(take(w)?.attempt.id, refresh.id);
         Ok(())
     })
     .unwrap();
@@ -502,7 +536,6 @@ fn protected_automatic_retries_overtake_older_pull_work_without_reuse() {
             "failure",
             None,
             ResultInfo::default(),
-            100,
             T0,
         )?;
         let automatic = take(w)?;
@@ -539,9 +572,6 @@ fn admission_reserves_capacity_for_active_classes_and_reports_waiting_drafts() {
         );
         assert_eq!(take(w)?.attempt.sha, "approved-sha");
         assert_eq!(take(w)?.attempt.sha, "approved-sha");
-        // Refreshes still use total capacity, even for a protected source.
-        let a = attempts_of(w, "repo_1", "draft-sha")?.remove(0);
-        assert!(enqueue_refresh(w, &a, "cache-key", 4, T0)?.is_none());
         Ok(())
     })
     .unwrap();
@@ -603,7 +633,6 @@ fn manual_retry_uses_the_class_after_replacing_only_its_own_failure() {
                     if i < failures { "failure" } else { "success" },
                     None,
                     ResultInfo::default(),
-                    4,
                     T0,
                 )?;
                 if i == 0 {
@@ -696,11 +725,6 @@ fn deferred_details_follow_current_records_and_preserve_retry_explanations() {
             attempt_details(w, &retried)?
                 .unwrap()
                 .contains("Deferred: no branch wants this commit.")
-        );
-        a.purpose = Purpose::CacheRefresh;
-        assert_eq!(
-            attempt_details(w, &a)?.unwrap(),
-            "Deferred: cache refresh. It runs when no other job is queued."
         );
         Ok(())
     })
@@ -814,7 +838,6 @@ fn fixture_target_is_not_hidden_by_another_reusable_attempt() {
                 image_digest: Some(DIGEST.into()),
                 ..Default::default()
             },
-            100,
             T0,
         )?;
         enqueue(w, "target", "target")?;

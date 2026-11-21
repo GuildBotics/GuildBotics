@@ -25,7 +25,7 @@ it.each([ ["en", "paths"], ["ja", "paths"], ["en", "post_merge"], ["ja", "post_m
   fakeApi({...SHELL,
     [`GET /api/v1/repos/acme/demo/commits/${sha}`]:json(200,{sha,message:"Documentation",author:"Test",authored_at:"2026-10-27T00:00:00Z",parents:[base]}),
     [`GET /api/v1/repos/acme/demo/commits/${sha}/checks`]:json(200,{sha,checks_expected:true,checks:[{name:"test",status:"completed",conclusion:"skipped",runner:null,path_skip,attempt_id:"att_skip",attempt:1}]}),
-    "GET /api/v1/repos/acme/demo/jobs/att_skip":json(200,{id:"att_skip",purpose:"check",job:"test",attempt:1,sha,status:"completed",conclusion:"skipped",runner:null,path_skip,artifact_names:[],details:null}),
+    "GET /api/v1/repos/acme/demo/jobs/att_skip":json(200,{id:"att_skip",job:"test",attempt:1,sha,status:"completed",conclusion:"skipped",runner:null,path_skip,artifact_names:[],details:null}),
     "GET /api/v1/repos/acme/demo/jobs/att_skip/log":json(200,{log:"[branvil] skipped: no file matching paths changed since merge-base",log_bytes:70,truncated:false}),
   });
   const user = userEvent.setup();
@@ -232,9 +232,9 @@ describe("pages", () => {
       ...SHELL,
       [`GET /api/v1/repos/acme/demo/commits/${sha}`]: json(200, { sha, message: "Same tree", author: "Test", authored_at: "2026-10-14T10:00:00.000Z", parents: [] }),
       [`GET /api/v1/repos/acme/demo/commits/${sha}/checks`]: json(200, { sha, checks_expected: true, checks: [
-        { name: "test", status: "completed", conclusion: "success", attempt_id: "att_reused", attempt: 1, details: null, artifact_names: ["report"], reused_from: source, cache_refresh: "att_refresh", purpose: "check" },
+        { name: "test", status: "completed", conclusion: "success", attempt_id: "att_reused", attempt: 1, details: null, artifact_names: ["report"], reused_from: source },
       ] }),
-      "GET /api/v1/repos/acme/demo/jobs/att_reused": json(200, { id: "att_reused", job: "test", attempt: 1, sha, status: "completed", conclusion: "success", details: null, artifact_names: ["report"], reused_from: source, cache_refresh: "att_refresh", purpose: "check" }),
+      "GET /api/v1/repos/acme/demo/jobs/att_reused": json(200, { id: "att_reused", job: "test", attempt: 1, sha, status: "completed", conclusion: "success", details: null, artifact_names: ["report"], reused_from: source }),
       "GET /api/v1/repos/acme/demo/jobs/att_reused/log": json(200, { log: "reused result of att_original", log_bytes: 28, truncated: false }),
     });
     const user = userEvent.setup();
@@ -246,7 +246,6 @@ describe("pages", () => {
     expect(screen.queryByText(otherLabel)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: source.sha.slice(0, 10) })).toHaveAttribute("href", `/acme/demo/-/commits/${source.sha}`);
     expect(link.querySelector("a")).toBeNull();
-    expect(screen.getByRole("link", { name: language === "ja" ? "キャッシュの更新" : "Cache refresh" })).toHaveAttribute("href", "/acme/demo/-/jobs/att_refresh");
     const reason = language === "ja" ? "理由" : "Reason";
     expect(screen.queryByText(new RegExp(reason))).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: language === "ja" ? "チェック test を開く" : "Open check test" }));
@@ -261,22 +260,20 @@ describe("pages", () => {
     expect(await within(drawer).findByText("reused result of att_original")).toBeInTheDocument();
   });
 
-  it.each(["en", "ja"] as const)("identifies a cache refresh and disables manual retry (%s)", async (language) => {
+  it.each(["en", "ja"] as const)("disables manual retry on a historical attempt (%s)", async (language) => {
     const sha = "f".repeat(40);
     fakeApi({
       ...SHELL,
       "GET /api/v1/repos/acme/demo/pulls": page([]),
       [`GET /api/v1/repos/acme/demo/commits/${sha}`]: json(200, { sha, message: "Same tree", author: "Test", parents: [] }),
       [`GET /api/v1/repos/acme/demo/commits/${sha}/checks`]: json(200, { sha, checks_expected: true, checks: [] }),
-      "GET /api/v1/repos/acme/demo/jobs/att_refresh": json(200, { id: "att_refresh", job: "test", purpose: "cache_refresh", attempt: 2, sha, status: "completed", conclusion: "failure", runner: "cache-runner", details: "exit 1", artifact_names: [], reused_from: null }),
-      "GET /api/v1/repos/acme/demo/jobs/att_refresh/log": json(200, { log: "cache refresh failed", log_bytes: 20, truncated: false }),
+      "GET /api/v1/repos/acme/demo/jobs/att_historical": json(200, { id: "att_historical", job: "test", retry_supported: false, attempt: 2, sha, status: "completed", conclusion: "failure", runner: "cache-runner", details: "exit 1", artifact_names: [], reused_from: null }),
+      "GET /api/v1/repos/acme/demo/jobs/att_historical/log": json(200, { log: "historical attempt log", log_bytes: 20, truncated: false }),
     });
-    renderApp("/acme/demo/-/jobs/att_refresh", language);
+    renderApp("/acme/demo/-/jobs/att_historical", language);
     const drawer = await screen.findByRole("dialog", { name: /test/ });
-    expect(await within(drawer).findByText(language === "ja" ? "キャッシュの更新" : "Cache refresh")).toBeInTheDocument();
-    expect(within(drawer).getByText(language === "ja" ? "ランナー" : "Runner").nextElementSibling).toHaveTextContent("cache-runner");
+    expect((await within(drawer).findByText(language === "ja" ? "ランナー" : "Runner")).nextElementSibling).toHaveTextContent("cache-runner");
     expect(within(drawer).getByRole("button", { name: language === "ja" ? "再実行" : "Retry" })).toBeDisabled();
-    expect(within(drawer).getByText(language === "ja" ? "この結果はチェックと自動更新に影響しません。" : "This result does not affect checks or automatic updates.")).toBeInTheDocument();
   });
 
   it("shows the checks of the default branch's tip on a repository's page", async () => {

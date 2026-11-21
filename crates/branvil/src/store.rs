@@ -23,7 +23,7 @@ pub type Tbl = TableDefinition<'static, &'static [u8], &'static [u8]>;
 /// The schema version this build reads and writes. A database of any other
 /// version is refused instead of being misread; one of the previous version
 /// is upgraded by `upgrade` (`guildbotics server hub-data upgrade` and `restore`).
-pub const SCHEMA_VERSION: u64 = 38;
+pub const SCHEMA_VERSION: u64 = 39;
 
 pub const META: Tbl = TableDefinition::new("meta");
 pub const COUNTERS: Tbl = TableDefinition::new("counters");
@@ -79,7 +79,6 @@ pub const IX_CI_PENDING: Tbl = TableDefinition::new("ix_ci_pending");
 pub const IX_CI_ACTIVE: Tbl = TableDefinition::new("ix_ci_active");
 pub const IX_CI_WAITING: Tbl = TableDefinition::new("ix_ci_waiting");
 pub const IX_CI_TREE: Tbl = TableDefinition::new("ix_ci_tree");
-pub const IX_CI_REFRESH: Tbl = TableDefinition::new("ix_ci_refresh");
 /// (repo id, job name, input digest, attempt id) → attempt id: actual,
 /// successful executions whose files are kept, by the inputs they ran on.
 pub const IX_CI_INPUTS: Tbl = TableDefinition::new("ix_ci_inputs");
@@ -135,7 +134,6 @@ pub const INDEX_TABLES: &[Tbl] = &[
     IX_CI_ACTIVE,
     IX_CI_WAITING,
     IX_CI_TREE,
-    IX_CI_REFRESH,
     IX_CI_INPUTS,
     IX_CI_MEMORY,
 ];

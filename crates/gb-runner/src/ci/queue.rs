@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
-/// A successful execution the runner may reuse after checking its image and cache.
+/// A successful execution the runner may reuse after checking its image.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Reuse {
     pub attempt_id: String,
     pub sha: String,
     pub image_digest: String,
-    pub cache_key: Option<String>,
     pub basis: Basis,
 }
 
@@ -26,6 +25,4 @@ pub struct ResultInfo {
     pub peak_memory_mib: Option<u64>,
     pub reused_from: Option<String>,
     pub cache_key: Option<String>,
-    #[serde(default)]
-    pub refresh_cache: bool,
 }

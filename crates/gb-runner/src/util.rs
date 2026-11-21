@@ -5,6 +5,7 @@ pub fn hex(bytes: &[u8]) -> String {
 pub fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
+#[cfg(test)]
 pub fn random_secret<const N: usize>() -> String {
     use base64::Engine;
     let mut b = [0; N];

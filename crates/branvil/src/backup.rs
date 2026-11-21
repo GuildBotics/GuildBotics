@@ -636,7 +636,6 @@ mod tests {
                     "success",
                     None,
                     queue::ResultInfo::default(),
-                    10,
                     old,
                 )?;
                 Ok(c.attempt.id)

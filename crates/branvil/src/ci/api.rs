@@ -43,8 +43,7 @@ fn json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> AppResult<T> {
 pub struct AttemptView {
     pub path_skip: Option<queue::PathSkip>,
     pub id: String,
-    pub purpose: queue::Purpose,
-    pub cache_refresh: Option<String>,
+    pub retry_supported: bool,
     pub url: String,
     pub repository: String,
     pub job: String,
@@ -80,8 +79,7 @@ pub(crate) async fn view(app: &Shared, a: &Attempt) -> AppResult<AttemptView> {
     Ok(AttemptView {
         path_skip: a.path_skip.clone(),
         id: a.id.clone(),
-        purpose: a.purpose,
-        cache_refresh: a.cache_refresh.clone(),
+        retry_supported: a.purpose == queue::Purpose::Check,
         url: format!("{}/{}/-/jobs/{}", app.base_url, a.repo_path, a.id),
         repository: a.repo_path.clone(),
         job: a.job.name.clone(),
@@ -368,7 +366,29 @@ async fn runner_health(State(app): State<Shared>, c: Caller) -> R {
     Ok(ok(gb_runner::ci::api::RunnerHealth {
         version: gb_base::BUILD_VERSION.into(),
         max_jobs: Some(limits.max_jobs),
+        cache_max_mib: Some(limits.cache_max_mib),
     }))
+}
+
+async fn runner_cache(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) -> R {
+    use gb_runner::ci::api::CACHE_DECISION_BATCH;
+    require_runner(&c)?;
+    let ids: Vec<String> = json(&body)?;
+    if ids.len() > CACHE_DECISION_BATCH || ids.iter().any(|id| !valid_attempt_id(id)) {
+        return Err(AppError::invalid(
+            "Expected a bounded list of CI attempt IDs.",
+        ));
+    }
+    let runner = c.name().to_string();
+    let decisions = app
+        .store
+        .read(move |r| {
+            ids.into_iter()
+                .map(|id| Ok((id.clone(), queue::cache_decision(r, &runner, &id)?)))
+                .collect::<AppResult<std::collections::BTreeMap<_, _>>>()
+        })
+        .await?;
+    Ok(ok(decisions))
 }
 
 fn require_runner(c: &Caller) -> AppResult<()> {
@@ -394,7 +414,6 @@ pub struct ClaimView {
     #[serde(flatten)]
     pub execution: gb_runner::ci::api::ExecutionLimits,
     pub attempt_id: String,
-    pub purpose: queue::Purpose,
     pub lease: String,
     pub expires_at: String,
     pub lease_secs: u64,
@@ -404,7 +423,7 @@ pub struct ClaimView {
     pub attempt: u64,
     pub job: JobDef,
     pub verified_sha: Option<String>,
-    pub cache_scope: String,
+    pub cache_write: bool,
     pub network: bool,
     /// How long the attempt waited in the queue, in seconds.
     pub queued_secs: u64,
@@ -441,13 +460,19 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     // Checked in the write: `Ci::stop` counts the running jobs in a write
     // too, so a claim it does not see gives out nothing.
     let ci = app.ci.clone();
-    let (claimed, waiting) = app
+    let (claimed, waiting, cache_write) = app
         .store
         .write(move |w| {
             if ci.stopping() {
-                return Ok((None, None));
+                return Ok((None, None, false));
             }
-            queue::claim_images(w, &runner, lease_secs, &at, &images, limits, machine)
+            let (claimed, waiting) =
+                queue::claim_images(w, &runner, lease_secs, &at, &images, limits, machine)?;
+            let cache_write = match claimed.as_ref() {
+                Some(claim) if limits.cache_max_mib > 0 => queue::keeps_cache(w, &claim.attempt)?,
+                _ => false,
+            };
+            Ok((claimed, waiting, cache_write))
         })
         .await?;
     app.ci.report_resource_wait(c.name(), reported_at, waiting);
@@ -462,7 +487,6 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
             artifacts_max_mib: app.ci.config().executor.artifacts_max_mib,
         },
         attempt_id: a.id.clone(),
-        purpose: a.purpose,
         lease: cl.lease.clone(),
         expires_at: a.lease_expires_at.clone().unwrap_or_default(),
         lease_secs,
@@ -472,7 +496,7 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
         attempt: a.number,
         job: a.job.clone(),
         verified_sha: a.verified_sha.clone(),
-        cache_scope: a.cache_scope.clone(),
+        cache_write,
         network: a.network,
         queued_secs: chrono::DateTime::parse_from_rfc3339(&a.created_at)
             .map_or(0, |t| (now - t.to_utc()).num_seconds().max(0) as u64),
@@ -779,8 +803,6 @@ struct FinishInput {
     peak_memory_mib: Option<u64>,
     reused_from: Option<String>,
     cache_key: Option<String>,
-    #[serde(default)]
-    refresh_cache: bool,
 }
 
 async fn finish(
@@ -797,7 +819,6 @@ async fn finish(
         )));
     }
     let now = util::now();
-    let queue_max = app.ci.config().queue_max;
     let a = app
         .store
         .write(move |w| {
@@ -812,9 +833,7 @@ async fn finish(
                     peak_memory_mib: input.peak_memory_mib,
                     reused_from: input.reused_from,
                     cache_key: input.cache_key,
-                    refresh_cache: input.refresh_cache,
                 },
-                queue_max,
                 &now,
             )
         })
@@ -833,6 +852,7 @@ loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
     ("/runner/images", (get, images, MemberSession)),
     ("/runner/images/{id}", (get, image_archive, MemberSession)),
     ("/runner/health", (get, runner_health, MemberSession)),
+    ("/runner/cache", (post, runner_cache, MemberSession)),
     ("/runner/claim", (post, claim, MemberSession)),
     ("/runner/attempts/{id}/source", (get, source, MemberSession)),
     ("/runner/attempts/{id}/heartbeat", (post, heartbeat, MemberSession)),
@@ -946,7 +966,6 @@ mod tests {
                         "failure",
                         None,
                         queue::ResultInfo::default(),
-                        10,
                         &now,
                     )
                 })

@@ -1008,7 +1008,7 @@ mod tests {
                 }, 10, "2026-01-01T00:00:00Z")?;
                 let mut number = 0;
                 while let Some(c) = queue::claim(w, "runner", 60, "2026-01-01T00:00:00Z")? {
-                    queue::finish(w, &c.attempt.id, &c.lease, if success && number > 0 { "success" } else { "failure" }, None, queue::ResultInfo::default(), 10, "2026-01-01T00:00:00Z")?;
+                    queue::finish(w, &c.attempt.id, &c.lease, if success && number > 0 { "success" } else { "failure" }, None, queue::ResultInfo::default(), "2026-01-01T00:00:00Z")?;
                     number += 1;
                 }
                 assert_eq!(number, if success { 2 } else { 4 });

@@ -228,7 +228,6 @@ mod tests {
                         conclusion,
                         None,
                         queue::ResultInfo::default(),
-                        10,
                         end,
                     )?;
                 }

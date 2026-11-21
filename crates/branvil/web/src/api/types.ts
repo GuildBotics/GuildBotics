@@ -422,7 +422,6 @@ export interface Check {
   details?: string;
   artifact_names?: string[];
   reused_from?: ReusedFrom;
-  cache_refresh?: string;
   started_at?: string;
   finished_at?: string;
   /** For an unfinished check: how long the job took where it last succeeded before. */
@@ -456,8 +455,7 @@ export interface Branch {
 
 export interface Job {
   path_skip?: PathSkip | null;
-  purpose: "check" | "cache_refresh";
-  cache_refresh: string | null;
+  retry_supported: boolean;
   id: string;
   job: string;
   attempt: number;
