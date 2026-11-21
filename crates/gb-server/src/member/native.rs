@@ -2011,10 +2011,8 @@ pub(crate) mod tests {
                 );
                 calls[0].run_id.clone()
             };
-            let record = RunStore::open(&native.workspace)
-                .read(&run_id)
-                .unwrap()
-                .unwrap();
+            let runs = RunStore::open(&native.workspace);
+            let record = runs.read(&run_id).unwrap().unwrap();
             assert_eq!(
                 record.work_kind,
                 if mention { "ticket_mention" } else { "ticket" }
@@ -2087,7 +2085,16 @@ pub(crate) mod tests {
                     linked_url.as_ref().unwrap().as_str()
                 );
             }
-            assert!(ticket.candidates().await.unwrap().is_empty());
+            let next_slot = crate::scheduler::slot(
+                "routine",
+                "aiko",
+                &line,
+                "2026-11-05T12:01:00".parse().unwrap(),
+            );
+            let idle = runtime.command(&line, "routine", next_slot).await.unwrap();
+            assert!(idle.text_output.is_empty());
+            assert_eq!(driver.calls.lock().unwrap().len(), 1);
+            assert_eq!(runs.records().unwrap().len(), 1);
             cleanup.close();
             cleanup.wait().await;
         }
