@@ -2603,12 +2603,6 @@ pub(crate) mod tests {
             let fails_later = phase == "after";
             let root = tempfile::tempdir().unwrap();
             let native = fixture(root.path());
-            write_json(
-                &native
-                    .workspace
-                    .join(".guildbotics/config/team/members/aiko/member.yml"),
-                json!({"is_active":true,"routine_commands":["workflows/ticket_driven_workflow"],"message_channels":[{"name":"notify","chat":{"channel_id":"C1","notify_work_stops":true}}]}),
-            );
             let cleanup = tokio_util::task::TaskTracker::new();
             let (runtime, driver) = workflow_fixture(&native, root.path(), &cleanup, false);
             *driver.completion.lock().unwrap() = status;
@@ -2640,22 +2634,19 @@ pub(crate) mod tests {
                 assert_eq!(records[0].status, gb_observability::runs::RunState::Failed);
                 assert!(records[0].finished_at.is_some() && records[0].result.is_none());
             }
-            let notices = runtime
-                .chat
-                .as_ref()
-                .unwrap()
-                .list_channel_events("C1", Default::default())
-                .await
-                .unwrap()
-                .events;
+            let run_id = driver.calls.lock().unwrap()[0].run_id.clone();
+            let notice = runtime
+                .diagnostics()
+                .event(&run_id, "work_stop.notified")
+                .unwrap();
             let expected = source != "manual" && (failed || status != "done");
-            assert_eq!(notices.len(), usize::from(expected));
-            if let Some(notice) = notices.first() {
-                let payload = serde_json::to_value(notice.status.as_ref().unwrap()).unwrap();
+            assert_eq!(notice.is_some(), expected);
+            if let Some(notice) = notice {
+                let payload = &notice["payload"];
                 assert_eq!(payload["reason"], if failed { "failed" } else { status });
-                assert_eq!(payload["subject"], ticket.target.url);
-                let calls = driver.calls.lock().unwrap();
-                assert_eq!(payload["run_id"], calls[0].run_id);
+                assert_eq!(payload["url"], ticket.target.url);
+                assert_eq!(payload["run_id"], run_id);
+                assert_eq!(payload["delivered"], false);
             }
             let comments = runtime
                 .tickets

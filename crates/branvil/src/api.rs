@@ -80,6 +80,10 @@ impl DataApi {
     pub fn base_url(&self) -> &str {
         &self.app.base_url
     }
+    /// Send an embedding host notice through the owner's shared webhook.
+    pub async fn notify_owner(&self, text: &str) -> bool {
+        self.app.autoland.send(&self.app.secrets, text).await
+    }
     /// Act as the owner: the embedding host shares this process, so it is
     /// trusted without a token.
     pub fn owner(&self) -> MemberApi {

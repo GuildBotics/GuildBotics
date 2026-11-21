@@ -999,7 +999,6 @@ async fn a_member_is_read_saved_taken_out_of_the_workspace_and_deleted() {
             "is_active": false, "person_type": "agent", "git_email": "a@example.com", "roles": ["reviewer"],
             "character": {"archetype": "bold"}, "chat_channels": ["C09999999"],
             "chat_channel_participation": {"C09999999": "muted"},
-            "work_stop_notification_channels": ["C09999999"],
             "expected_revisions": read["revisions"]}),
         )
         .await;
@@ -1019,12 +1018,8 @@ async fn a_member_is_read_saved_taken_out_of_the_workspace_and_deleted() {
     assert_eq!(member["message_channels"][0]["name"], "C09999999");
     assert_eq!(
         member["message_channels"][0]["chat"],
-        json!({"enabled": true, "participation": "muted", "notify_work_stops": true,
+        json!({"enabled": true, "participation": "muted",
             "channel_name": "C09999999"})
-    );
-    assert_eq!(
-        f.get("/config/members/alice").await["work_stop_notification_channels"],
-        json!(["C09999999"])
     );
     let (status, _) = f.call("DELETE", "/config/members/alice", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
@@ -1328,33 +1323,23 @@ async fn a_member_save_refuses_a_schedule_without_five_fields_or_a_command() {
 }
 
 #[tokio::test]
-async fn member_form_normalizes_channels_policies_and_work_stop_destinations() {
+async fn member_form_normalizes_channels_and_policies() {
     let f = fixture();
     f.init().await;
     let mut form = agent("alice");
     form["chat_channels"] = json!([" #general ", "  ", "random"]);
     form["chat_channel_participation"] = json!({"#general": "social", "random": "muted"});
-    form["work_stop_notification_channels"] = json!([" #general ", "deleted", " "]);
     f.add(form).await;
     let member = f.read(&f.config().join("team/members/alice/member.yml"));
     let channels = member["message_channels"].as_array().unwrap();
     assert_eq!(channels.len(), 2);
     assert_eq!(channels[0]["name"], "general");
     assert_eq!(channels[0]["chat"]["participation"], "social");
-    assert_eq!(channels[0]["chat"]["notify_work_stops"], true);
-    assert_eq!(channels[1]["chat"]["notify_work_stops"], false);
     assert_eq!(channels[1]["chat"]["participation"], "muted");
     let read = f.get("/config/members/alice").await;
-    assert_eq!(read["work_stop_notification_channels"], json!(["general"]));
-    let mut cleared = agent("alice");
-    cleared["chat_channels"] = json!(["general", "random"]);
-    cleared["work_stop_notification_channels"] = json!([]);
-    cleared["expected_revisions"] = read["revisions"].clone();
-    let (status, _) = f.save("PUT", "/config/members/alice", cleared).await;
-    assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        f.get("/config/members/alice").await["work_stop_notification_channels"],
-        json!([])
+        read["chat_channel_participation"],
+        json!({"general":"social", "random":"muted"})
     );
 }
 
@@ -1372,7 +1357,7 @@ async fn chat_channels_fall_back_to_names_without_an_id_reading_chat() {
         assert_eq!(channel["channel_info"], json!({}));
         assert_eq!(
             channel["chat"],
-            json!({"enabled": true, "participation": "strict", "notify_work_stops": false,
+            json!({"enabled": true, "participation": "strict",
                 "channel_name": "C0123456789"})
         );
     }

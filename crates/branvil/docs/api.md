@@ -1328,17 +1328,24 @@ is polled when, and how conflicts are settled: `docs/architecture.md`,
 ### Webhook
 
 Branvil tells the webhook when an automatically landing pull request is ready to merge on the host, when a
-repair ticket is created after main verification fails, and when a scripted service
-update or activation stops. Its URL is a credential of another system:
+repair ticket is created after main verification fails, when member work stops for a person or
+reaches the automatic re-review limit, and when a scripted service update or activation stops. Its URL is a credential of another system:
 it is kept in the service's vault (not in the data directory), never returned,
 and not in backups.
 
 - `GET /api/v1/admin/webhook` → `{"set": true, "host": "hooks.slack.com",
   "problem": null}`: whether one is set, the host of its URL, and why the last
-  send failed (kept in memory; retried at the next look).
+  send failed (kept in memory).
 - `PUT /api/v1/admin/webhook` `{"url": "https://..."}` → the same. `400
   invalid` unless it is an `http` or `https` URL. It replaces the one set.
 - `DELETE /api/v1/admin/webhook` → the same, with `set: false`.
+
+GuildBotics sends one `{"text":"..."}` work-stop notice for `asking`, `blocked`,
+`failed`, or `review_limit`. The workspace language determines the text, which
+includes the member name, ticket or PR URL, and comment URL when available.
+The result of the run is independent of delivery. An unset webhook skips delivery.
+A failed attempt is recorded in run diagnostics and appears in `problem`; work-stop
+notices have no automatic retry.
 
 For every automatically published PR in an `auto_land` repository whose `next`
 is `owner_merge_host` and `notified_at` is empty, Branvil sends:

@@ -38,6 +38,7 @@ pub struct Runtime {
     pub roster: Vec<PublicMember>,
     pub channels: Vec<Subscription>,
     pub language: String,
+    branvil: Option<branvil::api::DataApi>,
     pub tickets: Option<Arc<TicketAgent>>,
     pub code: Option<Arc<CodeAgent>>,
     pub chat: Option<Arc<dyn ChatService>>,
@@ -279,6 +280,7 @@ impl Runtime {
                 person,
                 roster,
                 language: team.language,
+                branvil: native.branvil.clone(),
                 tickets,
                 code,
                 chat,
@@ -659,23 +661,24 @@ impl Runner for Runtime {
     }
     fn notify<'a>(&'a self, stop: WorkStop, trace: &'a Trace) -> Pending<'a, ()> {
         Box::pin(async move {
-            let Some(chat) = self.chat.as_deref() else {
-                return;
+            let delivered = match &self.branvil {
+                Some(branvil) => {
+                    let message = work_stops::message(&self.person, &stop, &self.language);
+                    branvil.notify_owner(&message).await
+                }
+                None => false,
             };
-            work_stops::notify(
-                chat,
-                &self.person,
-                &self.channels,
-                &stop,
-                &self.language,
-                &|payload| {
-                    trace.event(
-                        "work_stop.notified",
-                        serde_json::from_value(payload).unwrap(),
-                    );
-                },
-            )
-            .await;
+            trace.event(
+                "work_stop.notified",
+                serde_json::from_value(json!({
+                    "run_id": stop.run_id,
+                    "reason": stop.reason,
+                    "url": stop.url,
+                    "comment_url": stop.comment_url,
+                    "delivered": delivered,
+                }))
+                .unwrap(),
+            );
         })
     }
     fn completed<'a>(
@@ -1047,6 +1050,168 @@ mod tests {
         assert_eq!(diagnostics[0]["payload"]["url"], "");
         assert_eq!(diagnostics[0]["payload"]["waiting_for"], json!(["aiko"]));
         assert!(!workspace.join(".guildbotics/state/events").exists());
+    }
+
+    #[tokio::test]
+    async fn work_stops_send_one_localized_notice_via_the_owner_webhook() {
+        use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+        use branvil::test_support::{Fixture, OWNER_TOKEN};
+
+        let fixture = Fixture::new("owner").await;
+        let mut runtime = crate::test_chat::runtime(fixture.root());
+        runtime.branvil = Some(fixture.data());
+        runtime.chat = None;
+        let received = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let destination = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new()
+            .route(
+                "/hook",
+                post(
+                    |State(received): State<Arc<std::sync::Mutex<Vec<Value>>>>,
+                     Json(value): Json<Value>| async move {
+                        received.lock().unwrap().push(value);
+                        StatusCode::NO_CONTENT
+                    },
+                ),
+            )
+            .route(
+                "/reject",
+                post(|| async { StatusCode::SERVICE_UNAVAILABLE }),
+            )
+            .with_state(received.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let endpoint = format!("{}/api/v1/admin/webhook", fixture.data().base_url());
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let put = |path: &str| {
+            http.put(&endpoint)
+                .bearer_auth(OWNER_TOKEN)
+                .json(&json!({"url": format!("{destination}{path}")}))
+                .send()
+        };
+        let status = || async {
+            http.get(&endpoint)
+                .bearer_auth(OWNER_TOKEN)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        };
+
+        let url = "http://example.test/repo/-/tickets/90";
+        let comment = "http://example.test/repo/-/tickets/90#comment";
+        let task = Task {
+            url: Some(url.into()),
+            label: "#90".into(),
+            title: "Task".into(),
+            ..Default::default()
+        };
+        for path in [None, Some("/reject")] {
+            if let Some(path) = path {
+                put(path).await.unwrap().error_for_status().unwrap();
+            }
+            let record: RunRecord = serde_json::from_value(json!({
+                "run_id": if path.is_some() { "rejected" } else { "unconfigured" },
+                "work_kind": "ticket", "execution_mode": "autonomous",
+                "member_id": "aiko", "device_id": "device", "status": "succeeded",
+                "started_at": "2026-11-05T00:00:00Z", "finished_at": "2026-11-05T00:01:00Z",
+                "result": {"subject_type":"ticket", "subject_id":"90", "status":"asking"}
+            }))
+            .unwrap();
+            let run_id = record.run_id.clone();
+            let original = runtime
+                .writes
+                .transaction(|writer| {
+                    RunStore::open(&runtime.dispatcher.workspace).start(
+                        writer,
+                        record,
+                        &runtime.redactor,
+                    )
+                })
+                .unwrap();
+            let diagnostics = runtime.diagnostics();
+            let trace = Trace::open(&diagnostics, "test");
+            Runner::completed(&runtime, &task, &run_id, &trace).await;
+
+            let stored = serde_json::to_value(runtime.record(&run_id).unwrap().unwrap()).unwrap();
+            assert_eq!(stored, serde_json::to_value(original).unwrap());
+            let notice = diagnostics
+                .event(trace.id(), "work_stop.notified")
+                .unwrap()
+                .unwrap();
+            assert_eq!(notice["payload"]["delivered"], false);
+            assert_eq!(notice["payload"]["reason"], "asking");
+            let view = status().await;
+            assert_eq!(view["set"], path.is_some());
+            assert_eq!(
+                view["problem"],
+                if path.is_some() {
+                    json!("the webhook answered 503 Service Unavailable")
+                } else {
+                    Value::Null
+                }
+            );
+        }
+        assert!(received.lock().unwrap().is_empty());
+
+        put("/hook").await.unwrap().error_for_status().unwrap();
+        for (reason, english, japanese) in [
+            ("asking", "asked a question", "質問し"),
+            ("blocked", "cannot go on", "作業を進められず"),
+            ("failed", "after an error", "エラーで止め"),
+            (
+                "review_limit",
+                "automatic re-review limit",
+                "自動再レビュー上限",
+            ),
+        ] {
+            for (language, phrase, comment_label) in [
+                ("en", english, "The member's comment"),
+                ("ja", japanese, "メンバーのコメント"),
+            ] {
+                runtime.language = language.into();
+                let mut task = task.clone();
+                let expected_url = if reason == "review_limit" {
+                    let pr = "http://example.test/repo/-/pulls/90";
+                    task.pull_request_url = Some(pr.into());
+                    task.label = "!90".into();
+                    pr
+                } else {
+                    url
+                };
+                let diagnostics = runtime.diagnostics();
+                let trace = Trace::open(&diagnostics, "test");
+                let stop = WorkStop::of(&task, reason, trace.id(), comment);
+                Runner::notify(&runtime, stop, &trace).await;
+
+                let mut messages = received.lock().unwrap();
+                assert_eq!(messages.len(), 1);
+                let notice = messages.pop().unwrap();
+                let text = notice["text"].as_str().unwrap();
+                assert!(text.starts_with(&runtime.person.name), "{text}");
+                assert!(text.contains(&format!("{} Task", task.label)), "{text}");
+                assert!(text.contains(phrase), "{text}");
+                assert!(
+                    text.contains(&format!("{expected_url}\n{comment_label}: {comment}")),
+                    "{text}"
+                );
+                assert_eq!(
+                    diagnostics
+                        .event(trace.id(), "work_stop.notified")
+                        .unwrap()
+                        .unwrap()["payload"]["delivered"],
+                    true
+                );
+            }
+        }
+        assert!(status().await["problem"].is_null());
+        server.abort();
+        let _ = server.await;
+        fixture.stop().await;
     }
 
     #[test]

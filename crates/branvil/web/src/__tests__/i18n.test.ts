@@ -19,6 +19,8 @@ describe("i18n", () => {
     expect(dictionaries.en["notifications.help"]).toContain("once per PR");
     expect(dictionaries.ja["notifications.help"]).toContain("修復チケット");
     expect(dictionaries.en["notifications.help"]).toContain("repair ticket");
+    expect(dictionaries.ja["notifications.help"]).toContain("作業が人の対応を待って止まった");
+    expect(dictionaries.en["notifications.help"]).toContain("member work stops");
   });
 
   it("has no empty messages and the same placeholders in both languages", () => {

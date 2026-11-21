@@ -315,7 +315,7 @@ describe("settings", () => {
     await waitFor(() => expect(fake.calls("PUT", "/api/v1/admin/webhook")).toHaveLength(1));
     expect(fake.calls("PUT", "/api/v1/admin/webhook")[0]?.body).toEqual({ url: secret });
     expect(await screen.findByText("Set (hooks.example.test)")).toBeInTheDocument();
-    expect(screen.getByText("The last send failed (retried): the webhook answered 500 Internal Server Error")).toBeInTheDocument();
+    expect(screen.getByText("The last send failed: the webhook answered 500 Internal Server Error")).toBeInTheDocument();
     // The URL is gone from the page once saved; the field shows that one is saved.
     expect(within(form).getByLabelText("Webhook URL")).toHaveValue("");
     expect(within(form).getByLabelText("Webhook URL")).toHaveAttribute("placeholder", "••••••••••••");

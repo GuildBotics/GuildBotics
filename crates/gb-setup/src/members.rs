@@ -108,8 +108,6 @@ pub struct PersonSetupInput {
     #[serde(default)]
     pub chat_channels: Vec<String>,
     #[serde(default)]
-    pub work_stop_notification_channels: Vec<String>,
-    #[serde(default)]
     pub chat_channel_participation: BTreeMap<String, String>,
     #[serde(default)]
     pub routine_commands: Vec<String>,
@@ -128,16 +126,12 @@ impl PersonSetupInput {
         if self.person_name.is_empty() {
             return Err(invalid("person_name is required"));
         }
-        for channels in [
-            &mut self.chat_channels,
-            &mut self.work_stop_notification_channels,
-        ] {
-            *channels = channels
-                .iter()
-                .map(|c| channel_name(c))
-                .filter(|c| !c.is_empty())
-                .collect();
-        }
+        self.chat_channels = self
+            .chat_channels
+            .iter()
+            .map(|c| channel_name(c))
+            .filter(|c| !c.is_empty())
+            .collect();
         self.chat_channel_participation = self
             .chat_channel_participation
             .iter()
@@ -167,7 +161,6 @@ pub struct PersonSnapshot {
     pub character: Map<String, Value>,
     pub accounts: Map<String, Value>,
     pub chat_channels: Vec<String>,
-    pub work_stop_notification_channels: Vec<String>,
     pub chat_channel_participation: BTreeMap<String, String>,
     pub routine_commands: Vec<String>,
     pub task_schedules: Vec<TaskSchedule>,
@@ -416,7 +409,7 @@ impl Setup<'_> {
                     (provider, view)
                 })
                 .collect();
-            let (mut channels, mut notified, mut policies) = (vec![], vec![], BTreeMap::new());
+            let (mut channels, mut policies) = (vec![], BTreeMap::new());
             for channel in participation
                 .get("message_channels")
                 .and_then(Value::as_array)
@@ -429,9 +422,6 @@ impl Setup<'_> {
                     continue;
                 }
                 let chat = object(channel.get("chat"));
-                if chat.get("notify_work_stops") == Some(&Value::Bool(true)) {
-                    notified.push(channel_name(&name));
-                }
                 let policy = chat.get("participation").and_then(Value::as_str);
                 policies.insert(name.clone(), participation_policy(policy).to_owned());
                 channels.push(name);
@@ -481,7 +471,6 @@ impl Setup<'_> {
                 character: object(object(identity.get("profile")).get("character")),
                 accounts,
                 chat_channels: channels,
-                work_stop_notification_channels: notified,
                 chat_channel_participation: policies,
                 routine_commands,
                 task_schedules,
@@ -625,7 +614,6 @@ impl Setup<'_> {
                 let mut settings = json!({
                     "enabled": true,
                     "participation": participation_policy(policy),
-                    "notify_work_stops": input.work_stop_notification_channels.contains(channel),
                 });
                 settings.as_object_mut().unwrap().extend(chat.clone());
                 channels.push(json!({

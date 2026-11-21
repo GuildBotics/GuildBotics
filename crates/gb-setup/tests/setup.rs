@@ -423,7 +423,6 @@ fn saves_separate_documents_and_identity_secrets_and_reports_revisions() {
         .save(json!({"person_id": "a", "person_name": "Ann", "person_type": "agent",
             "git_email": "ann@example.com", "roles": ["architect:"], "character": {"archetype": "x"},
             "chat_channels": ["#C01", " general ", "  "], "chat_channel_participation": {"#C01": "social"},
-            "work_stop_notification_channels": [" #C01 ", "deleted"],
             "accounts": {"alpha": {"user": "ann", "token": "secret-value"}}}))
         .unwrap();
     let identity_text =
@@ -445,10 +444,10 @@ fn saves_separate_documents_and_identity_secrets_and_reports_revisions() {
         json!([
             {"name": "C01", "used_as": ["internal_communication"], "used_by": ["a"],
              "channel_info": {"channel_id": "C01"},
-             "chat": {"enabled": true, "participation": "social", "notify_work_stops": true, "channel_id": "C01"}},
+             "chat": {"enabled": true, "participation": "social", "channel_id": "C01"}},
             {"name": "general", "used_as": ["internal_communication"], "used_by": ["a"],
              "channel_info": {},
-             "chat": {"enabled": true, "participation": "strict", "notify_work_stops": false, "channel_name": "general"}},
+             "chat": {"enabled": true, "participation": "strict", "channel_name": "general"}},
         ])
     );
     assert_eq!(world.identity_secrets()["A_ALPHA_TOKEN"], "secret-value");
@@ -458,19 +457,6 @@ fn saves_separate_documents_and_identity_secrets_and_reports_revisions() {
     assert_eq!(
         receipt.revisions.keys().collect::<Vec<_>>(),
         ["team/members/a/identity.yml", "team/members/a/member.yml"]
-    );
-    assert_eq!(read.work_stop_notification_channels, ["C01"]);
-    // Cleared, no channel is a destination any more.
-    let mut form = json!({"person_id": "a", "person_name": "Ann", "chat_channels": ["C01"]});
-    form["work_stop_notification_channels"] = json!([]);
-    world.save(form).unwrap();
-    assert!(
-        world
-            .setup()
-            .read_member("a")
-            .unwrap()
-            .work_stop_notification_channels
-            .is_empty()
     );
 }
 

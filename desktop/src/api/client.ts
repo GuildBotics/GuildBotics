@@ -702,7 +702,6 @@ type MemberWriteRequestBase = {
   /** The member's account with each provider, by the provider's name. */
   accounts?: Record<string, Record<string, unknown>>;
   chat_channels?: string[];
-  work_stop_notification_channels?: string[];
   chat_channel_participation?: Record<string, ChatParticipationPolicy>;
   routine_commands?: string[];
   task_schedules?: MemberTaskSchedule[];
@@ -730,7 +729,6 @@ export type MemberConfig = {
   /** The member's stored account with each provider, as its setup shows it. */
   accounts: Record<string, Record<string, unknown>>;
   chat_channels: string[];
-  work_stop_notification_channels: string[];
   chat_channel_participation: Record<string, ChatParticipationPolicy>;
   routine_commands: string[];
   task_schedules: MemberTaskSchedule[];

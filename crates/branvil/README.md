@@ -61,9 +61,9 @@ outside see. Branvil never pushes the default branch; it follows it.
    once it meets the conditions. Once the published head's host checks succeed
    and no more can arrive, Branvil tells the webhook once per PR head, with
    links to both pull requests. Failed host checks are reported in a comment.
-   Under
-   Settings → Notifications, the owner enters its URL (a Slack Incoming Webhook takes the
-   message as it is), which is kept like a credential and never shown again.
+   Under **Settings → Notifications**, the owner enters the webhook URL. For
+   Slack, use an Incoming Webhook for a channel that no member watches. Branvil
+   keeps the URL like a credential and never shows it again.
    Creating a repair ticket after main verification fails sends one notice with
    the failed jobs, commit range, ticket URL and assignee to this webhook.
 

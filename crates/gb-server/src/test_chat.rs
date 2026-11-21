@@ -38,9 +38,6 @@ pub fn runtime(root: &std::path::Path) -> crate::workflow_runtime::Runtime {
     .unwrap()
     .0
 }
-pub fn local(root: &std::path::Path) -> Arc<dyn ChatService> {
-    runtime(root).chat.unwrap()
-}
 impl Faults {
     pub fn new(inner: Arc<dyn ChatService>) -> Self {
         Self {

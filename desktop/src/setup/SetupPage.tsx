@@ -267,7 +267,6 @@ type MemberType = (typeof MEMBER_TYPE_OPTIONS)[number];
 type ChatChannelDraft = {
   name: string;
   participation: ChatParticipationPolicy;
-  notifyWorkStops: boolean;
 };
 const CHAT_PARTICIPATION_OPTIONS = ["social", "strict", "muted"] as const;
 /** The providers whose accounts a member form holds, whatever the project uses. */
@@ -3190,9 +3189,6 @@ function MembersSection({
       member.chat_channels.map((name) => ({
         name,
         participation: member.chat_channel_participation[normalizeChatChannel(name)] ?? "strict",
-        notifyWorkStops: member.work_stop_notification_channels
-          .map(normalizeChatChannel)
-          .includes(normalizeChatChannel(name)),
       })),
     );
     setChatChannelInput("");
@@ -3520,7 +3516,6 @@ function MembersSection({
       {
         name: channel,
         participation: existing?.participation ?? "strict",
-        notifyWorkStops: existing?.notifyWorkStops ?? false,
       },
     ]);
     setChatChannelInput("");
@@ -3567,55 +3562,45 @@ function MembersSection({
         <Stack gap="sm">
           {chatChannelDrafts.map((channel, index) => {
             return (
-              <Stack key={index} gap="xs">
-                <Group align="start">
-                  <TextInput
-                    className="member-chat-channel-input"
-                    label={t("setup.members.chatParticipationChannel")}
-                    value={channel.name}
-                    onChange={(event) =>
-                      updateChatChannel(index, { name: event.currentTarget.value })
-                    }
-                  />
-                  <Select
-                    className="member-chat-policy-select"
-                    label={t("setup.members.chatParticipationPolicy")}
-                    data={CHAT_PARTICIPATION_OPTIONS.map((option) => ({
-                      value: option,
-                      label: t(`setup.members.chatParticipationOptions.${option}`),
-                    }))}
-                    value={channel.participation}
-                    onChange={(value) =>
-                      updateChatChannel(index, { participation: toChatParticipationPolicy(value) })
-                    }
-                    renderOption={({ option }) => (
-                      <Stack gap={2}>
-                        <Text size="sm">{option.label}</Text>
-                        <Text size="xs" c="dimmed">
-                          {t(`setup.members.chatParticipationDescriptions.${option.value}`)}
-                        </Text>
-                      </Stack>
-                    )}
-                  />
-                  <ActionIcon
-                    aria-label={t("setup.members.chatChannelRemove")}
-                    color="danger"
-                    mt={25}
-                    variant="subtle"
-                    onClick={() => removeChatChannel(index)}
-                  >
-                    <Trash2 size={16} />
-                  </ActionIcon>
-                </Group>
-                <Switch
-                  label={t("setup.members.workStopNotifications")}
-                  description={t("setup.members.workStopNotificationsHint")}
-                  checked={channel.notifyWorkStops}
+              <Group key={index} align="start">
+                <TextInput
+                  className="member-chat-channel-input"
+                  label={t("setup.members.chatParticipationChannel")}
+                  value={channel.name}
                   onChange={(event) =>
-                    updateChatChannel(index, { notifyWorkStops: event.currentTarget.checked })
+                    updateChatChannel(index, { name: event.currentTarget.value })
                   }
                 />
-              </Stack>
+                <Select
+                  className="member-chat-policy-select"
+                  label={t("setup.members.chatParticipationPolicy")}
+                  data={CHAT_PARTICIPATION_OPTIONS.map((option) => ({
+                    value: option,
+                    label: t(`setup.members.chatParticipationOptions.${option}`),
+                  }))}
+                  value={channel.participation}
+                  onChange={(value) =>
+                    updateChatChannel(index, { participation: toChatParticipationPolicy(value) })
+                  }
+                  renderOption={({ option }) => (
+                    <Stack gap={2}>
+                      <Text size="sm">{option.label}</Text>
+                      <Text size="xs" c="dimmed">
+                        {t(`setup.members.chatParticipationDescriptions.${option.value}`)}
+                      </Text>
+                    </Stack>
+                  )}
+                />
+                <ActionIcon
+                  aria-label={t("setup.members.chatChannelRemove")}
+                  color="danger"
+                  mt={25}
+                  variant="subtle"
+                  onClick={() => removeChatChannel(index)}
+                >
+                  <Trash2 size={16} />
+                </ActionIcon>
+              </Group>
             );
           })}
         </Stack>
@@ -3654,11 +3639,6 @@ function MembersSection({
         ]),
       ),
       chat_channels: isHumanMember ? [] : chatChannels,
-      work_stop_notification_channels: isHumanMember
-        ? []
-        : chatChannelDrafts
-            .filter((channel) => channel.notifyWorkStops)
-            .map((channel) => normalizeChatChannel(channel.name)),
       chat_channel_participation: isHumanMember
         ? {}
         : Object.fromEntries(
