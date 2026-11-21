@@ -703,10 +703,11 @@ Per job the runner:
 3. when the cache has an entry for the job, puts a copy of its image at
    `<work dir>/jobs/<attempt id>/cache-disk.raw`; creates the disk of `/work`
    (`msb volume create bv-work-<runner>-<attempt> --kind disk --size SM`),
-   and makes the copy, grown to `S` (the space it gains takes no blocks),
-   that volume's disk (a rename). An entry that holds no ext4 file system is
-   not used. When a
-   cached path goes through a symbolic link of the commit (unpacking the
+   grows the copy to `S` (the space it gains takes no blocks), then tries
+   to rename it into place as the volume's disk and falls back to copying
+   if the rename fails.
+   An entry that holds no ext4 file system is not used. When a cached path
+   goes through a symbolic link of the commit (unpacking the
    checkout over an entry would write through it), the job neither uses nor
    keeps an entry; the runner decides this from the commit's index, byte
    for byte, not from what its machine's file system made of the checkout,
@@ -770,9 +771,13 @@ Per job the runner:
    selection as artifacts and leaving `/work` intact. When both tar
    commands and `sync` succeed, the VM records the KiB used on the new
    file system. After the VM ends, the runner flushes the image file and
-   hard-links it to `cache-disk.raw`. If disk creation, the copy inside the
-   VM, or the link fails, the runner logs the skipped save. Artifact
-   collection and the job conclusion are independent of those failures.
+   hard-links it to `cache-disk.raw`. The volume image under the
+   microsandbox home (`MSB_HOME` on external runners) and the `jobs/`
+   and `cache/` subdirectories of the runner's work directory must be on
+   the same file system so the runner can link and stage the image. If disk
+   creation, the copy inside the VM, or the link fails, the runner logs the
+   skipped save. Artifact collection and the job conclusion are independent
+   of those failures.
    A failure of the script itself (a `/work` that is not there, a mark that
    cannot be removed, a rename) fails the VM (`set -e`). The artifacts' archive is named only once it was packed
    whole, so it stays even when the VM failed or was stopped later; the
