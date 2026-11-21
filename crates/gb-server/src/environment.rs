@@ -1019,8 +1019,8 @@ fn upkeep_decision(view: &Value, last_problem: &mut String) -> (bool, Option<Str
 /// pass keeps up the workspace selected then. The server cancels it as it
 /// stops.
 pub(crate) async fn upkeep(api: Shared) {
-    // Linux guests used by CI have no nested KVM. They still report state,
-    // but cannot start the runtime's background build microVM here.
+    // Some Linux guests expose nested KVM. Those without the device can still
+    // report environment state, but cannot start a background build microVM.
     #[cfg(target_os = "linux")]
     if !std::path::Path::new("/dev/kvm").exists() {
         return;

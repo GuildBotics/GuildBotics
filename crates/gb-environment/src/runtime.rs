@@ -1458,16 +1458,20 @@ pub async fn build_snapshot(
         nameservers,
     )?;
     let images = home.join(IMAGE_LOCK);
-    let boot = async move {
-        reclaim_build_vms(&prefix).await?;
+    // The SDK futures make debug-build poll frames too large for a worker's
+    // stack if they are stored inline across the lifecycle's selects.
+    let boot = Box::pin(async move {
+        Box::pin(reclaim_build_vms(&prefix)).await?;
         let vm = boot_holding(&images, async move {
-            OwnedVm::start(builder, ()).await.map_err(|e| e.to_string())
+            Box::pin(OwnedVm::start(builder, ()))
+                .await
+                .map_err(|e| e.to_string())
         })
         .await?;
         let (sandbox, cleanup) = vm.into_parts();
         Ok((sandbox, move || cleanup.finish()))
-    };
-    build_lifecycle(boot, cancelled, |guest| async move {
+    });
+    let run = |guest: Sandbox| async move {
         let built = serde_json::to_value(guest.config()).map_err(|e| e.to_string())?;
         let manifest = built["manifest_digest"]
             .as_str()
@@ -1537,8 +1541,8 @@ pub async fn build_snapshot(
             },
         )
         .await
-    })
-    .await
+    };
+    build_lifecycle(boot, cancelled, |guest| Box::pin(run(guest))).await
 }
 
 #[cfg(test)]
@@ -1558,6 +1562,41 @@ mod build_tests {
                 },
             ],
         }
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_snapshot_build_can_report_a_missing_local_image_on_a_worker() {
+        let workspace = tempfile::tempdir().unwrap();
+        let home = workspace.path().join("runtime");
+        gb_vm::ensure(&home).unwrap();
+        let recipe = recipe();
+        let missing = "local/missing-stack-fixture:1";
+        let result = crate::snapshot::build(
+            workspace.path(),
+            &recipe.name(None),
+            "snapshot build timed out".into(),
+            move |directory, cancelled| async move {
+                Box::pin(build_snapshot(
+                    Build {
+                        home: &home,
+                        directory: &directory,
+                        recipe: &recipe,
+                        image: missing,
+                        pull: false,
+                        resources: gb_config::agent_environment::Resources {
+                            memory_mib: 512,
+                            cpus: 1,
+                        },
+                        nameservers: &[],
+                    },
+                    |_| {},
+                    cancelled,
+                ))
+                .await
+            },
+        )
+        .await;
+        let error = result.unwrap_err();
+        assert!(error.contains(missing), "{error}");
     }
     #[tokio::test]
     async fn next_build_reclaims_its_crashed_generations_and_disks_across_all_pages() {

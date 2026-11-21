@@ -2074,20 +2074,6 @@ async fn serving(
     (port, stop, served)
 }
 
-/// Sends `body` to `uri` of the server on `port` and goes away before it
-/// is answered.
-async fn leave(f: &Fixture, port: u16, uri: &str, body: Value) {
-    let sent = reqwest::Client::new()
-        .post(format!("http://127.0.0.1:{port}/-/guildbotics/api{uri}"))
-        .header("host", "127.0.0.1:8765")
-        .bearer_auth(&f.token)
-        .json(&body)
-        .timeout(Duration::from_millis(300))
-        .send()
-        .await;
-    assert!(sent.unwrap_err().is_timeout(), "{uri} answered");
-}
-
 #[tokio::test]
 async fn a_stopping_server_waits_for_the_switch_its_client_left() {
     let f = fixture();
@@ -2097,11 +2083,45 @@ async fn a_stopping_server_waits_for_the_switch_its_client_left() {
         gb_base::files::FileLock::hold(&f.data().join("workspaces.lock"), Duration::from_secs(1))
             .unwrap();
     let (port, stop, served) = serving(&f).await;
-    leave(&f, port, "/workspace", json!({"workspace_dir": other})).await;
-    assert!(f.api.admit().is_none(), "the switch is under way");
+    {
+        let request = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .post(format!(
+                "http://127.0.0.1:{port}/-/guildbotics/api/workspace"
+            ))
+            .header("host", "127.0.0.1:8765")
+            .bearer_auth(&f.token)
+            .json(&json!({"workspace_dir": other}))
+            .send();
+        let switching = async {
+            while f.api.admit().is_some() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        // Selecting admission drops the HTTP request while the registry is still locked.
+        tokio::select! {
+            reply = request => panic!("workspace request ended before switching: {reply:?}"),
+            admitted = tokio::time::timeout(Duration::from_secs(10), switching) => {
+                admitted.expect("the switch acquired admission");
+            }
+        }
+    }
     stop.cancel();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !f.api.work.is_closed() {
+            assert!(
+                !served.is_finished(),
+                "the server exited before draining work"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the server started draining work");
     assert!(!served.is_finished(), "the server waits for the switch");
+    assert_eq!(f.api.work.len(), 1, "the switch is still tracked");
     drop(registry);
     served.await.unwrap();
     assert_eq!(f.api.selected().workspace, Some(other.clone()));
