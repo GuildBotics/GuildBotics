@@ -1458,16 +1458,20 @@ pub async fn build_snapshot(
         nameservers,
     )?;
     let images = home.join(IMAGE_LOCK);
-    let boot = async move {
-        reclaim_build_vms(&prefix).await?;
+    // The SDK futures make debug-build poll frames too large for a worker's
+    // stack if they are stored inline across the lifecycle's selects.
+    let boot = Box::pin(async move {
+        Box::pin(reclaim_build_vms(&prefix)).await?;
         let vm = boot_holding(&images, async move {
-            OwnedVm::start(builder, ()).await.map_err(|e| e.to_string())
+            Box::pin(OwnedVm::start(builder, ()))
+                .await
+                .map_err(|e| e.to_string())
         })
         .await?;
         let (sandbox, cleanup) = vm.into_parts();
         Ok((sandbox, move || cleanup.finish()))
-    };
-    build_lifecycle(boot, cancelled, |guest| async move {
+    });
+    let run = |guest: Sandbox| async move {
         let built = serde_json::to_value(guest.config()).map_err(|e| e.to_string())?;
         let manifest = built["manifest_digest"]
             .as_str()
@@ -1537,8 +1541,8 @@ pub async fn build_snapshot(
             },
         )
         .await
-    })
-    .await
+    };
+    build_lifecycle(boot, cancelled, |guest| Box::pin(run(guest))).await
 }
 
 #[cfg(test)]

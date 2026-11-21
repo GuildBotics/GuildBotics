@@ -136,6 +136,25 @@ impl Server {
         format!("http://127.0.0.1:{}{path}", self.port)
     }
 
+    async fn screen(&mut self, path: &str, authenticated: bool) -> reqwest::Response {
+        let mut request = self.http.get(self.url(path));
+        if authenticated {
+            request = request.bearer_auth(self.owner_token());
+        }
+        request.send().await.unwrap_or_else(|error| {
+            let status = match self.child.try_wait() {
+                Ok(Some(status)) => status.to_string(),
+                Ok(None) => "still running".to_owned(),
+                Err(error) => format!("unavailable: {error}"),
+            };
+            let stderr = self.stderr.try_iter().collect::<Vec<_>>().join("\n");
+            panic!(
+                "GET {path} (authenticated: {authenticated}): {error:?}\n\
+                 server child: {status}\nserver stderr:\n{stderr}"
+            );
+        })
+    }
+
     /// The URL the code host serves on, once it says it is ready.
     fn branvil_url(&self) -> String {
         while !self.ready.get() {
@@ -283,38 +302,23 @@ async fn command_and_diagnostics_screens_match_the_python_golden() {
         ));
     }
     for (url, expected) in urls {
-        let (status, _, actual) = body(
-            server
-                .http
-                .get(server.url(&url))
-                .bearer_auth(server.owner_token())
-                .send()
-                .await
-                .unwrap(),
-        )
-        .await;
+        let (status, _, actual) = body(server.screen(&url, true).await).await;
         assert_eq!(status, StatusCode::OK, "{url}: {actual}");
         assert_eq!(normalize(actual), expected, "{url}");
         assert_eq!(
-            server
-                .http
-                .get(server.url(&url))
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::UNAUTHORIZED
+            server.screen(&url, false).await.status(),
+            StatusCode::UNAUTHORIZED,
+            "{url}"
         );
     }
     for filter in ["limit=0", "limit=1001", "limit=invalid"] {
         assert_eq!(
             server
-                .http
-                .get(server.url(&format!("/-/guildbotics/api/diagnostics/traces?{filter}")))
-                .bearer_auth(server.owner_token())
-                .send()
+                .screen(
+                    &format!("/-/guildbotics/api/diagnostics/traces?{filter}"),
+                    true,
+                )
                 .await
-                .unwrap()
                 .status(),
             StatusCode::UNPROCESSABLE_ENTITY
         );
@@ -327,12 +331,11 @@ async fn command_and_diagnostics_screens_match_the_python_golden() {
     ] {
         let (_, _, actual) = body(
             server
-                .http
-                .get(server.url(&format!("/-/guildbotics/api/diagnostics/traces?{filter}")))
-                .bearer_auth(server.owner_token())
-                .send()
-                .await
-                .unwrap(),
+                .screen(
+                    &format!("/-/guildbotics/api/diagnostics/traces?{filter}"),
+                    true,
+                )
+                .await,
         )
         .await;
         assert_eq!(actual, json!({"traces":[]}));
