@@ -428,7 +428,7 @@ interface RetryDecision {
   failed_runner: string | null;
 }
 
-interface ResourceShortfall {
+export interface ResourceShortfall {
   cpu_shortfall: number;
   memory_shortfall_mib: number;
   commit_shortfall_mib?: number;

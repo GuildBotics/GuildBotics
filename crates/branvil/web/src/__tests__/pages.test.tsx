@@ -295,6 +295,40 @@ describe("pages", () => {
     expect(panel.getByRole("link", { name: "Previous attempt" })).toHaveAttribute("href", "/acme/demo/-/jobs/att_failed");
   });
 
+  it.each([
+    ["en", "windows is short by 4096 MiB of commit headroom", "windows has a vCPU shortfall of 2", "Runner change", "Failed on windows, passed on linux"],
+    ["ja", "windows でコミット残量が 4096 MiB 不足", "windows で vCPU 2 不足", "ランナーの切り替え", "windows で失敗し、linux で成功"],
+  ] as const)("shows current and recorded runner shortfalls and labels runner changes (%s)", async (language, commit, cpu, change, recovery) => {
+    const sha = "f".repeat(40);
+    const job = { job: "test", retry_supported: true, sha, artifact_names: [], reused_from: null };
+    fakeApi({
+      ...SHELL,
+      "GET /api/v1/repos/acme/demo/pulls": page([]),
+      [`GET /api/v1/repos/acme/demo/commits/${sha}`]: json(200, { sha, message: "PR commit", author: "Test", parents: [] }),
+      [`GET /api/v1/repos/acme/demo/commits/${sha}/checks`]: json(200, { sha, checks_expected: true, checks: [] }),
+      "GET /api/v1/repos/acme/demo/jobs/att_waiting": json(200, {
+        ...job, id: "att_waiting", attempt: 3, status: "queued", conclusion: null, runner: null,
+        retry_decision: { source_attempt: "att_passed", requested_by: "aiko", selection: { runner: "windows" } },
+        retry_wait: { reason: "resources", cpu_shortfall: 0, memory_shortfall_mib: 0, commit_shortfall_mib: 4096 },
+        runner_deferrals: { windows: { at: "2026-11-21T07:00:00Z", cpu_shortfall: 2, memory_shortfall_mib: 0 } },
+      }),
+      "GET /api/v1/repos/acme/demo/jobs/att_waiting/log": json(200, { log: "", log_bytes: 0, truncated: false }),
+      "GET /api/v1/repos/acme/demo/jobs/att_passed": json(200, {
+        ...job, id: "att_passed", attempt: 2, status: "completed", conclusion: "success", runner: "linux",
+        runner_recovery: { failed_attempt: "att_failed", failed_runner: "windows", successful_runner: "linux" },
+      }),
+      "GET /api/v1/repos/acme/demo/jobs/att_passed/log": json(200, { log: "", log_bytes: 0, truncated: false }),
+    });
+    renderApp("/acme/demo/-/jobs/att_waiting", language);
+    const drawer = within(await screen.findByRole("dialog", { name: /test/ }));
+    expect(await drawer.findByText(commit)).toBeInTheDocument();
+    expect(drawer.getByText((text, element) => element?.tagName === "DD" && text.endsWith(cpu))).toBeInTheDocument();
+    await userEvent.setup().click(drawer.getByRole("link", { name: language === "ja" ? "前の試行" : "Previous attempt" }));
+    const passed = within(await screen.findByRole("dialog", { name: /test/ }));
+    const label = await passed.findByText(change);
+    expect(within(label.nextElementSibling as HTMLElement).getByRole("link", { name: recovery })).toHaveAttribute("href", "/acme/demo/-/jobs/att_failed");
+  });
+
   it.each(["en", "ja"] as const)("disables manual retry on a historical attempt (%s)", async (language) => {
     const sha = "f".repeat(40);
     fakeApi({

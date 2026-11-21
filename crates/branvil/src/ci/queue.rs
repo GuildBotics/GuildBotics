@@ -1554,10 +1554,13 @@ pub fn claim_images(
                 memory_shortfall_mib: short.memory,
                 commit_shortfall_mib,
             };
-            if commit_shortfall_mib > 0
+            if (commit_shortfall_mib > 0
                 || a.retry_decision
                     .as_ref()
-                    .is_some_and(|retry| retry.selection.runner.is_some())
+                    .is_some_and(|retry| retry.selection.runner.is_some()))
+                && a.runner_deferrals
+                    .get(&runner.name)
+                    .is_none_or(|previous| previous.wait != wait)
             {
                 // Only the diagnostics change; the scheduling copy has updated
                 // run-derived fields and must not be persisted here.
@@ -2391,12 +2394,12 @@ mod tests {
                     ..limits()
                 };
                 let image = [held_image()];
-                let claim = |available_mib, started_attempts| {
+                let claim = |now: &str, available_mib, started_attempts| {
                     claim_images(
                         w,
                         "windows",
                         60,
-                        T0,
+                        now,
                         &image,
                         limits,
                         Some(Machine {
@@ -2411,7 +2414,7 @@ mod tests {
                     )
                 };
                 register(w, reg("sha", "main", &["first", "second"]), 10, T0)?;
-                let (unclaimed, wait) = claim(8191, vec![])?;
+                let (unclaimed, wait) = claim(T0, 8191, vec![])?;
                 assert!(unclaimed.is_none());
                 let wait = wait.unwrap();
                 assert_eq!(
@@ -2423,16 +2426,27 @@ mod tests {
                     (0, 0, 1)
                 );
 
-                let first = claim(12288, vec![])?.0.unwrap().attempt;
-                let (unclaimed, wait) = claim(12288, vec![])?;
+                let first = claim(T0, 12288, vec![])?.0.unwrap().attempt;
+                let (unclaimed, wait) = claim(T0, 12288, vec![])?;
                 assert!(unclaimed.is_none());
                 assert_eq!(wait.unwrap().commit_shortfall_mib, 4096);
 
-                let second = claim(8192, vec![first.id])?.0.unwrap().attempt;
+                let same = claim(&later(T0, 2), 12288, vec![])?.1.unwrap();
+                let unchanged = get_attempt(w, &same.attempt_id)?.unwrap();
+                assert_eq!(unchanged.runner_deferrals["windows"].at, T0);
+                assert_eq!(same.commit_shortfall_mib, 4096);
+
+                let updated_at = later(T0, 4);
+                let changed = claim(&updated_at, 13312, vec![])?.1.unwrap();
+                assert_eq!(changed.commit_shortfall_mib, 3072);
+                let second = claim(&later(T0, 6), 8192, vec![first.id])?
+                    .0
+                    .unwrap()
+                    .attempt;
                 assert_ne!(second.job.name, first.job.name);
                 let deferral = &second.runner_deferrals["windows"];
-                assert_eq!(deferral.at, T0);
-                assert_eq!(deferral.wait.commit_shortfall_mib, 4096);
+                assert_eq!(deferral.at, updated_at);
+                assert_eq!(deferral.wait.commit_shortfall_mib, 3072);
                 Ok(())
             })
             .unwrap();

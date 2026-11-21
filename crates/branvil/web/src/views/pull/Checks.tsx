@@ -9,6 +9,7 @@ import * as api from "../../api/endpoints";
 import type { Check, CheckSet, Job, PathSkip, PullRequest, ReusedFrom, RunnerRecovery, RunnerSelection } from "../../api/types";
 import { ErrorMessage, Loading, Sha, StateBadge, Time, type Tone } from "../../components/common";
 import { useT } from "../../i18n";
+import { resourceShortfallText } from "../../i18n/resourceShortfall";
 import { useChecks, useCommitChecks, useJob, useJobLog } from "../../query/hooks";
 import { keys } from "../../query/keys";
 import { Link } from "../../router/Router";
@@ -308,7 +309,7 @@ function RetryDetails({ repo, job }: { repo: string; job: Job }) {
           <dt>{t("ci.reason")}</dt>
           <dd>
             {wait.reason === "prefer_other" ? t("ci.retryWait.prefer_other", { name: retry.failed_runner ?? "", until: new Date(wait.until).toLocaleTimeString() }) :
-              wait.reason === "resources" ? t("ci.retryWait.resources", { name: runner ?? "", cpus: wait.cpu_shortfall, memory: wait.memory_shortfall_mib, commit: wait.commit_shortfall_mib ?? 0 }) :
+              wait.reason === "resources" ? resourceShortfallText(t, runner ?? "", wait) :
               t(`ci.retryWait.${wait.reason}`, { name: runner ?? "" })}
           </dd>
         </>
@@ -396,11 +397,11 @@ function JobDetails({ repo, attemptId, onAttempt }: { repo: string; attemptId: s
             <dt>{t("ci.runnerDeferral")}</dt>
             <dd>
               <Time value={wait.at} />{" · "}
-              {t("ci.retryWait.resources", { name, cpus: wait.cpu_shortfall, memory: wait.memory_shortfall_mib, commit: wait.commit_shortfall_mib ?? 0 })}
+              {resourceShortfallText(t, name, wait)}
             </dd>
           </div>
         ))}
-        {j.runner_recovery && <><dt>{t("ci.retry")}</dt><dd><RunnerRecoveryLink repo={repo} recovery={j.runner_recovery} /></dd></>}
+        {j.runner_recovery && <><dt>{t("ci.runnerChange")}</dt><dd><RunnerRecoveryLink repo={repo} recovery={j.runner_recovery} /></dd></>}
         <dt>{t("ci.artifacts")}</dt>
         <dd>
           {j.artifact_names.length === 0 ? (

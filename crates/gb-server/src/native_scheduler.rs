@@ -481,20 +481,23 @@ mod cycle_tests {
                     "main:main",
                 ],
             );
-            owner
-                .members_create(branvil::test_support::input(
-                    json!({"name":"runner1","kind":"runner"}),
-                ))
-                .await
-                .unwrap();
-            let token = owner
-                .members_issue_token(
-                    "runner1".into(),
-                    branvil::test_support::input(json!({"label":"fixture"})),
-                )
-                .await
-                .unwrap()
-                .token;
+            let mut tokens = Vec::new();
+            for name in ["runner1", "runner2"] {
+                owner
+                    .members_create(branvil::test_support::input(
+                        json!({"name":name,"kind":"runner"}),
+                    ))
+                    .await
+                    .unwrap();
+                let issued = owner
+                    .members_issue_token(
+                        name.into(),
+                        branvil::test_support::input(json!({"label":"fixture"})),
+                    )
+                    .await
+                    .unwrap();
+                tokens.push(issued.token);
+            }
             // Queued without an event; its claim announces the new main.
             branvil::test_support::check(
                 &fixture.data,
@@ -511,12 +514,21 @@ mod cycle_tests {
                 .timeout(std::time::Duration::from_secs(10))
                 .build()
                 .unwrap();
-            let claim = || async {
-                tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            let verification = || async {
+                current_verification(async || {
+                    serde_json::to_value(owner.repos_verification("acme/demo").await.unwrap())
+                        .unwrap()["current"]
+                        .clone()
+                })
+                .await
+            };
+            // An automatic retry first goes to a runner other than the one that failed.
+            for token in tokens.iter().cycle() {
+                let attempt = tokio::time::timeout(std::time::Duration::from_secs(15), async {
                     loop {
                         let response = client
                             .post(format!("{base}/claim"))
-                            .bearer_auth(&token)
+                            .bearer_auth(token)
                             .json(&json!({"executor":"microsandbox","executor_state":"ready","version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true,"architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","a".repeat(64))}]}))
                             .send()
                             .await
@@ -531,25 +543,14 @@ mod cycle_tests {
                     }
                 })
                 .await
-                .expect("the main check was never queued")
-            };
-            let verification = || async {
-                current_verification(async || {
-                    serde_json::to_value(owner.repos_verification("acme/demo").await.unwrap())
-                        .unwrap()["current"]
-                        .clone()
-                })
-                .await
-            };
-            loop {
-                let attempt = claim().await;
+                .expect("the runner was not offered the queued main check");
                 let before = verification().await["retry"]["number"].as_u64().unwrap();
                 client
                     .post(format!(
                         "{base}/attempts/{}/finish",
                         attempt["attempt_id"].as_str().unwrap()
                     ))
-                    .bearer_auth(&token)
+                    .bearer_auth(token)
                     .json(&json!({"lease":attempt["lease"],"conclusion":"failure","image_digest":format!("sha256:{}","2".repeat(64))}))
                     .send()
                     .await

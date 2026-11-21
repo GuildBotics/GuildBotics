@@ -1067,9 +1067,10 @@ is not the full sha of a commit of the repository.
   Retries include `retry_decision` with the source attempt, `requested_by`
   (null for automation), `selection`, `failed_runner`, and the automatic
   fallback time `prefer_other_until` when applicable. For queued retries,
-  `retry_wait` reports the runner wait reason. The latest resource deferral
-  per runner is kept in `runner_deferrals` for pinned attempts and for any
-  attempt held by insufficient commit headroom. A successful retry on a
+  `retry_wait` reports the runner wait reason. For pinned attempts and attempts
+  held by insufficient commit headroom, `runner_deferrals` keeps the last
+  recorded shortfalls for each runner. The entry and its `at` timestamp change
+  only when the recorded shortfalls change. A successful retry on a
   different runner exposes `runner_recovery` with `failed_attempt`,
   `failed_runner`, and `successful_runner` on both job and check views.
   Default-branch verification exposes these as `runner_recoveries` with
