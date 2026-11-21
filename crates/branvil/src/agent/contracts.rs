@@ -355,7 +355,7 @@ pub trait TicketContractDriver: Send + Sync {
 }
 pub async fn ticket_board_order_contract(
     t: &TicketAgent,
-    _driver: &dyn TicketContractDriver,
+    driver: &dyn TicketContractDriver,
     tracker: &str,
     actor: &ActorName,
     other: &ActorName,
@@ -365,10 +365,14 @@ pub async fn ticket_board_order_contract(
         let mut q = ticket_request(tracker, &format!("Board order {i}"));
         q.lane = Some(CreateLane::Ready);
         q.assignee = Some(if i == 2 { other } else { actor }.clone());
+        let url = t.create_ticket(q).await.unwrap().target.url;
         if i == 2 {
-            q.body = format!("@{} Please check", actor.0);
+            driver
+                .human_comment(&url, &format!("@{} Please check", actor.0))
+                .await
+                .unwrap();
         }
-        urls.push(t.create_ticket(q).await.unwrap().target.url);
+        urls.push(url);
     }
     async fn order(t: &TicketAgent, urls: &[String]) -> Vec<String> {
         t.candidates()
@@ -991,8 +995,8 @@ pub async fn ticket_patrol_contract(
         assert_eq!(ticket_detail(t, &url).await, before);
         t.comment(&url, "Here is the context.", None).await.unwrap();
         driver.human_comment(&url, "Thanks.").await.unwrap();
-        assert!(task_for(t, &url).await.is_none());
-        assert!(t.refresh(&task).await.unwrap().is_none());
+        assert!(t.refresh(&task).await.unwrap().is_some());
+        assert!(!t.can_receive_work(&url).await.unwrap());
         let after = ticket_detail(t, &url).await;
         assert_eq!(after["lane"], before["lane"]);
         assert_eq!(after["assignee"], before["assignee"]);

@@ -2,10 +2,12 @@
 use crate::{dispatcher::DispatchFailure, service::Pending, work_stops::WorkStop};
 use branvil::agent::port::{MoveLane, Task};
 use branvil::agent::{CodeAgent, TicketAgent};
-use gb_base::service::{ServiceError, WorkflowStatus};
+use chrono::{DateTime, Utc};
+use gb_base::service::{ServiceError, WorkflowStatus, parse_timestamp};
 use gb_observability::{Diagnostics, Trace, runs::RunRecord};
 use gb_wire::{CommandReply, WorkflowInvocation};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 pub const COMMAND: &str = "workflows/ticket_driven_workflow";
 pub const REVIEW_LIMIT: &str = "pull_request_review_limit";
@@ -74,6 +76,7 @@ pub trait Runner: Send + Sync {
     ) -> Pending<'a, Option<String>>;
     fn evidence(&self, run_id: &str, kind: &str, payload: Value) -> anyhow::Result<()>;
     fn record(&self, run_id: &str) -> anyhow::Result<Option<RunRecord>>;
+    fn records(&self) -> anyhow::Result<Vec<RunRecord>>;
     fn activity(&self, trace: &Trace, kind: &str, payload: Value);
     fn notify<'a>(&'a self, stop: WorkStop, trace: &'a Trace) -> Pending<'a, ()>;
     fn completed<'a>(
@@ -167,6 +170,8 @@ impl Selector<'_> {
             }
         }
         candidates.extend(self.ticket.candidates().await?);
+        let completions = self.mention_completions(&candidates)?;
+        candidates.retain(|task| !mention_processed(task, &completions));
         candidates.sort_by_key(|task| !task.repair);
         Ok(candidates)
     }
@@ -181,6 +186,10 @@ impl Selector<'_> {
             self.ticket.refresh(task).await?
         };
         let Some(task) = task else { return Ok(None) };
+        let completions = self.mention_completions(std::slice::from_ref(&task))?;
+        if mention_processed(&task, &completions) {
+            return Ok(None);
+        }
         if task.trigger_reason.as_deref() == Some(REVIEW_LIMIT) {
             self.hand_over(&task).await;
             return Ok(None);
@@ -207,6 +216,33 @@ impl Selector<'_> {
             }
         }
         Ok(Some(invocation))
+    }
+
+    fn mention_completions(
+        &self,
+        tasks: &[Task],
+    ) -> Result<BTreeMap<String, DateTime<Utc>>, ServiceError> {
+        let mut latest = BTreeMap::new();
+        if !tasks.iter().any(|task| task.mention_at.is_some()) {
+            return Ok(latest);
+        }
+        let records = self.runner.records().map_err(|error| {
+            tracing::warn!(?error, "Could not read ticket mention run history");
+            ServiceError::Failed
+        })?;
+        for record in records {
+            if record.member_id == self.person
+                && record.work_kind == "ticket_mention"
+                && record.result.is_some()
+                && let Some(mut identity) = record.work_identity
+                && let Some(url) = identity.remove("ticket_url")
+                && let Some(started_at) = parse_timestamp(&record.started_at)
+            {
+                let previous = latest.entry(url).or_insert(started_at);
+                *previous = started_at.max(*previous);
+            }
+        }
+        Ok(latest)
     }
 
     async fn defer_ready(&self, task: &Task) -> bool {
@@ -539,6 +575,16 @@ impl Selector<'_> {
             "review_limit.finished"
         });
     }
+}
+
+fn mention_processed(task: &Task, completions: &BTreeMap<String, DateTime<Utc>>) -> bool {
+    task.mention_at
+        .zip(task.url.as_deref())
+        .is_some_and(|(mentioned_at, url)| {
+            completions
+                .get(url)
+                .is_some_and(|started_at| *started_at >= mentioned_at)
+        })
 }
 
 pub fn task_attributes(task: &Task) -> serde_json::Map<String, Value> {

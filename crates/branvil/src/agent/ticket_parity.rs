@@ -642,10 +642,27 @@ async fn other_assignee_mentions_preserve_human_assignment_and_lane() {
         .tickets_add_comment("test/repo", key, decode(json!({"body":"Thanks"})).unwrap())
         .await
         .unwrap();
-    assert!(f.service.refresh(&task).await.unwrap().is_none());
+    assert!(f.service.refresh(&task).await.unwrap().is_some());
+    assert!(!f.service.can_receive_work(&url).await.unwrap());
     let read = f.owner.tickets_get_ticket("test/repo", key).await.unwrap();
     assert_eq!(read.assignee.unwrap().name, "owner1");
     assert_eq!(read.lane, "new");
+    f.running.stop().await;
+}
+
+#[tokio::test]
+async fn an_unassigned_ticket_author_cannot_mention_themselves() {
+    let f = Fixture::new().await;
+    let mut c = card();
+    c["assignee"]["name"] = json!("owner1");
+    c["mentions"] = json!(["AGENT1"]);
+    c["author"] = json!("agent1");
+    assert_eq!(reason(&f.service, &c).await, None);
+    c["author"] = json!("owner1");
+    assert_eq!(
+        reason(&f.service, &c).await.as_deref(),
+        Some("issue_mention")
+    );
     f.running.stop().await;
 }
 

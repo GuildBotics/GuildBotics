@@ -21,6 +21,9 @@ pub struct Task {
     pub pull_request_url: Option<String>,
     pub trigger_reason: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
+    /// Latest ordinary mention of a member outside the assignment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mention_at: Option<DateTime<Utc>>,
     pub resumes: Option<AwaitedRun>,
 }
 impl Default for Task {
@@ -39,6 +42,7 @@ impl Default for Task {
             pull_request_url: None,
             trigger_reason: None,
             created_at: None,
+            mention_at: None,
             resumes: None,
         }
     }

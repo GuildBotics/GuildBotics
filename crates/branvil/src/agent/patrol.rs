@@ -74,7 +74,7 @@ impl TicketAgent {
     pub(super) async fn select_card(
         &self,
         card: &tickets::CardView,
-        finish: bool,
+        patrol: bool,
     ) -> Result<Option<Task>, ServiceError> {
         let t = &card.ticket;
         let me = fold(&self.person_id);
@@ -124,15 +124,33 @@ impl TicketAgent {
             ..Default::default()
         };
         if !assigned {
-            if !mention_pending(
-                mentions(&t.mentions),
-                messages
-                    .iter()
-                    .zip(comments)
-                    .map(|(m, c)| (m, mentions(c.mentions.as_deref().unwrap_or_default()))),
-            ) {
+            let body_mention =
+                (mentions(&t.mentions) && fold(&t.author) != me).then_some(t.created_at.as_str());
+            let latest_mention = messages
+                .iter()
+                .zip(comments)
+                .filter(|(_, c)| {
+                    c.meta
+                        .as_ref()
+                        .and_then(WorkflowStatus::from_payload)
+                        .is_none()
+                })
+                .fold(body_mention, |latest, (m, c)| {
+                    match m.author_type.as_str() {
+                        // The host uses run results for patrol. A reply by itself
+                        // only clears the mention for the recipient check.
+                        "Assistant" if !patrol => None,
+                        "Assistant" => latest,
+                        _ if mentions(c.mentions.as_deref().unwrap_or_default()) => {
+                            Some(m.timestamp.as_str())
+                        }
+                        _ => latest,
+                    }
+                });
+            let Some(latest_mention) = latest_mention else {
                 return Ok(None);
-            }
+            };
+            task.mention_at = parse_timestamp(latest_mention);
             task.trigger_reason = Some("issue_mention".into());
             return Ok(Some(task));
         }
@@ -213,7 +231,7 @@ impl TicketAgent {
             pending,
             linked,
             TicketPolicy {
-                finish_merged: finish,
+                finish_merged: patrol,
                 repair: task.repair,
                 work_status,
                 work_remaining,

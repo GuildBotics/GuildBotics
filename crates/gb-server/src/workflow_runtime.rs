@@ -627,6 +627,9 @@ impl Runner for Runtime {
     fn record(&self, run_id: &str) -> anyhow::Result<Option<RunRecord>> {
         RunStore::open(&self.dispatcher.workspace).read(run_id)
     }
+    fn records(&self) -> anyhow::Result<Vec<RunRecord>> {
+        RunStore::open(&self.dispatcher.workspace).records()
+    }
     fn activity(&self, trace: &Trace, kind: &str, payload: Value) {
         let attributes = if kind == "workflow.rate_limited" {
             crate::member::events::rate_limited(
