@@ -1,6 +1,4 @@
-//! Disk images moved between the dependency cache and a job's `/work`
-//! volume: a clone that shares the blocks where the file system can (APFS),
-//! otherwise a copy that writes only the blocks holding data.
+//! On-disk formats used by the runner's dependency cache.
 
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -37,30 +35,6 @@ pub fn flush(path: &Path) -> io::Result<()> {
     fs::OpenOptions::new().write(true).open(path)?.sync_all()
 }
 
-/// Makes `to`, which must not exist, a copy of `from`.
-pub fn copy(from: &Path, to: &Path) -> io::Result<()> {
-    #[cfg(target_os = "macos")]
-    if clone(from, to).is_ok() {
-        return Ok(());
-    }
-    sparse_copy(from, to)
-}
-
-/// Moves `from` to `to`, replacing it: a rename on the same file system,
-/// otherwise a [`copy`] (and `from` goes when it can). Once it succeeded,
-/// `to` has `from`'s content.
-pub fn place(from: &Path, to: &Path) -> io::Result<()> {
-    if fs::rename(from, to).is_ok() {
-        return Ok(());
-    }
-    let part = to.with_extension("part");
-    let _ = fs::remove_file(&part);
-    copy(from, &part)?;
-    fs::rename(&part, to)?;
-    let _ = fs::remove_file(from);
-    Ok(())
-}
-
 /// The size of the ext4 file system on the image `path`, from its
 /// superblock: it can be smaller than the file.
 pub fn ext4_bytes(path: &Path) -> io::Result<u64> {
@@ -86,276 +60,172 @@ pub fn ext4_bytes(path: &Path) -> io::Result<u64> {
     Ok(((high << 32) | u32_at(0x04)) << (10 + log))
 }
 
-/// Makes `path` at least `len` bytes long; what it gains is a hole.
-pub fn grow(path: &Path, len: u64) -> io::Result<()> {
-    let file = fs::OpenOptions::new().write(true).open(path)?;
-    if file.metadata()?.len() < len {
-        file.set_len(len)?;
-    }
-    Ok(())
-}
+const CLUSTER: usize = 1 << 16;
+pub const CACHE_BASE: &str = "cache-base.raw";
 
-#[cfg(target_os = "macos")]
-fn clone(from: &Path, to: &Path) -> io::Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-    let c = |p: &Path| CString::new(p.as_os_str().as_bytes()).map_err(io::Error::other);
-    // <sys/clonefile.h>: do not follow a link at the source.
-    const CLONE_NOFOLLOW: u32 = 0x0001;
-    let (src, dst) = (c(from)?, c(to)?);
-    // SAFETY: both are NUL-terminated paths that outlive the call.
-    if unsafe { libc::clonefile(src.as_ptr(), dst.as_ptr(), CLONE_NOFOLLOW) } == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
+/// Creates an empty qcow2 v3 overlay on the raw image beside it. All guest
+/// writes go to the overlay. The backing format is explicit so a raw image
+/// whose contents resemble a qcow2 header is still opened as raw.
+pub fn create_work_overlay(path: &Path, size: u64) -> io::Result<()> {
+    const HEADER_LEN: usize = 104;
+    // L2 entries are 8 bytes; each maps one data cluster.
+    const L1_COVERAGE: u64 = (CLUSTER as u64 / 8) * CLUSTER as u64;
+    const L1_OFFSET: usize = 3 * CLUSTER;
+    const BACKING_OFFSET: usize = HEADER_LEN + 16 + 8;
+    let l1_entries = size.div_ceil(L1_COVERAGE);
+    let l1_clusters = (l1_entries * 8).div_ceil(CLUSTER as u64);
+    let metadata_clusters = 3 + l1_clusters;
+    // The single refcount block must cover all preallocated clusters.
+    if size == 0 || metadata_clusters > (CLUSTER / 2) as u64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unsupported /work size for a qcow2 overlay",
+        ));
     }
-}
 
-/// The ranges of `file` (`len` bytes) that may hold data: what `SEEK_DATA`
-/// and `SEEK_HOLE` tell, so that the holes of a large image are never read;
-/// the whole file where they tell nothing.
-fn data_ranges(file: &fs::File, len: u64) -> Vec<(u64, u64)> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        use std::os::fd::AsRawFd;
-        let fd = file.as_raw_fd();
-        let mut ranges = Vec::new();
-        let mut at = 0i64;
-        while (at as u64) < len {
-            // SAFETY: lseek on the open file's descriptor.
-            let start = unsafe { libc::lseek(fd, at, libc::SEEK_DATA) };
-            if start < 0 {
-                // ENXIO: no data after `at`; anything else: no answer.
-                let e = io::Error::last_os_error();
-                return if e.raw_os_error() == Some(libc::ENXIO) {
-                    ranges
-                } else {
-                    vec![(0, len)]
-                };
-            }
-            // SAFETY: as above.
-            let end = unsafe { libc::lseek(fd, start, libc::SEEK_HOLE) };
-            if end < 0 {
-                return vec![(0, len)];
-            }
-            ranges.push((start as u64, end as u64));
-            at = end;
-        }
-        ranges
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = file;
-        vec![(0, len)]
-    }
-}
+    let mut metadata = vec![0; L1_OFFSET];
+    let header = &mut metadata[..CLUSTER];
+    header[..4].copy_from_slice(b"QFI\xfb");
+    header[4..8].copy_from_slice(&3u32.to_be_bytes());
+    header[8..16].copy_from_slice(&(BACKING_OFFSET as u64).to_be_bytes());
+    header[16..20].copy_from_slice(&(CACHE_BASE.len() as u32).to_be_bytes());
+    header[20..24].copy_from_slice(&16u32.to_be_bytes());
+    header[24..32].copy_from_slice(&size.to_be_bytes());
+    header[36..40].copy_from_slice(&(l1_entries as u32).to_be_bytes());
+    header[40..48].copy_from_slice(&(L1_OFFSET as u64).to_be_bytes());
+    header[48..56].copy_from_slice(&(CLUSTER as u64).to_be_bytes());
+    header[56..60].copy_from_slice(&1u32.to_be_bytes());
+    header[96..100].copy_from_slice(&4u32.to_be_bytes());
+    header[100..104].copy_from_slice(&(HEADER_LEN as u32).to_be_bytes());
+    header[104..108].copy_from_slice(&0xE279_2ACAu32.to_be_bytes());
+    header[108..112].copy_from_slice(&3u32.to_be_bytes());
+    header[112..115].copy_from_slice(b"raw");
+    header[BACKING_OFFSET..BACKING_OFFSET + CACHE_BASE.len()]
+        .copy_from_slice(CACHE_BASE.as_bytes());
 
-/// Copies `from` into a new `to`: the ranges that may hold data
-/// ([`data_ranges`]) in blocks of 1 MiB, skipping those that are all zero.
-/// The rest stays holes of `to`, which is sparse.
-fn sparse_copy(from: &Path, to: &Path) -> io::Result<()> {
-    const BLOCK: usize = 1 << 20;
-    let mut src = fs::File::open(from)?;
-    let len = src.metadata()?.len();
-    let mut dst = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(to)?;
-    let copied = (|| {
-        mark_sparse(&dst)?;
-        dst.set_len(len)?;
-        let mut buf = vec![0u8; BLOCK];
-        for (start, end) in data_ranges(&src, len) {
-            src.seek(SeekFrom::Start(start))?;
-            let mut at = start;
-            while at < end {
-                let want = BLOCK.min(usize::try_from(end - at).unwrap_or(BLOCK));
-                let mut n = 0;
-                while n < want {
-                    match src.read(&mut buf[n..want])? {
-                        0 => break,
-                        read => n += read,
-                    }
-                }
-                if n == 0 {
-                    break;
-                }
-                if buf[..n].iter().any(|b| *b != 0) {
-                    dst.seek(SeekFrom::Start(at))?;
-                    dst.write_all(&buf[..n])?;
-                }
-                at += n as u64;
-            }
-        }
-        dst.sync_all()
-    })();
-    if copied.is_err() {
-        let _ = fs::remove_file(to);
+    // The refcount table points at cluster 2, which counts itself as well
+    // as the header, the table and every L1 cluster. L1 starts all zero.
+    metadata[CLUSTER..CLUSTER + 8].copy_from_slice(&(2 * CLUSTER as u64).to_be_bytes());
+    for count in metadata[2 * CLUSTER..][..metadata_clusters as usize * 2].chunks_exact_mut(2) {
+        count.copy_from_slice(&1u16.to_be_bytes());
     }
-    copied
-}
-
-/// Unwritten ranges of a file are holes on Unix; NTFS fills them with zeros
-/// unless the file is marked sparse.
-#[cfg(windows)]
-fn mark_sparse(file: &fs::File) -> io::Result<()> {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::System::IO::DeviceIoControl;
-    use windows_sys::Win32::System::Ioctl::FSCTL_SET_SPARSE;
-    let mut returned = 0u32;
-    // SAFETY: the handle is the open file's; no buffers are passed.
-    let ok = unsafe {
-        DeviceIoControl(
-            file.as_raw_handle(),
-            FSCTL_SET_SPARSE,
-            std::ptr::null(),
-            0,
-            std::ptr::null_mut(),
-            0,
-            &mut returned,
-            std::ptr::null_mut(),
-        )
-    };
-    if ok == 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
+    let mut file = fs::File::create_new(path)?;
+    let result = file
+        .write_all(&metadata)
+        .and_then(|()| file.set_len(metadata_clusters * CLUSTER as u64));
+    drop(file);
+    if result.is_err() {
+        let _ = fs::remove_file(path);
     }
-}
-
-#[cfg(not(windows))]
-fn mark_sparse(_: &fs::File) -> io::Result<()> {
-    Ok(())
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// An image of 64 MiB with data in two blocks only (APFS fills a gap
-    /// of a few MiB before a write, not one this large).
-    fn image(path: &Path) {
-        let mut f = fs::File::create(path).unwrap();
-        f.set_len(64 << 20).unwrap();
-        f.write_all(b"head").unwrap();
-        f.seek(SeekFrom::Start(40 << 20)).unwrap();
-        f.write_all(b"middle").unwrap();
-    }
-
-    /// Whether `a` and `b` hold the same bytes, read a block at a time.
-    fn same(a: &Path, b: &Path) -> bool {
-        let (mut a, mut b) = (fs::File::open(a).unwrap(), fs::File::open(b).unwrap());
-        let (mut x, mut y) = (vec![0u8; 1 << 20], vec![0u8; 1 << 20]);
-        loop {
-            let (n, m) = (a.read(&mut x).unwrap(), b.read(&mut y).unwrap());
-            if n != m || x[..n] != y[..m] {
-                return false;
-            }
-            if n == 0 {
-                return true;
-            }
-        }
-    }
-
-    /// The first 4 bytes of `path`.
-    fn head(path: &Path) -> [u8; 4] {
-        let mut h = [0u8; 4];
-        fs::File::open(path).unwrap().read_exact(&mut h).unwrap();
-        h
-    }
-
-    /// An image another process wrote and closed can be flushed.
     #[test]
     fn a_closed_image_can_be_flushed() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("disk.raw");
-        image(&path);
+        fs::write(&path, b"head").unwrap();
         flush(&path).unwrap();
-        assert_eq!(head(&path), *b"head");
+        assert_eq!(fs::read(path).unwrap(), b"head");
     }
 
-    /// A copy has the image's content and size, and takes no more of the
-    /// disk than its blocks with data, whichever way it was made.
-    #[test]
-    fn a_copy_keeps_the_content_and_the_holes() {
+    #[tokio::test]
+    async fn the_overlay_reads_raw_backing_and_keeps_writes_after_reopening() {
+        use imago::file::File;
+        use imago::qcow2::Qcow2;
+        use imago::{FormatAccess, FormatDriverBuilder, PermissiveImplicitOpenGate};
+
         let dir = tempfile::tempdir().unwrap();
-        let from = dir.path().join("from.raw");
-        image(&from);
-        for name in ["copy", "sparse"] {
-            let to = dir.path().join(name);
-            if name == "copy" {
-                copy(&from, &to).unwrap();
-            } else {
-                sparse_copy(&from, &to).unwrap();
-            }
-            assert!(same(&to, &from), "{name}");
-            assert!(allocated(&to).unwrap() <= 4 << 20, "{name}");
-        }
-        // It never replaces a file.
-        assert!(copy(&from, &dir.path().join("copy")).is_err());
+        let published = dir.path().join("disk.raw");
+        let base = dir.path().join(CACHE_BASE);
+        let overlay = dir.path().join("work.qcow2");
+        // A qcow2 signature at the start of the raw image must be read as data.
+        let mut original = vec![0x12u8; CLUSTER];
+        original[..4].copy_from_slice(b"QFI\xfb");
+        fs::write(&published, &original).unwrap();
+        fs::hard_link(&published, &base).unwrap();
+        let size = 512 << 20;
+        create_work_overlay(&overlay, size).unwrap();
+
+        let qcow = Qcow2::<File>::builder_path(&overlay)
+            .write(true)
+            .open(PermissiveImplicitOpenGate::default())
+            .await
+            .unwrap();
         assert_eq!(
-            fs::metadata(dir.path().join("copy")).unwrap().len(),
-            64 << 20
+            qcow.implicit_backing_file().map(String::as_str),
+            Some(CACHE_BASE)
         );
+        assert_eq!(
+            qcow.implicit_backing_format().map(String::as_str),
+            Some("raw")
+        );
+        let image = FormatAccess::new(qcow);
+        assert_eq!(image.size(), size);
+        let mut data = vec![0; 2 * CLUSTER];
+        image.read(data.as_mut_slice(), 0).await.unwrap();
+        assert_eq!(&data[..CLUSTER], &original);
+        assert!(data[CLUSTER..].iter().all(|&byte| byte == 0));
+
+        image.write(&b"updated"[..], 0).await.unwrap();
+        image
+            .write(&b"new block"[..], CLUSTER as u64)
+            .await
+            .unwrap();
+        image.flush().await.unwrap();
+        drop(image);
+        assert_eq!(fs::read(&published).unwrap(), original);
+        fs::remove_file(published).unwrap();
+
+        let qcow = Qcow2::<File>::builder_path(&overlay)
+            .open(PermissiveImplicitOpenGate::default())
+            .await
+            .unwrap();
+        FormatAccess::new(qcow)
+            .read(data.as_mut_slice(), 0)
+            .await
+            .unwrap();
+        assert_eq!(&data[..7], b"updated");
+        assert_eq!(&data[7..CLUSTER], &original[7..]);
+        assert_eq!(&data[CLUSTER..CLUSTER + 9], b"new block");
+        assert_eq!(fs::read(base).unwrap(), original);
     }
 
-    /// A sparse copy reads only where the image holds data (a file of 64 GiB
-    /// with two small blocks of data has a few MiB of ranges to read), and
-    /// copies a file with no data, or with data up to its end, whole.
-    // Where `SEEK_DATA` tells the ranges; elsewhere the copy reads it all.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn a_sparse_copy_reads_only_the_data() {
+    fn overlay_metadata_covers_every_l1_cluster() {
         let dir = tempfile::tempdir().unwrap();
-        let (from, to) = (dir.path().join("big.raw"), dir.path().join("copy.raw"));
-        let mut f = fs::File::create(&from).unwrap();
-        f.set_len(64 << 30).unwrap();
-        f.write_all(b"head").unwrap();
-        f.seek(SeekFrom::Start(40 << 30)).unwrap();
-        f.write_all(b"middle").unwrap();
-        drop(f);
-        let ranges = data_ranges(&fs::File::open(&from).unwrap(), 64 << 30);
-        assert!(
-            ranges.iter().map(|(a, b)| b - a).sum::<u64>() <= 8 << 20,
-            "{ranges:?}"
-        );
-        sparse_copy(&from, &to).unwrap();
-        assert_eq!(fs::metadata(&to).unwrap().len(), 64 << 30);
-        let mut middle = [0u8; 6];
-        let mut t = fs::File::open(&to).unwrap();
-        t.seek(SeekFrom::Start(40 << 30)).unwrap();
-        t.read_exact(&mut middle).unwrap();
-        assert_eq!(&middle, b"middle");
-        assert_eq!(&head(&to), b"head");
-        assert!(allocated(&to).unwrap() <= 4 << 20);
-        for (name, tail) in [("empty", &b""[..]), ("tail", &b"end"[..])] {
-            let (from, to) = (
-                dir.path().join(name),
-                dir.path().join(format!("{name}.copy")),
+        for (size, entries, clusters) in [
+            (512 << 20, 1, 4),
+            ((512 << 20) + 1, 2, 4),
+            (16_794 << 20, 33, 4),
+            ((4 << 40) + 1, 8193, 5),
+        ] {
+            let path = dir.path().join(format!("{entries}.qcow2"));
+            create_work_overlay(&path, size).unwrap();
+            let bytes = fs::read(path).unwrap();
+            assert_eq!(u64::from_be_bytes(bytes[24..32].try_into().unwrap()), size);
+            assert_eq!(
+                u32::from_be_bytes(bytes[36..40].try_into().unwrap()),
+                entries
             );
-            let mut f = fs::File::create(&from).unwrap();
-            f.set_len((64 << 20) - tail.len() as u64).unwrap();
-            f.seek(SeekFrom::End(0)).unwrap();
-            f.write_all(tail).unwrap();
-            drop(f);
-            sparse_copy(&from, &to).unwrap();
-            assert!(same(&from, &to), "{name}");
-            assert_eq!(fs::metadata(&to).unwrap().len(), 64 << 20, "{name}");
+            assert_eq!(
+                u64::from_be_bytes(bytes[40..48].try_into().unwrap()),
+                3 * CLUSTER as u64
+            );
+            assert_eq!(
+                u64::from_be_bytes(bytes[CLUSTER..CLUSTER + 8].try_into().unwrap()),
+                2 * CLUSTER as u64
+            );
+            assert_eq!(bytes.len(), clusters * CLUSTER);
+            for (i, count) in bytes[2 * CLUSTER..3 * CLUSTER].chunks_exact(2).enumerate() {
+                assert_eq!(count, if i < clusters { &[0, 1] } else { &[0, 0] });
+            }
+            assert!(bytes[3 * CLUSTER..].iter().all(|&b| b == 0));
         }
-    }
-
-    /// A copy writes nothing to the original: changing one leaves the other.
-    #[test]
-    fn a_copy_is_independent_of_its_original() {
-        let dir = tempfile::tempdir().unwrap();
-        let (from, to) = (dir.path().join("from.raw"), dir.path().join("to.raw"));
-        image(&from);
-        copy(&from, &to).unwrap();
-        let mut f = fs::OpenOptions::new().write(true).open(&to).unwrap();
-        f.write_all(b"HEAD").unwrap();
-        drop(f);
-        assert_eq!(&head(&from), b"head");
-        assert_eq!(&head(&to), b"HEAD");
     }
 
     /// The size of an ext4 file system is read from its superblock, whatever
@@ -383,27 +253,5 @@ mod tests {
         assert!(ext4_bytes(&path).is_err());
         fs::write(&path, b"short").unwrap();
         assert!(ext4_bytes(&path).is_err());
-    }
-
-    /// Placing replaces the target and leaves nothing at the source; growing
-    /// adds a hole and never shrinks. Like the runner's, the image placed is
-    /// a copy (NTFS keeps holes only in a file marked sparse).
-    #[test]
-    fn placing_replaces_and_growing_only_grows() {
-        let dir = tempfile::tempdir().unwrap();
-        let (from, to) = (dir.path().join("from.raw"), dir.path().join("to.raw"));
-        let image_path = dir.path().join("image.raw");
-        image(&image_path);
-        copy(&image_path, &from).unwrap();
-        fs::write(&to, "old").unwrap();
-        place(&from, &to).unwrap();
-        assert!(!from.exists());
-        assert_eq!(&head(&to), b"head");
-        let before = allocated(&to).unwrap();
-        grow(&to, 128 << 20).unwrap();
-        assert_eq!(fs::metadata(&to).unwrap().len(), 128 << 20);
-        assert!(allocated(&to).unwrap() <= before + (1 << 20));
-        grow(&to, 1).unwrap();
-        assert_eq!(fs::metadata(&to).unwrap().len(), 128 << 20);
     }
 }

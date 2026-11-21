@@ -545,18 +545,16 @@ impl Cache {
         Ok(())
     }
 
-    /// Puts a copy of the disk image of `key`'s entry at `into`, a path of
-    /// the host that no VM mounts, for the job's `/work` to start from: the
-    /// job writes to that copy only (a clone shares the entry's blocks until
-    /// it is written). Returns the bytes of data its file system holds (what
-    /// the copy takes when the entry does not say), or none when there is no
-    /// such entry.
+    /// Hard-link a published raw backing image into the attempt directory.
+    /// The caller must open the image only for reading.
     pub fn restore(&self, key: &str, into: &Path) -> io::Result<Option<u64>> {
         let _reading = self.lock.read().unwrap_or_else(|e| e.into_inner());
         restore_entry(&self.root.join(key), into)
     }
 
-    /// Try the exact key first, then the newest published image of the group.
+    /// Hard-link the exact published image, or the newest compatible one.
+    /// The link survives eviction once the read lock has been released.
+    /// Returns the generation's key and the bytes of cached data it holds.
     pub fn restore_generation(
         &self,
         key: &str,
@@ -754,12 +752,16 @@ fn restore_entry(entry: &Path, into: &Path) -> io::Result<Option<u64>> {
     if !fs::symlink_metadata(&image).is_ok_and(|m| m.is_file()) {
         return Ok(None);
     }
-    super::disk::copy(&image, into)?;
-    record_use(entry, SystemTime::now())?;
-    match entry_data(entry) {
-        Some(data) => Ok(Some(data)),
-        None => super::disk::allocated(into).map(Some),
+    let data = match entry_data(entry) {
+        Some(data) => data,
+        None => super::disk::allocated(&image)?,
+    };
+    fs::hard_link(&image, into)?;
+    if let Err(error) = record_use(entry, SystemTime::now()) {
+        let _ = fs::remove_file(into);
+        return Err(error);
     }
+    Ok(Some(data))
 }
 
 /// Only publication may evict a current generation.
@@ -842,7 +844,12 @@ mod tests {
         }
         let restored = dir.path().join("restored");
         assert_eq!(cache.restore("previous", &restored).unwrap(), Some(30));
-        fs::remove_file(&restored).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let published = fs::metadata(cache.root.join("previous").join(IMAGE)).unwrap();
+            assert_eq!(fs::metadata(&restored).unwrap().ino(), published.ino());
+        }
 
         let image = packed(dir.path(), b"pending");
         assert!(
@@ -851,6 +858,9 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(cache.pending().unwrap(), ["next"]);
+        assert!(!cache.root.join("previous").exists());
+        assert_eq!(fs::read(&restored).unwrap(), b"previous");
+        fs::remove_file(&restored).unwrap();
         assert!(cache.restore("previous", &restored).unwrap().is_none());
         assert_eq!(cache.restore("current", &restored).unwrap(), Some(30));
         fs::remove_file(&restored).unwrap();
@@ -1508,8 +1518,9 @@ mod tests {
         Cache::new(root.clone())
             .save_taken(&k1, &owner("acme/demo", &job.name), &archive, 1 << 20)
             .unwrap();
-        // The entry and what a job is given are copies: writing the image
-        // saved from, or the one a job is given, changes no entry.
+        // Staging moves the original image out of the attempt directory.
+        // Reusing that path does not affect the published image.
+        assert!(!archive.exists());
         fs::write(&archive, "changed").unwrap();
         let fresh = dir.path().join("fresh");
         fs::create_dir_all(&fresh).unwrap();
@@ -1529,7 +1540,6 @@ mod tests {
                 fs::read_to_string(fresh.join("cache.raw")).unwrap(),
                 "object"
             );
-            fs::write(fresh.join("cache.raw"), "changed").unwrap();
             fs::remove_file(fresh.join("cache.raw")).unwrap();
         }
         fs::write(fresh.join("Cargo.lock"), "v2").unwrap();
