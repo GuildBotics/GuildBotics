@@ -1063,6 +1063,17 @@ is not the full sha of a commit of the repository.
   the source's artifacts, empty after the source's retention expires.
   For automatic retries, `details` includes `Automatic retry 1/3 of att_…`
   and the attempt's own reason. Check `details` carries the same text.
+  Completed PR head attempts list eligible names in `retry_runners`.
+  Retries include `retry_decision` with the source attempt, `requested_by`
+  (null for automation), `selection`, `failed_runner`, and the automatic
+  fallback time `prefer_other_until` when applicable. For queued retries,
+  `retry_wait` reports the runner wait reason. The latest resource deferral
+  per runner is kept in `runner_deferrals` for pinned attempts and for any
+  attempt held by insufficient commit headroom. A successful retry on a
+  different runner exposes `runner_recovery` with `failed_attempt`,
+  `failed_runner`, and `successful_runner` on both job and check views.
+  Default-branch verification exposes these as `runner_recoveries` with
+  each job's `name` for the current and most recently verified commits.
   Queued attempts in classes 4a/4b append `Deferred: <reason>.` and when they
   run: `It runs when no protected-branch, near-landing or normal job is queued.`
   (4a), or `It runs when no other job is queued.` (4b). This follows any
@@ -1085,9 +1096,13 @@ is not the full sha of a commit of the repository.
   otherwise); a full queue is
   `503 unavailable`. The new attempt always executes; it never reuses a
   result, including when requeued after interruption. A manual retry starts
-  a fresh automatic retry budget. Retry waits for ongoing
-  repository ref changes,  before it
-  queues the new attempt.
+  a fresh automatic retry budget. Retry waits for ongoing repository ref changes
+  before it queues the new attempt. The optional body accepts
+  `{"runner":"linux","exclude_runners":["windows","hub"]}`. Either field may
+  be omitted. Selection is limited to current, unprotected PR heads (`409 retry_pr_head_required`).
+  Every name must belong to a runner able to execute the job's image on its
+  CPU architecture and match the Hub version (`400 retry_runner_ineligible`).
+  The selected name cannot also be excluded (`400 retry_runner_excluded`).
 - `POST /api/v1/repos/{repo}/jobs/{attempt_id}/cancel` → the attempt: a
   queued one is `completed`/`cancelled` at once, a running one gets
   `cancel_requested: true` and is concluded `cancelled` when its runner stops
@@ -1098,6 +1113,10 @@ is not the full sha of a commit of the repository.
   The source's original retention applies. `404 not_found` when there is none.
 
 ## Runner API (`/api/v1/runner`, runner token)
+
+A runner may report `machine.commit` with `available_mib` and
+`started_attempts` (active VM allocations reflected by that sample). The claim
+transaction reserves the full VM allocation against remaining commit headroom.
 
 Used by `guildbotics runner` only. A runner token is a member token of a member of
 kind `runner` (created by `guildbotics runner register`); any other member gets
@@ -1421,7 +1440,8 @@ file, and applied without a restart. The Hub uses the shared image store at
   0 respectively, with ranges 0–100 and 0–6400. Zero for the CPU multiplier
   derives a budget that preserves configured concurrency. The runner row
   reports `machine` and, if held by resource limits, `resource_wait` with
-  the attempt, repository, job, and CPU and memory shortfall. This endpoint
+  the attempt, repository, job, CPU and physical memory shortfalls, and
+  `commit_shortfall_mib` for the Windows VM commit budget. This endpoint
   updates the Hub defaults.
 - `PUT /api/v1/admin/ci/runners/{name}/limits` (owner) takes the same
   fields and returns the settings. It saves an override under

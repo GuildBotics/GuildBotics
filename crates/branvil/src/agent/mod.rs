@@ -346,6 +346,13 @@ pub fn error(e: AppError, operation: &str) -> ServiceError {
     }
     match e.code {
         "head_moved" => diagnostic("integrations.branvil.api.head_moved", []),
+        "retry_pr_head_required" => {
+            diagnostic("integrations.branvil.api.retry_pr_head_required", [])
+        }
+        "retry_runner_ineligible" => {
+            diagnostic("integrations.branvil.api.retry_runner_ineligible", [])
+        }
+        "retry_runner_excluded" => diagnostic("integrations.branvil.api.retry_runner_excluded", []),
         "label_undefined" => diagnostic(
             "integrations.branvil.api.label_undefined",
             [("message", message)],

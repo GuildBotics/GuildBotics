@@ -1,6 +1,7 @@
 //! Authenticated in-process access to the same operations used by HTTP.
 use crate::app::Shared;
 use crate::auth::Caller;
+pub use crate::ci::queue::RunnerSelection;
 use crate::domain::tickets::{NewComment, NewReaction, ReactionAdded};
 pub use crate::domain::{CommentView, Page};
 pub use crate::domain::{attachments, members, pulls, repos, tickets};
@@ -189,9 +190,15 @@ impl MemberApi {
         let _open = self.api.guard()?;
         crate::ci::admin::data_load(&self.api.app, &self.caller().await?, path).await
     }
-    pub async fn job_retry(&self, repo: &str, id: &str) -> AppResult<crate::ci::api::AttemptView> {
+    pub async fn job_retry(
+        &self,
+        repo: &str,
+        id: &str,
+        selection: crate::ci::queue::RunnerSelection,
+    ) -> AppResult<crate::ci::api::AttemptView> {
         let _open = self.api.guard()?;
-        crate::ci::api::data_job_retry(&self.api.app, &self.caller().await?, repo, id).await
+        crate::ci::api::data_job_retry(&self.api.app, &self.caller().await?, repo, id, selection)
+            .await
     }
     pub async fn job_log(&self, repo: &str, id: &str, tail: u64) -> AppResult<serde_json::Value> {
         let _open = self.api.guard()?;

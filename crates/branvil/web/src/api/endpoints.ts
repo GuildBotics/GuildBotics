@@ -1,6 +1,7 @@
 // Typed calls of the Branvil HTTP API v1 used by the GUI (docs/api.md).
 
 import { enc, get, getAll, newIdempotencyKey, request } from "./client";
+import type { RunnerSelection } from "./types";
 import type {
   Verification,
   VerificationCommit,
@@ -237,7 +238,7 @@ const jobPath = (repo: string, id: string) => `/repos/${enc(repo)}/jobs/${enc(id
 export const jobs = {
   get: (repo: string, id: string) => get<Job>(jobPath(repo, id)),
   log: (repo: string, id: string, tailBytes: number) => get<JobLog>(`${jobPath(repo, id)}/log`, { tail_bytes: tailBytes }),
-  retry: (repo: string, id: string) => request<Job>("POST", `${jobPath(repo, id)}/retry`),
+  retry: (repo: string, id: string, selection: RunnerSelection) => request<Job>("POST", `${jobPath(repo, id)}/retry`, { body: selection }),
   cancel: (repo: string, id: string) => request<unknown>("POST", `${jobPath(repo, id)}/cancel`),
   artifactUrl: (repo: string, sha: string, name: string) =>
     `/api/v1/repos/${enc(repo)}/commits/${enc(sha)}/artifacts/${enc(name)}`,

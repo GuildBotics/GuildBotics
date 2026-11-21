@@ -79,6 +79,20 @@ describe("default branch verification", () => {
     expect(fake.calls("GET", `/api/v1/repos/acme/demo/commits/${SHA}/checks`)).toHaveLength(0);
   });
 
+  it("links the failed attempt after a retry passed on a different runner", async () => {
+    fakeApi({
+      "GET /api/v1/repos/acme/demo/verification": json(200, {
+        ...state(),
+        runner_recoveries: [{ name: "rust-test", failed_attempt: "att_failed", failed_runner: "windows", successful_runner: "linux" }],
+      }),
+      "GET /api/v1/repos/acme/demo/verification/commits": json(200, { items: [], next_cursor: null }),
+    });
+    show(["acme/demo"], "acme/demo");
+    await userEvent.setup().click(screen.getByRole("button"));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(await dialog.findByRole("link", { name: "Failed on windows, passed on linux" })).toHaveAttribute("href", "/acme/demo/-/jobs/att_failed");
+  });
+
   it("counts repository states while closed and reports refresh errors", async () => {
     const fake = fakeApi({
       "GET /api/v1/repos/acme/a/verification": [json(200, state()), apiError(403, "forbidden", "Denied")],

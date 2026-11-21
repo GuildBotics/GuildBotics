@@ -103,14 +103,15 @@ function ResourceQueue({ runners }: { runners: CiRunner[] }) {
   return (
     <Section title={t("ci.settings.resourceQueue")}>
       <Stack gap="xs">
-        {waiting.map(({ name, repo, job, attempt_id, cpu_shortfall: cpus, memory_shortfall_mib: memory }) => {
-          const message = cpus === 0
+        {waiting.map(({ name, repo, job, attempt_id, cpu_shortfall: cpus, memory_shortfall_mib: memory, commit_shortfall_mib: commit }) => {
+          const message = cpus === 0 && memory === 0 ? null : cpus === 0
             ? "ci.settings.resourceWaitMemory"
             : memory === 0 ? "ci.settings.resourceWaitCpu" : "ci.settings.resourceWait";
           return (
             <Text size="sm" key={name}>
               <Link to={href.job(repo, attempt_id)}>{repo} · {job}</Link>
-              {" — "}{t(message, { name, cpus, memory })}
+              {message && <>{" — "}{t(message, { name, cpus, memory })}</>}
+              {!!commit && <>{" — "}{t("ci.settings.resourceWaitCommit", { name, commit })}</>}
             </Text>
           );
         })}

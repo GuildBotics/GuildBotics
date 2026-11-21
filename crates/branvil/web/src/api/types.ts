@@ -410,7 +410,39 @@ export interface PathSkip {
   bases: { pull: number; base: string; base_sha: string; merge_base: string | null }[];
 }
 
+export interface RunnerRecovery {
+  failed_attempt: string;
+  failed_runner: string;
+  successful_runner: string;
+}
+
+export interface RunnerSelection {
+  runner?: string;
+  exclude_runners?: string[];
+}
+
+interface RetryDecision {
+  source_attempt: string;
+  requested_by: string | null;
+  selection: RunnerSelection;
+  failed_runner: string | null;
+}
+
+interface ResourceShortfall {
+  cpu_shortfall: number;
+  memory_shortfall_mib: number;
+  commit_shortfall_mib?: number;
+}
+
+type RetryWait =
+  | { reason: "offline" | "unavailable" | "busy" | "waiting" }
+  | ({ reason: "resources" } & ResourceShortfall)
+  | { reason: "prefer_other"; until: string };
+
 export interface Check {
+  runner_recovery?: RunnerRecovery | null;
+  retry_decision?: RetryDecision | null;
+  retry_wait?: RetryWait | null;
   path_skip?: PathSkip | null;
   name: string;
   status: CheckStatus;
@@ -456,6 +488,11 @@ export interface Branch {
 export interface Job {
   path_skip?: PathSkip | null;
   retry_supported: boolean;
+  retry_runners?: string[];
+  runner_deferrals?: Record<string, ResourceShortfall & { at: string }>;
+  retry_decision?: RetryDecision | null;
+  retry_wait?: RetryWait | null;
+  runner_recovery?: RunnerRecovery | null;
   id: string;
   job: string;
   attempt: number;
@@ -526,8 +563,8 @@ export interface CiRunner {
   executor_state: "ready" | "unavailable" | null;
   executor_detail: string | null;
   architecture: string | null;
-  machine: { logical_cpus: number; total_memory_mib: number; available_memory_mib: number } | null;
-  resource_wait: { attempt_id: string; repo: string; job: string; cpu_shortfall: number; memory_shortfall_mib: number } | null;
+  machine: { logical_cpus: number; total_memory_mib: number; available_memory_mib: number; commit?: { available_mib: number } } | null;
+  resource_wait: ({ attempt_id: string; repo: string; job: string } & ResourceShortfall) | null;
   missing_images: string[] | null;
   limits: CiLimits;
   limits_source: "default" | "runner";
@@ -589,6 +626,7 @@ export interface ChangeEvent {
 
 export type VerificationState = "empty" | "verifying" | "failing" | "verified" | "pending";
 export interface Verification {
+  runner_recoveries?: ({ name: string } & RunnerRecovery)[];
   repair: { number: number; assignee: string | null; url: string } | null;
   branch: string;
   tip: string | null;

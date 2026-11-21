@@ -223,17 +223,26 @@ async fn main_failure_notifies_creation_once_and_recovery_sends_nothing() {
     .await;
     settings(&w, json!({"required_checks": ["test"]})).await;
     let barrier = other_repo(&w, OTHER, true).await;
-    let mut c = runner.claim().await.unwrap();
-    for _ in 0..3 {
+    let alternate = Runner::new(&w, "runner2").await;
+    let mut last = Value::Null;
+    for (n, runner) in [&runner, &alternate]
+        .into_iter()
+        .cycle()
+        .take(4)
+        .enumerate()
+    {
+        let c = runner.next_claim().await;
         assert_eq!(runner.finish(&c, "failure").await.0, 200);
+        last = c;
+        if n == 3 {
+            break;
+        }
         swept(&w, &barrier).await;
         assert!(
             hook.received().is_empty(),
             "automatic retry defers final failure notice"
         );
-        c = runner.claim().await.unwrap();
     }
-    assert_eq!(runner.finish(&c, "failure").await.0, 200);
     eventually("repair ticket notice", || async {
         hook.received().len() == 1
     })
@@ -254,7 +263,7 @@ async fn main_failure_notifies_creation_once_and_recovery_sends_nothing() {
         .ok(&format!("{}/verification", w.repo_path()), &w.owner)
         .await;
     let verified = state["latest_verified"]["sha"].as_str().unwrap();
-    let failed = c["sha"].as_str().unwrap();
+    let failed = last["sha"].as_str().unwrap();
     assert!(
         text.contains(&format!("Range: {}..{}", &verified[..7], &failed[..7])),
         "{text}"
@@ -264,17 +273,18 @@ async fn main_failure_notifies_creation_once_and_recovery_sends_nothing() {
     swept(&w, &barrier).await;
     assert_eq!(hook.received().len(), 1);
     // A failed retry while the ticket is open must not create another notice.
-    let runner = Runner::new(&w, "runner2").await;
+    let runner = Runner::new(&w, "runner3").await;
+    let alternate = Runner::new(&w, "runner4").await;
     let retry_url = format!(
         "{}/jobs/{}/retry",
         w.repo_path(),
-        c["attempt_id"].as_str().unwrap()
+        last["attempt_id"].as_str().unwrap()
     );
     assert_eq!(w.server.post(&retry_url, &w.owner, json!({})).await.0, 200);
     let retry = runner.next_claim().await;
     assert_eq!(runner.finish(&retry, "failure").await.0, 200);
-    let recovery = runner.next_claim().await;
-    assert_eq!(runner.finish(&recovery, "success").await.0, 200);
+    let recovery = alternate.next_claim().await;
+    assert_eq!(alternate.finish(&recovery, "success").await.0, 200);
     eventually("main recovered", || async {
         w.server
             .ok(&format!("{}/verification", w.repo_path()), &w.owner)

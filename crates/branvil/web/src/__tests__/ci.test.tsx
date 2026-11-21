@@ -91,6 +91,13 @@ describe("CI settings", () => {
     const link = await screen.findByRole("link", { name: "acme/demo · rust-test" });
     expect(link.parentElement?.textContent).toBe(`acme/demo · rust-test — ${label}`);
   });
+  it("shows a commit headroom shortfall on its own", async () => {
+    const resource_wait = { attempt_id: "att_waiting", repo: "acme/demo", job: "rust-test", cpu_shortfall: 0, memory_shortfall_mib: 0, commit_shortfall_mib: 4096 };
+    fakeApi({ ...SHELL, "GET /api/v1/admin/ci": json(200, { ...CI, runner: { ...CI.runner, runners: [{ ...HUB_RUNNER, resource_wait }] } }) });
+    renderApp("/-/settings/ci");
+    const link = await screen.findByRole("link", { name: "acme/demo · rust-test" });
+    expect(link.parentElement?.textContent).toBe("acme/demo · rust-test — branvil-runner is short by 4096 MiB of commit headroom");
+  });
   it("shows each part of the settings in its own card to the owner", async () => {
     fakeApi({ ...SHELL, "GET /api/v1/admin/ci": json(200, CI) });
     renderApp("/-/settings/ci");

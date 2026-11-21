@@ -1859,6 +1859,15 @@
         "help": "Page URL of the CI job to retry."
       },
       {
+        "spelling": "--runner",
+        "help": "Run this pull request check on the named runner."
+      },
+      {
+        "spelling": "--exclude-runner",
+        "multiple": true,
+        "help": "Exclude the named runner from this pull request check."
+      },
+      {
         "spelling": "--format",
         "default": "json",
         "choices": [

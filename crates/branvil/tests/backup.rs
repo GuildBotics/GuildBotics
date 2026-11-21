@@ -285,9 +285,9 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     let previous = out_dir.path().join("previous");
     copy_backup(&backup, &previous, &manifest);
     let db = previous.join("branvil.redb");
-    as_schema_38(&db);
+    as_schema_39(&db);
     let mut old = manifest.clone();
-    old["schema_version"] = json!(38);
+    old["schema_version"] = json!(39);
     // Refresh the checksum of the database rewritten by the fixture.
     for f in old["files"].as_array_mut().unwrap() {
         if f["path"] == "branvil.redb" {
@@ -323,12 +323,12 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("from schema version 38 to 39"),
+        text(&out).contains("from schema version 39 to 40"),
         "{}",
         text(&out)
     );
     assert!(
-        text(&out).contains("retired 0 cache refresh attempts"),
+        text(&out).contains("initialized retry decisions for"),
         "{}",
         text(&out)
     );

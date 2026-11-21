@@ -288,7 +288,7 @@ async fn verification_reopened_retry_finishes_with_a_mark_or_fails_again() {
                     .read_sync(|r| priority::class_of(r, &c.attempt))
                     .unwrap()
                     .class,
-                Class::Protected
+                Class::Verify
             );
             f.finish(c, "success");
             f.advance().await;
@@ -581,9 +581,13 @@ async fn narrowing_outside_inconsistent_undetermined_dedup_and_abandonment() {
             .0
             .clone();
     // A later passing verification closes active searches in its transaction.
-    f.push_next().await;
+    let next = f.push_next().await;
     f.advance().await;
-    let main = f.claim();
+    let main =
+        f.ci.inner
+            .store
+            .write_sync(|w| queue::claim_fixture(w, (&f.repo.path, &next), &util::now()))
+            .unwrap();
     assert_eq!(main.attempt.purpose, queue::Purpose::Check);
     f.finish(main, "success");
     f.advance().await;

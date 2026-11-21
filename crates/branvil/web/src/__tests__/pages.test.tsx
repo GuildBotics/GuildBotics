@@ -260,6 +260,41 @@ describe("pages", () => {
     expect(await within(drawer).findByText("reused result of att_original")).toBeInTheDocument();
   });
 
+  it("sends the selected runner and multiple exclusions when retrying a PR job", async () => {
+    const user = userEvent.setup();
+    const sha = "f".repeat(40);
+    const path = "/api/v1/repos/acme/demo/jobs/att_failed";
+    const job = { id: "att_failed", job: "test", retry_supported: true, attempt: 1, sha, status: "completed", conclusion: "failure", runner: "linux", artifact_names: [], reused_from: null };
+    const fake = fakeApi({
+      ...SHELL,
+      "GET /api/v1/repos/acme/demo/pulls": page([]),
+      [`GET /api/v1/repos/acme/demo/commits/${sha}`]: json(200, { sha, message: "PR commit", author: "Test", parents: [] }),
+      [`GET /api/v1/repos/acme/demo/commits/${sha}/checks`]: json(200, { sha, checks_expected: true, checks: [] }),
+      [`GET ${path}`]: json(200, { ...job, retry_runners: ["linux", "windows", "hub"] }),
+      [`GET ${path}/log`]: json(200, { log: "failed", log_bytes: 6, truncated: false }),
+      [`POST ${path}/retry`]: json(200, { id: "att_retry" }),
+      "GET /api/v1/repos/acme/demo/jobs/att_retry": json(200, {
+        ...job, id: "att_retry", attempt: 2, status: "queued", conclusion: null, runner: null,
+        retry_decision: { source_attempt: job.id, requested_by: "aiko", selection: { runner: "windows", exclude_runners: ["linux", "hub"] } },
+        retry_wait: { reason: "offline" },
+      }),
+      "GET /api/v1/repos/acme/demo/jobs/att_retry/log": json(200, { log: "", log_bytes: 0, truncated: false }),
+    });
+    renderApp("/acme/demo/-/jobs/att_failed");
+    const panel = within(await screen.findByRole("dialog", { name: /test/ }));
+    await user.click(panel.getByRole("combobox", { name: "Select runner" }));
+    await user.click(screen.getByRole("option", { name: "windows" }));
+    const exclude = panel.getByRole("combobox", { name: "Exclude runners" });
+    await user.click(exclude);
+    await user.click(screen.getByRole("option", { name: "linux" }));
+    if (!screen.queryByRole("option", { name: "hub" })) await user.click(exclude);
+    await user.click(screen.getByRole("option", { name: "hub" }));
+    await user.click(panel.getByRole("button", { name: "Retry" }));
+    expect(fake.calls("POST", `${path}/retry`)[0]?.body).toEqual({ runner: "windows", exclude_runners: ["linux", "hub"] });
+    expect(await panel.findByText("windows is offline")).toBeInTheDocument();
+    expect(panel.getByRole("link", { name: "Previous attempt" })).toHaveAttribute("href", "/acme/demo/-/jobs/att_failed");
+  });
+
   it.each(["en", "ja"] as const)("disables manual retry on a historical attempt (%s)", async (language) => {
     const sha = "f".repeat(40);
     fakeApi({
