@@ -141,18 +141,38 @@ impl Server {
         if authenticated {
             request = request.bearer_auth(self.owner_token());
         }
-        request.send().await.unwrap_or_else(|error| {
-            let status = match self.child.try_wait() {
-                Ok(Some(status)) => status.to_string(),
-                Ok(None) => "still running".to_owned(),
-                Err(error) => format!("unavailable: {error}"),
-            };
-            let stderr = self.stderr.try_iter().collect::<Vec<_>>().join("\n");
-            panic!(
-                "GET {path} (authenticated: {authenticated}): {error:?}\n\
-                 server child: {status}\nserver stderr:\n{stderr}"
-            );
+        let error = match request.send().await {
+            Ok(response) => return response,
+            Err(error) => error,
+        };
+        // The server may close the connection before its exit becomes visible.
+        let exit = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(status) = self.child.try_wait()? {
+                    return Ok::<_, std::io::Error>(status);
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
         })
+        .await;
+        let status = match exit {
+            Ok(Ok(status)) => status.to_string(),
+            Ok(Err(error)) => format!("unavailable: {error}"),
+            Err(_) => "no exit observed within 1 second".to_owned(),
+        };
+        let deadline = std::time::Instant::now() + Duration::from_millis(250);
+        let mut stderr = Vec::new();
+        while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+            match self.stderr.recv_timeout(remaining) {
+                Ok(line) => stderr.push(line),
+                Err(_) => break,
+            }
+        }
+        panic!(
+            "GET {path} (authenticated: {authenticated}): {error:?}\n\
+             server child: {status}\nserver stderr:\n{}",
+            stderr.join("\n"),
+        );
     }
 
     /// The URL the code host serves on, once it says it is ready.
@@ -245,6 +265,12 @@ async fn command_and_diagnostics_screens_match_the_python_golden() {
     for (name, text) in expected["sessions"].as_object().unwrap() {
         std::fs::write(run.join("sessions").join(name), text.as_str().unwrap()).unwrap();
     }
+    // A real runtime is outside this screen fixture, even in a job VM with KVM.
+    gb_base::files::atomic_write(
+        &root.join(".guildbotics/data/msb"),
+        b"disable runtime upkeep",
+    )
+    .unwrap();
     let port = free_port();
     let mut command = server_command(&root, port);
     command
