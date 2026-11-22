@@ -109,11 +109,11 @@ pub fn declaration_problem(problem: DeclarationProblem) -> Sentence {
 }
 
 /// The installed CLI, shell-quoted so a person can paste the instruction.
-pub fn load_command(home: &std::path::Path) -> Result<String, String> {
-    if !home.is_absolute() {
+pub fn load_command(machine_root: &std::path::Path) -> Result<String, String> {
+    if !machine_root.is_absolute() {
         return Err("The home directory for the managed CLI must be absolute.".into());
     }
-    let executable = home.join(".guildbotics/bin/guildbotics");
+    let executable = gb_base::home::managed_cli(machine_root);
     let executable = executable
         .to_str()
         .ok_or("The managed CLI path is not UTF-8.")?;

@@ -219,7 +219,7 @@ pub(crate) fn tool_refusals(
         host.package
             .join("templates/environment/cli_provision.json"),
     )?)?;
-    let tools = crate::host_window::tool_status(&host.data, &host.home, &catalog, keychain);
+    let tools = crate::host_window::tool_status(&host.data, &catalog, keychain);
     Ok(tools
         .as_array()
         .into_iter()
@@ -398,7 +398,7 @@ pub(crate) async fn usage(
     let data = api.data.clone();
     let home = api.home.clone();
     let keychain = api.keychain.clone();
-    if !crate::host_window::tool_status(&data, &home, &catalog, keychain.as_ref())
+    if !crate::host_window::tool_status(&data, &catalog, keychain.as_ref())
         .as_array()
         .into_iter()
         .flatten()
@@ -436,7 +436,7 @@ pub(crate) async fn usage(
             input.refresh,
             requested,
             || {
-                crate::host_window::tool_status(&data, &home, &catalog, keychain.as_ref())
+                crate::host_window::tool_status(&data, &catalog, keychain.as_ref())
                     .as_array()
                     .into_iter()
                     .flatten()
@@ -565,7 +565,7 @@ pub(crate) async fn status_with(
         host.package
             .join("templates/environment/cli_provision.json"),
     )?)?;
-    let mut tools = crate::host_window::tool_status(&host.data, &host.home, &catalog, keychain);
+    let mut tools = crate::host_window::tool_status(&host.data, &catalog, keychain);
     if let Some(rows) = tools.as_array_mut() {
         for row in rows {
             let name = row["name"].as_str().unwrap_or_default().to_owned();
@@ -704,7 +704,6 @@ pub enum BuildOutcome {
 pub async fn build(
     workspace: &std::path::Path,
     data: &std::path::Path,
-    home: &std::path::Path,
     force: bool,
     language: &str,
     on_line: impl Fn(&str) + Send + Sync + 'static,
@@ -723,7 +722,8 @@ pub async fn build(
         held = runtime::held_image(&runtime_home, &image.reference, &recipe.image)
             .await
             .map_err(|e| anyhow::anyhow!(crate::i18n::say(e.sentence(), language)))?;
-        let command = image::load_command(home).map_err(anyhow::Error::msg)?;
+        let command =
+            image::load_command(data.parent().unwrap_or(data)).map_err(anyhow::Error::msg)?;
         let status = image::status(image, image::device_architecture(), held.clone(), &command);
         if let Some(reason) = status.refusal {
             return Err(anyhow::anyhow!(crate::commands::say(reason, language)));
@@ -853,9 +853,6 @@ pub(crate) async fn build_route(
         .get("x-guildbotics-language")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("en");
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
     begin_output(&workspace);
     let data = api.data.clone();
     let language = language.to_owned();
@@ -865,17 +862,10 @@ pub(crate) async fn build_route(
         build_task(
             &workspace,
             cancelled,
-            build(
-                &workspace,
-                &data,
-                &home,
-                input.force,
-                &language,
-                move |line| {
-                    tracing::info!("{line}");
-                    output(&output_workspace, line);
-                },
-            ),
+            build(&workspace, &data, input.force, &language, move |line| {
+                tracing::info!("{line}");
+                output(&output_workspace, line);
+            }),
         )
         .await;
     });
@@ -1056,7 +1046,7 @@ pub(crate) async fn upkeep(api: Shared) {
         }
         let output_workspace = workspace.clone();
         if should_build
-            && let Err(e) = build(&workspace, &api.data, &home, false, "en", move |line| {
+            && let Err(e) = build(&workspace, &api.data, false, "en", move |line| {
                 tracing::info!("{line}");
                 output(&output_workspace, line);
             })

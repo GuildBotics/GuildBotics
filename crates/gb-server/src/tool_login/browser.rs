@@ -275,14 +275,18 @@ mod tests {
             access(&files, &catalog()).unwrap(),
             "synthetic-browser-login"
         );
-        assert!(
-            crate::host_window::tool_status(
-                &data,
-                root.path(),
-                &serde_json::json!([{"name":"codex","provision":catalog()["provision"]}]),
-                &FakeKeychain
-            )[0]["saved"]
-                == true
+        let tools = crate::host_window::tool_status(
+            &data,
+            &serde_json::json!([{"name":"codex","provision":catalog()["provision"]}]),
+            &FakeKeychain,
+        );
+        assert_eq!(tools[0]["saved"], true);
+        assert_eq!(
+            tools[0]["login_command"],
+            gb_base::shell::managed_cli_command(
+                &root.path().join("bin/guildbotics"),
+                &["environment", "login", "codex"],
+            )
         );
         let mut request =
             format!("ws://127.0.0.1:{port}/-/guildbotics/api/intelligences/cli-agents/codex/login")

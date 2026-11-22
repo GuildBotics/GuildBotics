@@ -4,6 +4,7 @@ use std::{
 };
 
 use gb_base::files::{FileLock, SHARED_WRITE_TIMEOUT, atomic_write};
+use gb_base::home::managed_cli;
 use gb_server::{client, i18n};
 use serde_json::{Value, json};
 
@@ -11,10 +12,6 @@ const SKILL: &[u8] = include_bytes!("../../../skills/guildbotics/SKILL.md");
 const PROVISION: &str =
     include_str!("../../../guildbotics/templates/environment/cli_provision.json");
 const METADATA: &str = ".guildbotics-managed.json";
-#[cfg(unix)]
-const EXECUTABLE: &str = "guildbotics";
-#[cfg(windows)]
-const EXECUTABLE: &str = "guildbotics.exe";
 
 pub async fn run() -> anyhow::Result<()> {
     let language = client::language().await;
@@ -22,20 +19,28 @@ pub async fn run() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.install.home_required", &[])))?;
     let root = gb_base::home::machine_root()?;
     let _install = FileLock::hold(&root.join("install.lock"), SHARED_WRITE_TIMEOUT)?;
-    let bin = root.join("bin");
+    let managed = managed_cli(&root);
+    let bin = managed.parent().unwrap();
     if bin.is_symlink() {
         #[cfg(unix)]
-        fs::remove_file(&bin)?;
+        fs::remove_file(bin)?;
         #[cfg(windows)]
-        fs::remove_dir(&bin)?;
+        fs::remove_dir(bin)?;
     }
-    fs::create_dir_all(&bin)?;
-    let managed = bin.canonicalize()?.join(EXECUTABLE);
+    fs::create_dir_all(bin)?;
+    let managed = managed_cli(&root.canonicalize()?);
     install_binary(&std::env::current_exe()?, &managed)?;
     #[cfg(unix)]
-    install_on_path(&home.join(".local/bin/guildbotics"), &managed)?;
+    {
+        gb_base::home::mark_managed_cli(&managed)?;
+        let entry = managed_cli(&std::path::absolute(home.join(".guildbotics"))?);
+        if entry != managed {
+            install_link_if_vacant(&entry, &managed)?;
+        }
+        install_on_path(&home.join(".local/bin/guildbotics"), &entry)?;
+    }
     #[cfg(windows)]
-    windows_path(&bin)?;
+    windows_path(bin)?;
     println!(
         "{}",
         i18n::t(
@@ -160,7 +165,7 @@ fn shadowing(path: Option<&std::ffi::OsStr>, managed: &Path) -> Option<PathBuf> 
             .map(|ext| format!("guildbotics{ext}"))
             .collect();
         #[cfg(unix)]
-        let names = [EXECUTABLE];
+        let names = [managed.file_name()?];
         for name in names {
             let candidate = directory.join(name);
             if candidate.is_file() {
@@ -201,7 +206,7 @@ fn install_binary(source: &Path, destination: &Path) -> anyhow::Result<()> {
 }
 
 #[cfg(unix)]
-fn install_on_path(path: &Path, managed: &Path) -> anyhow::Result<()> {
+fn install_on_path(path: &Path, entry: &Path) -> anyhow::Result<()> {
     use std::io::Read;
     use std::os::unix::fs::symlink;
 
@@ -218,17 +223,25 @@ fn install_on_path(path: &Path, managed: &Path) -> anyhow::Result<()> {
             }
             let pending = tempfile::tempdir_in(path.parent().unwrap())?;
             let link = pending.path().join("guildbotics");
-            symlink(managed, &link)?;
+            symlink(entry, &link)?;
             fs::rename(link, path)?;
         }
         Ok(_) => (),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir_all(path.parent().unwrap())?;
-            symlink(managed, path)?;
+            install_link_if_vacant(path, entry)?;
         }
         Err(error) => return Err(error.into()),
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn install_link_if_vacant(path: &Path, target: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(path.parent().unwrap())?;
+    match std::os::unix::fs::symlink(target, path) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        result => result,
+    }
 }
 
 fn install_skill(directory: &Path, content: &[u8]) -> anyhow::Result<bool> {
@@ -455,11 +468,16 @@ mod shadow_tests {
             return;
         }
         let temp = tempfile::tempdir().unwrap();
+        let executable = if cfg!(windows) {
+            "guildbotics.exe"
+        } else {
+            "guildbotics"
+        };
         let old = temp.path().join("old");
         let bin = temp.path().join("bin");
         for path in [&old, &bin] {
             std::fs::create_dir(path).unwrap();
-            let cli = path.join(super::EXECUTABLE);
+            let cli = path.join(executable);
             std::fs::write(&cli, "fixture").unwrap();
             #[cfg(unix)]
             {
@@ -467,12 +485,12 @@ mod shadow_tests {
                 std::fs::set_permissions(cli, std::fs::Permissions::from_mode(0o755)).unwrap();
             }
         }
-        let managed = bin.join(super::EXECUTABLE).canonicalize().unwrap();
+        let managed = bin.join(executable).canonicalize().unwrap();
         let path = std::env::join_paths([&old, &bin]).unwrap();
         // PATHEXT may spell the same Windows file with an uppercase extension.
         assert_eq!(
             super::shadowing(Some(&path), &managed).map(|path| path.canonicalize().unwrap()),
-            Some(old.join(super::EXECUTABLE).canonicalize().unwrap())
+            Some(old.join(executable).canonicalize().unwrap())
         );
         let path = std::env::join_paths([&bin, &old]).unwrap();
         assert_eq!(super::shadowing(Some(&path), &managed), None);

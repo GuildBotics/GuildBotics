@@ -495,7 +495,7 @@ async fn branvil_workspaces_and_git_config_need_no_connection() {
         .call("POST", "/config/providers/branvil/git_config", json!({}))
         .await;
     assert_eq!(status, StatusCode::OK, "{v}");
-    let helper = f.api.home.join(".guildbotics/bin/guildbotics");
+    let helper = f.root.join("machine/bin/guildbotics");
     let quoted = gb_base::shell::managed_cli_command(&helper, &["git-credential"])
         .replace('\\', "\\\\")
         .replace('"', "\\\"");

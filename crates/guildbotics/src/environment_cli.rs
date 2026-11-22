@@ -119,14 +119,10 @@ pub async fn run(command: EnvironmentCommand, workspace: Option<PathBuf>) -> any
         }
         EnvironmentCommand::Build { force } => {
             let workspace = gb_server::workspace::resolve(&data, workspace, language)?;
-            let home = std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
-            let built =
-                gb_server::environment::build(&workspace, &data, &home, force, language, |line| {
-                    println!("{line}")
-                })
-                .await?;
+            let built = gb_server::environment::build(&workspace, &data, force, language, |line| {
+                println!("{line}")
+            })
+            .await?;
             use gb_server::environment::BuildOutcome;
             let (path, state) = match built {
                 BuildOutcome::UpToDate(path) => (path, "already up to date"),

@@ -99,7 +99,7 @@ pub(crate) async fn git_config(
     match api.branvil.get() {
         Some(data) => Json(json!({"git_config": git_config_text(
             data.base_url(),
-            &api.home.join(".guildbotics/bin/guildbotics"),
+            &gb_base::home::managed_cli(api.data.parent().unwrap_or(&api.data)),
         )}))
         .into_response(),
         None => error(
