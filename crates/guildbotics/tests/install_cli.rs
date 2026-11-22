@@ -166,34 +166,54 @@ fn git_invokes_the_installed_helper_without_a_home_override() {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     install_at(home, &machine, port);
-    let mut git = Command::new("git")
-        .args(["credential", "fill"])
-        .current_dir(home)
-        .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env_remove("HOME")
-        .env_remove("GUILDBOTICS_HOME")
-        .env("LANGUAGE", "en")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        // Force keychain access to fail after root resolution, without using real credentials.
-        .env(
-            "DBUS_SESSION_BUS_ADDRESS",
-            format!("unix:path={}", home.join("no-keychain.sock").display()),
+    let fill = |explicit_root: Option<&Path>| {
+        let mut command = Command::new("git");
+        command
+            .args(["credential", "fill"])
+            .current_dir(home)
+            .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env_remove("HOME")
+            .env_remove("GUILDBOTICS_HOME")
+            .env("GUILDBOTICS_SERVER_PORT", port.to_string())
+            .env("LANGUAGE", "en")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            // Keep the probe independent of any session keychain.
+            .env(
+                "DBUS_SESSION_BUS_ADDRESS",
+                format!("unix:path={}", home.join("no-keychain.sock").display()),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(root) = explicit_root {
+            command.env("GUILDBOTICS_HOME", root);
+        }
+        let mut git = command.spawn().unwrap();
+        write!(
+            git.stdin.take().unwrap(),
+            "protocol=http\nhost=127.0.0.1:{port}\n\n"
         )
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
         .unwrap();
-    write!(
-        git.stdin.take().unwrap(),
-        "protocol=http\nhost=127.0.0.1:{port}\n\n"
-    )
-    .unwrap();
-    let result = git.wait_with_output().unwrap();
-    assert!(!result.status.success());
-    let error = String::from_utf8(result.stderr).unwrap();
-    assert!(error.contains("OS keychain"), "{error}");
+        git.wait_with_output().unwrap()
+    };
+
+    // The fixture has no credentials. A backend can report either an
+    // unavailable keychain or a missing entry. Both invocations should reach
+    // the same credential lookup after resolving the root.
+    let explicit = fill(Some(&machine));
+    let inferred = fill(None);
+    assert!(!explicit.status.success());
+    assert_eq!(inferred.status, explicit.status);
+    assert!(explicit.stdout.is_empty());
+    assert!(inferred.stdout.is_empty());
+    let expected = String::from_utf8(explicit.stderr).unwrap();
+    let unreachable = gb_server::i18n::t("en", "cli.server.unreachable", &[]);
+    assert!(
+        expected.contains("OS keychain") || expected.contains(&unreachable),
+        "{expected}"
+    );
+    assert_eq!(String::from_utf8(inferred.stderr).unwrap(), expected);
 }
 
 #[cfg(unix)]
