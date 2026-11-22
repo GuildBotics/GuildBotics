@@ -117,7 +117,7 @@ pub fn hint(w: &Wtx, repo: &str, failed_sha: &str, job: &str, narrowing: Hint) -
             )
         }
         Hint::NotReproduced => format!(
-            "Hint: {job} passed two diagnostic runs at {}, where main verification failed. Narrowing stopped because the failure could not be reproduced.",
+            "Hint: Main verification marked {job} as failed at {}. Narrowing observed no failing result for the job and stopped after two successful diagnostic runs at that commit.",
             short(failed_sha)
         ),
     };

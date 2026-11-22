@@ -756,7 +756,7 @@ mod tests {
                             "found" => assert!(c.body.contains("passes at aaaaaaa and fails at bbbbbbb, the first commit where it fails (not from a pull request of this Branvil)")),
                             "outside" => assert!(c.body.contains("also fails at aaaaaaa, the last verified commit")),
                             "inconsistent" => assert!(c.body.contains("aaaaaaa: success [Job](/acme/demo/-/jobs/pass), bbbbbbb: failure [Job](/acme/demo/-/jobs/fail)")),
-                            "not_reproduced" => assert!(c.body.contains("test passed two diagnostic runs at fffffff, where main verification failed. Narrowing stopped because the failure could not be reproduced.")),
+                            "not_reproduced" => assert_eq!(c.body, "Hint: Main verification marked test as failed at fffffff. Narrowing observed no failing result for the job and stopped after two successful diagnostic runs at that commit."),
                             _ => unreachable!(),
                         }
                     }
