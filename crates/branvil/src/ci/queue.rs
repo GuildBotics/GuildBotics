@@ -3094,6 +3094,7 @@ mod tests {
             image: "alpine".into(),
             commands: vec!["true".into()],
             timeout_secs: Some(60),
+            tmpfs_mib: None,
             artifacts: vec![],
             cache: None,
         }

@@ -105,6 +105,7 @@ fn any_purpose_supplies_a_source_but_only_actual_kept_successes_of_the_same_job(
         "other_pull",
         "protected",
         "definition",
+        "tmpfs",
         "network",
         "pruned",
         "reused",
@@ -137,10 +138,12 @@ fn any_purpose_supplies_a_source_but_only_actual_kept_successes_of_the_same_job(
                 source_id = done.id;
             }
             let mut next = head("h3", "feature", "d1");
-            if case == "definition"
-                && let PipelineState::Jobs { jobs } = &mut next.pipeline
-            {
-                jobs[0].commands.push("false".into());
+            if let PipelineState::Jobs { jobs } = &mut next.pipeline {
+                match case {
+                    "definition" => jobs[0].commands.push("false".into()),
+                    "tmpfs" => jobs[0].tmpfs_mib = Some(2048),
+                    _ => {}
+                }
             }
             let c = offer(w, next, T2)?;
             let expected = matches!(case, "other_pull" | "protected" | "refresh");

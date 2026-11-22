@@ -1,8 +1,11 @@
-//! 39 → 40: add the recorded decision for CI retries.
-use crate::config::Layout;
-use crate::store::{self, Rd, Upgraded, Upgrading};
+//! 40 → 41: give recorded CI jobs their previous disk-backed /tmp.
+use anyhow::Context;
+use serde_json::Value;
 
-pub const FROM: u64 = 39;
+use crate::config::Layout;
+use crate::store::{self, Rd, Tbl, Upgraded, Upgrading, Wtx};
+
+pub const FROM: u64 = 40;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
@@ -10,25 +13,118 @@ pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
         return Ok(None);
     };
     db.finish(|w| {
-        let mut count = 0;
-        let mut after = None;
-        loop {
-            let rows = w.prefix_raw(store::CI_ATTEMPTS, &[], after.as_deref(), 512)?;
-            if rows.is_empty() {
-                break;
+        let attempts = update_rows(w, store::CI_ATTEMPTS, |attempt| {
+            disk_tmp(&mut attempt["job"])
+        })?;
+        let runs = update_rows(w, store::CI_RUNS, |run| {
+            let pipeline = &mut run["pipeline"];
+            match pipeline["state"].as_str() {
+                Some("jobs") => {
+                    let jobs = pipeline["jobs"]
+                        .as_array_mut()
+                        .context("CI pipeline is missing its jobs")?;
+                    for job in jobs {
+                        disk_tmp(job)?;
+                    }
+                }
+                Some("absent" | "invalid") => {}
+                _ => anyhow::bail!("CI run has an invalid pipeline state"),
             }
-            for (key, raw) in rows {
-                let mut value: serde_json::Value = store::decode(&raw)?;
-                value["retry_decision"] = serde_json::Value::Null;
-                value["runner_deferrals"] = serde_json::json!({});
-                w.put(store::CI_ATTEMPTS, &key, &value)?;
-                count += 1;
-                after = Some(key);
-            }
-        }
+            Ok(())
+        })?;
         Ok(format!(
-            "initialized retry decisions for {count} CI attempts"
+            "set disk /tmp for jobs in {attempts} CI attempts and {runs} CI runs"
         ))
     })
     .map(Some)
+}
+
+fn disk_tmp(job: &mut Value) -> anyhow::Result<()> {
+    job.as_object_mut()
+        .context("CI record is missing its job definition")?
+        .insert("tmpfs_mib".into(), Value::Null);
+    Ok(())
+}
+
+fn update_rows(
+    w: &Wtx,
+    table: Tbl,
+    update: impl Fn(&mut Value) -> anyhow::Result<()>,
+) -> anyhow::Result<usize> {
+    let mut count = 0;
+    let mut after = None;
+    loop {
+        let rows = w.prefix_raw(table, &[], after.as_deref(), 512)?;
+        if rows.is_empty() {
+            return Ok(count);
+        }
+        for (key, raw) in rows {
+            let mut value = store::decode(&raw)?;
+            update(&mut value)?;
+            w.put(table, &key, &value)?;
+            count += 1;
+            after = Some(key);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ci::{pipeline::JobDef, queue::PipelineState};
+    use crate::store::{Key, Store};
+    use serde_json::json;
+
+    #[test]
+    fn upgrade_keeps_all_saved_jobs_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(dir.path());
+        let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
+        let job = json!({
+            "verified_sha": false, "name": "test", "image": "alpine", "commands": ["true"],
+            "paths": [], "timeout_secs": null, "artifacts": [], "cache": null,
+        });
+        let mut lint = job.clone();
+        lint["name"] = json!("lint");
+        let absent = json!({"pipeline": {"state": "absent"}});
+        let invalid = json!({"pipeline": {"state": "invalid", "message": "bad pipeline"}});
+        assert!(serde_json::from_value::<JobDef>(job.clone()).is_err());
+        db.write_sync(|w| {
+            w.put(store::CI_ATTEMPTS, b"a", &json!({"job": job, "number": 3}))?;
+            w.put(
+                store::CI_RUNS,
+                b"jobs",
+                &json!({"pipeline": {"state": "jobs", "jobs": [job, lint]}}),
+            )?;
+            w.put(store::CI_RUNS, b"absent", &absent)?;
+            w.put(store::CI_RUNS, b"invalid", &invalid)?;
+            w.put(store::META, &Key::new().s("schema_version").bytes(), &FROM)
+        })
+        .unwrap();
+        drop(db);
+
+        let upgraded = upgrade(&layout).unwrap().unwrap();
+        assert_eq!(upgraded.from, FROM);
+        let db = Upgrading::open(&layout.db()).unwrap();
+        assert!(db.is_none());
+        let db = redb::Database::open(layout.db()).unwrap();
+        let r = redb::ReadableDatabase::begin_read(&db).unwrap();
+        let attempt: Value = r.get(store::CI_ATTEMPTS, b"a").unwrap().unwrap();
+        assert_eq!(attempt["number"], 3);
+        let job: JobDef = serde_json::from_value(attempt["job"].clone()).unwrap();
+        assert_eq!((job.name.as_str(), job.tmpfs_mib), ("test", None));
+        let run: Value = r.get(store::CI_RUNS, b"jobs").unwrap().unwrap();
+        let PipelineState::Jobs { jobs } = serde_json::from_value(run["pipeline"].clone()).unwrap()
+        else {
+            panic!("expected jobs in the upgraded pipeline");
+        };
+        assert_eq!(
+            jobs.iter()
+                .map(|job| (job.name.as_str(), job.tmpfs_mib))
+                .collect::<Vec<_>>(),
+            [("test", None), ("lint", None)]
+        );
+        assert_eq!(r.get(store::CI_RUNS, b"absent").unwrap(), Some(absent));
+        assert_eq!(r.get(store::CI_RUNS, b"invalid").unwrap(), Some(invalid));
+    }
 }

@@ -655,6 +655,24 @@ impl Microsandbox {
         format!("bv-tmp-{}-{id}", self.runner)
     }
 
+    fn mount_job_tmp_cli(
+        &self,
+        cmd: &mut tokio::process::Command,
+        attempt_id: &str,
+        tmpfs_mib: Option<u32>,
+    ) {
+        if let Some(mib) = tmpfs_mib {
+            // msb gives a tmpfs at /tmp mode 1777 and leaves it executable.
+            cmd.args(["--tmpfs", &format!("/tmp:{mib}M")]);
+        } else {
+            let name = self.tmp_volume(attempt_id);
+            cmd.args([
+                "--mount-named",
+                &format!("{name}:/tmp:kind=disk,size={TMP_DISK_MIB}M"),
+            ]);
+        }
+    }
+
     /// The volume of a job's `/work`, named like its `/tmp`'s.
     fn work_volume(&self, id: &str) -> String {
         format!("bv-work-{}-{id}", self.runner)
@@ -869,7 +887,7 @@ pub const JOB_USER_ID: u32 = 1000;
 
 /// The size of the disk a job's `/tmp` is on: the size of the root disk msb
 /// gives a VM by default, which Branvil keeps.
-const TMP_DISK: &str = "4G";
+const TMP_DISK_MIB: u32 = 4096;
 
 /// Where the transfer directory ([`JobRun::io`]) is mounted in the VMs that
 /// prepare and collect `/work`.
@@ -1751,11 +1769,11 @@ impl Microsandbox {
             return Outcome::StartupFailure(self.missing());
         };
         let name = Self::sandbox_name(job.attempt_id);
-        let tmp = self.tmp_volume(job.attempt_id);
         let owner = format!("uid={JOB_USER_ID},gid={JOB_USER_ID}");
         let j = job.job;
         cmd.args(["run", "--name", &name, "--quiet", "--pull", "never"]);
         disk.attach_to_cli(&mut cmd, "/work");
+        self.mount_job_tmp_cli(&mut cmd, job.attempt_id, j.tmpfs_mib);
         cmd.args(["--label", &format!("branvil.runner={}", self.runner)])
             .args(["--label", &format!("branvil.job={}", job.attempt_id)])
             .args(["--cpus", &job.cpus.to_string()])
@@ -1768,11 +1786,6 @@ impl Microsandbox {
                     "{log_dir}:{LOG_MOUNT}:{owner},quota={}M",
                     job.work_quota_mib
                 ),
-            ])
-            // On a disk, not in the VM's memory (msb's default /tmp).
-            .args([
-                "--mount-named",
-                &format!("{tmp}:/tmp:kind=disk,size={TMP_DISK}"),
             ])
             .args(["--workdir", "/work"])
             // Backstop: the VM itself ends shortly after the job's timeout.
@@ -2120,6 +2133,17 @@ pub(crate) mod tests {
     use super::*;
 
     #[test]
+    fn cli_job_tmpfs_uses_the_requested_size_without_a_named_volume() {
+        let runner = Microsandbox::new(Msb::Missing(String::new()), PathBuf::new(), "fixture");
+        let mut cmd = tokio::process::Command::new("msb");
+        runner.mount_job_tmp_cli(&mut cmd, "attempt", Some(2048));
+        assert_eq!(
+            cmd.as_std().get_args().collect::<Vec<_>>(),
+            ["--tmpfs", "/tmp:2048M"]
+        );
+    }
+
+    #[test]
     fn windows_directories_reach_msb_as_plain_drive_paths() {
         // Windows' canonical form of a plain path: it drops a component's
         // trailing dots and spaces, which the verbatim form keeps.
@@ -2388,6 +2412,7 @@ esac
             image: "img:dev".into(),
             commands: vec![],
             timeout_secs: None,
+            tmpfs_mib: None,
             artifacts: vec![],
             cache: None,
         };
@@ -2481,7 +2506,7 @@ esac
                     root.join("log").display()
                 ),
             ),
-            ("--mount-named", "bv-tmp-t-a1:/tmp:kind=disk,size=4G"),
+            ("--mount-named", "bv-tmp-t-a1:/tmp:kind=disk,size=4096M"),
         ] {
             assert!(has(&ran, flag, value), "{flag} {value} in {ran}");
         }
@@ -2617,6 +2642,7 @@ esac
             image: "img:dev".into(),
             commands: vec![],
             timeout_secs: None,
+            tmpfs_mib: None,
             artifacts: vec![crate::ci::pipeline::ArtifactDef {
                 name: "report".into(),
                 paths: vec!["out/".into()],

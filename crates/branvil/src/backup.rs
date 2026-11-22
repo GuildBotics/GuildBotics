@@ -611,6 +611,7 @@ mod tests {
                     image: "alpine".into(),
                     commands: vec!["true".into()],
                     timeout_secs: None,
+                    tmpfs_mib: None,
                     artifacts: vec![],
                     cache: None,
                 };

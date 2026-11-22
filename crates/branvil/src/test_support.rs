@@ -339,6 +339,7 @@ pub async fn check(
                 commands: vec!["true".into()],
                 paths: vec![],
                 timeout_secs: None,
+                tmpfs_mib: None,
                 artifacts: vec![],
                 cache: None,
             }],

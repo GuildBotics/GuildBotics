@@ -12,6 +12,9 @@ pub struct JobDef {
     /// The job's own time limit, when it gives one; the runner lowers it to
     /// its limit and runs a job that gives none with its limit.
     pub timeout_secs: Option<u64>,
+    /// The maximum size of the job's /tmp in MiB. None uses a disk.
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    pub tmpfs_mib: Option<u32>,
     pub artifacts: Vec<ArtifactDef>,
     pub cache: Option<CacheDef>,
 }
