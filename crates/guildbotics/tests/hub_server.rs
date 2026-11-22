@@ -2204,6 +2204,93 @@ fn update_uses_the_installed_identity_root_instead_of_the_shells_selection() {
 }
 
 #[test]
+fn storage_holds_builds_and_backups_away_from_the_state_directory() {
+    let hub = Hub::new();
+    let storage = hub.root().join("other disk");
+    let name = storage.to_str().unwrap();
+    let state = hub.builds().parent().unwrap().to_path_buf();
+    hub.run_with(
+        "install",
+        &[
+            ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY),
+            ("GUILDBOTICS_HUB_STORAGE", name),
+        ],
+        true,
+    );
+    let held = fs::canonicalize(storage.join("Hub")).unwrap();
+    assert!(hub.installed_build().starts_with(held.join("builds")));
+    assert!(held.join("target/release/guildbotics").exists());
+    assert!(fs::read_to_string(hub.plist()).unwrap().contains(&format!(
+        "<key>GUILDBOTICS_HUB_STORAGE</key><string>{name}</string>"
+    )));
+
+    // An update uses the recorded place, whatever the shell sets.
+    hub.commit("new");
+    hub.run_with(
+        "update",
+        &[("GUILDBOTICS_HUB_STORAGE", "/unrelated/storage")],
+        true,
+    );
+    hub.assert_runs_signed("new");
+    assert!(hub.installed_build().starts_with(held.join("builds")));
+    assert_eq!(fs::read_dir(held.join("backups")).unwrap().count(), 1);
+    assert!(!held.join("operation").exists());
+    // Only what launchd and the lock need stays in the state directory.
+    assert!(state.join("builds/current").exists());
+    assert!(hub.source_trees().is_empty());
+    assert!(!state.join("target").exists());
+    assert!(!state.join("backups").exists());
+
+    // Moving it takes a new installation: the running build reads its source there.
+    let out = hub.run_with(
+        "install",
+        &[
+            ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY),
+            ("GUILDBOTICS_HUB_STORAGE", "/unrelated/storage"),
+        ],
+        false,
+    );
+    assert!(text(&out).contains("GUILDBOTICS_HUB_STORAGE differs"));
+
+    // Guidance to install again keeps the place.
+    fs::remove_file(state.join("signing-identity")).unwrap();
+    let out = hub.run("update", None, false);
+    assert!(text(&out).contains(&format!("GUILDBOTICS_HUB_STORAGE='{name}'")));
+}
+
+#[test]
+fn a_hub_copy_keeps_its_own_storage() {
+    let hub = Hub::new();
+    let storage = hub.root().join("storage");
+    hub.run_with(
+        "install",
+        &[
+            ("GUILDBOTICS_HUB_INSTANCE", "copy"),
+            ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY),
+            ("GUILDBOTICS_HUB_STORAGE", storage.to_str().unwrap()),
+        ],
+        true,
+    );
+    assert!(storage.join("Hub-copy/target/release/guildbotics").exists());
+    assert!(!storage.join("Hub").exists());
+}
+
+#[test]
+fn storage_must_be_an_absolute_path() {
+    let hub = Hub::new();
+    let out = hub.run_with(
+        "install",
+        &[
+            ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY),
+            ("GUILDBOTICS_HUB_STORAGE", "relative/storage"),
+        ],
+        false,
+    );
+    assert!(text(&out).contains("GUILDBOTICS_HUB_STORAGE must be an absolute path."));
+    assert!(!hub.repo.join("relative").exists());
+}
+
+#[test]
 fn automatic_and_manual_updates_wait_for_client_artifacts() {
     let hub = Hub::new();
     hub.install();
