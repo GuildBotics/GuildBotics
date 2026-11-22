@@ -68,6 +68,8 @@ signing=$hub/signing-identity
 storage=$hub
 sources=$builds
 backups=$hub/backups
+# Never the lock: however the storage path is spelled, removing this keeps it.
+scratch=$storage/update-files
 
 if [ "$action" = status ]; then exec launchctl print "$target"; fi
 
@@ -77,7 +79,6 @@ if [ "$action" = auto-once ]; then exec "$current" server hub-auto-update --chec
 # Use one lock for the build pointer, backup rotation and LaunchAgent changes.
 mkdir -p "$builds"
 lock=$hub/operation
-scratch=$lock
 mkdir "$lock" 2>/dev/null || fail "Another Hub operation holds $lock. See docs/hub-server.md."
 stage=setup
 finish() {
@@ -86,7 +87,9 @@ finish() {
         message="$(date -u +%FT%TZ): Hub $action failed during $stage (exit $1, active revision: ${running##*/}, requested revision: ${revision:-unknown})."
         printf '%s\n' "$message" | tee "$hub/last-failure" >&2 || true
     fi
-    rm -rf "$lock" "$scratch"
+    # The next operation shares the scratch directory: clear it before unlocking.
+    rm -rf "$scratch" || :
+    rm -rf "$lock"
 }
 trap 'finish "$?"' 0
 trap 'exit 130' INT
@@ -226,8 +229,8 @@ build_head() {
     revision=$(git -C "$repo" rev-parse --verify HEAD)
     source=$sources/$revision
     candidate=$source/guildbotics-bin
-    # A killed operation can leave its scratch files outside the lock.
-    [ "$scratch" = "$lock" ] || rm -rf "$scratch"
+    # A killed operation can leave its scratch files behind.
+    rm -rf "$scratch"
     mkdir -p "$sources" "$scratch"
     if [ -x "$candidate" ]; then
         cp "$candidate" "$candidate.new"
@@ -324,12 +327,18 @@ write_plist() {
     plutil -lint "$lock/agent.plist" >/dev/null || return
     mv -f "$lock/agent.plist" "$plist"
 }
+# A disk that is not mounted stops the operation: creating its path would put
+# the build on another disk, which the mounted disk would later hide.
+require_storage() {
+    [ -z "${GUILDBOTICS_HUB_STORAGE:-}" ] || [ -d "$GUILDBOTICS_HUB_STORAGE" ] ||
+        fail "GUILDBOTICS_HUB_STORAGE ($GUILDBOTICS_HUB_STORAGE) is not available. Mount the disk and retry."
+}
 use_storage() {
     [ -n "${GUILDBOTICS_HUB_STORAGE:-}" ] || return 0
     storage=$GUILDBOTICS_HUB_STORAGE/Hub${instance:+-$instance}
     sources=$storage/builds
     backups=$storage/backups
-    scratch=$storage/operation
+    scratch=$storage/update-files
 }
 read_plist() {
     # Build with the invoking shell's tools, but run commands against the same
@@ -409,6 +418,8 @@ rollback() {
 if [ "$action" != install ]; then
     require_agent
     read_plist
+    # Uninstalling stays possible while the disk is away.
+    [ "$action" = uninstall ] || require_storage
 fi
 if [ -e "$pending" ] && [ "$action" != recover ]; then
     fail "An update has not finished. Run: $self recover"
@@ -431,6 +442,16 @@ case "$action" in
 '*) fail "Paths and environment settings must not contain line breaks." ;;
         esac
         export BRANVIL_DATA_DIR GUILDBOTICS_HOME
+        if [ -n "${GUILDBOTICS_HUB_STORAGE:-}" ]; then
+            require_storage
+            # Record one spelling: backup rotation compares these paths as text.
+            GUILDBOTICS_HUB_STORAGE=$(CDPATH='' cd -P -- "$GUILDBOTICS_HUB_STORAGE" && pwd -P)
+            # Pruning and the lock's removal must not reach into it.
+            state_root=$(CDPATH='' cd -P -- "$hub/.." && pwd -P)
+            case "$GUILDBOTICS_HUB_STORAGE/" in
+                "$state_root"/*) fail "GUILDBOTICS_HUB_STORAGE must be outside $state_root." ;;
+            esac
+        fi
         if [ -e "$plist" ] || loaded; then
             installed || fail "Remove the existing $label LaunchAgent before installing the integrated server."
             [ "$(setting EnvironmentVariables.GUILDBOTICS_HUB_STORAGE || true)" = "${GUILDBOTICS_HUB_STORAGE:-}" ] ||

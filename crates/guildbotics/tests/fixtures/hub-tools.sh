@@ -10,6 +10,11 @@ case "$name" in
     uname) cat "$FAKE_ROOT/os" ;;
     id) printf '1234\n' ;;
     npm) : ;;
+    # A test links these to record the call; the real tool still does the work.
+    rm|tar)
+        PATH=${PATH#*:}
+        exec "$name" "$@"
+        ;;
     node) printf 'v24.0.0\n' ;;
     rustc) printf 'rustc %s (fixture)\n' "$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)" ;;
     cargo)

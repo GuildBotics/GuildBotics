@@ -51,16 +51,24 @@ scripts/hub-server.sh uninstall  # 停止してLaunchAgentの登録を解除
 
 ### ビルドとバックアップを別のディスクに置く
 
-更新のたびに大きく書き換わるビルドのソース、Cargoの `target`、バックアップ、予行の写しは、`GUILDBOTICS_HUB_STORAGE` の絶対パスの下の `Hub`（Hubの写しは `Hub-<名前>`）へ移せます。指定しなければ、これまでどおり `~/Library/Application Support/GuildBotics/Hub` を使います。LaunchAgentが起動する `builds/current`、更新途中のコピー、署名の識別、ロックは、macOSの許可を保つために元の場所に残ります。動いているビルドはこの置き場のソースを読むので、ログイン時にディスクがマウントされている必要があります。リンクを通るパスは指定しないでください。
+更新のたびに大きく書き換わるビルドのソース、Cargoの `target`、バックアップ、予行の写しは、`GUILDBOTICS_HUB_STORAGE` の絶対パスの下の `Hub`（Hubの写しは `Hub-<名前>`）へ移せます。指定しなければ、これまでどおり `~/Library/Application Support/GuildBotics/Hub` を使います。LaunchAgentが起動する `builds/current`、更新途中のコピー、署名の識別、ロックは、macOSの許可を保つために元の場所に残ります。動いているビルドはこの置き場のソースを読むので、ログイン時にディスクがマウントされている必要があります。置き場が見つからないとき、`update`、`restart`、`recover` は何も変えずに止まります。
 
-値は `install` のときにLaunchAgentへ記録し、`update` はその値を使います。変えるときは登録を解除してから、新しい値でインストールし直します。
+置き場には、APFSなど所有者とアクセス権を保てるファイルシステムの既存のディレクトリを、`~/Library/Application Support/GuildBotics` の外に指定します。その下の `Hub` と `Hub-<名前>` はこの機能の専用です。リンクを通るパスは指定しないでください。
+
+値は `install` のときにLaunchAgentへ記録し、`update` はその値を使います。変えるときは登録を解除してから、新しい値でインストールし直します。`uninstall` は記録した値も消します。切り替えでデータの変換を飛ばさないよう、チェックアウトを動いているビルドのコミットに合わせてから入れ直します。自動更新を登録していない場合は `auto-uninstall` と `auto-install` を省きます。
 
 ```sh
+scripts/hub-server.sh auto-uninstall
+hub="$HOME/Library/Application Support/GuildBotics/Hub"
+git switch --detach "$(basename "$("$hub/builds/current" server hub-probe --source)")"
 scripts/hub-server.sh uninstall
 export BRANVIL_DATA_DIR="/absolute/path/to/code-host-data"
 export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
 export GUILDBOTICS_HUB_STORAGE="/Volumes/<ディスク名>/guildbotics-hub"
+mkdir -p "$GUILDBOTICS_HUB_STORAGE"
 scripts/hub-server.sh install
+git switch main
+scripts/hub-server.sh auto-install
 ```
 
 `GUILDBOTICS_HOME` などを変えていた場合は、それも同じ値を設定します。元の場所の `builds/<commit>/`、`target`、`backups/` は自動では消しません。新しい置き場で動くことを確かめてから整理してください。
@@ -300,7 +308,7 @@ scripts/hub-server.sh auto-install
 Hubと別のものを設定し、`GUILDBOTICS_IDENTITY_ROOT` は外します（写しは `GUILDBOTICS_HOME` の下のidentityを使います）。
 以後の操作でも同じ `GUILDBOTICS_HUB_INSTANCE` を設定します。写しの `install` と `update` も、AI CLIのユーザースキルを
 写しの版で書き換えます。
-片付けは `auto-uninstall`、`uninstall` のあと、状態とデータのディレクトリを削除し、
+片付けは `auto-uninstall`、`uninstall` のあと、状態とデータのディレクトリ（`GUILDBOTICS_HUB_STORAGE` を指定した場合は、その下の `Hub-<名前>` も）を削除し、
 Hubの `builds/current install` でスキルを戻します。
 
 ```sh

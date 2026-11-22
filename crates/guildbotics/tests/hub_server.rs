@@ -159,6 +159,19 @@ impl Hub {
         result
     }
 
+    /// An existing storage directory, by its physical path as the Hub records it.
+    fn storage(&self, name: &str) -> PathBuf {
+        let path = self.root().join(name);
+        fs::create_dir(&path).unwrap();
+        fs::canonicalize(path).unwrap()
+    }
+
+    /// Records the calls of a real tool, which still does the work.
+    fn link_tool(&self, name: &str) {
+        let tools = self.root().join("tools");
+        symlink(tools.join("stub"), tools.join(name)).unwrap();
+    }
+
     fn calls_contain(&self, call: &str) -> bool {
         self.lines("calls").contains(call)
     }
@@ -2206,25 +2219,28 @@ fn update_uses_the_installed_identity_root_instead_of_the_shells_selection() {
 #[test]
 fn storage_holds_builds_and_backups_away_from_the_state_directory() {
     let hub = Hub::new();
-    let storage = hub.root().join("other disk");
+    let storage = hub.storage("other disk");
     let name = storage.to_str().unwrap();
     let state = hub.builds().parent().unwrap().to_path_buf();
+    // A trailing slash is recorded in the one spelling backups are compared by.
     hub.run_with(
         "install",
         &[
             ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY),
-            ("GUILDBOTICS_HUB_STORAGE", name),
+            ("GUILDBOTICS_HUB_STORAGE", &format!("{name}/")),
         ],
         true,
     );
-    let held = fs::canonicalize(storage.join("Hub")).unwrap();
-    assert!(hub.installed_build().starts_with(held.join("builds")));
+    let held = storage.join("Hub");
+    let first = hub.installed_build();
+    assert!(first.starts_with(held.join("builds")));
     assert!(held.join("target/release/guildbotics").exists());
     assert!(fs::read_to_string(hub.plist()).unwrap().contains(&format!(
         "<key>GUILDBOTICS_HUB_STORAGE</key><string>{name}</string>"
     )));
 
     // An update uses the recorded place, whatever the shell sets.
+    hub.link_tool("tar");
     hub.commit("new");
     hub.run_with(
         "update",
@@ -2234,19 +2250,45 @@ fn storage_holds_builds_and_backups_away_from_the_state_directory() {
     hub.assert_runs_signed("new");
     assert!(hub.installed_build().starts_with(held.join("builds")));
     assert_eq!(fs::read_dir(held.join("backups")).unwrap().count(), 1);
-    assert!(!held.join("operation").exists());
+    // The source archive and the rehearsal are written there too.
+    let scratch = storage.join("Hub/update-files");
+    assert!(hub.calls_contain(&format!(
+        "tar|-xmf|{}|-C|",
+        scratch.join("source.tar").display()
+    )));
+    let actions = hub.lines("actions");
+    let rehearsal = format!("|--data-dir|{}", scratch.join("rehearsal").display());
+    for step in ["restore", "upgrade"] {
+        let prefix = format!("new|server|hub-data|{step}|");
+        assert!(
+            actions
+                .lines()
+                .any(|line| line.starts_with(&prefix) && line.ends_with(&rehearsal)),
+            "{actions}"
+        );
+    }
+    assert!(!scratch.exists());
     // Only what launchd and the lock need stays in the state directory.
     assert!(state.join("builds/current").exists());
     assert!(hub.source_trees().is_empty());
     assert!(!state.join("target").exists());
     assert!(!state.join("backups").exists());
+    assert!(!state.join("update-files").exists());
+
+    // The running build is found, and unused builds are pruned, in the storage.
+    let out = hub.run("update", None, true);
+    assert!(text(&out).contains("The Hub already uses"));
+    hub.commit("newer");
+    hub.run("update", None, true);
+    assert!(!first.parent().unwrap().exists());
 
     // Moving it takes a new installation: the running build reads its source there.
+    let another = hub.storage("another disk");
     let out = hub.run_with(
         "install",
         &[
             ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY),
-            ("GUILDBOTICS_HUB_STORAGE", "/unrelated/storage"),
+            ("GUILDBOTICS_HUB_STORAGE", another.to_str().unwrap()),
         ],
         false,
     );
@@ -2259,9 +2301,84 @@ fn storage_holds_builds_and_backups_away_from_the_state_directory() {
 }
 
 #[test]
+fn an_operation_clears_its_scratch_files_before_it_unlocks() {
+    let hub = Hub::new();
+    let storage = hub.storage("storage");
+    hub.run_with(
+        "install",
+        &[
+            ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY),
+            ("GUILDBOTICS_HUB_STORAGE", storage.to_str().unwrap()),
+        ],
+        true,
+    );
+    hub.link_tool("rm");
+    hub.run("restart", None, true);
+    let lock = hub.builds().parent().unwrap().join("operation");
+    in_order(
+        &hub.lines("calls"),
+        &[
+            &format!("rm|-rf|{}\n", storage.join("Hub/update-files").display()),
+            &format!("rm|-rf|{}\n", lock.display()),
+        ],
+    );
+}
+
+#[test]
+fn storage_cannot_reach_into_the_hubs_state() {
+    let hub = Hub::new();
+    let state = hub.builds().parent().unwrap().to_path_buf();
+    fs::create_dir_all(&state).unwrap();
+    for storage in [
+        format!("{}/", state.parent().unwrap().display()),
+        state.join("builds").display().to_string(),
+        state.join("operation").display().to_string(),
+    ] {
+        let out = hub.run_with(
+            "install",
+            &[
+                ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY),
+                ("GUILDBOTICS_HUB_STORAGE", &storage),
+            ],
+            false,
+        );
+        assert!(text(&out).contains("must be outside"), "{storage}");
+        assert!(!hub.calls_contain("cargo|"));
+        assert!(!state.join("operation").exists());
+    }
+}
+
+#[test]
+fn a_missing_storage_disk_stops_before_anything_changes() {
+    let hub = Hub::new();
+    let storage = hub.storage("disk");
+    hub.run_with(
+        "install",
+        &[
+            ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY),
+            ("GUILDBOTICS_HUB_STORAGE", storage.to_str().unwrap()),
+        ],
+        true,
+    );
+    let old = hub.installed_build();
+    fs::rename(&storage, hub.root().join("unmounted")).unwrap();
+    hub.commit("new");
+    for action in ["update", "restart", "recover"] {
+        let out = hub.run(action, None, false);
+        assert!(text(&out).contains("is not available"), "{action}");
+        assert!(!storage.exists(), "{action}");
+        assert!(!hub.lines("calls").contains("server|stop"), "{action}");
+    }
+    assert_eq!(hub.installed_build(), old);
+    assert_eq!(hub.lines("holder"), "42\n");
+    hub.run("uninstall", None, true);
+    assert!(!hub.plist().exists());
+}
+
+#[test]
 fn a_hub_copy_keeps_its_own_storage() {
     let hub = Hub::new();
-    let storage = hub.root().join("storage");
+    let storage = hub.storage("storage");
     hub.run_with(
         "install",
         &[
@@ -2276,18 +2393,28 @@ fn a_hub_copy_keeps_its_own_storage() {
 }
 
 #[test]
-fn storage_must_be_an_absolute_path() {
+fn storage_must_be_an_existing_absolute_path() {
     let hub = Hub::new();
-    let out = hub.run_with(
-        "install",
-        &[
-            ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY),
-            ("GUILDBOTICS_HUB_STORAGE", "relative/storage"),
-        ],
-        false,
-    );
-    assert!(text(&out).contains("GUILDBOTICS_HUB_STORAGE must be an absolute path."));
+    let missing = hub.root().join("missing");
+    for (storage, message) in [
+        (
+            "relative/storage",
+            "GUILDBOTICS_HUB_STORAGE must be an absolute path.",
+        ),
+        (missing.to_str().unwrap(), "is not available"),
+    ] {
+        let out = hub.run_with(
+            "install",
+            &[
+                ("GUILDBOTICS_HUB_SIGNING_IDENTITY", IDENTITY),
+                ("GUILDBOTICS_HUB_STORAGE", storage),
+            ],
+            false,
+        );
+        assert!(text(&out).contains(message), "{storage}");
+    }
     assert!(!hub.repo.join("relative").exists());
+    assert!(!missing.exists());
 }
 
 #[test]
