@@ -3094,6 +3094,7 @@ mod tests {
             image: "alpine".into(),
             commands: vec!["true".into()],
             timeout_secs: Some(60),
+            tmpfs_mib: None,
             artifacts: vec![],
             cache: None,
         }
@@ -3441,7 +3442,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_schema_keeps_executions_and_pending_attempts_with_no_retry_decision() {
+    fn previous_schema_keeps_executions_and_pending_attempts_on_disk() {
         let dir = tempfile::tempdir().unwrap();
         let layout = crate::config::Layout::new(dir.path());
         let path = layout.db();
@@ -3453,9 +3454,16 @@ mod tests {
                 let pending = attempts_of(w, &source.repo, "pending")?.remove(0);
                 for a in [&source, &pending] {
                     let mut record = serde_json::to_value(a).map_err(AppError::internal)?;
-                    record.as_object_mut().unwrap().remove("retry_decision");
-                    record.as_object_mut().unwrap().remove("runner_deferrals");
+                    record["job"].as_object_mut().unwrap().remove("tmpfs_mib");
                     w.put(store::CI_ATTEMPTS, &Attempt::key(&a.id), &record)?;
+                }
+                for sha in ["source", "pending"] {
+                    let run = get_run(w, &source.repo, sha)?.unwrap();
+                    let mut record = serde_json::to_value(run).map_err(AppError::internal)?;
+                    for job in record["pipeline"]["jobs"].as_array_mut().unwrap() {
+                        job.as_object_mut().unwrap().remove("tmpfs_mib");
+                    }
+                    w.put(store::CI_RUNS, &run_key(&source.repo, sha), &record)?;
                 }
                 w.put(
                     store::META,
@@ -3473,6 +3481,12 @@ mod tests {
         db.read_sync(|r| {
             assert_eq!(get_attempt(r, &source.id)?.unwrap(), source);
             assert_eq!(get_attempt(r, &pending.id)?.unwrap(), pending);
+            for sha in ["source", "pending"] {
+                assert_eq!(
+                    get_run(r, &source.repo, sha)?.unwrap().pipeline,
+                    cached(sha).pipeline
+                );
+            }
             assert_eq!(pending_count(r, 10)?, 1);
             assert!(crate::model::index_problems(r)?.is_empty());
             Ok(())

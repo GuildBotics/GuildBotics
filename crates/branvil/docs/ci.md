@@ -85,6 +85,7 @@ commands = ["./scripts/test.sh", "make lint"]   # 1-64 commands, each run by /bi
 paths = ["src/**", "tests/*.rs", "Cargo.lock"]  # optional; empty/omitted runs every change
 verified_sha = false             # optional; declares BRANVIL_VERIFIED_SHA as an input
 timeout_secs = 600                # optional, 1-86400; default the runner's time limit
+tmpfs_mib = 2048                   # optional, 1-4096; /tmp uses a 4 GiB disk by default
 artifacts = [{ name = "report", paths = ["out/report/", "coverage.xml"] }]   # up to 16
 cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # optional
 ```
@@ -264,12 +265,15 @@ What a job's commands find, as on common CI services:
   the home the image's passwd gives uid 1000 when that user can write it, and
   `/tmp/home` (created) otherwise; the user may not exist in the image's
   passwd.
-- **`/tmp` is on a disk, not in the VM's memory**: an ext4 disk of 4 GiB of
-  the job's own (mode 1777), a named volume `bv-tmp-<runner>-<attempt id>`
-  the runner removes after the job. (Without it, microsandbox puts `/tmp` in
-  a tmpfs of a quarter of the VM's memory, at most 512 MiB.) The VM's root
-  disk (Branvil passes no `--root-disk`) and `/tmp` are microsandbox's 4 GiB
-  default. `/work` is an ext4 disk of the job's own too, a named volume
+- **`/tmp` is private to the job**, writable and executable by the job user
+  (mode 1777). By default it is a 4 GiB ext4 disk, a named volume
+  `bv-tmp-<runner>-<attempt id>` that the runner removes after the job. A job
+  can instead set `tmpfs_mib` to an integer from 1 to 4096. The runner then
+  mounts a tmpfs of that maximum size and creates no `/tmp` volume. Files
+  written there use the job VM's memory, so the job's commands and temporary
+  files share its memory limit. A change to `tmpfs_mib` changes the job
+  definition used to match reusable results. The VM's root disk still uses
+  microsandbox's 4 GiB default. `/work` is an ext4 disk of the job's own, a named volume
   `bv-work-<runner>-<attempt id>`: what the job may add to it beyond the
   checkout and the restored cache is `ci.executor.work_quota_mib` (16 GiB by
   default; a workspace built from scratch outgrows microsandbox's 4 GiB

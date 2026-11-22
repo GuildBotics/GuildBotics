@@ -1779,7 +1779,7 @@ esac
                     "attempt_id":"att", "lease":"lease", "lease_secs":60,
                     "repo":"acme/demo", "sha":"head", "attempt":1,
                     "job":{"name":"test", "image":"alpine", "commands":["true"], "paths":[],
-                        "timeout_secs":null, "artifacts":[], "cache":null, "verified_sha":declared},
+                        "timeout_secs":null, "tmpfs_mib":null, "artifacts":[], "cache":null, "verified_sha":declared},
                     "verified_sha":verified, "cache_write":true, "network":false,
                     "queued_secs":0, "reuse":null, "reuse_only":false,
                     "limits": crate::ci::config::JobLimits::from(&crate::ci::config::ExecutorConfig::default()),

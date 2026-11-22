@@ -25,6 +25,7 @@ const MAX_SCRIPT_BYTES: usize = 64 << 10;
 const MAX_ARTIFACTS: usize = 16;
 const MAX_PATHS: usize = 32;
 const MAX_CACHE_PATHS: usize = 8;
+const MAX_TMPFS_MIB: u32 = 4096;
 
 /// Reads the pipeline of commit `sha` in the repository at `dir`. Only a
 /// pipeline path the commit's tree does not have reads as `Absent`; any Git
@@ -106,6 +107,7 @@ struct JobSchema {
     #[serde(default)]
     paths: Vec<String>,
     timeout_secs: Option<u64>,
+    tmpfs_mib: Option<u32>,
     #[serde(default)]
     artifacts: Vec<ArtifactDef>,
     cache: Option<CacheDef>,
@@ -183,6 +185,13 @@ fn validate_job(j: JobSchema) -> Result<JobDef, String> {
     if j.timeout_secs.is_some_and(|t| !(1..=86_400).contains(&t)) {
         return Err(at("timeout_secs must be between 1 and 86400."));
     }
+    if j.tmpfs_mib
+        .is_some_and(|mib| !(1..=MAX_TMPFS_MIB).contains(&mib))
+    {
+        return Err(at(&format!(
+            "tmpfs_mib must be between 1 and {MAX_TMPFS_MIB}."
+        )));
+    }
     if j.paths.len() > MAX_PATHS {
         return Err(at(&format!("paths takes at most {MAX_PATHS} entries.")));
     }
@@ -236,6 +245,7 @@ fn validate_job(j: JobSchema) -> Result<JobDef, String> {
         commands: j.commands,
         paths: j.paths,
         timeout_secs: j.timeout_secs,
+        tmpfs_mib: j.tmpfs_mib,
         artifacts: j.artifacts,
         cache: j.cache,
     })
@@ -299,6 +309,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(jobs[0].timeout_secs, Some(86_400));
+    }
+
+    #[test]
+    fn tmpfs_size_is_optional_and_bounded_per_job() {
+        let pipeline = "[[jobs]]\nname='disk'\nimage='alpine'\ncommands=['true']\n\
+                        [[jobs]]\nname='ram'\nimage='alpine'\ncommands=['true']\n";
+        assert!(
+            parse(pipeline)
+                .unwrap()
+                .iter()
+                .all(|job| job.tmpfs_mib.is_none())
+        );
+        for size in [1, 2048, MAX_TMPFS_MIB] {
+            let jobs = parse(&format!("{pipeline}tmpfs_mib = {size}")).unwrap();
+            assert_eq!(jobs[0].tmpfs_mib, None);
+            assert_eq!(jobs[1].tmpfs_mib, Some(size));
+        }
+        for size in ["0", "4097"] {
+            assert_eq!(
+                parse(&format!("{pipeline}tmpfs_mib = {size}")).unwrap_err(),
+                "Job ram: tmpfs_mib must be between 1 and 4096."
+            );
+        }
+        for value in ["-1", "1.5", "\"2048\"", "4294967296"] {
+            let error = parse(&format!("{pipeline}tmpfs_mib = {value}")).unwrap_err();
+            assert!(error.contains("tmpfs_mib"), "{value}: {error}");
+        }
     }
 
     #[test]

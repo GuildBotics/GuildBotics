@@ -23,6 +23,21 @@ impl HelperDisks<'_> {
 }
 
 impl Microsandbox {
+    fn mount_job_tmp_sdk(
+        &self,
+        builder: SandboxBuilder,
+        attempt_id: &str,
+        tmpfs_mib: Option<u32>,
+    ) -> SandboxBuilder {
+        builder.volume("/tmp", |m| match tmpfs_mib {
+            // Agentd defaults to mode 1777 for tmpfs mounts at /tmp.
+            Some(mib) => m.tmpfs().size(mib),
+            None => m.named_with(self.tmp_volume(attempt_id), |v| {
+                v.create().disk().size(TMP_DISK_MIB)
+            }),
+        })
+    }
+
     pub(super) async fn sdk_inspect(&self, reference: &str) -> Result<Option<ImageInfo>, String> {
         gb_vm::backend(&self.home).await?;
         let detail = match Image::inspect(reference).await {
@@ -171,12 +186,8 @@ impl Microsandbox {
             .memory(job.memory_mib as u32)
             .user(format!("{JOB_USER_ID}:{JOB_USER_ID}"))
             .workdir("/work")
-            .max_duration(job.timeout_secs + 60)
-            .volume("/tmp", |m| {
-                m.named_with(self.tmp_volume(job.attempt_id), |v| {
-                    v.create().disk().size(4096)
-                })
-            });
+            .max_duration(job.timeout_secs + 60);
+        let builder = self.mount_job_tmp_sdk(builder, job.attempt_id, job.job.tmpfs_mib);
         let builder = if job.network {
             // Allow public destinations only; the host and private networks stay blocked.
             builder.network(|network| {
@@ -286,6 +297,51 @@ async fn stream_job(
 mod tests {
     use super::*;
     use gb_vm::sdk::sandbox::{SandboxConfig, VolumeMount};
+
+    #[tokio::test]
+    async fn sdk_job_tmp_mount_is_executable_and_matches_the_requested_storage() {
+        let runner = Microsandbox::new(Msb::Missing(String::new()), PathBuf::new(), "fixture");
+        for size in [None, Some(2048)] {
+            let builder = Sandbox::builder("job").image("img:dev");
+            let config = runner
+                .mount_job_tmp_sdk(builder, "attempt", size)
+                .build()
+                .await
+                .unwrap();
+            match (size, config.spec.mounts.as_slice()) {
+                (
+                    Some(mib),
+                    [
+                        VolumeMount::Tmpfs {
+                            guest,
+                            size_mib,
+                            options,
+                        },
+                    ],
+                ) => {
+                    assert_eq!(guest, "/tmp");
+                    assert_eq!(*size_mib, Some(mib));
+                    assert!(!options.noexec && !options.readonly);
+                }
+                (
+                    None,
+                    [
+                        VolumeMount::Named {
+                            guest,
+                            name,
+                            create: Some(create),
+                            ..
+                        },
+                    ],
+                ) => {
+                    assert_eq!(guest, "/tmp");
+                    assert_eq!(name, "bv-tmp-fixture-attempt");
+                    assert_eq!(create.capacity_mib, Some(4096));
+                }
+                (_, mounts) => panic!("unexpected job mounts: {mounts:?}"),
+            }
+        }
+    }
 
     #[tokio::test]
     async fn sdk_mounts_use_the_same_work_disk_for_preparation_job_and_collection() {
