@@ -102,7 +102,8 @@ pub async fn read(host: &Host, workspace: &Path) -> Device {
                 .cloned()
                 .unwrap_or_default()
         );
-        let command = match image::load_command(&host.home) {
+        let machine_root = host.data.parent().unwrap_or(&host.data);
+        let command = match image::load_command(machine_root) {
             Ok(command) => command,
             Err(error) => {
                 if device.refusal.is_none() {

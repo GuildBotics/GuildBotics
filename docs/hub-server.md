@@ -35,7 +35,21 @@ scripts/hub-server.sh status
 
 `install` はチェックアウトのコミット済みの `HEAD` から両方の画面とRustの実行ファイルを作ります。LaunchAgent `local.guildbotics` がこの実行ファイルの `server start` を直接起動し、1つのプロセスが1つのポート（既定7878）で GuildBotics と Branvil を配ります。ログイン時と異常終了後にも起動します。正常に停止したあとは、次回のログインか `scripts/hub-server.sh restart` で起動します。
 
-`install` は署名の識別を `signing-identity` に記録し、`update` は同じ識別で署名します。識別がキーチェーンに見つからない場合、署名に失敗した場合、署名にTeam IDがない場合（自己署名の証明書など）は、ビルドを切り替えずに止まります。登録時の `PATH` と `BRANVIL_DATA_DIR` をLaunchAgentが使います。GuildBoticsのデータは既定で `~/.guildbotics`、ポートは7878です。画面は `http://127.0.0.1:7878/-/guildbotics/` で配り、Branvil を設定済みなら `/` は Branvil の画面、未設定なら GuildBotics の画面へ案内します。更新後は `guildbotics open` でブラウザに入り直してください。変更する場合は登録前に絶対パスの `GUILDBOTICS_HOME` または `GUILDBOTICS_SERVER_PORT` を設定します。同じ設定でCLIを実行してください。起動確認後に `guildbotics install` がCLIとスキルを配置します。サーバーのログは `~/Library/Logs/guildbotics.log` で確認できます。
+`install` は署名の識別を `signing-identity` に記録し、`update` は同じ識別で署名します。識別がキーチェーンに見つからない場合、署名に失敗した場合、署名にTeam IDがない場合（自己署名の証明書など）は、ビルドを切り替えずに止まります。登録時の `PATH` と `BRANVIL_DATA_DIR` をLaunchAgentが使います。GuildBoticsのデータは既定で `~/.guildbotics`、ポートは7878です。画面は `http://127.0.0.1:7878/-/guildbotics/` で配り、Branvil を設定済みなら `/` は Branvil の画面、未設定なら GuildBotics の画面へ案内します。更新後は `guildbotics open` でブラウザに入り直してください。変更する場合は登録前に絶対パスの `GUILDBOTICS_HOME` または `GUILDBOTICS_SERVER_PORT` を設定します。導入前のCLIも同じ設定で実行してください。起動確認後に `guildbotics install` がCLIとスキルを配置します。サーバーのログは `~/Library/Logs/guildbotics.log` で確認できます。
+
+`GUILDBOTICS_HOME` に別ディスクなどの絶対パスを指定すると、`guildbotics install` は
+その場所の `bin/guildbotics` に CLI を置きます。起動時に `GUILDBOTICS_HOME` があれば
+その値が優先されます。未設定の場合、導入済みの CLI はリンク経由でも実体の配置場所から
+machine root を見つけます。単体でコピーした CLI の既定は `~/.guildbotics` です。
+
+スキルとイメージ作成スクリプトの入口は `~/.guildbotics/bin/guildbotics` です。
+別の machine root に導入する際、入口が空いていれば、導入先の CLI へのリンクを作ります。
+入口にある既存のファイルやリンクは維持します。新規の `~/.local/bin/guildbotics` のリンクも
+この入口を指します。
+
+画面のログイン案内、イメージ読み込みの案内、Git の設定例に出るパスは machine root 配下の CLI
+を指します。`install` が Git のグローバル設定へ登録する credential helper も同じ CLI を使うので、
+シェルを通さずに起動した Git でも `GUILDBOTICS_HOME` の設定は不要です。
 
 インストール後の最初の起動時、macOSの確認が出たらオーナーが回答してください。スクリプトは最大20分間、起動を待ちます。同じ識別で署名した更新では、これらの確認は出ません。
 

@@ -317,18 +317,15 @@ fn write_turn_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 impl ToolLogin {
     pub async fn prepare(
         data: &Path,
-        home: &Path,
         catalog: Value,
         language: &str,
         vm: LoginVm,
     ) -> Result<Arc<Self>, String> {
-        Self::prepare_with_keychain(data, home, catalog, language, vm, Arc::new(SystemKeychain))
-            .await
+        Self::prepare_with_keychain(data, catalog, language, vm, Arc::new(SystemKeychain)).await
     }
 
     pub(crate) async fn prepare_with_keychain(
         data: &Path,
-        home: &Path,
         catalog: Value,
         language: &str,
         vm: LoginVm,
@@ -340,7 +337,7 @@ impl ToolLogin {
             .to_owned();
         let broker = &catalog["provision"]["credential_broker"];
         let command = gb_base::shell::managed_cli_command(
-            &home.join(".guildbotics/bin/guildbotics"),
+            &gb_base::home::managed_cli(data.parent().unwrap_or(data)),
             &["environment", "login", &name],
         );
         let source_language = language.to_owned();
@@ -1153,6 +1150,7 @@ mod tests {
     #[tokio::test]
     async fn parallel_turns_borrow_without_holding_the_writer_lock() {
         let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
         let device = DeviceKey {
             machine_root: dir.path().into(),
             keychain: &FakeKeychain,
@@ -1163,37 +1161,32 @@ mod tests {
         catalog["provision"]["credential_broker"]["upstream"] = json!("https://api.example.test");
         credential_vault::seal(
             &device,
-            &path(dir.path(), "tool"),
+            &path(&data, "tool"),
             "tool:default:test",
             &credentials("synthetic-old"),
         )
         .unwrap();
         let vm = LoginVm {
-            data: dir.path().into(),
+            data: data.clone(),
             package: dir.path().join("package"),
             snapshot: dir.path().join("snapshot"),
             memory_mib: 512,
             cpus: 1,
             nameservers: vec![],
         };
-        let first = ToolLogin::prepare(
-            dir.path(),
-            &dir.path().join("home"),
-            catalog.clone(),
-            "en",
-            vm.clone(),
-        )
-        .await
-        .unwrap();
-        let second = ToolLogin::prepare(
-            dir.path(),
-            &dir.path().join("home"),
-            catalog,
-            "en",
-            vm.clone(),
-        )
-        .await
-        .unwrap();
+        let first = ToolLogin::prepare(&data, catalog.clone(), "en", vm.clone())
+            .await
+            .unwrap();
+        let second = ToolLogin::prepare(&data, catalog, "en", vm.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            first.command,
+            gb_base::shell::managed_cli_command(
+                &dir.path().join("bin/guildbotics"),
+                &["environment", "login", "tool"],
+            )
+        );
         first
             .begin_with_keychain(Arc::new(FakeKeychain))
             .await
@@ -1203,7 +1196,7 @@ mod tests {
             .await
             .unwrap();
         let writer =
-            credential_vault::hold(&path(dir.path(), "tool"), std::time::Duration::ZERO).unwrap();
+            credential_vault::hold(&path(&data, "tool"), std::time::Duration::ZERO).unwrap();
         assert!(first.state.lock().await.as_ref().unwrap()._lease.active());
         assert!(second.state.lock().await.as_ref().unwrap()._lease.active());
         first.end().await;
@@ -1476,9 +1469,7 @@ mod tests {
             cpus: 1,
             nameservers: vec![],
         };
-        ToolLogin::prepare(data, &data.join("home"), catalog, "en", vm.clone())
-            .await
-            .unwrap()
+        ToolLogin::prepare(data, catalog, "en", vm).await.unwrap()
     }
     #[tokio::test]
     async fn expiring_logins_refresh_again_until_a_provider_rejects_the_refreshed_token() {
@@ -2247,15 +2238,9 @@ mod tests {
                 cpus: 1,
                 nameservers: vec![],
             };
-            let tool = ToolLogin::prepare(
-                dir.path(),
-                &dir.path().join("home"),
-                catalog.clone(),
-                "en",
-                vm.clone(),
-            )
-            .await
-            .unwrap();
+            let tool = ToolLogin::prepare(dir.path(), catalog.clone(), "en", vm.clone())
+                .await
+                .unwrap();
             let environment = tool
                 .begin_with_keychain(Arc::new(FakeKeychain))
                 .await

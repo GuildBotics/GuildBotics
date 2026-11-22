@@ -37,8 +37,8 @@ fn image_load_help_and_validation_reach_the_real_entry() {
 
 #[test]
 fn managed_instruction_preserves_the_absolute_path_as_one_shell_argument() {
-    let home = std::path::Path::new("/home/a user's $device");
-    let instruction = gb_environment::image::load_command(home).unwrap();
+    let machine_root = std::path::Path::new("/mnt/a user's $device");
+    let instruction = gb_environment::image::load_command(machine_root).unwrap();
     let command = instruction.strip_suffix(" <archive.tar>").unwrap();
     let output = Command::new("sh")
         .args(["-c", &format!("set -- {command}; printf '%s\\n' \"$@\"")])
@@ -47,7 +47,7 @@ fn managed_instruction_preserves_the_absolute_path_as_one_shell_argument() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "/home/a user's $device/.guildbotics/bin/guildbotics\nenvironment\nimage\nload\n"
+        "/mnt/a user's $device/bin/guildbotics\nenvironment\nimage\nload\n"
     );
     assert!(gb_environment::image::load_command(std::path::Path::new("relative")).is_err());
 }

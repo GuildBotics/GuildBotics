@@ -6,13 +6,18 @@ const BIN: &str = env!("CARGO_BIN_EXE_guildbotics");
 const SKILL: &[u8] = include_bytes!("../../../skills/guildbotics/SKILL.md");
 
 fn install(home: &Path) -> String {
+    install_at(home, &home.join(".guildbotics"), 7878)
+}
+
+fn install_at(home: &Path, machine: &Path, port: u16) -> String {
     let result = Command::new(BIN)
         .args(["install"])
         .env("HOME", home)
         .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .env_remove("XDG_CONFIG_HOME")
-        .env(gb_base::home::USER_HOME_ENV, home)
-        .env("GUILDBOTICS_HOME", home.join(".guildbotics"))
+        .env("GUILDBOTICS_HOME", machine)
+        .env("GUILDBOTICS_SERVER_PORT", port.to_string())
         .env_remove("CODEX_HOME")
         .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("GROK_HOME")
@@ -46,6 +51,8 @@ fn installation_replaces_managed_cli_paths_without_touching_the_old_directory() 
     .unwrap();
     install(home);
     assert!(!bin.is_symlink());
+    assert!(bin.join("guildbotics").is_file());
+    assert_eq!(fs::read_link(&on_path).unwrap(), bin.join("guildbotics"));
     assert_eq!(
         fs::read_to_string(programs.join("guildbotics")).unwrap(),
         "old"
@@ -68,6 +75,125 @@ fn installation_replaces_managed_cli_paths_without_touching_the_old_directory() 
         let state: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
         assert_eq!(state["configured"], false);
     }
+}
+
+#[cfg(feature = "hub")]
+#[test]
+fn managed_cli_infers_its_machine_root_through_both_entry_links() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().canonicalize().unwrap();
+    let machine = home.join("extra disk /machine");
+    let fixed = home.join(".guildbotics/bin/guildbotics");
+    let on_path = home.join(".local/bin/guildbotics");
+    let managed = machine.join("bin/guildbotics");
+    install_at(&home, &machine, 7878);
+    assert_eq!(fs::read_link(&fixed).unwrap(), managed);
+    assert_eq!(fs::read_link(&on_path).unwrap(), fixed);
+
+    let state_path = |cli: &Path, explicit: Option<&Path>| {
+        let mut command = Command::new(cli);
+        command
+            .args(["workspace", "status", "--format", "json"])
+            .env("HOME", &home)
+            .env("LANGUAGE", "en")
+            .env_remove("GUILDBOTICS_HOME");
+        if let Some(root) = explicit {
+            command.env("GUILDBOTICS_HOME", root);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let state: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        state["state_file"].as_str().unwrap().to_owned()
+    };
+    let expected = |root: &Path| {
+        root.join("data/active-workspace.json")
+            .to_str()
+            .unwrap()
+            .to_owned()
+    };
+    for cli in [&managed, &fixed, &on_path] {
+        assert_eq!(state_path(cli, None), expected(&machine));
+    }
+    let explicit = home.join("override");
+    assert_eq!(state_path(&on_path, Some(&explicit)), expected(&explicit));
+
+    let unmanaged = home.join("usr/local/bin/guildbotics");
+    fs::create_dir_all(unmanaged.parent().unwrap()).unwrap();
+    fs::copy(&managed, &unmanaged).unwrap();
+    assert_eq!(
+        state_path(&unmanaged, None),
+        expected(&home.join(".guildbotics"))
+    );
+}
+
+#[test]
+fn custom_install_keeps_the_existing_fixed_entry_and_path_link() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().canonicalize().unwrap();
+    let fixed = home.join(".guildbotics/bin/guildbotics");
+    let on_path = home.join(".local/bin/guildbotics");
+    let machine = home.join("development");
+    fs::create_dir_all(fixed.parent().unwrap()).unwrap();
+    fs::write(&fixed, "#!/bin/sh\nexec production\n").unwrap();
+    install_at(&home, &machine, 7878);
+    assert_eq!(
+        fs::read_to_string(&fixed).unwrap(),
+        "#!/bin/sh\nexec production\n"
+    );
+    assert_eq!(fs::read_link(&on_path).unwrap(), fixed);
+
+    fs::remove_file(&fixed).unwrap();
+    let other = home.join("other/bin/guildbotics");
+    // The other machine root can be on a disk that is not mounted yet.
+    symlink(&other, &fixed).unwrap();
+    install_at(&home, &machine, 7878);
+    assert_eq!(fs::read_link(&fixed).unwrap(), other);
+    assert_eq!(fs::read_link(&on_path).unwrap(), fixed);
+    assert!(machine.join("bin/guildbotics").is_file());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn git_invokes_the_installed_helper_without_a_home_override() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path();
+    let machine = home.join("extra disk/machine");
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    install_at(home, &machine, port);
+    let mut git = Command::new("git")
+        .args(["credential", "fill"])
+        .current_dir(home)
+        .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("HOME")
+        .env_remove("GUILDBOTICS_HOME")
+        .env("LANGUAGE", "en")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        // Force keychain access to fail after root resolution, without using real credentials.
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            format!("unix:path={}", home.join("no-keychain.sock").display()),
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    write!(
+        git.stdin.take().unwrap(),
+        "protocol=http\nhost=127.0.0.1:{port}\n\n"
+    )
+    .unwrap();
+    let result = git.wait_with_output().unwrap();
+    assert!(!result.status.success());
+    let error = String::from_utf8(result.stderr).unwrap();
+    assert!(error.contains("OS keychain"), "{error}");
 }
 
 #[cfg(unix)]

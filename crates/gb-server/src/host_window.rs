@@ -521,6 +521,20 @@ async fn forward(State(state): State<GatewayState>, request: axum::extract::Requ
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn member_program_uses_the_machine_root_unless_overridden() {
+        let data = std::path::Path::new("/mounted/disk/machine/data");
+        assert_eq!(
+            member_program(data, None),
+            std::path::Path::new("/mounted/disk/machine/bin/guildbotics")
+        );
+        assert_eq!(
+            member_program(data, Some("/override/guildbotics".into())),
+            std::path::Path::new("/override/guildbotics")
+        );
+    }
+
     #[tokio::test]
     async fn the_guest_is_told_of_the_configuration_and_the_workspace_not_of_the_copy() {
         struct Keys;
@@ -1984,7 +1998,6 @@ fn conversation(context: &Context, name: &str, args: &Value) -> Result<Value, Ho
 /// login contents, upstream token, or OS keychain's error text.
 pub fn tool_status(
     data: &std::path::Path,
-    home: &std::path::Path,
     catalog: &Value,
     keychain: &dyn gb_config::secrets::Keychain,
 ) -> Value {
@@ -1992,11 +2005,12 @@ pub fn tool_status(
         machine_root: data.parent().unwrap_or(data).into(),
         keychain,
     };
+    let executable = gb_base::home::managed_cli(&device.machine_root);
     let tools=catalog.as_array().into_iter().flatten().filter_map(|tool|{
   let name=tool["name"].as_str()?;let provision=&tool["provision"];let broker=&provision["credential_broker"];
   let path=data.join("agent_environment").join(name).join("login.sealed");
   let label=format!("{name}:default:{}",broker["format"].as_str().unwrap_or(""));
-  let command=gb_base::shell::managed_cli_command(&home.join(".guildbotics/bin/guildbotics"), &["environment", "login", name]);
+  let command=gb_base::shell::managed_cli_command(&executable, &["environment", "login", name]);
   let mut status=gb_config::credential_vault::status(&device,&path,&label,command.clone());
   if status.saved {
     let valid=gb_config::credential_vault::unseal(&device,&path,&label).ok().flatten().is_some_and(|files| crate::tool_login::valid(&files,tool));
@@ -2043,6 +2057,15 @@ fn spoken_strings(config: &gb_environment::Configuration, value: &mut Value) {
         Value::Object(fields) => fields.values_mut().for_each(|v| spoken_strings(config, v)),
         _ => {}
     }
+}
+
+fn member_program(
+    data: &std::path::Path,
+    configured: Option<std::ffi::OsString>,
+) -> std::path::PathBuf {
+    configured
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| gb_base::home::managed_cli(data.parent().unwrap_or(data)))
 }
 
 pub async fn prepare_command(
@@ -2096,9 +2119,6 @@ pub async fn prepare_command(
     let shape =
         gb_environment::shape(host, workspace, command, Some(language.clone())).map_err(refusal)?;
     let invocation = broker_invocation(command);
-    let program = std::env::var_os("GUILDBOTICS_MEMBER_CLI")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| host.home.join(".guildbotics/bin/guildbotics"));
     let guest_process = gb_environment::guest_process::Channel::new();
     let broker = match member.and_then(|backend| {
         backend
@@ -2107,7 +2127,10 @@ pub async fn prepare_command(
     }) {
         Some(handler) => Broker::native(invocation.clone(), handler)
             .tracked(member.and_then(|backend| backend.executor.tracker())),
-        None => Broker::new(program, invocation.clone()),
+        None => Broker::new(
+            member_program(&host.data, std::env::var_os("GUILDBOTICS_MEMBER_CLI")),
+            invocation.clone(),
+        ),
     };
     let tools = configured_tools(&resolved);
     let redactor = command_redactor(host, workspace, keychain.as_ref())?;
@@ -2169,7 +2192,6 @@ pub async fn prepare_command(
         }
         let loan = crate::tool_login::ToolLogin::prepare_with_keychain(
             &host.data,
-            &host.home,
             tool.clone(),
             resolved["language"].as_str().unwrap_or("en"),
             crate::tool_login::LoginVm {

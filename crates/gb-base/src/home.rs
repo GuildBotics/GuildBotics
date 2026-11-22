@@ -20,19 +20,66 @@ pub fn user_home() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// `GUILDBOTICS_HOME`, else `~/.guildbotics`.
-pub fn machine_root() -> anyhow::Result<PathBuf> {
-    root_from(std::env::var_os(HOME_ENV), std::env::var_os(USER_HOME_ENV))
+/// The managed executable installed under the machine root.
+pub fn managed_cli(root: &Path) -> PathBuf {
+    root.join("bin").join(MANAGED_CLI_NAME)
 }
 
-fn root_from(configured: Option<OsString>, home: Option<OsString>) -> anyhow::Result<PathBuf> {
+#[cfg(unix)]
+const MANAGED_CLI_NAME: &str = "guildbotics";
+#[cfg(windows)]
+const MANAGED_CLI_NAME: &str = "guildbotics.exe";
+
+#[cfg(unix)]
+const MANAGED_CLI_MARK: &str = ".guildbotics-installed";
+
+/// Mark the installed binary's directory so a standalone copy cannot select
+/// a machine root merely by being named `bin/guildbotics`.
+#[cfg(unix)]
+pub fn mark_managed_cli(binary: &Path) -> std::io::Result<()> {
+    crate::files::atomic_write(&binary.with_file_name(MANAGED_CLI_MARK), b"")
+}
+
+#[cfg(unix)]
+fn installed_root() -> Option<PathBuf> {
+    use std::sync::OnceLock;
+
+    // Replacing the binary during an update does not change this process's root.
+    static ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        let executable = std::env::current_exe().ok()?.canonicalize().ok()?;
+        let root = executable.parent()?.parent()?;
+        (executable == managed_cli(root)
+            && executable
+                .with_file_name(MANAGED_CLI_MARK)
+                .symlink_metadata()
+                .is_ok_and(|metadata| metadata.is_file()))
+        .then(|| root.to_owned())
+    })
+    .clone()
+}
+
+#[cfg(windows)]
+fn installed_root() -> Option<PathBuf> {
+    None
+}
+
+/// Resolve the explicit root, the managed Unix CLI's root, or the home default.
+pub fn machine_root() -> anyhow::Result<PathBuf> {
+    root_from(std::env::var_os(HOME_ENV), user_home(), installed_root)
+}
+
+fn root_from(
+    configured: Option<OsString>,
+    home: Option<PathBuf>,
+    installed: impl FnOnce() -> Option<PathBuf>,
+) -> anyhow::Result<PathBuf> {
     match configured {
         Some(root) if root.is_empty() => anyhow::bail!("{HOME_ENV} is empty"),
         Some(root) => Ok(root.into()),
-        None => match home {
-            Some(home) if !home.is_empty() => Ok(PathBuf::from(home).join(".guildbotics")),
-            _ => anyhow::bail!("{USER_HOME_ENV} is not set; set {HOME_ENV}"),
-        },
+        None => installed()
+            .or_else(|| home.map(|home| home.join(".guildbotics")))
+            .ok_or_else(|| anyhow::anyhow!("{USER_HOME_ENV} is not set; set {HOME_ENV}")),
     }
 }
 
@@ -103,16 +150,18 @@ mod tests {
     #[test]
     fn the_root_is_the_configured_one_or_under_home() {
         assert_eq!(
-            root_from(Some("/x".into()), Some("/home/o".into())).unwrap(),
+            root_from(Some("/x".into()), Some("/home/o".into()), || panic!(
+                "explicit root wins"
+            ))
+            .unwrap(),
             PathBuf::from("/x")
         );
         assert_eq!(
-            root_from(None, Some("/home/o".into())).unwrap(),
+            root_from(None, Some("/home/o".into()), || None).unwrap(),
             PathBuf::from("/home/o/.guildbotics")
         );
-        assert!(root_from(Some("".into()), Some("/home/o".into())).is_err());
-        assert!(root_from(None, None).is_err());
-        assert!(root_from(None, Some("".into())).is_err());
+        assert!(root_from(Some("".into()), Some("/home/o".into()), || None).is_err());
+        assert!(root_from(None, None, || None).is_err());
     }
 
     #[test]
