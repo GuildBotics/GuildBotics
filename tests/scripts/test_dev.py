@@ -40,7 +40,7 @@ from pathlib import Path
 
 tool, *args = sys.argv[1:]
 env = os.environ
-BRANVIL_LISTENED = Path(env["DEV_TEST_EVENTS"] + ".branvil")
+CODE_HOST_LISTENED = Path(env["DEV_TEST_EVENTS"] + ".branvil")
 
 
 def option(name):
@@ -57,17 +57,17 @@ def record(**extra):
             name: env.get(name)
             for name in (
                 "GUILDBOTICS_HOME",
-                "BRANVIL_DATA_DIR",
+                "GUILDBOTICS_CODE_HOST_DATA_DIR",
                 "GUILDBOTICS_SERVER_PORT",
                 "GUILDBOTICS_IDENTITY_ROOT",
                 "GUILDBOTICS_CONFIG_DIR",
                 "GUILDBOTICS_WORKSPACE_ROOT",
                 "GUILDBOTICS_LOG",
-                "BRANVIL_TOKEN",
-                "BRANVIL_URL",
+                "GUILDBOTICS_RUNNER_TOKEN",
+                "GUILDBOTICS_RUNNER_URL",
             )
         },
-        "branvil_listened": BRANVIL_LISTENED.exists(),
+        "branvil_listened": CODE_HOST_LISTENED.exists(),
         **extra,
     }
     with open(env["DEV_TEST_EVENTS"], "a", encoding="utf-8") as out:
@@ -118,13 +118,13 @@ elif tool == "guildbotics":
             signal.signal(stop, lambda *_: None)
         port = env["GUILDBOTICS_SERVER_PORT"]
         print(f"\\nGUILDBOTICS_APP_API_PORT={port}", flush=True)
-        BRANVIL_LISTENED.unlink(missing_ok=True)
+        CODE_HOST_LISTENED.unlink(missing_ok=True)
         branvil_at = time.monotonic() + float(env.get("DEV_TEST_BRANVIL_DELAY", "0"))
         release = Path(env["DEV_TEST_RELEASE"])
         stopped = None
         while not release.exists():
-            if not BRANVIL_LISTENED.exists() and time.monotonic() >= branvil_at:
-                BRANVIL_LISTENED.touch()
+            if not CODE_HOST_LISTENED.exists() and time.monotonic() >= branvil_at:
+                CODE_HOST_LISTENED.touch()
                 print("INFO gb_server: Branvil ready on the shared listener", file=sys.stderr, flush=True)
             try:
                 for signum in os.read(wakeup, 64):
@@ -198,8 +198,8 @@ class Launcher:
             "PATH": str(tools) + os.pathsep + os.environ["PATH"],
             "DEV_TEST_EVENTS": str(self.log),
             "DEV_TEST_RUSTC": RUSTC,
-            "BRANVIL_TOKEN": "test-unrelated-credential",
-            "BRANVIL_URL": "http://example.invalid/unrelated",
+            "GUILDBOTICS_RUNNER_TOKEN": "test-unrelated-credential",
+            "GUILDBOTICS_RUNNER_URL": "http://example.invalid/unrelated",
             "GUILDBOTICS_IDENTITY_ROOT": str(root / "production identities"),
             "GUILDBOTICS_CONFIG_DIR": str(root / "production/.guildbotics/config"),
         }
@@ -420,10 +420,14 @@ def test_the_server_runs_on_data_and_a_port_of_its_own(launcher: Launcher) -> No
 
     default, chosen = (e["env"] for e in launcher.calls("server", "start"))
     assert default["GUILDBOTICS_HOME"] == str(launcher.home / ".gbb/dev/home")
-    assert default["BRANVIL_DATA_DIR"] == str(launcher.home / ".gbb/dev/branvil")
+    assert default["GUILDBOTICS_CODE_HOST_DATA_DIR"] == str(
+        launcher.home / ".gbb/dev/branvil"
+    )
     assert default["GUILDBOTICS_SERVER_PORT"] == "8866"
     assert chosen["GUILDBOTICS_HOME"] == str(launcher.root / "relative data/home")
-    assert chosen["BRANVIL_DATA_DIR"] == str(launcher.root / "relative data/branvil")
+    assert chosen["GUILDBOTICS_CODE_HOST_DATA_DIR"] == str(
+        launcher.root / "relative data/branvil"
+    )
     assert chosen["GUILDBOTICS_SERVER_PORT"] == "9911"
 
 

@@ -212,8 +212,8 @@ mod tests {
         let mut command = Command::new(std::env::current_exe().unwrap());
         command
             .args(["--exact", FIXTURE, "--nocapture"])
-            .env("BRANVIL_TEST_LOCK_DIR", dir)
-            .env("BRANVIL_TEST_LOCK_DEPTH", depth.to_string())
+            .env("GUILDBOTICS_TEST_LOCK_DIR", dir)
+            .env("GUILDBOTICS_TEST_LOCK_DEPTH", depth.to_string())
             .stdout(Stdio::piped());
         command
     }
@@ -227,18 +227,18 @@ mod tests {
     // redb lock; descendants outlive a leader's natural exit unless drained.
     #[test]
     fn lock_holder_fixture() {
-        let Some(dir) = std::env::var_os("BRANVIL_TEST_LOCK_DIR") else {
+        let Some(dir) = std::env::var_os("GUILDBOTICS_TEST_LOCK_DIR") else {
             return;
         };
         let dir = Path::new(&dir);
-        let depth: u8 = std::env::var("BRANVIL_TEST_LOCK_DEPTH")
+        let depth: u8 = std::env::var("GUILDBOTICS_TEST_LOCK_DEPTH")
             .unwrap()
             .parse()
             .unwrap();
         let _db = redb::Database::create(dir.join(format!("{depth}.redb"))).unwrap();
         // The last generation in a group of its own, as a Git child is; it
         // finishes once `release` exists.
-        let detached = std::env::var_os("BRANVIL_TEST_LOCK_DETACH").is_some();
+        let detached = std::env::var_os("GUILDBOTICS_TEST_LOCK_DETACH").is_some();
         let _child = if depth < 2 {
             // Inherit the group: ServiceProcess::spawn is only for the root.
             let mut command = command(dir, depth + 1);
@@ -354,7 +354,7 @@ mod tests {
     fn draining_waits_for_descendants_in_their_own_group() {
         let dir = tempfile::tempdir().unwrap();
         let mut process =
-            ServiceProcess::spawn(command(dir.path(), 0).env("BRANVIL_TEST_LOCK_DETACH", "1"))
+            ServiceProcess::spawn(command(dir.path(), 0).env("GUILDBOTICS_TEST_LOCK_DETACH", "1"))
                 .unwrap();
         ready(process.take_stdout());
         let release = dir.path().join("release");

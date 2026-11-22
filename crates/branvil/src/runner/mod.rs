@@ -712,8 +712,8 @@ fi
             // A commit of main with a pipeline, pushed into the bare repository
             // directly (no hooks: the hooks directory is empty) and recorded.
             let work = dir.path().join("work");
-            std::fs::create_dir_all(work.join(".branvil")).unwrap();
-            std::fs::write(work.join(".branvil/ci.toml"), pipeline).unwrap();
+            std::fs::create_dir_all(&work).unwrap();
+            std::fs::write(work.join(".guildbotics-ci.toml"), pipeline).unwrap();
             git(&work, &["init", "-q", "-b", "main"]);
             git(&work, &["add", "."]);
             git(&work, &["commit", "-qm", "pipeline"]);
@@ -774,7 +774,7 @@ fi
         async fn a_runtime_installed_after_startup_runs_the_next_job() {
             // Isolate the resolver's fallback paths without changing this process's
             // environment or depending on an msb installed in the developer's home.
-            const CHILD: &str = "BRANVIL_TEST_LATE_RUNTIME_CHILD";
+            const CHILD: &str = "GUILDBOTICS_TEST_LATE_RUNTIME_CHILD";
             if std::env::var_os(CHILD).is_none() {
                 for mode in ["ready", "doctor-failure"] {
                     let home = tempfile::tempdir().unwrap();
@@ -787,6 +787,7 @@ fi
                         .env(CHILD, mode)
                         .env("HOME", home.path())
                         .env("USERPROFILE", home.path())
+                        .env("GUILDBOTICS_HOME", home.path().join(".guildbotics"))
                         .output()
                         .await
                         .unwrap();
@@ -1661,7 +1662,7 @@ esac
             // The work directory is a checkout of the commit with its history
             // and the tags it reaches, and without a remote.
             assert!(
-                log.contains(&format!("\n{sha}\nv1\nv1\n.branvil/ci.toml\n")),
+                log.contains(&format!("\n{sha}\nv1\nv1\n.guildbotics-ci.toml\n")),
                 "{log}"
             );
             assert!(!log.contains("later") && !log.contains("remote."), "{log}");
@@ -1789,10 +1790,10 @@ esac
                     let env = job_environment(&c);
                     let value = env
                         .iter()
-                        .find(|(k, _)| k == "BRANVIL_VERIFIED_SHA")
+                        .find(|(k, _)| k == "GB_CI_VERIFIED_SHA")
                         .map(|(_, v)| v.as_str());
                     assert_eq!(value, declared.then_some(verified.unwrap_or_default()));
-                    assert!(env.contains(&("BRANVIL_SHA".into(), "head".into())));
+                    assert!(env.contains(&("GB_CI_SHA".into(), "head".into())));
                 }
             }
         }

@@ -25,7 +25,7 @@ fn process_entry() {
             1
         });
     }
-    if std::env::var_os("BRANVIL_TEST_PROCESS").is_some() {
+    if std::env::var_os("GUILDBOTICS_TEST_PROCESS").is_some() {
         let args: Vec<String> = std::env::args().skip(1).collect();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -41,7 +41,7 @@ fn process_entry() {
 async fn process(args: Vec<String>) -> i32 {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("BRANVIL_LOG")
+            tracing_subscriber::EnvFilter::try_from_env("GUILDBOTICS_TEST_LOG")
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("branvil=info")),
         )
         .with_writer(std::io::stderr)
@@ -50,10 +50,10 @@ async fn process(args: Vec<String>) -> i32 {
     let result = match words.as_slice() {
         ["serve", "--listen", listen, "--data-dir", data] => {
             let vault: std::sync::Arc<dyn branvil::vault::Vault> =
-                if std::env::var_os("BRANVIL_TEST_NO_VAULT").is_some() {
+                if std::env::var_os("GUILDBOTICS_TEST_NO_VAULT").is_some() {
                     std::sync::Arc::new(NoVault)
                 } else {
-                    match std::env::var_os("BRANVIL_TEST_VAULT") {
+                    match std::env::var_os("GUILDBOTICS_TEST_VAULT") {
                         Some(dir) => {
                             std::sync::Arc::new(branvil::test_support::FileVault(dir.into()))
                         }
@@ -85,9 +85,13 @@ async fn process(args: Vec<String>) -> i32 {
         }
         ["backup", "--to", to] => {
             let env = |name| std::env::var(name).unwrap_or_default();
-            branvil::request_backup(&env("BRANVIL_URL"), &env("BRANVIL_TOKEN"), Path::new(to))
-                .await
-                .map(|()| 0)
+            branvil::request_backup(
+                &env("GUILDBOTICS_RUNNER_URL"),
+                &env("GUILDBOTICS_RUNNER_TOKEN"),
+                Path::new(to),
+            )
+            .await
+            .map(|()| 0)
         }
         ["restore", "--from", from, "--data-dir", data] => {
             branvil::restore(Path::new(from), Path::new(data)).await
@@ -100,10 +104,10 @@ async fn process(args: Vec<String>) -> i32 {
                 args: branvil::RunnerArgs,
             }
             let parsed = Runner::try_parse_from(&args).unwrap_or_else(|e| e.exit());
-            let data = std::env::var_os("BRANVIL_DATA_DIR").unwrap_or_default();
+            let data = std::env::var_os("GUILDBOTICS_CODE_HOST_DATA_DIR").unwrap_or_default();
             let args = parsed.args;
             #[cfg(feature = "host")]
-            let args = if let Some(vm_data) = std::env::var_os("BRANVIL_TEST_VM_DATA") {
+            let args = if let Some(vm_data) = std::env::var_os("GUILDBOTICS_TEST_VM_DATA") {
                 args.vm_home(vm_data.into())
             } else {
                 args
@@ -158,7 +162,7 @@ impl branvil::vault::Vault for NoVault {
 
 pub fn branvil_command() -> Command {
     let mut command = Command::new(std::env::current_exe().unwrap());
-    command.env("BRANVIL_TEST_PROCESS", "1");
+    command.env("GUILDBOTICS_TEST_PROCESS", "1");
     command
 }
 
@@ -207,9 +211,9 @@ impl Server {
         let mut cmd = branvil_command();
         cmd.args(["serve", "--listen", listen, "--data-dir"])
             .arg(&data)
-            .env("BRANVIL_TEST_VAULT", &vault)
-            .env("BRANVIL_LOG", "branvil=debug")
-            .env_remove("BRANVIL_FAILPOINT")
+            .env("GUILDBOTICS_TEST_VAULT", &vault)
+            .env("GUILDBOTICS_TEST_LOG", "branvil=debug")
+            .env_remove("GUILDBOTICS_FAILPOINT")
             .stdout(Stdio::piped())
             .stderr(log);
         for (k, v) in env {
@@ -479,8 +483,8 @@ impl Server {
             command.arg("--data-dir").arg(&self.data);
         }
         command
-            .env("BRANVIL_URL", &self.url)
-            .env("BRANVIL_TOKEN", token)
+            .env("GUILDBOTICS_RUNNER_URL", &self.url)
+            .env("GUILDBOTICS_RUNNER_TOKEN", token)
             .output()
             .unwrap()
     }
@@ -509,7 +513,7 @@ fn git_cmd(dir: &Path, args: &[&str], auth: Option<(&str, &str)>) -> Output {
     if !askpass.exists() {
         std::fs::write(
             &askpass,
-            "#!/bin/sh\ncase \"$1\" in\n  Username*) printf '%s\\n' \"$BRANVIL_TEST_USER\" ;;\n  *) printf '%s\\n' \"$BRANVIL_TEST_TOKEN\" ;;\nesac\n",
+            "#!/bin/sh\ncase \"$1\" in\n  Username*) printf '%s\\n' \"$GUILDBOTICS_TEST_USER\" ;;\n  *) printf '%s\\n' \"$GUILDBOTICS_TEST_TOKEN\" ;;\nesac\n",
         )
         .unwrap();
         #[cfg(unix)]
@@ -539,8 +543,8 @@ fn git_cmd(dir: &Path, args: &[&str], auth: Option<(&str, &str)>) -> Output {
     match auth {
         Some((member, token)) => {
             cmd.env("GIT_ASKPASS", &askpass)
-                .env("BRANVIL_TEST_USER", member)
-                .env("BRANVIL_TEST_TOKEN", token);
+                .env("GUILDBOTICS_TEST_USER", member)
+                .env("GUILDBOTICS_TEST_TOKEN", token);
         }
         // Without credentials, a prompt must fail instead of asking anyone.
         None => {

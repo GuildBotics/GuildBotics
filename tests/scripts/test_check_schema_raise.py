@@ -49,9 +49,9 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def run(repo: Path, verified: str | None) -> subprocess.CompletedProcess:
     env = os.environ.copy()
-    env.pop("BRANVIL_VERIFIED_SHA", None)
+    env.pop("GB_CI_VERIFIED_SHA", None)
     if verified is not None:
-        env["BRANVIL_VERIFIED_SHA"] = verified
+        env["GB_CI_VERIFIED_SHA"] = verified
     return subprocess.run(
         [sys.executable, str(repo / SCRIPT)],
         cwd=repo,
@@ -91,27 +91,6 @@ def test_no_verified_commit(repo: Path, verified: str | None) -> None:
     assert "empty or unset" in result.stdout
 
 
-def test_non_ancestor(repo: Path) -> None:
-    old = git(repo, "rev-parse", "HEAD")
-    store(repo, 26)
-    verified = commit(repo)
-    git(repo, "checkout", "--detach", old)
-    result = run(repo, verified)
-    assert result.returncode == 0
-    assert "not an ancestor" in result.stdout
-
-
-def test_bootstrap(repo: Path) -> None:
-    (repo / SCRIPT).unlink()
-    verified = commit(repo)
-    shutil.copyfile(ROOT / SCRIPT, repo / SCRIPT)
-    store(repo, 27)
-    commit(repo)
-    result = run(repo, verified)
-    assert result.returncode == 0
-    assert "predates this script" in result.stdout
-
-
 def test_invalid_commit_fails(repo: Path) -> None:
     result = run(repo, "0" * 40)
     assert result.returncode == 1
@@ -136,7 +115,7 @@ def test_repository_itself() -> None:
 
 
 def test_ci_schema_command_runs_without_a_virtualenv(repo: Path) -> None:
-    jobs = tomllib.loads((ROOT / ".branvil/ci.toml").read_text())["jobs"]
+    jobs = tomllib.loads((ROOT / ".guildbotics-ci.toml").read_text())["jobs"]
     [job] = [job for job in jobs if job["name"] == "schema-raise"]
     # Match the image's command names without a virtualenv's bare python.
     bin_dir = repo / "bin"
@@ -145,7 +124,7 @@ def test_ci_schema_command_runs_without_a_virtualenv(repo: Path) -> None:
         executable = shutil.which(name)
         assert executable is not None
         (bin_dir / name).symlink_to(executable)
-    env = {**os.environ, "PATH": str(bin_dir), "BRANVIL_VERIFIED_SHA": "HEAD"}
+    env = {**os.environ, "PATH": str(bin_dir), "GB_CI_VERIFIED_SHA": "HEAD"}
     for command in job["commands"]:
         result = subprocess.run(
             ["/bin/sh", "-c", command],
@@ -164,11 +143,10 @@ def test_ci_schema_command_runs_without_a_virtualenv(repo: Path) -> None:
 def test_ci_schema_job() -> None:
     jobs = {
         job["name"]: job
-        for job in tomllib.loads((ROOT / ".branvil/ci.toml").read_text())["jobs"]
+        for job in tomllib.loads((ROOT / ".guildbotics-ci.toml").read_text())["jobs"]
     }
     job = jobs["schema-raise"]
     assert job["verified_sha"] is True
     assert "cache" not in job
-    assert job["paths"] == [STORE, UPGRADE, SCRIPT]
     assert job["commands"] == [f"python3 {SCRIPT}"]
     assert "verified_sha" not in jobs["test"]

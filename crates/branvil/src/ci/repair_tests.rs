@@ -244,8 +244,7 @@ async fn repeated_failures_and_repair_head_selection() {
         .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
         .await
         .unwrap();
-    std::fs::create_dir(work.join(".branvil")).unwrap();
-    std::fs::write(work.join(".branvil/ci.toml"), "version = 1\n[[jobs]]\nname = 'post'\nimage = 'alpine'\ncommands = ['true']\n[[jobs]]\nname = 'test'\nimage = 'alpine'\ncommands = ['true']\npaths = ['src/**']\n").unwrap();
+    std::fs::write(work.join(".guildbotics-ci.toml"), "version = 1\n[[jobs]]\nname = 'post'\nimage = 'alpine'\ncommands = ['true']\n[[jobs]]\nname = 'test'\nimage = 'alpine'\ncommands = ['true']\npaths = ['src/**']\n").unwrap();
     let base = commit_all(&app.git, &work, "base").await;
     let head = commit_all(&app.git, &work, "head").await;
     app.git

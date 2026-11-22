@@ -23,12 +23,12 @@ export default class TestTiming implements Reporter {
         ...test.diagnostic(),
       })),
     }));
-    const directory = process.env.BRANVIL_TEST_RESULTS ?? "test-results";
+    const directory = process.env.GUILDBOTICS_TEST_RESULTS ?? "test-results";
     mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, "timing.json"), JSON.stringify({
       startedAt: this.startedAt, finishedAt, elapsedMs: finishedAt - this.startedAt, reason,
       node: process.version, platform: platform(), release: release(), cpus: availableParallelism(),
-      commit: process.env.BRANVIL_SHA, attempt: process.env.BRANVIL_ATTEMPT_ID,
+      commit: process.env.GB_CI_SHA, attempt: process.env.GB_CI_ATTEMPT_ID,
       files,
     }, null, 2) + "\n");
   }

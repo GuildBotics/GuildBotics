@@ -66,14 +66,14 @@ class 1–3 admission. Other jobs keep class 4m across failed attempts and subse
 verifications. Other protected branches retain class 1.
 
 Jobs declaring `verified_sha = true` record the latest verified SHA when claimed,
-return it in the claim response, and receive `BRANVIL_VERIFIED_SHA` (empty before
+return it in the claim response, and receive `GB_CI_VERIFIED_SHA` (empty before
 any success). Reuse for these jobs requires both the same verified SHA and the
 same commit tree, even when `paths` match: ancestry of a verified commit is not a
 property of those paths. Undeclared jobs retain the usual reuse rules and have
 no such environment variable. Protected registration reruns unsuccessful attempts
 previously executed for PRs; successful cacheless actual executions remain valid.
 
-## The pipeline: `.branvil/ci.toml`
+## The pipeline: `.guildbotics-ci.toml`
 
 ```toml
 version = 1                       # optional; only 1 exists
@@ -83,7 +83,7 @@ name = "test"                     # [A-Za-z0-9_.-]{1,64}, not "pipeline", unique
 image = "docker.io/library/alpine:3.22"   # [registry/]name[:tag], no digest
 commands = ["./scripts/test.sh", "make lint"]   # 1-64 commands, each run by /bin/sh -c
 paths = ["src/**", "tests/*.rs", "Cargo.lock"]  # optional; empty/omitted runs every change
-verified_sha = false             # optional; declares BRANVIL_VERIFIED_SHA as an input
+verified_sha = false             # optional; declares GB_CI_VERIFIED_SHA as an input
 timeout_secs = 600                # optional, 1-86400; default the runner's time limit
 tmpfs_mib = 2048                   # optional, 1-4096; /tmp uses a 4 GiB disk by default
 artifacts = [{ name = "report", paths = ["out/report/", "coverage.xml"] }]   # up to 16
@@ -92,10 +92,10 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
 
 - Commands run in order in `/work`; the first one that fails ends the job
   with its exit code. The job's environment has only CI metadata (besides
-  the image's own variables and `HOME`): `CI=true`, `BRANVIL_CI=true`,
-  `BRANVIL_REPOSITORY`, `BRANVIL_SHA`, `BRANVIL_JOB`, `BRANVIL_ATTEMPT`,
-  `BRANVIL_ATTEMPT_ID`. Jobs declaring `verified_sha = true` also receive
-  `BRANVIL_VERIFIED_SHA` (the latest verified commit at claim, or empty). No tokens, no host variables. See "The job's
+  the image's own variables and `HOME`): `CI=true`,
+  `GB_CI_REPOSITORY`, `GB_CI_SHA`, `GB_CI_JOB`, `GB_CI_ATTEMPT`,
+  `GB_CI_ATTEMPT_ID`. Jobs declaring `verified_sha = true` also receive
+  `GB_CI_VERIFIED_SHA` (the latest verified commit at claim, or empty). No tokens, no host variables. See "The job's
   environment" for `/work`, the user, and `/tmp`.
 - Jobs of one run are queued together; a runner runs queued jobs, of any
   run, up to the runner's configured `max_jobs` at once, each in a microVM of its own
@@ -282,13 +282,13 @@ What a job's commands find, as on common CI services:
 ## Trust: where the pipeline comes from
 
 Every commit runs its own pipeline: a tip of the default branch and the head
-of an open pull request alike read `.branvil/ci.toml` from that commit. A pull
+of an open pull request alike read `.guildbotics-ci.toml` from that commit. A pull
 request that changes the pipeline runs the changed pipeline as its checks, so
 a mistake in it shows before the merge. Main verification checks the combination after merge.
 PR-head jobs with `paths` run if any matching file changed since the
 merge-base with the current base tip of any open PR sharing that head SHA
 (and may then reuse a success with the same contents of paths, below).
-A changed `.branvil/ci.toml`, a missing base, or no merge-base runs all jobs.
+A changed `.guildbotics-ci.toml`, a missing base, or no merge-base runs all jobs.
 The run saves each PR's base name, tip and merge-base and its skipped job
 names. Re-registration updates this snapshot when PRs or base tips change;
 unchanged inputs do not create new attempts. Queue admission after waiting
@@ -324,7 +324,7 @@ opens, without a merge base, or when the pipeline changes. Protected branches ex
 them before merge too, regardless of paths.
 Manual retries also execute them and their skips cannot supply reusable results.
 
-The owner controls this in repository settings rather than `.branvil/ci.toml` so a
+The owner controls this in repository settings rather than `.guildbotics-ci.toml` so a
 PR cannot exempt its own jobs. Required checks and post-merge jobs cannot overlap.
 Selection records include the setting; reconciliation reselects open heads when
 it changes. Newly excluded queued jobs complete as `skipped`, not `cancelled`;
@@ -632,7 +632,7 @@ guildbotics runner register runner1 --url http://127.0.0.1:7878
 guildbotics runner pull docker.io/library/alpine:3.22
 
 guildbotics runner doctor                                          # which msb, executor ready?
-BRANVIL_TOKEN=<runner token> guildbotics runner --url http://127.0.0.1:7878
+GUILDBOTICS_RUNNER_TOKEN=<runner token> guildbotics runner --url http://127.0.0.1:7878
 ```
 
 Or let the service supervise one: `[ci] runner = "auto"` in `branvil.toml`
@@ -874,7 +874,7 @@ run `guildbotics environment image load --ci <archive>` on the Hub.
 An external runner uses the pinned `msb` executable. Its configured
 `ci.microsandbox.msb_path` takes precedence over the enrolled runtime and the
 copy installed by `guildbotics runner install-msb --from <msb>`. On an external
-runner, `ci.microsandbox.home` sets `MSB_HOME` (default `~/.branvil/msb-home`).
+runner, `ci.microsandbox.home` sets `MSB_HOME` (default `<machine root>/runner/msb-home`).
 External runners read job output live from the mounted log file.
 
 The job gets private disks at `/work` and `/tmp`. A preparation VM uses the
@@ -931,7 +931,7 @@ reports itself unavailable without it, as without `msb`).
   the collecting VM keeps for the cache (with the system's `sh` and `find`).
 - `crates/gb-runner/src/runner/disk.rs`: copies of an image keep its content
   and its holes and are independent of it.
-- `tests/real_executor.rs` (opt-in, `BRANVIL_REAL_EXECUTOR=1`): real microVMs
+- `tests/real_executor.rs` (opt-in, `GUILDBOTICS_REAL_EXECUTOR=1`): real microVMs
   (no network or host files; a checkout of the commit at `/work` whose index
   is clean, a non-root user that cannot read a file of mode 0, `/tmp` on a
   disk, the cache restored in the next attempt, nothing left behind).

@@ -118,7 +118,7 @@ the backup, even if a later edit removed the last reference and the sweep
    against the records) plus a Git directory for every repository record, and
    exits `1` when one fails.
 
-A server started on the restored data directory (`BRANVIL_DATA_DIR`) uses it
+A server started on the restored data directory (`GUILDBOTICS_CODE_HOST_DATA_DIR`) uses it
 like any other (after a passing `guildbotics server hub-data check` when the
 restore upgraded it; its last line says which); at startup it re-applies the
 service's Git configuration and hooks, finishes or drops pending journal
@@ -155,8 +155,9 @@ GuildBotics stays valid.
 Successive verified commits may raise the schema version by at most one, so
 each verified build remains reachable with a single upgrade. While a schema
 raise is still unverified, add further format changes to that same step's
-upgrade. The `schema-raise` CI job checks this against `BRANVIL_VERIFIED_SHA`
-and rejects changes to `upgrade.rs` at an unchanged verified version.
+upgrade. The `schema-raise` CI job checks this against `GB_CI_VERIFIED_SHA`
+on default-branch verification and rejects changes to `upgrade.rs` at an
+unchanged verified version. Without a verified commit it skips the check.
 
 A build that changes the stored format raises the schema version
 (`docs/storage-design.md`) and carries the upgrade from the version before

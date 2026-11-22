@@ -698,7 +698,7 @@ export const ja: Record<MessageKey, string> = {
   "ci.settings.images": "イメージ",
   "ci.settings.addImage": "イメージを追加",
   "ci.settings.emptyTitle": "ジョブを動かすイメージを追加してください",
-  "ci.settings.emptyHelp": "追加したイメージの参照を、.branvil/ci.toml の image に書きます。",
+  "ci.settings.emptyHelp": "追加したイメージの参照を、.guildbotics-ci.toml の image に書きます。",
   "ci.settings.cached": "キャッシュにあるイメージ",
   "ci.settings.usedBy": "使用中: {repositories}",
   "ci.settings.copyReference": "参照をコピー",

@@ -70,7 +70,7 @@ pub struct App {
     pub token_touched: Mutex<HashMap<String, std::time::Instant>>,
     /// (repo dir, base, head) → changed file count.
     pub changed_files: Mutex<HashMap<(String, String, String), u64>>,
-    /// Test-only crash point (`BRANVIL_FAILPOINT`).
+    /// Test-only crash point (`GUILDBOTICS_FAILPOINT`).
     failpoint: Option<String>,
 }
 
@@ -183,7 +183,7 @@ impl App {
             accounts: KeyedLocks::default(),
             token_touched: Mutex::new(HashMap::new()),
             changed_files: Mutex::new(HashMap::new()),
-            failpoint: std::env::var("BRANVIL_FAILPOINT")
+            failpoint: std::env::var("GUILDBOTICS_FAILPOINT")
                 .ok()
                 .filter(|v| !v.is_empty()),
             config,
@@ -301,7 +301,7 @@ impl App {
         std::mem::forget(self.operations.clone().write_owned().await);
     }
 
-    /// Simulates a crash at a named point when `BRANVIL_FAILPOINT` names it.
+    /// Simulates a crash at a named point when `GUILDBOTICS_FAILPOINT` names it.
     /// Used by the recovery tests; inert otherwise.
     pub fn failpoint(&self, name: &str) {
         if self.failpoint.as_deref() == Some(name) {

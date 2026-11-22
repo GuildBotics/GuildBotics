@@ -582,7 +582,7 @@ export interface CiLimits {
 }
 
 export interface CachedImage {
-  /** The tag: what to write as `image` in `.branvil/ci.toml`. */
+  /** The tag: what to write as `image` in `.guildbotics-ci.toml`. */
   reference: string;
   /** The configuration digest: which version of the tag the cache holds. */
   digest: string;

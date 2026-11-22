@@ -1198,8 +1198,8 @@ mod tests {
     /// process whose `XDG_CONFIG_HOME` and `HOME` hold `* text eol=crlf`.
     #[tokio::test]
     async fn the_checkout_ignores_the_machines_git_attributes() {
-        if std::env::var_os("BRANVIL_TEST_CHILD").is_some() {
-            let dir = PathBuf::from(std::env::var_os("BRANVIL_TEST_DIR").unwrap());
+        if std::env::var_os("GUILDBOTICS_TEST_CHILD").is_some() {
+            let dir = PathBuf::from(std::env::var_os("GUILDBOTICS_TEST_DIR").unwrap());
             let work = dir.join("work");
             checkout(
                 &dir.join("b.bundle"),
@@ -1258,7 +1258,7 @@ mod tests {
                 module_path!()
             ),
             &[
-                ("BRANVIL_TEST_DIR", d.as_os_str()),
+                ("GUILDBOTICS_TEST_DIR", d.as_os_str()),
                 ("XDG_CONFIG_HOME", d.join("xdg").as_os_str()),
                 ("HOME", d.join("home").as_os_str()),
             ],

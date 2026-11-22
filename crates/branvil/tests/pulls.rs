@@ -842,7 +842,7 @@ async fn the_owner_merges_the_current_head_and_closes_tickets() {
         checks["checks"][0]["details"]
             .as_str()
             .unwrap()
-            .contains(".branvil/ci.toml"),
+            .contains(".guildbotics-ci.toml"),
         "{checks}"
     );
     assert!(checks["checks"][0].get("attempt_id").is_none());
@@ -1352,8 +1352,7 @@ async fn the_patrol_puts_first_what_waits_for_least_once_the_work_is_done() {
             assert_eq!(st, 200, "{v}");
         }
     };
-    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
-    w.push_change("pipeline", ".branvil/ci.toml", &pipeline(&["test"]));
+    w.push_change("pipeline", ".guildbotics-ci.toml", &pipeline(&["test"]));
     w.open_pull("pipeline", json!([])).await;
     runner.drain("success").await;
     land(1).await;

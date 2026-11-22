@@ -1,6 +1,6 @@
 name: CI
 
-# Branvil's CI (.branvil/ci.toml) runs every check it can on Linux. This
+# Branvil's CI (.guildbotics-ci.toml) runs every check it can on Linux. This
 # workflow runs macOS Clippy and the Windows GNU client contracts.
 
 on:

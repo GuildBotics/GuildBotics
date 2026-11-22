@@ -30,12 +30,11 @@ impl Fixture {
             .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
             .await
             .unwrap();
-        std::fs::create_dir(work.join(".branvil")).unwrap();
         let pipeline: String = names
             .iter()
             .map(|name| format!("[[jobs]]\nname='{name}'\nimage='alpine'\ncommands=['true']\n"))
             .collect();
-        std::fs::write(work.join(".branvil/ci.toml"), pipeline).unwrap();
+        std::fs::write(work.join(".guildbotics-ci.toml"), pipeline).unwrap();
         let sha = tests::commit_all(&ci.inner.git, &work, "initial").await;
         ci.inner
             .git
@@ -631,7 +630,7 @@ async fn narrowing_missing_job_is_not_run_and_boundary_disagreement_keeps_attemp
             } else {
                 "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n"
             };
-            std::fs::write(f.temp.path().join("work/.branvil/ci.toml"), pipeline).unwrap();
+            std::fs::write(f.temp.path().join("work/.guildbotics-ci.toml"), pipeline).unwrap();
             commits.push(f.push_next().await);
         }
         f.advance().await;

@@ -69,7 +69,7 @@ async fn post_merge_settings_validate_the_result_atomically_and_require_owner() 
 #[tokio::test]
 async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
     let mut config: toml::Table =
-        toml::from_str(include_str!("../../../.branvil/ci.toml")).unwrap();
+        toml::from_str(include_str!("../../../.guildbotics-ci.toml")).unwrap();
     let jobs = config["jobs"].as_array_mut().unwrap();
     jobs.retain(|job| job["name"].as_str() == Some("client-linux"));
     assert_eq!(jobs.len(), 1);
@@ -100,7 +100,6 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
         toml::to_string(&config).unwrap()
     );
     let w = World::new().await;
-    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
     let runner = Runner::new(&w, "post-merge-runner").await;
     let repo = w.server.ok(&w.repo_path(), &w.owner).await;
     assert_eq!(
@@ -114,7 +113,7 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
             .0,
         200
     );
-    let head = w.push_change("feature", ".branvil/ci.toml", &pipeline);
+    let head = w.push_change("feature", ".guildbotics-ci.toml", &pipeline);
     let commit_checks = w
         .server
         .ok(
@@ -168,8 +167,11 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
 async fn job_and_check_responses_identify_the_runner_that_claimed_each_attempt() {
     let w = World::new().await;
     set_required(&w, &["test", "lint"]).await;
-    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
-    let head = w.push_change("feature", ".branvil/ci.toml", &pipeline(&["test", "lint"]));
+    let head = w.push_change(
+        "feature",
+        ".guildbotics-ci.toml",
+        &pipeline(&["test", "lint"]),
+    );
     let commit_url = format!("{}/commits/{head}/checks", w.repo_path());
     let unregistered = w.server.ok(&commit_url, &w.aiko).await;
     assert_eq!(unregistered["run_registered"], false);
@@ -231,8 +233,11 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
         .await;
     assert_eq!(status, 200, "{body}");
     let runner = Runner::new(&w, "ordering-runner").await;
-    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
-    let head = w.push_change("feature", ".branvil/ci.toml", &pipeline(&["z", "a", "m"]));
+    let head = w.push_change(
+        "feature",
+        ".guildbotics-ci.toml",
+        &pipeline(&["z", "a", "m"]),
+    );
     let p = w.open_pull("feature", json!([])).await;
     let checks_url = format!("{}/pulls/{}/checks", w.repo_path(), p["number"]);
     let names = |v: &Value| {
@@ -284,7 +289,7 @@ async fn schema_40_upgrade_preserves_records() {
     let head = land(
         &w,
         "setup",
-        &[("src/a.txt", "a"), (".branvil/ci.toml", &ci)],
+        &[("src/a.txt", "a"), (".guildbotics-ci.toml", &ci)],
         None,
     )
     .await;
@@ -393,7 +398,7 @@ async fn protected_required_retries_are_visible_as_queued_checks_until_exhausted
     let head = land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline(&["test"]))],
+        &[(".guildbotics-ci.toml", &pipeline(&["test"]))],
         None,
     )
     .await;
@@ -482,8 +487,7 @@ async fn pr_retry_routes_only_to_selected_runners_and_reports_recovery() {
     let third = Runner::new(&w, "runner3").await;
     assert!(second.claim().await.is_none());
     assert!(third.claim().await.is_none());
-    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
-    let head = w.push_change("feature", ".branvil/ci.toml", &pipeline(&["test"]));
+    let head = w.push_change("feature", ".guildbotics-ci.toml", &pipeline(&["test"]));
     w.open_pull("feature", json!([])).await;
     let a = first.next_claim().await;
     assert_eq!(a["sha"], head);
@@ -588,7 +592,7 @@ async fn paths_protected_non_default_tip_needs_a_pull_but_then_runs_all_jobs() {
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &filtered_pipeline())],
+        &[(".guildbotics-ci.toml", &filtered_pipeline())],
         None,
     )
     .await;
@@ -633,7 +637,7 @@ async fn paths_empty_tree_changes_leave_as_already_in_base() {
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &filtered_pipeline())],
+        &[(".guildbotics-ci.toml", &filtered_pipeline())],
         None,
     )
     .await;
@@ -677,7 +681,7 @@ async fn paths_land(auto: bool) {
     let base = land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &filtered_pipeline())],
+        &[(".guildbotics-ci.toml", &filtered_pipeline())],
         None,
     )
     .await;
@@ -787,7 +791,7 @@ async fn paths_match_git_globs_and_a_pipeline_change_disables_selection() {
         &w,
         "setup",
         &[
-            (".branvil/ci.toml", &filtered_pipeline()),
+            (".guildbotics-ci.toml", &filtered_pipeline()),
             ("src/nested/a.rs", "before\n"),
         ],
         None,
@@ -813,7 +817,7 @@ async fn paths_match_git_globs_and_a_pipeline_change_disables_selection() {
     sync_main(&w);
     w.push_change(
         "pipeline-change",
-        ".branvil/ci.toml",
+        ".guildbotics-ci.toml",
         &format!("{}\n# changed", filtered_pipeline()),
     );
     let p = w.open_pull("pipeline-change", json!([])).await;
@@ -851,7 +855,7 @@ async fn paths_reuse_gate(reused: bool, verified: bool) {
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline), ("src/a.rs", "a\n")],
+        &[(".guildbotics-ci.toml", &pipeline), ("src/a.rs", "a\n")],
         None,
     )
     .await;
@@ -938,7 +942,7 @@ async fn paths_retry_actually_executes_a_skipped_job() {
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &filtered_pipeline())],
+        &[(".guildbotics-ci.toml", &filtered_pipeline())],
         None,
     )
     .await;
@@ -980,7 +984,7 @@ async fn paths_reselect_for_another_pr_and_ref_of_the_same_sha_and_remain_stable
         &w,
         "setup",
         &[
-            (".branvil/ci.toml", &filtered_pipeline()),
+            (".guildbotics-ci.toml", &filtered_pipeline()),
             ("src/a.rs", "before\n"),
         ],
         None,
@@ -1072,7 +1076,7 @@ async fn a_reused_success_counts_for_required_checks_and_not_for_duration_estima
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline(&["test"]))],
+        &[(".guildbotics-ci.toml", &pipeline(&["test"]))],
         None,
     )
     .await;
@@ -1382,7 +1386,7 @@ async fn checks_say_when_they_ran_and_how_long_the_job_took_where_it_last_succee
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline(&["test", "lint"]))],
+        &[(".guildbotics-ci.toml", &pipeline(&["test", "lint"]))],
         None,
     )
     .await;
@@ -1474,7 +1478,7 @@ async fn a_head_runs_its_own_pipeline_and_reports_logs_and_artifacts() {
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &artifact_pipeline(&["test"]))],
+        &[(".guildbotics-ci.toml", &artifact_pipeline(&["test"]))],
         None,
     )
     .await;
@@ -1488,8 +1492,8 @@ async fn a_head_runs_its_own_pipeline_and_reports_logs_and_artifacts() {
         "{}\ntmpfs_mib = 2048\n",
         artifact_pipeline(&["test"]).replace("echo test", "echo changed")
     );
-    std::fs::write(w.work.join(".branvil/ci.toml"), changed).unwrap();
-    git_ok(&w.work, &["add", ".branvil/ci.toml"]);
+    std::fs::write(w.work.join(".guildbotics-ci.toml"), changed).unwrap();
+    git_ok(&w.work, &["add", ".guildbotics-ci.toml"]);
     let head = w.push_change("feature", "f.txt", "one\n");
     let p = w.open_pull("feature", json!([])).await;
     let n = p["number"].as_u64().unwrap();
@@ -1708,7 +1712,7 @@ async fn a_merge_keeps_a_running_head_and_can_publish_its_cache_after_success() 
         "[[jobs]]\nname = \"build\"\nimage = \"{IMAGE}\"\ncommands = [\"echo build\"]\ncache = {{ paths = [\"target\"] }}\n\n{}",
         pipeline(&["lint"])
     );
-    land(&w, "setup", &[(".branvil/ci.toml", &jobs)], None).await;
+    land(&w, "setup", &[(".guildbotics-ci.toml", &jobs)], None).await;
     // Merged while its jobs waited, the setup's commit runs them as main's.
     for _ in 0..2 {
         let c = runner.claim().await.unwrap();
@@ -1792,7 +1796,7 @@ async fn rapid_pushes_supersede_older_commits_and_their_late_results_never_count
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline(&["build", "test"]))],
+        &[(".guildbotics-ci.toml", &pipeline(&["build", "test"]))],
         None,
     )
     .await;
@@ -1863,7 +1867,10 @@ async fn required_ci_is_never_shown_as_success_or_no_checks() {
         (Some("completed"), Some("failure"))
     );
     assert!(
-        t["details"].as_str().unwrap().contains(".branvil/ci.toml"),
+        t["details"]
+            .as_str()
+            .unwrap()
+            .contains(".guildbotics-ci.toml"),
         "{t}"
     );
     let base = format!("{}/pulls/{n}", w.repo_path());
@@ -1893,7 +1900,7 @@ async fn required_ci_is_never_shown_as_success_or_no_checks() {
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline(&["test"]))],
+        &[(".guildbotics-ci.toml", &pipeline(&["test"]))],
         Some(&runner),
     )
     .await;
@@ -1997,11 +2004,11 @@ async fn required_ci_is_never_shown_as_success_or_no_checks() {
     // A head that breaks its own pipeline gets a failing pipeline check.
     sync_main(&w);
     std::fs::write(
-        w.work.join(".branvil/ci.toml"),
+        w.work.join(".guildbotics-ci.toml"),
         "[[jobs]]\nname = \"test\"\nprivileged = true\n",
     )
     .unwrap();
-    git_ok(&w.work, &["add", ".branvil/ci.toml"]);
+    git_ok(&w.work, &["add", ".guildbotics-ci.toml"]);
     w.push_change("feature3", "h.txt", "1\n");
     let p3 = w.open_pull("feature3", json!([])).await;
     let v = checks(&w, p3["number"].as_u64().unwrap()).await;
@@ -2026,8 +2033,8 @@ async fn required_ci_is_never_shown_as_success_or_no_checks() {
     // A head that drops the required check from its own pipeline runs what is
     // left, and still cannot be merged: the required check fails.
     sync_main(&w);
-    std::fs::write(w.work.join(".branvil/ci.toml"), pipeline(&["lint"])).unwrap();
-    git_ok(&w.work, &["add", ".branvil/ci.toml"]);
+    std::fs::write(w.work.join(".guildbotics-ci.toml"), pipeline(&["lint"])).unwrap();
+    git_ok(&w.work, &["add", ".guildbotics-ci.toml"]);
     let head4 = w.push_change("feature4", "i.txt", "1\n");
     let p4 = w.open_pull("feature4", json!([])).await;
     let n4 = p4["number"].as_u64().unwrap();
@@ -2089,7 +2096,7 @@ async fn a_commit_shows_its_checks_with_or_without_a_pull_request() {
     let tip = land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline(&["test"]))],
+        &[(".guildbotics-ci.toml", &pipeline(&["test"]))],
         None,
     )
     .await;
@@ -2136,7 +2143,7 @@ async fn no_runner_means_startup_failure_not_waiting_forever() {
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline(&["test"]))],
+        &[(".guildbotics-ci.toml", &pipeline(&["test"]))],
         None,
     )
     .await;
@@ -2170,7 +2177,7 @@ async fn an_expired_lease_requeues_once_and_a_restart_handles_orphans() {
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline(&["test"]))],
+        &[(".guildbotics-ci.toml", &pipeline(&["test"]))],
         None,
     )
     .await;
@@ -2250,7 +2257,7 @@ async fn running_test_and_queued_lint(w: &World, runner: &Runner) -> Value {
     land(
         w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline(&["test", "lint"]))],
+        &[(".guildbotics-ci.toml", &pipeline(&["test", "lint"]))],
         None,
     )
     .await;
@@ -2388,7 +2395,11 @@ async fn the_automatic_runner_starting_again_queues_the_jobs_its_predecessor_hel
     // for a ready runner instead of taking incompatible attempts.
     let home = w.dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
-    w.restart(&[("HOME", home.to_str().unwrap())]);
+    let root = home.join(".guildbotics");
+    w.restart(&[
+        ("HOME", home.to_str().unwrap()),
+        ("GUILDBOTICS_HOME", root.to_str().unwrap()),
+    ]);
     let url = format!(
         "{}/jobs/{}",
         w.repo_path(),
@@ -2474,7 +2485,7 @@ async fn deleting_a_merged_head_keeps_the_jobs_of_the_commit_it_merged() {
     land(
         &w,
         "add-ci",
-        &[(".branvil/ci.toml", &pipeline(&["test"]))],
+        &[(".guildbotics-ci.toml", &pipeline(&["test"]))],
         None,
     )
     .await;
@@ -2494,7 +2505,7 @@ async fn a_merge_needs_success_on_the_exact_head_and_refuses_a_moved_base() {
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline(&["test"]))],
+        &[(".guildbotics-ci.toml", &pipeline(&["test"]))],
         None,
     )
     .await;
@@ -2597,7 +2608,7 @@ async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
     land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &artifact_pipeline(&["test"]))],
+        &[(".guildbotics-ci.toml", &artifact_pipeline(&["test"]))],
         None,
     )
     .await;
@@ -2689,7 +2700,7 @@ async fn author_yields_only_deferred_running_checks_and_old_finish_stays_obsolet
         land(
             &w,
             "setup",
-            &[(".branvil/ci.toml", &pipeline(&["test", "lint", "wait"]))],
+            &[(".guildbotics-ci.toml", &pipeline(&["test", "lint", "wait"]))],
             None,
         )
         .await;
@@ -2854,7 +2865,7 @@ mod yield_noops_for_closed_protected_approved_outdated_and_answered_heads {
                 land(
                     &world,
                     "setup",
-                    &[(".branvil/ci.toml", &pipeline(&["test"]))],
+                    &[(".guildbotics-ci.toml", &pipeline(&["test"]))],
                     None,
                 )
                 .await;
@@ -3057,9 +3068,8 @@ async fn verification_api_auth_first_parent_and_cursor_pages() {
     std::fs::create_dir(&work).unwrap();
     git_ok(&work, &["init", "-q", "-b", "main"]);
     let runner = Runner::new(&w, "verification-reader").await;
-    std::fs::create_dir(work.join(".branvil")).unwrap();
-    std::fs::write(work.join(".branvil/ci.toml"), pipeline(&["verify"])).unwrap();
-    git_ok(&work, &["add", ".branvil/ci.toml"]);
+    std::fs::write(work.join(".guildbotics-ci.toml"), pipeline(&["verify"])).unwrap();
+    git_ok(&work, &["add", ".guildbotics-ci.toml"]);
     for i in 0..32 {
         git_ok(
             &work,

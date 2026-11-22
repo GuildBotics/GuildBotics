@@ -142,7 +142,7 @@ async fn hold_blocks_local_merge_until_verification_succeeds() {
     crate::ci::land(
         &w,
         "pipeline",
-        &[(".branvil/ci.toml", &pipeline(&["verify"]))],
+        &[(".guildbotics-ci.toml", &pipeline(&["verify"]))],
         Some(&runner),
     )
     .await;
@@ -225,9 +225,8 @@ async fn held_host_pulls_keep_sending_heads_and_release_unpublished_work() {
     let (w, gh) = followed().await;
     with_aiko_account(&w).await;
     let runner = Runner::new(&w, "hold-host-runner").await;
-    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
-    std::fs::write(w.work.join(".branvil/ci.toml"), pipeline(&["verify"])).unwrap();
-    git_ok(&w.work, &["add", ".branvil/ci.toml"]);
+    std::fs::write(w.work.join(".guildbotics-ci.toml"), pipeline(&["verify"])).unwrap();
+    git_ok(&w.work, &["add", ".guildbotics-ci.toml"]);
     git_ok(&w.work, &["commit", "-qm", "main verification"]);
     git_ok(
         &w.work,

@@ -18,7 +18,7 @@ const CANARY: &str = "synthetic-owner-disk-positive-control";
 async fn isolated_command_uses_the_ci_image_store() {
     assert!(std::env::var_os("CI").is_none());
     let data = PathBuf::from(
-        std::env::var_os("BRANVIL_REAL_EXECUTOR_DATA").expect("disposable test data required"),
+        std::env::var_os("GUILDBOTICS_REAL_EXECUTOR_DATA").expect("disposable test data required"),
     );
     assert!(data.is_absolute());
     let home = gb_vm::home(&data);

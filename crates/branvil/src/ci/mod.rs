@@ -2,7 +2,7 @@
 //! only through `Ci`; the runner talks to it through the runner API
 //! (`api.rs`). See `docs/ci.md`.
 //!
-//! - The pipeline (`.branvil/ci.toml`) is read from the commit itself, for a
+//! - The pipeline (`.guildbotics-ci.toml`) is read from the commit itself, for a
 //!   tip of the default branch and a pull request head alike. What a head
 //!   cannot change is the repository's settings: the required checks and
 //!   `ci_network`.
@@ -1931,9 +1931,12 @@ mod tests {
             .run_ok(None, &["init", "-q", "-b", "main", w])
             .await
             .unwrap();
-        std::fs::create_dir_all(work.join(".branvil")).unwrap();
         std::fs::create_dir_all(work.join("src")).unwrap();
-        std::fs::write(work.join(".branvil/ci.toml"), inputs_pipeline("'src/**'")).unwrap();
+        std::fs::write(
+            work.join(".guildbotics-ci.toml"),
+            inputs_pipeline("'src/**'"),
+        )
+        .unwrap();
         std::fs::write(work.join("src/a.txt"), "a").unwrap();
         std::fs::write(work.join("src/b.txt"), "b").unwrap();
         let main = commit_all(&app.git, &work, "main").await;
@@ -1992,7 +1995,7 @@ mod tests {
         }
         // A commit that changes the job's paths has the digest of its paths.
         std::fs::write(
-            work.join(".branvil/ci.toml"),
+            work.join(".guildbotics-ci.toml"),
             inputs_pipeline("'src/a.txt'"),
         )
         .unwrap();
@@ -2025,9 +2028,8 @@ mod tests {
             )
             .await
             .unwrap();
-        std::fs::create_dir(work.join(".branvil")).unwrap();
         std::fs::write(
-            work.join(".branvil/ci.toml"),
+            work.join(".guildbotics-ci.toml"),
             "[[jobs]]\nname = 'test'\nimage = 'alpine'\ncommands = ['true']\n",
         )
         .unwrap();
@@ -2244,8 +2246,7 @@ mod tests {
             .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
             .await
             .unwrap();
-        std::fs::create_dir(work.join(".branvil")).unwrap();
-        std::fs::write(work.join(".branvil/ci.toml"), "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n\n[[jobs]]\nname='lint'\nimage='alpine'\ncommands=['true']\n").unwrap();
+        std::fs::write(work.join(".guildbotics-ci.toml"), "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n\n[[jobs]]\nname='lint'\nimage='alpine'\ncommands=['true']\n").unwrap();
         let mut shas = vec![];
         for message in ["first", "second", "third"] {
             shas.push(commit_all(&app.git, &work, message).await);
@@ -2432,13 +2433,12 @@ mod tests {
                 .await
                 .unwrap();
             if kind != "absent" {
-                std::fs::create_dir(work.join(".branvil")).unwrap();
                 let pipeline = if kind == "invalid" {
                     "invalid"
                 } else {
                     "[[jobs]]\nname='lint'\nimage='alpine'\ncommands=['true']\n"
                 };
-                std::fs::write(work.join(".branvil/ci.toml"), pipeline).unwrap();
+                std::fs::write(work.join(".guildbotics-ci.toml"), pipeline).unwrap();
             }
             let sha = commit_all(&app.git, &work, "verification").await;
             app.git

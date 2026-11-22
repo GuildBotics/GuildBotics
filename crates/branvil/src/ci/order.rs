@@ -179,7 +179,6 @@ mod tests {
         git.run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
             .await
             .unwrap();
-        std::fs::create_dir_all(work.join(".branvil")).unwrap();
         let PipelineState::Jobs { jobs } = pipeline() else {
             unreachable!()
         };
@@ -192,7 +191,7 @@ mod tests {
                 )
             })
             .collect::<String>();
-        std::fs::write(work.join(".branvil/ci.toml"), text).unwrap();
+        std::fs::write(work.join(".guildbotics-ci.toml"), text).unwrap();
         let h1 = commit_all(&git, &work, "H1").await;
         let gap = commit_all(&git, &work, "no run here").await;
         let h2 = commit_all(&git, &work, "H2").await;

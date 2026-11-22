@@ -106,8 +106,8 @@ pub fn start(app: Shared, url: String) {
                 .arg(&app.config.data_dir)
                 .arg("--config")
                 .arg(&app.config.file)
-                .env("BRANVIL_TOKEN", token)
-                .env_remove("BRANVIL_FAILPOINT")
+                .env("GUILDBOTICS_RUNNER_TOKEN", token)
+                .env_remove("GUILDBOTICS_FAILPOINT")
                 .stdin(std::process::Stdio::null())
                 // The service's stdout carries only its own notices.
                 .stdout(std::io::stderr())

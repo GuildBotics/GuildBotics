@@ -44,7 +44,7 @@ const MAX_DETAILS: usize = 4 << 10;
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum PipelineState {
-    /// The commit has no `.branvil/ci.toml`.
+    /// The commit has no `.guildbotics-ci.toml`.
     Absent,
     /// It has one and it is invalid.
     Invalid {

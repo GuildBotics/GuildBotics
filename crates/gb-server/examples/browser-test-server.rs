@@ -90,7 +90,8 @@ async fn main() -> anyhow::Result<()> {
 // This protocol belongs only to this example process, never the product router.
 async fn controls(data: branvil::api::DataApi) -> anyhow::Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-    let root = std::path::PathBuf::from(std::env::var_os("BRANVIL_DATA_DIR").unwrap());
+    let root =
+        std::path::PathBuf::from(std::env::var_os("GUILDBOTICS_CODE_HOST_DATA_DIR").unwrap());
     let owner = data.owner();
     let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await? {

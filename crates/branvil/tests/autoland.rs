@@ -217,7 +217,7 @@ async fn main_failure_notifies_creation_once_and_recovery_sends_nothing() {
     crate::ci::land(
         &w,
         "setup",
-        &[(".branvil/ci.toml", &pipeline(&["test"]))],
+        &[(".guildbotics-ci.toml", &pipeline(&["test"]))],
         None,
     )
     .await;
@@ -305,9 +305,8 @@ async fn a_pull_request_merges_itself_once_approved_and_its_required_check_succe
         json!({"auto_land": true, "required_checks": ["test"], "required_approvals": 1}),
     )
     .await;
-    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
-    std::fs::write(w.work.join(".branvil/ci.toml"), pipeline(&["test"])).unwrap();
-    git_ok(&w.work, &["add", ".branvil/ci.toml"]);
+    std::fs::write(w.work.join(".guildbotics-ci.toml"), pipeline(&["test"])).unwrap();
+    git_ok(&w.work, &["add", ".guildbotics-ci.toml"]);
 
     // The approval first, then the check.
     let head = w.push_change("one", "one.txt", "1\n");

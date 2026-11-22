@@ -1,7 +1,7 @@
 //! Restart and crash recovery: redb reopened from disk, journaled merges
 //! interrupted between Git and the database, and pushes whose post-receive
 //! never reached the database. Crashes are simulated with
-//! `BRANVIL_FAILPOINT`, which aborts the process at a named point. This is
+//! `GUILDBOTICS_FAILPOINT`, which aborts the process at a named point. This is
 //! process-kill testing, not power-loss testing. Every other stop is a normal
 //! one (SIGINT), which waits for the repository operations already started.
 
@@ -81,7 +81,7 @@ async fn records_survive_a_restart() {
 async fn a_merge_interrupted_after_the_ref_update_completes_at_startup() {
     let mut w = World::new().await;
     let (base, head, main) = ready_pull(&w).await;
-    w.restart(&[("BRANVIL_FAILPOINT", "merge_after_update_ref")]);
+    w.restart(&[("GUILDBOTICS_FAILPOINT", "merge_after_update_ref")]);
     let url = format!("{}/api/v1{base}/merge", w.server.url);
     let result = w
         .server
@@ -117,7 +117,7 @@ async fn a_merge_interrupted_after_the_ref_update_completes_at_startup() {
 async fn a_merge_interrupted_before_the_ref_update_is_dropped_at_startup() {
     let mut w = World::new().await;
     let (base, head, main) = ready_pull(&w).await;
-    w.restart(&[("BRANVIL_FAILPOINT", "merge_before_update_ref")]);
+    w.restart(&[("GUILDBOTICS_FAILPOINT", "merge_before_update_ref")]);
     let _ = w
         .server
         .http
@@ -265,7 +265,7 @@ async fn the_next_start_waits_for_the_git_a_stopped_service_left_running() {
             branvil_command()
                 .args(["serve", "--listen", "127.0.0.1:0", "--data-dir"])
                 .arg(&w.server.data)
-                .env_remove("BRANVIL_FAILPOINT")
+                .env_remove("GUILDBOTICS_FAILPOINT")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::fs::File::create(&waiting_log).unwrap()),
         )
@@ -441,7 +441,7 @@ async fn a_push_the_service_did_not_record_is_found_at_startup() {
         .server
         .ok(&format!("{}/pulls/1", w.repo_path()), &w.aiko)
         .await;
-    w.restart(&[("BRANVIL_FAILPOINT", "post_receive_before_record")]);
+    w.restart(&[("GUILDBOTICS_FAILPOINT", "post_receive_before_record")]);
     // The push lands in Git; the service aborts before recording it.
     let w2 = &w;
     let file = w2.work.join("f.txt");

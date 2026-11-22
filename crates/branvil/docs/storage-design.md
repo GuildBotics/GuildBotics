@@ -55,10 +55,10 @@ closure returns `Ok` and aborts otherwise.
 Raise the version by at most one between successive verified commits. While a
 schema raise is still unverified, add further format changes to that same
 step's upgrade instead of raising the version again. The `schema-raise` CI job
-compares the checkout with `BRANVIL_VERIFIED_SHA` and also requires `upgrade.rs`
-to remain unchanged when the version stays at the verified version. It skips
-the comparison when no verified commit exists, it is not an ancestor of the
-checkout, or it predates the guard script.
+compares the checkout with `GB_CI_VERIFIED_SHA` and also requires `upgrade.rs`
+to remain unchanged when the version stays at the verified version. It runs
+only on default-branch verification and skips the comparison when no verified
+commit exists.
 
 `meta["schema_version"]` is written on creation (currently `39`). The current
 format includes per-pull landing conditions, each merged pull request's original

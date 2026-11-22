@@ -198,10 +198,9 @@ async fn head_check_blocker_jobs_only_list_unmet_required_checks() {
         json!({"required_checks": ["failed", "running", "passed"]}),
     )
     .await;
-    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
     w.push_change(
         "feature",
-        ".branvil/ci.toml",
+        ".guildbotics-ci.toml",
         &crate::ci::pipeline(&["failed", "running", "passed"]),
     );
     w.open_pull("feature", json!([])).await;

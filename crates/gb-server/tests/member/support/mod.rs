@@ -58,7 +58,7 @@ impl Embedded {
         fixture.repository(REPO).await;
         let first = fixture.commit(REPO, "main", None, "readme", "first\n");
         // Every head registers a `test` job; no runner ever finishes it.
-        let main = fixture.commit(REPO, "main", Some(&first), ".branvil/ci.toml", PIPELINE);
+        let main = fixture.commit(REPO, "main", Some(&first), ".guildbotics-ci.toml", PIPELINE);
         let code = CodeAgent::new(
             fixture.data(),
             WORKSPACE.into(),

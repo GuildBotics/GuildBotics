@@ -460,10 +460,10 @@ mod cycle_tests {
             let fixture = self.native.fixture.as_ref().unwrap();
             let owner = &fixture.owner;
             let seed = self.root.path().join("repair-seed");
-            std::fs::create_dir_all(seed.join(".branvil")).unwrap();
+            std::fs::create_dir_all(&seed).unwrap();
             git(&seed, &["init", "-qb", "main"]);
             std::fs::write(
-                seed.join(".branvil/ci.toml"),
+                seed.join(".guildbotics-ci.toml"),
                 "[[jobs]]\nname = \"test\"\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\n",
             )
             .unwrap();

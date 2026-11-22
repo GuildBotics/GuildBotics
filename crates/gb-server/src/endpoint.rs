@@ -11,9 +11,9 @@ pub(crate) const DEFAULT_PORT: u16 = 7878;
 pub const PORT_NOTICE_PREFIX: &str = "GUILDBOTICS_APP_API_PORT=";
 
 /// Names the code host's data directory.
-pub const CODE_HOST_DATA_ENV: &str = "BRANVIL_DATA_DIR";
+pub const CODE_HOST_DATA_ENV: &str = "GUILDBOTICS_CODE_HOST_DATA_DIR";
 
-/// The code host's data directory: `BRANVIL_DATA_DIR`, else `code-host` in
+/// The code host's data directory: `GUILDBOTICS_CODE_HOST_DATA_DIR`, else `code-host` in
 /// the machine's data.
 pub fn code_host_data() -> anyhow::Result<std::path::PathBuf> {
     match std::env::var_os(CODE_HOST_DATA_ENV) {

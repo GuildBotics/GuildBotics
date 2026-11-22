@@ -3,7 +3,7 @@
 # GuildBotics' default base image (Debian with curl, the compilers and git) lets an
 # agent run the AI CLI tools but not this repository's own build and tests.
 # This image adds everything the Linux CI uses, so a member turn inside the
-# isolated environment can run the same checks as `.branvil/ci.toml`, whose
+# isolated environment can run the same checks as `.guildbotics-ci.toml`, whose
 # jobs run in this image:
 #
 #   - Python (uv-managed; the version `requires-python` allows) for `uv sync`,
@@ -23,7 +23,7 @@
 #     the member's next clone reuses its dependencies' compilation; a
 #     read-only command keeps the cache on the microVM's own disk, which is
 #     discarded with it. The CI's Rust jobs build without it (an empty
-#     RUSTC_WRAPPER in `.branvil/ci.toml`). For the clones to share results,
+#     RUSTC_WRAPPER in `.guildbotics-ci.toml`). For the clones to share results,
 #     aarch64 links through the repository's linker script copied to a fixed
 #     path (cc-lld.sh)
 #   - Playwright's Chromium with its system libraries for `npm run e2e`

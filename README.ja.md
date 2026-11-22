@@ -74,7 +74,7 @@ target/debug/guildbotics install
 
 `install` はビルド済みの実行ファイルを `~/.guildbotics/bin/guildbotics` に置き、利用可能なAI CLIのユーザー領域に同梱スキルを配置します。ユーザーが編集したスキルと既存のコマンドは保持します。`~/.local/bin/guildbotics` のリンクを使うには `~/.local/bin` を `PATH` に加えます。
 
-コードホストのデータは、初回の起動時に `~/.guildbotics/data/code-host` に作られます。別の場所を使う場合や既存のデータを使う場合は、起動の前に `BRANVIL_DATA_DIR` にその絶対パスを設定します。コードホストの画面は `"$HOME/.guildbotics/bin/guildbotics" open --branvil` で開きます。ログイン時の起動、更新、復旧は [macOS Hubの起動と更新](docs/hub-server.md) を参照してください。
+コードホストのデータは、初回の起動時に `~/.guildbotics/data/code-host` に作られます。別の場所を使う場合や既存のデータを使う場合は、起動の前に `GUILDBOTICS_CODE_HOST_DATA_DIR` にその絶対パスを設定します。コードホストの画面は `"$HOME/.guildbotics/bin/guildbotics" open --branvil` で開きます。ログイン時の起動、更新、復旧は [macOS Hubの起動と更新](docs/hub-server.md) を参照してください。
 
 ### 初期セットアップ
 

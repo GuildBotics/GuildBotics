@@ -20,10 +20,10 @@ use serde::{Deserialize, Serialize};
 use crate::config::Layout;
 use crate::refs::Update;
 
-pub const ENV_URL: &str = "BRANVIL_HOOK_URL";
-pub const ENV_SECRET: &str = "BRANVIL_HOOK_SECRET";
-pub const ENV_REPO: &str = "BRANVIL_HOOK_REPO";
-pub const ENV_MEMBER: &str = "BRANVIL_HOOK_MEMBER";
+pub const ENV_URL: &str = "GUILDBOTICS_HOOK_URL";
+pub const ENV_SECRET: &str = "GUILDBOTICS_HOOK_SECRET";
+pub const ENV_REPO: &str = "GUILDBOTICS_HOOK_REPO";
+pub const ENV_MEMBER: &str = "GUILDBOTICS_HOOK_MEMBER";
 pub const SECRET_HEADER: &str = "x-branvil-hook";
 
 /// Writes the hook scripts for the running executable.

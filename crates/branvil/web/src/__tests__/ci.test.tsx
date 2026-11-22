@@ -52,7 +52,7 @@ const CI = {
     detail: "1 runner(s) connected.",
     runners: [HUB_RUNNER],
   },
-  executor: { msb: "/Users/u/.guildbotics/data/msb/bin/msb", problem: null, home: "/Users/u/.branvil/msb-home" },
+  executor: { msb: "/Users/u/.guildbotics/data/msb/bin/msb", problem: null, home: "/Users/u/.guildbotics/runner/msb-home" },
   limits: LIMITS,
   images: { error: null, cached: [CACHED], missing: [] },
   operation: null,
@@ -114,7 +114,7 @@ describe("CI settings", () => {
 
     const executor = screen.getByRole("region", { name: "Executor" });
     expect(within(executor).getByText("/Users/u/.guildbotics/data/msb/bin/msb")).toBeInTheDocument();
-    expect(within(executor).getByText("/Users/u/.branvil/msb-home")).toBeInTheDocument();
+    expect(within(executor).getByText("/Users/u/.guildbotics/runner/msb-home")).toBeInTheDocument();
 
     // The only Save button is the job resources', inside their card.
     const limits = screen.getByRole("region", { name: "Job resources" });
@@ -160,7 +160,7 @@ describe("CI settings", () => {
     renderApp("/-/settings/ci");
     const images = await screen.findByRole("region", { name: "Images" });
     expect(within(images).getByText("Add an image for jobs to run in")).toBeInTheDocument();
-    expect(within(images).getByText("Write the added image's reference as image in .branvil/ci.toml.")).toBeInTheDocument();
+    expect(within(images).getByText("Write the added image's reference as image in .guildbotics-ci.toml.")).toBeInTheDocument();
     expect(within(images).queryByRole("list")).not.toBeInTheDocument();
     expect(within(images).getByRole("button", { name: "Add image" })).toBeInTheDocument();
   });

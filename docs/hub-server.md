@@ -1,6 +1,6 @@
 # macOS Hubの起動と更新
 
-Hubのチェックアウトで、オーナーがmacOSのデスクトップにログインしてから実行します。Git、リポジトリの `rust-toolchain.toml` が指定するRust、Node.js 24、npmを `PATH` に入れておきます。コードホスト（リポジトリ、チケット、プルリクエスト、CI）のデータは `BRANVIL_DATA_DIR` の絶対パスに置き、初回の起動時に作られます。既存のHubを切り替える場合は、これまでの方法でGuildBoticsとBranvilを停止し、両方の旧LaunchAgentの登録を解除してから、既存のBranvilデータを指定します。
+Hubのチェックアウトで、オーナーがmacOSのデスクトップにログインしてから実行します。Git、リポジトリの `rust-toolchain.toml` が指定するRust、Node.js 24、npmを `PATH` に入れておきます。コードホスト（リポジトリ、チケット、プルリクエスト、CI）のデータは `GUILDBOTICS_CODE_HOST_DATA_DIR` の絶対パスに置き、初回の起動時に作られます。既存のHubを切り替える場合は、これまでの方法でGuildBoticsとBranvilを停止し、両方の旧LaunchAgentの登録を解除してから、既存のBranvilデータを指定します。
 
 ## 署名の識別を用意する
 
@@ -27,7 +27,7 @@ Hubのチェックアウトは、開発用のチェックアウトとは別にcl
 `install` と後述の `auto-install` は、開発用のvenvなどを有効にしていないシェル（VS Codeのターミナルではなくターミナル.appなど）で実行します。そのシェルの `PATH` がLaunchAgentに記録されます。
 
 ```sh
-export BRANVIL_DATA_DIR="/absolute/path/to/code-host-data"
+export GUILDBOTICS_CODE_HOST_DATA_DIR="/absolute/path/to/code-host-data"
 export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
 scripts/hub-server.sh install
 scripts/hub-server.sh status
@@ -35,7 +35,7 @@ scripts/hub-server.sh status
 
 `install` はチェックアウトのコミット済みの `HEAD` から両方の画面とRustの実行ファイルを作ります。LaunchAgent `local.guildbotics` がこの実行ファイルの `server start` を直接起動し、1つのプロセスが1つのポート（既定7878）で GuildBotics と Branvil を配ります。ログイン時と異常終了後にも起動します。正常に停止したあとは、次回のログインか `scripts/hub-server.sh restart` で起動します。
 
-`install` は署名の識別を `signing-identity` に記録し、`update` は同じ識別で署名します。識別がキーチェーンに見つからない場合、署名に失敗した場合、署名にTeam IDがない場合（自己署名の証明書など）は、ビルドを切り替えずに止まります。登録時の `PATH` と `BRANVIL_DATA_DIR` をLaunchAgentが使います。GuildBoticsのデータは既定で `~/.guildbotics`、ポートは7878です。画面は `http://127.0.0.1:7878/-/guildbotics/` で配り、Branvil を設定済みなら `/` は Branvil の画面、未設定なら GuildBotics の画面へ案内します。更新後は `guildbotics open` でブラウザに入り直してください。変更する場合は登録前に絶対パスの `GUILDBOTICS_HOME` または `GUILDBOTICS_SERVER_PORT` を設定します。導入前のCLIも同じ設定で実行してください。起動確認後に `guildbotics install` がCLIとスキルを配置します。サーバーのログは `~/Library/Logs/guildbotics.log` で確認できます。
+`install` は署名の識別を `signing-identity` に記録し、`update` は同じ識別で署名します。識別がキーチェーンに見つからない場合、署名に失敗した場合、署名にTeam IDがない場合（自己署名の証明書など）は、ビルドを切り替えずに止まります。登録時の `PATH` と `GUILDBOTICS_CODE_HOST_DATA_DIR` をLaunchAgentが使います。GuildBoticsのデータは既定で `~/.guildbotics`、ポートは7878です。画面は `http://127.0.0.1:7878/-/guildbotics/` で配り、Branvil を設定済みなら `/` は Branvil の画面、未設定なら GuildBotics の画面へ案内します。更新後は `guildbotics open` でブラウザに入り直してください。変更する場合は登録前に絶対パスの `GUILDBOTICS_HOME` または `GUILDBOTICS_SERVER_PORT` を設定します。導入前のCLIも同じ設定で実行してください。起動確認後に `guildbotics install` がCLIとスキルを配置します。サーバーのログは `~/Library/Logs/guildbotics.log` で確認できます。
 
 `GUILDBOTICS_HOME` に別ディスクなどの絶対パスを指定すると、`guildbotics install` はその場所の `bin/guildbotics` に CLI を置きます。起動時に `GUILDBOTICS_HOME` があればその値が優先されます。未設定の場合、導入済みの CLI はリンク経由でも実体の配置場所から machine root を見つけます。単体でコピーした CLI の既定は `~/.guildbotics` です。
 
@@ -70,7 +70,7 @@ scripts/hub-server.sh auto-uninstall
 hub="$HOME/Library/Application Support/GuildBotics/Hub"
 git switch --detach "$(basename "$("$hub/builds/current" server hub-probe --source)")"
 scripts/hub-server.sh uninstall
-export BRANVIL_DATA_DIR="/absolute/path/to/code-host-data"
+export GUILDBOTICS_CODE_HOST_DATA_DIR="/absolute/path/to/code-host-data"
 export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
 export GUILDBOTICS_HUB_STORAGE="/Volumes/<ディスク名>/guildbotics-hub"
 mkdir -p "$GUILDBOTICS_HUB_STORAGE"
@@ -154,7 +154,7 @@ scripts/hub-server.sh recover
    ```sh
    git merge --ff-only "$change"
    scripts/hub-server.sh uninstall
-   export BRANVIL_DATA_DIR="/absolute/path/to/branvil-data"
+   export GUILDBOTICS_CODE_HOST_DATA_DIR="/absolute/path/to/branvil-data"
    export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
    scripts/hub-server.sh install
    ```
@@ -313,7 +313,7 @@ scripts/hub-server.sh auto-install
 
 名前に `update` は使えません。写しの通知とスクリプトの案内は、この名前を含めて表示します。案内のCLIのコマンドは、本番と同じく、そのHubの `builds/current` にそのHubの設定を付けた形です。
 
-写し専用のチェックアウトで、`install` の前に、`GUILDBOTICS_HOME`、`BRANVIL_DATA_DIR`、`GUILDBOTICS_SERVER_PORT` に
+写し専用のチェックアウトで、`install` の前に、`GUILDBOTICS_HOME`、`GUILDBOTICS_CODE_HOST_DATA_DIR`、`GUILDBOTICS_SERVER_PORT` に
 Hubと別のものを設定し、`GUILDBOTICS_IDENTITY_ROOT` は外します（写しは `GUILDBOTICS_HOME` の下のidentityを使います）。
 以後の操作でも同じ `GUILDBOTICS_HUB_INSTANCE` を設定します。写しの `install` と `update` も、AI CLIのユーザースキルを
 写しの版で書き換えます。
@@ -323,7 +323,7 @@ Hubの `builds/current install` でスキルを戻します。
 ```sh
 export GUILDBOTICS_HUB_INSTANCE=copy
 export GUILDBOTICS_HOME="/absolute/path/to/copy-home"
-export BRANVIL_DATA_DIR="/absolute/path/to/copy-code-host-data"
+export GUILDBOTICS_CODE_HOST_DATA_DIR="/absolute/path/to/copy-code-host-data"
 export GUILDBOTICS_SERVER_PORT=7979
 export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
 scripts/hub-server.sh install
@@ -388,7 +388,7 @@ GuildBotics の記録は、このマシンの `data/workspaces.json` に登録�
 
 `restore` は退避の検査値を確かめ、新しいディレクトリへ GuildBotics の記録の写しとコードホストのデータ（`code-host/`）を置いて検査します。直前の版のコードホストのデータは、置くときに変換します。復元先は、そのまま `check` と `upgrade` の `--data-dir` に渡せる退避の形です。本物へ戻す手順は自動化していません。停止中に manifest の root と番号付きの写しを照合し、戻す対象をオーナーが決めてください。
 
-`check`、`upgrade`、`reindex` はサーバーの停止中に使います。コードホストのデータを開いているサーバーがあれば断ります。`--data-dir` を省略すると、このマシンの記録と `BRANVIL_DATA_DIR`（未指定なら `GUILDBOTICS_HOME/data/code-host`）を対象にします。まだデータのないコードホストは対象にしません。`upgrade` で変換したコードホストのデータは、`check` が通るまでサーバーが開きません。
+`check`、`upgrade`、`reindex` はサーバーの停止中に使います。コードホストのデータを開いているサーバーがあれば断ります。`--data-dir` を省略すると、このマシンの記録と `GUILDBOTICS_CODE_HOST_DATA_DIR`（未指定なら `GUILDBOTICS_HOME/data/code-host`）を対象にします。まだデータのないコードホストは対象にしません。`upgrade` で変換したコードホストのデータは、`check` が通るまでサーバーが開きません。
 
 `upgrade --data-dir <復元先>` と `check --data-dir <復元先>` は番号付きの写しと `code-host/` だけを扱い、manifest の元のパスへはアクセスしません。GuildBotics の記録はJSON・JSONL・YAML の構文と記録の schema_version を検査します。JSONL は製品の読み取りと同様に壊れた行とオブジェクト以外を読み飛ばし、読めた全記録の版を検査します。検査は退避した元の行を書き換えません。版1〜4は項目追加だけなので変換しません。版4から版5への変換は、identity root から組み込みのコードホストへの接続設定 `config/connections/branvil.yml`、秘密の `BRANVIL_ADMIN_TOKEN` と各メンバーの `BRANVIL_TOKEN`・`BRANVIL_TOKEN_ID`、各メンバーの identity の `account_info.branvil_username` を削除し、変換したときは identity root の `state/schema.json` に `schema_version: 5` を記録します。版4はこれらを identity root だけに置くので、ワークスペースは検査だけを行います。旧ビルドの検査はこの記録で停止します。変換は対象のファイルと秘密をすべて読んでから変更するので、秘密を復号できない場合は何も変更せずに失敗します。秘密の復号にはこのマシンの OS キーチェーンの鍵を使います。繰り返し実行しても、変換済みの root は変わりません。互換性を壊す版では直前の1版からの変換と検査を追加します。それ以前の形式を並行サポートしません。`--data-dir` を省略すると登録済みの本物を対象にします。更新ではサーバー停止後に本物へ `upgrade`（検査を含む）を行い、その成功後だけ起動します。`recover` も候補の変換と検査を再実行します。
 
@@ -409,38 +409,6 @@ cwd はリポジトリのルートにしてください。下位フォルダだ�
 更新前に、`~/Documents/GuildBotics` に残したいファイルを別の場所へ移し、自作コマンドの固定パスを実行の作業ディレクトリへ書き換えます。GuildBotics はこの既存フォルダを削除しません。更新後は共通許可を与えず、画面で cwd が空欄の手動実行と巡回・チャット・定期実行は、端末状態の `run/files/<run_id>/work` を使います。成果物は実行終了後にコマンド画面・診断画面からダウンロードします（7日間保持、通常ファイルのみ、1ファイル64 MBまで）。アップロードも7日間保持し、要求した実行にだけ読み取り専用で渡します。期限切れは次の利用時に掃除します。
 
 **macOS のシステム設定 → プライバシーとセキュリティ → ファイルとフォルダで、以前 `python3.15` に与えた「書類フォルダ」の許可を外してください。** 同じ uv 管理の Python を使う別のプログラムにも影響する許可です。「書類」の下に明示的な許可先やワークスペースを置く場合だけ、その用途の許可を残します。Hub 以外のクライアントでの手作業はありません。
-
-## コードホストのコマンドを guildbotics にまとめる更新（手動更新版 7）
-
-この版で、コードホストのコマンドは `guildbotics runner`、`guildbotics server hub-data`、`guildbotics server git-hook` になります。コードホストは自前のセッションと owner のトークンファイルを持たず、GuildBotics のオーナーの認証だけを使います。保存形式は 37 になり、変換で `secrets/owner.token`、ブラウザのセッションの表、設定ファイルの `listen`・`base_url`・`limits.session_hours` を削除します。
-
-稼働中の旧ビルドには新しい `server hub-data backup` がないため、`update` が退避を取れません。自動更新は手作業が必要として止まります。旧ビルドで退避を新しい形に取り、それを `update` に渡します。`update` はその退避で新ビルドのリハーサルを行い、成功してから旧ビルドを止めます。Hubのチェックアウトの同じターミナルで続けて実行します。
-
-```sh
-hub="$HOME/Library/Application Support/GuildBotics/Hub"
-plist="$HOME/Library/LaunchAgents/local.guildbotics.plist"
-for key in GUILDBOTICS_HOME BRANVIL_DATA_DIR GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT; do
-    if value=$(plutil -extract "EnvironmentVariables.$key" raw -o - "$plist" 2>/dev/null); then
-        export "$key=$value"
-    else
-        unset "$key"
-    fi
-done
-unset BRANVIL_TOKEN BRANVIL_URL
-scripts/hub-server.sh auto-uninstall
-backup="$hub/backups/hub-update-before-7"
-mkdir "$backup"
-"$hub/builds/current" server hub-data backup --to "$backup"
-"$hub/builds/current" branvil backup --data-dir "$BRANVIL_DATA_DIR" --to "$backup/code-host"
-git fetch origin main
-git merge --ff-only FETCH_HEAD
-GUILDBOTICS_HUB_MANUAL_BACKUP="$backup" scripts/hub-server.sh update
-scripts/hub-server.sh auto-install
-```
-
-新ビルドが起動できずに旧ビルドへ戻った場合、旧ビルドの検査はコードホストの形式を確かめないため、旧ビルドは変換済みのデータを開けずに停止します。ログで原因を確かめてから `recover` で新ビルドを起動し直すか、退避 `$backup` から戻してください。
-
-更新後は `guildbotics open` で画面に入り直してください。開発用のチェックアウトで動かすサーバーも、同じ変換を `guildbotics server hub-data upgrade` で行ってから起動します。更新を確かめたら、以前の形の退避 `backups/branvil-update-*` と `backups/guildbotics-update-*` は削除できます。Hub以外のマシンでの手作業はありません。
 
 ## 別のマシンから member CLI と Git を使う
 
@@ -498,7 +466,7 @@ Hub の既存キャッシュだけでは、別 CPU のアーカイブは配布�
    元のアーカイブもレジストリから取得できる同じ版もない場合は、旧CIストアからタグを一つずつ書き出します。再書き出しでは設定digestが変わるため、取り込んだあとに新しいdigestで使うことを確認します。次の例のパスとタグは、旧CI設定画面のランタイムとイメージに合わせて置き換えます。
 
    ```sh
-   MSB_HOME="$HOME/.branvil/msb-home" "$HOME/.guildbotics/data/msb/bin/msb" save \
+   MSB_HOME="/absolute/path/to/old-ci-msb-home" "$HOME/.guildbotics/data/msb/bin/msb" save \
      --output /absolute/path/to/ci-image.tar guildbotics/agent-environment:dev
    ```
 
@@ -512,6 +480,41 @@ Hub の既存キャッシュだけでは、別 CPU のアーカイブは配布�
    レジストリから同じ版を取得できるタグは、Hubで `guildbotics runner pull <tag>` を実行する方法もあります。
 
 4. CI設定画面で、読み込んだタグと設定digestを手順1の記録と照合します。再書き出ししたタグの新しいdigestを隔離環境の宣言にも使う場合は、該当するCPUのdigestを更新してスナップショットをビルドします。同じタグを使うCIジョブをHubで実行し、隔離コマンドも起動できることを確認します。
-5. 元に戻す必要がなくなったら、旧ストアと作業用に書き出したアーカイブを削除できます。削除できるのは旧ストア専用のディレクトリです。パスを `realpath` で確認し、新しいストアやHubの運用データを配下に含む場合はディレクトリごと保管します。旧ストアが専用ディレクトリでパスが既定値なら、`rm -ri "$HOME/.branvil/msb-home"` で削除する内容を確認しながら進めます。コードホストの配布用アーカイブはランナーが取得に使うため保管します。
+5. 元に戻す必要がなくなったら、旧ストアと作業用に書き出したアーカイブを削除できます。削除できるのは旧ストア専用のディレクトリです。パスを `realpath` で確認し、新しいストアやHubの運用データを配下に含む場合はディレクトリごと保管します。旧ストアが専用ディレクトリなら、`rm -ri` で削除する内容を確認しながら進めます。コードホストの配布用アーカイブはランナーが取得に使うため保管します。
 
 CI設定の `[ci.microsandbox]` で旧ストアを指定していた場合は、その設定値を手順1の書き出しに使います。更新後のHubは共有ストアを使います。
+
+## CI の設定ファイルと環境変数の名前を変える更新（手作業の版 11）
+
+この版で、CI の設定ファイルは `.guildbotics-ci.toml`、ジョブが受け取る環境変数は `GB_CI_*`、コードホストのデータの場所を指す環境変数は `GUILDBOTICS_CODE_HOST_DATA_DIR` になります。データの場所は変わりません。自動更新は手作業が必要として止まります。
+
+1. **ランナーの置き場所を固定します。** 設定のないランナーの msb のホームと作業場所の既定値は、`<machine root>/runner` の下に変わります。msb のホームの定義は絶対パスを持つので、フォルダーは移さず、今の場所を設定に書きます。ランナーは Hub の版に追従して再起動するので、Hub の更新より前に行います。
+   - Hub 以外のマシンでは、`ci.microsandbox.home` を設定していなければ、`<machine root>/runner/branvil.toml` に今のホームを書きます。
+   - Hub では、`ci.executor.work_dir` と `ci.microsandbox.home` を設定していなければ、コードホストのデータの `branvil.toml` に今の場所を書きます。
+   - `guildbotics runner install-msb` で置いた msb を使っているマシンでは、`ci.microsandbox.msb_path` に今の msb のパスも書きます。
+   - パスは単一引用符で囲みます。Windows のパスの `\` もそのまま書けます。書いたあと、`guildbotics runner doctor` で msb が見つかることを確かめます。
+
+   ```toml
+   [ci.executor]
+   work_dir = '/absolute/path/to/current-runner'
+
+   [ci.microsandbox]
+   home = '/absolute/path/to/current-msb-home'
+   msb_path = '/absolute/path/to/current-msb'
+   ```
+
+2. **Hub を更新します。** 自動更新を止め、LaunchAgent に新しい名前を足してから更新します。前のビルドへ戻る場合に備えて、古い名前もこの版の間は残ります。
+
+   ```sh
+   scripts/hub-server.sh auto-uninstall
+   plist="$HOME/Library/LaunchAgents/local.guildbotics.plist"
+   data=$(plutil -extract EnvironmentVariables.BRANVIL_DATA_DIR raw -o - "$plist")
+   plutil -insert EnvironmentVariables.GUILDBOTICS_CODE_HOST_DATA_DIR -string "$data" "$plist"
+   git fetch origin main
+   git merge --ff-only <確認済みのコミットのSHA>
+   scripts/hub-server.sh update
+   scripts/hub-server.sh auto-install
+   ```
+
+3. **シェルの設定を直します。** `~/.zshrc` などで `BRANVIL_DATA_DIR` を設定している場合は、`GUILDBOTICS_CODE_HOST_DATA_DIR` に置き換えます。
+4. **開いている PR に main を取り込みます。** 新しい Hub は `.guildbotics-ci.toml` だけを読むので、このファイルを含まない head の必須チェックは失敗します。
