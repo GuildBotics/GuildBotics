@@ -55,7 +55,9 @@ scripts/hub-server.sh uninstall  # 停止してLaunchAgentの登録を解除
 
 置き場には、APFSなど所有者とアクセス権を保てるファイルシステムの既存のディレクトリを、`~/Library/Application Support/GuildBotics` の外に指定します。その下の `Hub` と `Hub-<名前>` はこの機能の専用です。リンクを通るパスは指定しないでください。
 
-値は `install` のときにLaunchAgentへ記録し、`update` はその値を使います。変えるときは登録を解除してから、新しい値でインストールし直します。`uninstall` は記録した値も消します。切り替えでデータの変換を飛ばさないよう、チェックアウトを動いているビルドのコミットに合わせてから入れ直します。自動更新を登録していない場合は `auto-uninstall` と `auto-install` を省きます。
+値は `install` のときにLaunchAgentへ記録し、`update` はその値を使います。変えるときは登録を解除してから、新しい値でインストールし直します。`uninstall` は記録した値も消します。
+
+この機能より前の版が動いている場合は、先に[手動更新](#手動更新)か自動更新でこの機能を含む版まで進め、バックアップとデータの変換を済ませます。古い版のスクリプトの `install` は、この値を記録しないためです。そのあと、データの変換を飛ばさないよう、チェックアウトを動いているビルドのコミットに合わせてから入れ直します。自動更新を登録していない場合は `auto-uninstall` と `auto-install` を省きます。途中の `plutil` が置き場の実パスを表示しなければ、値は記録されていません。自動更新を戻す前に、動いている版を確かめてください。
 
 ```sh
 scripts/hub-server.sh auto-uninstall
@@ -67,6 +69,7 @@ export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
 export GUILDBOTICS_HUB_STORAGE="/Volumes/<ディスク名>/guildbotics-hub"
 mkdir -p "$GUILDBOTICS_HUB_STORAGE"
 scripts/hub-server.sh install
+plutil -extract EnvironmentVariables.GUILDBOTICS_HUB_STORAGE raw -o - "$HOME/Library/LaunchAgents/local.guildbotics.plist"
 git switch main
 scripts/hub-server.sh auto-install
 ```
