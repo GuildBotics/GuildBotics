@@ -710,12 +710,13 @@ mod tests {
 
     #[tokio::test]
     async fn hints_before_and_after_creation_are_unique_and_leave_ticket_unchanged() {
-        for state in [
-            "found",
-            "outside",
-            "inconsistent",
-            "undetermined",
-            "abandoned",
+        for (state, has_hint) in [
+            ("found", true),
+            ("outside", true),
+            ("inconsistent", true),
+            ("not_reproduced", true),
+            ("undetermined", false),
+            ("abandoned", false),
         ] {
             for before in [true, false] {
                 let dir = tempfile::tempdir().unwrap();
@@ -739,7 +740,7 @@ mod tests {
                     let pending = Pending { repo: repo.id.clone(), sha: n.failed_sha.clone(), failures: vec![verify::FailedJob { name: n.job.clone(), attempt_id: None, details: None }] };
                     let t = create(w, &repo, &pending, "Evidence".into(), &[], "aaaaaaa", "http://example.test", None)?;
                     assert!(t.body.contains("Hints from running the failed jobs"));
-                    assert_eq!(comments(w, &t).len(), usize::from(before && super::super::Hint::from_conclusion(&n).is_some()));
+                    assert_eq!(comments(w, &t).len(), usize::from(before && has_hint));
                     if !before { save(w)?; }
                     for _ in 0..2 {
                         if let Some(h) = super::super::Hint::from_conclusion(&n) {
@@ -747,7 +748,7 @@ mod tests {
                         }
                     }
                     let cs = comments(w, &t);
-                    assert_eq!(cs.len(), usize::from(super::super::Hint::from_conclusion(&n).is_some()));
+                    assert_eq!(cs.len(), usize::from(has_hint));
                     if let Some(c) = cs.first() {
                         assert_eq!(c.author, "branvil");
                         assert_eq!(c.meta, Some(json!({"repair_hint":{"sha":n.failed_sha,"job":"test"}})));
@@ -755,6 +756,7 @@ mod tests {
                             "found" => assert!(c.body.contains("passes at aaaaaaa and fails at bbbbbbb, the first commit where it fails (not from a pull request of this Branvil)")),
                             "outside" => assert!(c.body.contains("also fails at aaaaaaa, the last verified commit")),
                             "inconsistent" => assert!(c.body.contains("aaaaaaa: success [Job](/acme/demo/-/jobs/pass), bbbbbbb: failure [Job](/acme/demo/-/jobs/fail)")),
+                            "not_reproduced" => assert!(c.body.contains("test passed two diagnostic runs at fffffff, where main verification failed. Narrowing stopped because the failure could not be reproduced.")),
                             _ => unreachable!(),
                         }
                     }

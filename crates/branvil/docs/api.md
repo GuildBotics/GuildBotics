@@ -1621,7 +1621,8 @@ Board cards accept `repair=true` to select repair tickets independently of assig
 
 Branvil adds diagnostic `Hint:` comments to open repair tickets when failed-job
 narrowing finds the first failing commit, fails again at the last verified
-commit, or observes inconsistent passing/failing results. Comments include
+commit, observes inconsistent passing/failing results, or ends after two
+successful probes at the failed commit with no observed failure. Comments include
 `meta: {"repair_hint": {"sha": "<failed commit>", "job": "<job name>"}}` and
 are unique per failed commit and job on that ticket. They do not change the
 assignee, lane, rank, or repair record. Conclusions available before creation
