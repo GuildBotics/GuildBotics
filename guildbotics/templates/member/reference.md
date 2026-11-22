@@ -63,6 +63,7 @@
 
 ### Repair tickets / 修復チケット
 - Code-host-written `Hint:` comments and the paths paragraph in the body are diagnostic hints; they do not change the assignee. When the first failing commit is found, fix or revert that change. When the last verified commit also fails, follow the rules for causes outside the range. When results do not split into passing and failing at one commit, follow the rules for varying results. When no pull request's head ran a failed job and the cause is a file outside its paths, include that file in the job's paths in the CI configuration in the same repair PR.
+- When the hint reports two successful diagnostic runs at the failed commit with no observed failing result, use `checks retry` with the latest attempt's page URL if that main verification job is still failed.
 - The code host creates repair tickets (`repair: true`) after default-branch verification fails, assigns them, and puts them first in ready. Creation, assignment, lane, and position follow established rules and need no human approval. Repair tickets are assigned at creation from the workspace’s active agents; unavailable members and humans are excluded. Members do not change these fields.
 - The assignee restores passing default-branch verification regardless of whose change caused the failure. Another member's or a human's change is not a reason to stop, ask, or hand back the work.
 - Repair work includes linked repair PRs, for both authors and reviewers. Patrol starts it before other work regardless of the open-PR quota. Review rounds have no limit for repair PRs.

@@ -16,6 +16,7 @@ pub enum Hint {
     Inconsistent {
         results: Vec<(String, String, Option<String>)>,
     },
+    NotReproduced,
 }
 
 impl Hint {
@@ -39,6 +40,7 @@ impl Hint {
                     })
                     .collect(),
             }),
+            "not_reproduced" => Some(Self::NotReproduced),
             _ => None,
         }
     }
@@ -114,6 +116,10 @@ pub fn hint(w: &Wtx, repo: &str, failed_sha: &str, job: &str, narrowing: Hint) -
                 "Hint: {job} on the commits in between does not split into passing and failing at one commit ({results}). It may be intermittent."
             )
         }
+        Hint::NotReproduced => format!(
+            "Hint: Main verification marked {job} as failed at {}. Narrowing observed no failing result for the job and stopped after two successful diagnostic runs at that commit.",
+            short(failed_sha)
+        ),
     };
     tickets::insert_comment(w, &target, "branvil", body, Some(meta))?;
     Ok(())

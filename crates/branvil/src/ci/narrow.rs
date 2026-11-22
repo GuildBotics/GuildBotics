@@ -179,6 +179,8 @@ enum Next {
     Probe(usize),
     Done(&'static str, Option<(usize, usize)>, Option<String>),
 }
+const CONFIRMATIONS: usize = 2;
+
 fn decide(n: &Narrowing) -> Next {
     let values: Vec<Vec<bool>> = n
         .results
@@ -190,7 +192,7 @@ fn decide(n: &Narrowing) -> Next {
         return Next::Probe(0);
     }
     if !values[0][0] {
-        if values[0].len() < 2 {
+        if values[0].len() < CONFIRMATIONS {
             return Next::Probe(0);
         }
         return Next::Done(
@@ -211,7 +213,15 @@ fn decide(n: &Narrowing) -> Next {
         failed |= rs.contains(&false);
     }
     let Some(f) = values.iter().position(|v| v.contains(&false)) else {
-        return Next::Probe(values.len() - 1);
+        let failed = values.len() - 1;
+        let successful_probes = n.results[failed]
+            .iter()
+            .filter(|r| r.probe && r.outcome == "success")
+            .count();
+        if successful_probes >= CONFIRMATIONS {
+            return Next::Done("not_reproduced", None, None);
+        }
+        return Next::Probe(failed);
     };
     let p = (0..f)
         .rev()
@@ -221,7 +231,7 @@ fn decide(n: &Narrowing) -> Next {
         return Next::Probe(p + (f - p) / 2);
     }
     for i in [p, f] {
-        if values[i].len() < 2 && !n.results[i].iter().any(|r| r.outcome == "not_run") {
+        if values[i].len() < CONFIRMATIONS && !n.results[i].iter().any(|r| r.outcome == "not_run") {
             return Next::Probe(i);
         }
     }
@@ -439,6 +449,24 @@ mod tests {
             decide(&sample(&[&["failure"], &["failure"]])),
             Next::Probe(0)
         ));
+    }
+    #[test]
+    fn interrupted_verification_stops_after_two_successful_probes() {
+        let mut n = sample(&[
+            &["success"],
+            &[],
+            &["cancelled", "success", "success", "cancelled", "success"],
+        ]);
+        let failed = n.results.len() - 1;
+        let results = n.results[failed].split_off(2);
+        for result in &mut n.results[failed] {
+            result.probe = false;
+        }
+        for result in results {
+            assert!(matches!(decide(&n), Next::Probe(pos) if pos == failed));
+            n.results[failed].push(result);
+        }
+        assert!(matches!(decide(&n), Next::Done("not_reproduced", None, _)));
     }
     #[tokio::test]
     async fn conclusion_transaction_attaches_hint_and_resolves_local_pull() {

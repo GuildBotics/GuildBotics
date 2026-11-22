@@ -992,11 +992,13 @@ A narrowing reads the first-parent history from its verified base c0 through the
 failed commit cn. It executes one `probe` at a time, using that commit's own job
 definition. cn contributes its verification attempts, including retries. First
 c0 runs: two failures mean `outside`, and a failure followed by a success means
-`inconsistent`. Otherwise the search bisects between the last observed passing
-commit and first observed failure. Adjacent boundary commits are tested until
-each has two results. Mixed results at one commit or a success after an observed
-failure mean `inconsistent`; otherwise `found` records both boundary SHAs. All
-observations retain their attempt IDs. An absent job or invalid pipeline counts
+`inconsistent`. With no observed failure, two successful probes at cn end the
+search as `not_reproduced`. Once a failure is observed, the search bisects
+between the last observed passing commit and first observed failure. Each
+adjacent boundary commit is tested until it has two results. Mixed results at
+one commit or a success after an observed failure mean `inconsistent`;
+otherwise `found` records both boundary SHAs. All observations retain their
+attempt IDs. An absent job or invalid pipeline counts
 as passing with `not_run` and creates no attempt. Two consecutive non-pass/fail
 probe outcomes mean `undetermined`, with a reason. A passing main verification
 cancels queued probes, requests running probes to stop, and records `abandoned`.

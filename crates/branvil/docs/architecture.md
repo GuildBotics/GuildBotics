@@ -693,7 +693,8 @@ run ahead of ordinary approved heads in class 2 and require all jobs to succeed.
 ### Diagnostic repair hints
 
 The transaction recording a narrowing conclusion calls `repair::hint` for
-`found`, `outside`, and `inconsistent`; `undetermined` and `abandoned` add nothing.
+`found`, `outside`, `inconsistent`, and `not_reproduced`. Searches ending in
+`undetermined` or `abandoned` leave the existing ticket evidence in place.
 With an open repair ticket it inserts a Branvil comment, deduplicated by
 `meta.repair_hint`'s failed `sha` and `job`. Without one it stores nothing.
 Ticket creation reads each failed job's conclusion at the latest verified commit

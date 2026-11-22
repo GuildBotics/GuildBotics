@@ -283,6 +283,7 @@ fn repair_reference_explains_retry_priority_and_recovery() {
         "first failing commit",
         "outside the range",
         "do not split",
+        "When the hint reports two successful diagnostic runs at the failed commit with no observed failing result, use `checks retry` with the latest attempt's page URL if that main verification job is still failed.",
         "same repair PR",
         "CI configuration",
         "no limit",
