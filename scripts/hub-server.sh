@@ -10,7 +10,8 @@ Usage: scripts/hub-server.sh install | update | restart | status | recover | uni
 install    Build HEAD, install the CLI and skill, and start the LaunchAgent.
            Set BRANVIL_DATA_DIR to the absolute path of the code host's data
            (the first start creates it), and GUILDBOTICS_HUB_SIGNING_IDENTITY
-           to the code signing identity.
+           to the code signing identity. Set GUILDBOTICS_HUB_STORAGE to an
+           absolute path to keep builds and backups on another disk.
 update     Build HEAD, back up the Hub's records, rehearse the upgrade, and switch builds.
 restart    Let in-flight work finish, then start the current build again.
 status     Show the LaunchAgent and its last exit.
@@ -62,7 +63,13 @@ current=$builds/current
 # During an update, the copy that ran before it: what a rollback restores.
 pending=$builds/update-from
 signing=$hub/signing-identity
+# Source trees, Cargo's output, backups and the rehearsal: large, and rewritten
+# by every update. GUILDBOTICS_HUB_STORAGE moves them; what launchd runs stays.
+storage=$hub
+sources=$builds
 backups=$hub/backups
+# Never the lock: however the storage path is spelled, removing this keeps it.
+scratch=$storage/update-files
 
 if [ "$action" = status ]; then exec launchctl print "$target"; fi
 
@@ -80,6 +87,8 @@ finish() {
         message="$(date -u +%FT%TZ): Hub $action failed during $stage (exit $1, active revision: ${running##*/}, requested revision: ${revision:-unknown})."
         printf '%s\n' "$message" | tee "$hub/last-failure" >&2 || true
     fi
+    # The next operation shares the scratch directory: clear it before unlocking.
+    rm -rf "$scratch" || :
     rm -rf "$lock"
 }
 trap 'finish "$?"' 0
@@ -206,7 +215,7 @@ point_current() {
 # A build is named by its revision directory; the executable reports that
 # directory by its physical path, which need not spell $builds.
 built_from() {
-    tree=$("$1" server hub-probe --source) && printf '%s/%s/guildbotics-bin\n' "$builds" "${tree##*/}"
+    tree=$("$1" server hub-probe --source) && printf '%s/%s/guildbotics-bin\n' "$sources" "${tree##*/}"
 }
 team_of() { codesign -dv "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p'; }
 
@@ -218,8 +227,11 @@ build_head() {
         fail "\"$identity\" is not a valid code signing identity in the Keychain. See docs/hub-server.md."
     stage=build
     revision=$(git -C "$repo" rev-parse --verify HEAD)
-    source=$builds/$revision
+    source=$sources/$revision
     candidate=$source/guildbotics-bin
+    # A killed operation can leave its scratch files behind.
+    rm -rf "$scratch"
+    mkdir -p "$sources" "$scratch"
     if [ -x "$candidate" ]; then
         cp "$candidate" "$candidate.new"
     else
@@ -227,18 +239,18 @@ build_head() {
         # Keep this exact source at its build path even as the Hub checkout advances.
         rm -rf "$source"
         mkdir "$source"
-        git -C "$repo" archive --format=tar --output="$lock/source.tar" "$revision"
+        git -C "$repo" archive --format=tar --output="$scratch/source.tar" "$revision"
         # Extract with the current time: Cargo rebuilds what is newer than its last
         # build, and a commit's own time can be older than that.
-        tar -xmf "$lock/source.tar" -C "$source"
-        rm -f "$lock/source.tar"
+        tar -xmf "$scratch/source.tar" -C "$source"
+        rm -f "$scratch/source.tar"
         (
             cd "$source"
             npm ci
             npm run build --workspace desktop --workspace crates/branvil/web
-            cargo build --release --locked -p guildbotics --target-dir "$hub/target"
+            cargo build --release --locked -p guildbotics --target-dir "$storage/target"
         )
-        cp "$hub/target/release/guildbotics" "$candidate.new"
+        cp "$storage/target/release/guildbotics" "$candidate.new"
     fi
     # Sign a reused build too, so that every build carries the recorded identity.
     stage=signing
@@ -282,7 +294,7 @@ backup_and_rehearse() {
     while [ "$#" -gt 2 ]; do rm -rf "$1"; shift; done
 
     stage=rehearsal
-    rehearsal=$lock/rehearsal
+    rehearsal=$scratch/rehearsal
     "$candidate" server hub-data restore --from "$backup" --data-dir "$rehearsal"
     "$candidate" server hub-data upgrade --data-dir "$rehearsal"
 }
@@ -301,6 +313,7 @@ write_plist() {
         entry BRANVIL_DATA_DIR "$BRANVIL_DATA_DIR"
         entry GUILDBOTICS_HOME "$GUILDBOTICS_HOME"
         if [ -n "${GUILDBOTICS_IDENTITY_ROOT:-}" ]; then entry GUILDBOTICS_IDENTITY_ROOT "$GUILDBOTICS_IDENTITY_ROOT"; fi
+        if [ -n "${GUILDBOTICS_HUB_STORAGE:-}" ]; then entry GUILDBOTICS_HUB_STORAGE "$GUILDBOTICS_HUB_STORAGE"; fi
         if [ -n "${GUILDBOTICS_SERVER_PORT:-}" ]; then entry GUILDBOTICS_SERVER_PORT "$GUILDBOTICS_SERVER_PORT"; fi
         printf '%s\n' '</dict>' \
             '<key>RunAtLoad</key><true/>' \
@@ -314,6 +327,19 @@ write_plist() {
     plutil -lint "$lock/agent.plist" >/dev/null || return
     mv -f "$lock/agent.plist" "$plist"
 }
+# A disk that is not mounted stops the operation: creating its path would put
+# the build on another disk, which the mounted disk would later hide.
+require_storage() {
+    [ -z "${GUILDBOTICS_HUB_STORAGE:-}" ] || [ -d "$GUILDBOTICS_HUB_STORAGE" ] ||
+        fail "GUILDBOTICS_HUB_STORAGE ($GUILDBOTICS_HUB_STORAGE) is not available. Mount the disk and retry."
+}
+use_storage() {
+    [ -n "${GUILDBOTICS_HUB_STORAGE:-}" ] || return 0
+    storage=$GUILDBOTICS_HUB_STORAGE/Hub${instance:+-$instance}
+    sources=$storage/builds
+    backups=$storage/backups
+    scratch=$storage/update-files
+}
 read_plist() {
     # Build with the invoking shell's tools, but run commands against the same
     # machine root, code host data directory and port as the installed agent.
@@ -322,13 +348,15 @@ read_plist() {
     GUILDBOTICS_HOME=$(setting EnvironmentVariables.GUILDBOTICS_HOME)
     GUILDBOTICS_SERVER_PORT=$(setting EnvironmentVariables.GUILDBOTICS_SERVER_PORT || true)
     GUILDBOTICS_IDENTITY_ROOT=$(setting EnvironmentVariables.GUILDBOTICS_IDENTITY_ROOT || true)
+    GUILDBOTICS_HUB_STORAGE=$(setting EnvironmentVariables.GUILDBOTICS_HUB_STORAGE || true)
     export BRANVIL_DATA_DIR GUILDBOTICS_HOME GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT
+    use_storage
 }
 # Guidance runs with this Hub's settings, whatever the shell it is pasted into
 # sets: a bare guildbotics may run another Hub's build against other data.
 hub_env() {
     unset_settings= settings=
-    for key in GUILDBOTICS_HOME BRANVIL_DATA_DIR GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT; do
+    for key in GUILDBOTICS_HOME BRANVIL_DATA_DIR GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT GUILDBOTICS_HUB_STORAGE; do
         eval "value=\${$key:-}"
         if [ -n "$value" ]; then settings="$settings$key=$(quote "$value") "
         else unset_settings="$unset_settings-u $key "; fi
@@ -359,7 +387,7 @@ remove_unused_builds() {
     if cli=$("$GUILDBOTICS_HOME/bin/guildbotics" server hub-probe --source 2>/dev/null); then
         set -- "$@" --keep "${cli##*/}"
     fi
-    "$candidate" server hub-prune "$@" "$builds" || :
+    "$candidate" server hub-prune "$@" "$sources" || :
 }
 complete_activation() {
     rm -f "$pending" "$builds/update-to" || return
@@ -390,6 +418,8 @@ rollback() {
 if [ "$action" != install ]; then
     require_agent
     read_plist
+    # Uninstalling stays possible while the disk is away.
+    [ "$action" = uninstall ] || require_storage
 fi
 if [ -e "$pending" ] && [ "$action" != recover ]; then
     fail "An update has not finished. Run: $self recover"
@@ -403,17 +433,31 @@ case "$action" in
             *) fail "Set BRANVIL_DATA_DIR to the absolute path of the code host's data." ;;
         esac
         case "$GUILDBOTICS_HOME" in /*) ;; *) fail "GUILDBOTICS_HOME must be an absolute path." ;; esac
+        case "${GUILDBOTICS_HUB_STORAGE:-}" in ''|/*) ;; *) fail "GUILDBOTICS_HUB_STORAGE must be an absolute path." ;; esac
         identity=${GUILDBOTICS_HUB_SIGNING_IDENTITY:-}
         [ -n "$identity" ] ||
             fail "Set GUILDBOTICS_HUB_SIGNING_IDENTITY to the code signing identity. See docs/hub-server.md."
-        case "$HOME$PATH$GUILDBOTICS_HOME$BRANVIL_DATA_DIR${GUILDBOTICS_IDENTITY_ROOT:-}${GUILDBOTICS_SERVER_PORT:-}$identity" in
+        case "$HOME$PATH$GUILDBOTICS_HOME$BRANVIL_DATA_DIR${GUILDBOTICS_IDENTITY_ROOT:-}${GUILDBOTICS_SERVER_PORT:-}${GUILDBOTICS_HUB_STORAGE:-}$identity" in
             *'
 '*) fail "Paths and environment settings must not contain line breaks." ;;
         esac
         export BRANVIL_DATA_DIR GUILDBOTICS_HOME
+        if [ -n "${GUILDBOTICS_HUB_STORAGE:-}" ]; then
+            require_storage
+            # Record one spelling: backup rotation compares these paths as text.
+            GUILDBOTICS_HUB_STORAGE=$(CDPATH='' cd -P -- "$GUILDBOTICS_HUB_STORAGE" && pwd -P)
+            # Pruning and the lock's removal must not reach into it.
+            state_root=$(CDPATH='' cd -P -- "$hub/.." && pwd -P)
+            case "$GUILDBOTICS_HUB_STORAGE/" in
+                "$state_root"/*) fail "GUILDBOTICS_HUB_STORAGE must be outside $state_root." ;;
+            esac
+        fi
         if [ -e "$plist" ] || loaded; then
             installed || fail "Remove the existing $label LaunchAgent before installing the integrated server."
+            [ "$(setting EnvironmentVariables.GUILDBOTICS_HUB_STORAGE || true)" = "${GUILDBOTICS_HUB_STORAGE:-}" ] ||
+                fail "GUILDBOTICS_HUB_STORAGE differs from the installed Hub's. To change it, run: $self uninstall, then install."
         fi
+        use_storage
         build_head
         if installed && [ -e "$current" ] && [ "$(built_from "$current")" != "$candidate" ]; then
             fail "A different build is installed. Run: $self update"

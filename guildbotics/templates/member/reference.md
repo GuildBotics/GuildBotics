@@ -100,7 +100,7 @@
 2. Group findings by mechanism or state rather than location. Check whether the same mechanism or state has received a second finding; if it has, question whether that mechanism is needed at all before repairing it. Use repository searches to count all locations with the same shape.
 3. Choose the repair before editing. If it adds an exit, check, exception, or fallback, first consider a design in which the problematic state cannot exist.
 4. Write down the implicit guarantees the change could remove: other roles played by moved code, removed mutual exclusion, or reordered calls.
-5. Get two independent inspections: after step 2 to find other holes with the same shape, and before committing to find guarantees implicitly removed by the diff. For each, use a fresh delegate (such as a subagent) without the author's conversation context; select a higher-capability model if the CLI supports model selection. Include decided matters with their reasons, and ask for file:line and a failing scenario for each finding. The delegate finds omissions; the author verifies each finding and decides whether to accept it. Record reasons for rejected findings on the PR: reply in the relevant thread when one exists, otherwise leave a PR conversation comment.
+5. Before committing, get one independent inspection that covers both other holes with the same shape and guarantees implicitly removed by the diff. Use one fresh delegate (such as a subagent) without the author's conversation context; select a higher-capability model if the CLI supports model selection. Include decided matters with their reasons, and ask for file:line and a failing scenario for each finding. The delegate finds omissions; the author verifies each finding and decides whether to accept it. Record reasons for rejected findings on the PR: reply in the relevant thread when one exists, otherwise leave a PR conversation comment.
 6. Pin the whole population with tests, not just the reported locations. Deliberately break the repaired behavior and confirm that the tests fail.
 7. Reply to each thread with the cause's shape, the repair's shape, and the tests that pin it.
 
@@ -110,7 +110,7 @@
 2. 場所ではなく仕組みや状態で分ける。同じ仕組みや同じ状態に 2 件目の指摘が来ていないかを確かめ、来ていたら直す前にその仕組み自体が要るのかを問う。同じ形の箇所がほかにないかを検索で数える。
 3. 直す形を編集前に決める。修正が「出口・検査・例外・フォールバックを足す」形なら、先にその状態が存在しなくて済む設計を検討する。
 4. 変更で外れる暗黙の保証を書き出す。移した処理、外した排他、組み替えた呼び出し順が兼ねていた役割を見る。
-5. 独立した見直しを 2 回受ける。手順 2 のあとには同じ形の穴を、コミットの前には差分が暗黙に外した保証を探す。それぞれ作者の会話の文脈を持たない新しい委任先 (サブエージェントなど) へ依頼し、CLI がモデルを選べるなら上位のモデルを指定する。依頼には決定済み事項を理由と一緒に含め、各指摘に file:line と壊れるシナリオを求める。委任先は見落としを探し、作者は指摘を 1 件ずつ確かめて採否を決める。採らなかったものは理由を PR に残す。該当スレッドがあれば返信し、なければ PR の会話コメントに書く。
+5. コミットの前に、独立した見直しを 1 回受ける。同じ形の穴と、差分が暗黙に外した保証の両方を、作者の会話の文脈を持たない新しい委任先 (サブエージェントなど) 1 つへまとめて依頼し、CLI がモデルを選べるなら上位のモデルを指定する。依頼には決定済み事項を理由と一緒に含め、各指摘に file:line と壊れるシナリオを求める。委任先は見落としを探し、作者は指摘を 1 件ずつ確かめて採否を決める。採らなかったものは理由を PR に残す。該当スレッドがあれば返信し、なければ PR の会話コメントに書く。
 6. 個別の箇所ではなく母集団をテストで固定する。直した振る舞いをわざと壊し、テストが落ちることを確かめる。
 7. スレッドごとに「原因の形」「直した形」「固定したテスト」を書いて返信する。
 

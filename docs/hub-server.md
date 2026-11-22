@@ -49,6 +49,33 @@ scripts/hub-server.sh uninstall  # 停止してLaunchAgentの登録を解除
 
 `uninstall` はサーバーのデータ、ビルド、バックアップを残します。巡回やチャット受信を起動時に開始するかどうかは、GuildBoticsのサービス設定で指定します。
 
+### ビルドとバックアップを別のディスクに置く
+
+更新のたびに大きく書き換わるビルドのソース、Cargoの `target`、バックアップ、予行の写しは、`GUILDBOTICS_HUB_STORAGE` の絶対パスの下の `Hub`（Hubの写しは `Hub-<名前>`）へ移せます。指定しなければ、これまでどおり `~/Library/Application Support/GuildBotics/Hub` を使います。LaunchAgentが起動する `builds/current`、更新途中のコピー、署名の識別、ロックは、macOSの許可を保つために元の場所に残ります。動いているビルドはこの置き場のソースを読むので、ログイン時にディスクがマウントされている必要があります。置き場が見つからないとき、`update`、`restart`、`recover` は何も変えずに止まります。
+
+置き場には、APFSなど所有者とアクセス権を保てるファイルシステムの既存のディレクトリを、`~/Library/Application Support/GuildBotics` の外に指定します。その下の `Hub` と `Hub-<名前>` はこの機能の専用です。リンクを通るパスは指定しないでください。
+
+値は `install` のときにLaunchAgentへ記録し、`update` はその値を使います。変えるときは登録を解除してから、新しい値でインストールし直します。`uninstall` は記録した値も消します。
+
+この機能より前の版が動いている場合は、先に[手動更新](#手動更新)か自動更新でこの機能を含む版まで進め、バックアップとデータの変換を済ませます。古い版のスクリプトの `install` は、この値を記録しないためです。そのあと、データの変換を飛ばさないよう、チェックアウトを動いているビルドのコミットに合わせてから入れ直します。自動更新を登録していない場合は `auto-uninstall` と `auto-install` を省きます。途中の `plutil` が置き場の実パスを表示しなければ、値は記録されていません。自動更新を戻す前に、動いている版を確かめてください。
+
+```sh
+scripts/hub-server.sh auto-uninstall
+hub="$HOME/Library/Application Support/GuildBotics/Hub"
+git switch --detach "$(basename "$("$hub/builds/current" server hub-probe --source)")"
+scripts/hub-server.sh uninstall
+export BRANVIL_DATA_DIR="/absolute/path/to/code-host-data"
+export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
+export GUILDBOTICS_HUB_STORAGE="/Volumes/<ディスク名>/guildbotics-hub"
+mkdir -p "$GUILDBOTICS_HUB_STORAGE"
+scripts/hub-server.sh install
+plutil -extract EnvironmentVariables.GUILDBOTICS_HUB_STORAGE raw -o - "$HOME/Library/LaunchAgents/local.guildbotics.plist"
+git switch main
+scripts/hub-server.sh auto-install
+```
+
+`GUILDBOTICS_HOME` などを変えていた場合は、それも同じ値を設定します。元の場所の `builds/<commit>/`、`target`、`backups/` は自動では消しません。新しい置き場で動くことを確かめてから整理してください。
+
 ## CI のキャッシュ容量
 
 キャッシュはランナーごとに保存します。既定は 16 GiB です。Branvil の設定 → CI で、共通の上限またはランナー別の上限を MiB 単位で指定できます。以前に保存した設定値は、そのランナーの上限として引き続き使われます。
@@ -78,7 +105,7 @@ arm64 でこのジョブを引き取るランナーでは、x86_64 GNU のクロ
 
 手動更新でも停止時のサービス再開の意図を保存します。自動更新を登録している場合は、その次の回が記録に従ってサービスを再開します。
 
-状態は `~/Library/Application Support/GuildBotics/Hub` にあります。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`builds/update-from` は切り替える前に動いていたコピー、`builds/update-to` は更新候補のコピーです。復旧が終わるまで保持します。`update` は、切り替えの前に、現行ビルド・更新候補・配置済みのCLIのビルドを除き、どのプロセスも使っていない `builds/<commit>/` を削除します。GuildBoticsのプロセスは自分のビルドのソースを読むので、終わるまでそのソースを使用中にします（OSのファイルロック）。使用中のビルドは、のちの更新で削除します。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。途中で止まった退避は次の退避時に削除します。バックアップに含まれるデータと含まれない資格情報は[Hubのデータの退避・復元・検査](#hubのデータの退避復元検査)を参照してください。
+状態は `~/Library/Application Support/GuildBotics/Hub` にあります（[別のディスクに置く](#ビルドとバックアップを別のディスクに置く)場合、`builds/<commit>/`、`target`、`backups/` はその置き場にあります）。`builds/<commit>/` はその版の署名した実行ファイルとソース、`builds/current` はLaunchAgentが起動する現行ビルドのコピーで、どのビルドのコピーかはこの実行ファイル自身が答えます。`builds/update-from` は切り替える前に動いていたコピー、`builds/update-to` は更新候補のコピーです。復旧が終わるまで保持します。`update` は、切り替えの前に、現行ビルド・更新候補・配置済みのCLIのビルドを除き、どのプロセスも使っていない `builds/<commit>/` を削除します。GuildBoticsのプロセスは自分のビルドのソースを読むので、終わるまでそのソースを使用中にします（OSのファイルロック）。使用中のビルドは、のちの更新で削除します。`signing-identity` は署名の識別です。`backups/` に直近3世代の完了したバックアップを保持します。途中で止まった退避は次の退避時に削除します。バックアップに含まれるデータと含まれない資格情報は[Hubのデータの退避・復元・検査](#hubのデータの退避復元検査)を参照してください。
 
 ## 失敗した更新から戻す
 
@@ -284,7 +311,7 @@ scripts/hub-server.sh auto-install
 Hubと別のものを設定し、`GUILDBOTICS_IDENTITY_ROOT` は外します（写しは `GUILDBOTICS_HOME` の下のidentityを使います）。
 以後の操作でも同じ `GUILDBOTICS_HUB_INSTANCE` を設定します。写しの `install` と `update` も、AI CLIのユーザースキルを
 写しの版で書き換えます。
-片付けは `auto-uninstall`、`uninstall` のあと、状態とデータのディレクトリを削除し、
+片付けは `auto-uninstall`、`uninstall` のあと、状態とデータのディレクトリ（`GUILDBOTICS_HUB_STORAGE` を指定した場合は、その下の `Hub-<名前>` も）を削除し、
 Hubの `builds/current install` でスキルを戻します。
 
 ```sh
