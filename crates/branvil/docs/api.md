@@ -1143,9 +1143,12 @@ attempts are not interrupted by changes in class.
   when the runner did not ask for work, the version differs, the executor is
   unavailable, the Hub's current concurrency has been reached, no compatible
   attempt fits the reported capacity, or the service is stopping. Otherwise it returns:
-  `{"attempt_id","lease","expires_at","lease_secs","repo","sha","attempt","verified_sha":"<latest verified sha>"|null,"job":{"verified_sha":false,"name","image","commands","paths","timeout_secs"|null,"tmpfs_mib":2048|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_write":true|false,"network":false,"queued_secs","reuse","reuse_only","limits","artifacts_max_mib"}`.
+  `{"attempt_id","lease","expires_at","lease_secs","repo","sha","attempt","verified_sha":"<latest verified sha>"|null,"job":{"verified_sha":false,"name","image","commands","paths","timeout_secs"|null,"tmpfs_mib":2048|null,"ram_workspace":{"paths","max_mib"}|null,"artifacts":[{"name","paths"}],"cache":{"paths","key_files"}|null},"cache_write":true|false,"network":false,"queued_secs","reuse","reuse_only","limits","artifacts_max_mib"}`.
   `job.tmpfs_mib` is the configured `/tmp` tmpfs capacity in MiB (1–4096).
-  A value of `null` selects the default 4 GiB disk.
+  A `tmpfs_mib` value of `null` selects the default 4 GiB disk for `/tmp`.
+  `job.ram_workspace` is the optional set of relative work directories and
+  their shared RAM capacity in MiB (1–65536). A value of `null` uses the
+  disk for all work directories.
   `limits` contains the effective job resources for this attempt (see
   [CI settings](#ci-settings)). `timeout_secs` is `null` when the pipeline
   gives none. A claim with `cache_write` may stage an image if it executes successfully.

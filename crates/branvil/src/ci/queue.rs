@@ -1624,10 +1624,7 @@ fn capacity(machine: &Machine, limits: JobLimits, running: &[&Attempt]) -> (Reso
         0 => logical_cpus.max(u64::from(limits.max_cpus) * u64::from(limits.max_jobs)),
         percent => logical_cpus * u64::from(percent) / 100,
     };
-    let reserve = machine
-        .total_memory_mib
-        .saturating_mul(limits.memory_reserve_percent.into())
-        .div_ceil(100);
+    let reserve = limits.memory_reserve_mib(machine.total_memory_mib);
     let total = Resources {
         cpus,
         memory: machine.total_memory_mib.saturating_sub(reserve),
@@ -3095,6 +3092,7 @@ mod tests {
             commands: vec!["true".into()],
             timeout_secs: Some(60),
             tmpfs_mib: None,
+            ram_workspace: None,
             artifacts: vec![],
             cache: None,
         }
@@ -3454,14 +3452,17 @@ mod tests {
                 let pending = attempts_of(w, &source.repo, "pending")?.remove(0);
                 for a in [&source, &pending] {
                     let mut record = serde_json::to_value(a).map_err(AppError::internal)?;
-                    record["job"].as_object_mut().unwrap().remove("tmpfs_mib");
+                    record["job"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("ram_workspace");
                     w.put(store::CI_ATTEMPTS, &Attempt::key(&a.id), &record)?;
                 }
                 for sha in ["source", "pending"] {
                     let run = get_run(w, &source.repo, sha)?.unwrap();
                     let mut record = serde_json::to_value(run).map_err(AppError::internal)?;
                     for job in record["pipeline"]["jobs"].as_array_mut().unwrap() {
-                        job.as_object_mut().unwrap().remove("tmpfs_mib");
+                        job.as_object_mut().unwrap().remove("ram_workspace");
                     }
                     w.put(store::CI_RUNS, &run_key(&source.repo, sha), &record)?;
                 }

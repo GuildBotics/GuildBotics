@@ -727,7 +727,7 @@ async fn assignments_evidence_and_lifecycle() {
             for (i, author) in authors.iter().enumerate() {
                 if let Some(author) = author {
                     let p: Pull = serde_json::from_value(json!({"repo":r2.id,"number":i+1,"title":"change @alice | title","body":"","state":"closed","merged":true,"draft":false,"author":author,"head":"feature","base":"main","reviewers":[],"tickets":[],"labels":[],"reviewed_by":[],"ready_at":null,"created_at":"0","updated_at":"0","closed_at":null,"merged_at":i.to_string(),"merge_sha":cs[i],"merged_head":cs[i],"merged_base":base,"upstream":null,"revision":1})).unwrap();
-                    let jobs: Vec<super::pipeline::JobDef> = ["test", "paths", "post"].iter().map(|name| super::pipeline::JobDef { name: (*name).into(), image: "alpine".into(), commands: vec!["true".into()], paths: vec![], verified_sha: false, timeout_secs: None, tmpfs_mib: None, artifacts: vec![], cache: None }).collect();
+                    let jobs: Vec<super::pipeline::JobDef> = ["test", "paths", "post"].iter().map(|name| super::pipeline::JobDef { name: (*name).into(), image: "alpine".into(), commands: vec!["true".into()], paths: vec![], verified_sha: false, timeout_secs: None, tmpfs_mib: None, ram_workspace: None, artifacts: vec![], cache: None }).collect();
                     queue::register(w, queue::Registration {order:vec![],selection:None,repo:r2.id.clone(),repo_path:r2.path.clone(),sha:cs[i].clone(),tree:None,branch:"feature".into(),protected:false,pipeline:queue::PipelineState::Jobs {jobs:jobs.clone()},network:false,inputs:Default::default()}, 100, "now")?;
                     for mut a in queue::current_attempts(w,&r2.id,&cs[i],&jobs)? {
                         let old = a.clone();

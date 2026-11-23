@@ -1336,6 +1336,7 @@ impl Runner {
                         image_lock,
                         cpus,
                         memory_mib,
+                        ram_limits: Some(*limits),
                         work_quota_mib: limits.work_quota_mib,
                         timeout_secs,
                         io: &io,

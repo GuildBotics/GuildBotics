@@ -1040,6 +1040,7 @@ mod tests {
                                     commands: vec!["true".into()],
                                     timeout_secs: None,
                                     tmpfs_mib: None,
+                                    ram_workspace: None,
                                     artifacts: vec![],
                                     cache: None,
                                 }],

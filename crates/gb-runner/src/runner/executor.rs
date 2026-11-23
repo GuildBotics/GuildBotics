@@ -3,6 +3,7 @@
 //! There is no host executor: when the executor is unusable, jobs conclude
 //! `startup_failure`.
 
+mod ram_workspace;
 #[cfg(feature = "host")]
 mod sdk;
 use std::future::Future;
@@ -112,6 +113,7 @@ pub struct JobRun<'a> {
     pub image_lock: ImageLock,
     pub cpus: u32,
     pub memory_mib: u64,
+    pub ram_limits: Option<crate::ci::config::JobLimits>,
     /// What the job may write to `/work` beyond what it holds at the start.
     pub work_quota_mib: u64,
     pub timeout_secs: u64,
@@ -282,6 +284,8 @@ pub struct Microsandbox {
     runner: String,
     health: tokio::sync::Mutex<Option<(Instant, Health)>>,
     started: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    #[cfg(all(test, unix))]
+    test_machine: Option<crate::ci::api::Machine>,
     #[cfg(feature = "host")]
     sdk: bool,
 }
@@ -294,6 +298,8 @@ impl Microsandbox {
             runner: runner.to_string(),
             health: tokio::sync::Mutex::new(None),
             started: std::sync::Mutex::new(Default::default()),
+            #[cfg(all(test, unix))]
+            test_machine: None,
             #[cfg(feature = "host")]
             sdk: false,
         }
@@ -1220,6 +1226,10 @@ impl<'a> HelperDisks<'a> {
 
 impl Executor for Microsandbox {
     fn machine(&self) -> Option<crate::ci::api::Machine> {
+        #[cfg(all(test, unix))]
+        if let Some(machine) = &self.test_machine {
+            return Some(machine.clone());
+        }
         let started = self.started.lock().unwrap();
         super::machine::sample(|| started.iter().cloned().collect())
     }
@@ -1424,6 +1434,10 @@ impl Executor for Microsandbox {
         let fresh_name = Self::fresh_volume(&name);
         let image_lock = std::mem::take(&mut job.image_lock);
         let preparing = Instant::now();
+        let mut prep_script = prepare_script("/work", IO_MOUNT, restore.as_ref());
+        if job.job.ram_workspace.is_some() && job.exact_cache && restore.is_some() {
+            ram_workspace::probe(&mut prep_script);
+        }
         let mut prepared = self
             .helper(
                 &job,
@@ -1434,7 +1448,7 @@ impl Executor for Microsandbox {
                     work: disk,
                     cache: None,
                 },
-                &prepare_script("/work", IO_MOUNT, restore.as_ref()),
+                &prep_script,
                 &mut cancel,
             )
             .await;
@@ -1487,6 +1501,7 @@ impl Executor for Microsandbox {
             say(format!("the image has no resize2fs: /work keeps the cache entry's file system, {fs} MiB rather than {disk_mib} MiB")).await;
         }
         let used_exact_cache = job.exact_cache && restore.is_some() && !dropped && prepared.is_ok();
+        let mut ram = None;
         let mut outcome = match prepared {
             Err(e) => {
                 drop(image_lock);
@@ -1501,11 +1516,25 @@ impl Executor for Microsandbox {
                     preparing.elapsed().as_millis()
                 ))
                 .await;
+                if let Some(config) = &job.job.ram_workspace {
+                    match ram_workspace::RamWorkspace::select(
+                        config,
+                        &job,
+                        used_exact_cache,
+                        collect_mib,
+                        || self.machine(),
+                    ) {
+                        Ok(selected) => ram = Some(selected),
+                        Err(reason) => {
+                            say(format!("RAM workspace disabled: {reason}; using disk")).await
+                        }
+                    }
+                }
                 match output {
                     Some(output) => {
                         self.run_job(
                             &mut job,
-                            (disk, &log_dir),
+                            (disk, &log_dir, ram.as_ref()),
                             output,
                             image_lock,
                             &log,
@@ -1515,8 +1544,14 @@ impl Executor for Microsandbox {
                     }
                     #[cfg(feature = "host")]
                     None => {
-                        self.sdk_job(&mut job, disk, image_lock, &log, &mut cancel)
-                            .await
+                        self.sdk_job(
+                            &mut job,
+                            (disk, ram.as_ref()),
+                            image_lock,
+                            &log,
+                            &mut cancel,
+                        )
+                        .await
                     }
                     #[cfg(not(feature = "host"))]
                     None => unreachable!("the client always uses the CLI executor"),
@@ -1529,6 +1564,15 @@ impl Executor for Microsandbox {
         let name = Self::sandbox_name(job.attempt_id);
         self.clean("the job's sandbox", &["remove", "--force", "-q", &name])
             .await;
+        if let Some(ram) = &ram
+            && let Outcome::Exited(code) = outcome
+            && !ram.active()
+            && !ram.used_disk()
+        {
+            outcome = Outcome::StartupFailure(format!(
+                "RAM workspace setup exited with code {code} before starting the job"
+            ));
+        }
         let artifacts: Vec<&str> = match outcome {
             Outcome::Exited(_) | Outcome::TimedOut => job
                 .job
@@ -1538,6 +1582,10 @@ impl Executor for Microsandbox {
                 .collect(),
             _ => Vec::new(),
         };
+        let ram_archive = ram
+            .as_ref()
+            .filter(|ram| !ram.used_disk())
+            .map(|ram| ram.returned.join(ARTIFACTS));
         let cache_name = self.cache_volume(job.attempt_id);
         let cache = if outcome == Outcome::Exited(0)
             && job.save_cache
@@ -1573,7 +1621,7 @@ impl Executor for Microsandbox {
                 let _ = std::fs::remove_file(job.io.join(format!("{name}{suffix}")));
             }
         }
-        if !artifacts.is_empty() || cache.is_some() {
+        let check_archive = if ram_archive.is_none() && (!artifacts.is_empty() || cache.is_some()) {
             let collecting = Instant::now();
             let script = collect_script(
                 "/work",
@@ -1614,15 +1662,6 @@ impl Executor for Microsandbox {
                         collecting.elapsed().as_millis()
                     ))
                     .await;
-                    // An archive is there only once it was packed whole, and
-                    // only as the regular file of that name. The link is not
-                    // followed: the VM can leave one where the archive should
-                    // be, and that is not an archive.
-                    let packed = std::fs::symlink_metadata(job.io.join(ARTIFACTS))
-                        .is_ok_and(|m| m.is_file());
-                    if !artifacts.is_empty() && !packed {
-                        say(format!("packing {ARTIFACTS} failed")).await;
-                    }
                     // Keep the new cache disk by its link after the
                     // collecting VM has ended.
                     // The mark, read as what a VM returned: a regular file,
@@ -1652,6 +1691,7 @@ impl Executor for Microsandbox {
                         (Some(_), None) => say("cache save skipped: copying the cached paths in the collecting VM failed".into()).await,
                         (None, _) => {}
                     }
+                    true
                 }
                 Err(e) => {
                     // A stop while only the cache was collected leaves the
@@ -1667,9 +1707,12 @@ impl Executor for Microsandbox {
                     // The artifacts' archive is named only once it was packed
                     // whole: what failed later (the cache's steps) leaves it.
                     let _ = std::fs::remove_file(job.io.join(CACHE_KEPT));
+                    false
                 }
             }
-        }
+        } else {
+            ram_archive.is_some()
+        };
         // By label and from the list: one that never came to be is not an
         // error.
         let label = format!("branvil.job={}", job.attempt_id);
@@ -1696,8 +1739,14 @@ impl Executor for Microsandbox {
         // The work directory holds what came back, and nothing of the
         // checkout: a path the job did not leave has no artifact.
         if !artifacts.is_empty() {
+            let returned = ram_archive.unwrap_or_else(|| job.io.join(ARTIFACTS));
+            // Both VM paths publish the archive only as a whole regular file.
+            // An empty archive is valid; an absent file or a link is not.
+            if check_archive && !std::fs::symlink_metadata(&returned).is_ok_and(|m| m.is_file()) {
+                say(format!("packing {ARTIFACTS} failed")).await;
+            }
             // Off the async threads, where the other jobs' heartbeats run.
-            let (work, returned) = (job.work.to_path_buf(), job.io.join(ARTIFACTS));
+            let work = job.work.to_path_buf();
             let unpacked = super::blocking(move || {
                 std::fs::remove_dir_all(&work)
                     .and_then(|_| std::fs::create_dir(&work))
@@ -1755,7 +1804,11 @@ impl Microsandbox {
     async fn run_job(
         &self,
         job: &mut JobRun<'_>,
-        (disk, log_dir): (DiskMount<'_>, &str),
+        (disk, log_dir, ram): (
+            DiskMount<'_>,
+            &str,
+            Option<&ram_workspace::RamWorkspace<'_>>,
+        ),
         mut output: tokio::fs::File,
         image_lock: ImageLock,
         log: &mpsc::Sender<Vec<u8>>,
@@ -1770,11 +1823,25 @@ impl Microsandbox {
         cmd.args(["run", "--name", &name, "--quiet", "--pull", "never"]);
         disk.attach_to_cli(&mut cmd, "/work");
         self.mount_job_tmp_cli(&mut cmd, job.attempt_id, j.tmpfs_mib);
+        let user = if let Some(ram) = ram {
+            cmd.args([
+                "--mount-dir",
+                &format!(
+                    "{}:{}:uid=0,gid=0,quota={}M",
+                    ram.returned.display(),
+                    ram_workspace::RETURN_MOUNT,
+                    ram.quota_mib,
+                ),
+            ]);
+            "0:0".to_owned()
+        } else {
+            format!("{JOB_USER_ID}:{JOB_USER_ID}")
+        };
         cmd.args(["--label", &format!("branvil.runner={}", self.runner)])
             .args(["--label", &format!("branvil.job={}", job.attempt_id)])
             .args(["--cpus", &job.cpus.to_string()])
             .args(["--memory", &format!("{}M", job.memory_mib)])
-            .args(["--user", &format!("{JOB_USER_ID}:{JOB_USER_ID}")])
+            .args(["--user", &user])
             // What the job writes to the host is bounded as `/work` is.
             .args([
                 "--mount-dir",
@@ -1796,8 +1863,9 @@ impl Microsandbox {
         for (k, v) in &job.env {
             cmd.args(["--env", &format!("{k}={v}")]);
         }
+        let script = ram.map_or_else(|| script(&j.commands), |ram| ram.script(j, true));
         cmd.arg(&j.image)
-            .args(["--", "/bin/sh", "-c", &script(&j.commands)])
+            .args(["--", "/bin/sh", "-c", &script])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut job_log = JobLog {
@@ -1896,7 +1964,13 @@ impl Microsandbox {
                     // Its artifacts are collected: flush what it wrote,
                     // which the kill would lose (the job's own flush runs
                     // only when its script exits). A stop does not wait.
-                    let flush = ["exec", name.as_str(), "--", "sync"];
+                    let mut flush = vec!["exec"];
+                    let flush_script = ram.map(|_| ram_workspace::RamWorkspace::flush_script());
+                    if let Some(script) = &flush_script {
+                        flush.extend(["--user", "0:0", &name, "--", "/bin/sh", "-c", script]);
+                    } else {
+                        flush.extend([&name, "--", "sync"]);
+                    }
                     let flushed = tokio::select! {
                         out = self.output_within(&flush, TIMEOUT_FLUSH) => {
                             Some(out.is_ok_and(|out| out.status.success()))
@@ -1916,7 +1990,11 @@ impl Microsandbox {
                 // Killing `msb run` stops the VM (its watchdog watches the
                 // parent), and every process inside it with it.
                 let _ = child.kill().await;
-                o
+                if o == Outcome::TimedOut {
+                    ram.and_then(|r| r.exit_code()).map_or(o, Outcome::Exited)
+                } else {
+                    o
+                }
             }
             None => match child.wait().await {
                 Ok(status) => {
@@ -2274,6 +2352,16 @@ pub(crate) mod tests {
     #[cfg(unix)]
     const FAKE_MSB: &str = r#"#!/bin/sh
 state="$MSB_HOME/fake"
+return_archives() {
+  if [ -f "$state/archive-links" ]; then
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      ln -sfn "$state/tag" "$1/$name"
+    done < "$state/archive-links"
+  else
+    cp "$state"/returned/* "$1" 2>/dev/null
+  fi
+}
 case "$1" in
 image)
   [ "$5" = "img:dev" ] || exit 1
@@ -2287,25 +2375,25 @@ run)
     [ "$prev" = "--mount-dir" ] && case "$a" in
       *:/.branvil-log:*) log="${a%%:/.branvil-log:*}" ;;
       *:/.branvil-io:*) io="${a%%:/.branvil-io:*}" ;;
+      *:/.branvil-ram-return:*) ram="${a%%:/.branvil-ram-return:*}" ;;
     esac
     prev="$a"
   done
   printf '%s\n' "$@" > "$state/args-$name"
   case "$name" in
   bv-collect-*)
-    if [ -f "$state/archive-links" ]; then
-      while IFS= read -r name; do
-        [ -n "$name" ] || continue
-        ln -sfn "$state/tag" "$io/$name"
-      done < "$state/archive-links"
-    else
-      cp "$state"/returned/* "$io" 2>/dev/null
-    fi
+    return_archives "$io"
     if [ -e "$state/link-fails" ]; then mkdir "${io%/*}/cache-disk.raw"; fi
     while [ -e "$state/collect-hangs" ]; do sleep 0.05; done
     [ ! -e "$state/collect-fails" ]; exit $? ;;
-  bv-job-*) echo $$ > "$state/pid-$name" ;;
+  bv-job-*)
+    echo $$ > "$state/pid-$name"
+    if [ -n "$ram" ]; then
+      echo $$ > "$ram/pid"
+      return_archives "$ram"
+    fi ;;
   bv-prep-*)
+    if [ -e "$state/ram-probe" ]; then : > "$io/ram-workspace.probed"; fi
     if [ -e "$state/prep-drops" ]; then rm -f "$state/prep-drops"; : > "$io/cache.dropped"; fi
     if [ -e "$state/prep-fails" ]; then rm -f "$state/prep-fails"; exit 1; fi
     exit 0 ;;
@@ -2409,6 +2497,7 @@ esac
             commands: vec![],
             timeout_secs: None,
             tmpfs_mib: None,
+            ram_workspace: None,
             artifacts: vec![],
             cache: None,
         };
@@ -2422,6 +2511,7 @@ esac
                 image_lock,
                 cpus: 1,
                 memory_mib: 256,
+                ram_limits: None,
                 work_quota_mib: 2048,
                 timeout_secs: 60,
                 io: &io,
@@ -2639,6 +2729,7 @@ esac
             commands: vec![],
             timeout_secs: None,
             tmpfs_mib: None,
+            ram_workspace: None,
             artifacts: vec![crate::ci::pipeline::ArtifactDef {
                 name: "report".into(),
                 paths: vec!["out/".into()],
@@ -2830,6 +2921,7 @@ esac
                             image_lock: ImageLock::default(),
                             cpus: 1,
                             memory_mib: 256,
+                            ram_limits: None,
                             work_quota_mib: 2048,
                             timeout_secs: if ending.starts_with("timeout")
                                 || ending == "stop-while-flushing"
@@ -3157,6 +3249,7 @@ esac
                         image_lock: ImageLock::default(),
                         cpus: 1,
                         memory_mib: 256,
+                        ram_limits: None,
                         work_quota_mib: 2048,
                         timeout_secs: 60,
                         io: &io,
@@ -3292,13 +3385,11 @@ esac
         }
     }
 
-    /// A name in the return directory is an archive only as a regular file.
-    /// A symbolic link of that name, even one whose target is a regular
-    /// file, is logged as `packing <name> failed`. A regular file of that
-    /// name is not.
+    /// The host distinguishes a missing or non-regular archive from a
+    /// successfully packed archive, including one containing no files.
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_symbolic_link_is_not_counted_as_a_packed_archive() {
+    async fn the_host_reports_only_missing_or_nonregular_artifact_archives() {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
         let msb = root.join("msb");
@@ -3308,20 +3399,63 @@ esac
         std::fs::create_dir_all(state.join("returned")).unwrap();
         std::fs::write(state.join("tag"), format!("sha256:{}", "a".repeat(64))).unwrap();
         std::fs::write(state.join("volumes"), "[]").unwrap();
-        std::fs::write(state.join("done"), "").unwrap();
-        let job = job_with_returned_archives(&state);
-        for link in [false, true] {
-            if link {
-                std::fs::write(state.join("archive-links"), format!("{ARTIFACTS}\n")).unwrap();
+        let mut job = job_with_returned_archives(&state);
+        let full_archive = std::fs::read(state.join("returned").join(ARTIFACTS)).unwrap();
+        let returned = state.join("returned").join(ARTIFACTS);
+        for (ram, case) in [false, true]
+            .into_iter()
+            .flat_map(|ram| ["file", "empty", "link", "missing", "timeout"].map(|case| (ram, case)))
+        {
+            let _ = std::fs::remove_file(state.join("archive-links"));
+            let expected = if case == "timeout" {
+                std::fs::remove_file(state.join("done")).unwrap();
+                Outcome::TimedOut
+            } else {
+                std::fs::write(state.join("done"), "").unwrap();
+                Outcome::Exited(0)
+            };
+            match case {
+                "file" => std::fs::write(&returned, &full_archive).unwrap(),
+                "empty" => std::fs::write(
+                    &returned,
+                    tar::Builder::new(Vec::new()).into_inner().unwrap(),
+                )
+                .unwrap(),
+                "link" => {
+                    std::fs::write(state.join("archive-links"), format!("{ARTIFACTS}\n")).unwrap();
+                }
+                "missing" => std::fs::remove_file(&returned).unwrap(),
+                _ => {}
             }
-            let at = root.join(if link { "link" } else { "file" });
+            let at = root.join(format!("{ram}-{case}"));
             let (work, log_dir, io) = (at.join("work"), at.join("log"), at.join("io"));
             for d in [&work, &log_dir, &io] {
                 std::fs::create_dir_all(d).unwrap();
             }
             let (log, mut logs) = mpsc::channel(64);
             let (_stop, cancel) = watch::channel(false);
-            let runner = Microsandbox::new(Msb::Found(msb.clone()), home.clone(), "t");
+            let cache_base = at.join("cache-base.raw");
+            let mut runner = Microsandbox::new(Msb::Found(msb.clone()), home.clone(), "t");
+            if ram {
+                std::fs::write(state.join("ram-probe"), "").unwrap();
+                std::fs::write(
+                    io.join(CHECKOUT),
+                    tar::Builder::new(Vec::new()).into_inner().unwrap(),
+                )
+                .unwrap();
+                ext4_image(&cache_base, 128, b"restored");
+                runner.test_machine = Some(crate::ci::api::Machine {
+                    logical_cpus: 4,
+                    total_memory_mib: 8192,
+                    available_memory_mib: 8192,
+                    commit: None,
+                });
+                job.ram_workspace = Some(crate::ci::pipeline::RamWorkspace {
+                    paths: vec!["out".into()],
+                    max_mib: 64,
+                });
+            }
+            let _ = std::fs::remove_file(state.join("args-bv-collect-a1"));
             let outcome = runner
                 .run(
                     JobRun {
@@ -3330,15 +3464,20 @@ esac
                         job: &job,
                         image_lock: ImageLock::default(),
                         cpus: 1,
-                        memory_mib: 256,
+                        memory_mib: 1536,
+                        ram_limits: ram.then(|| {
+                            crate::ci::config::JobLimits::from(
+                                &crate::ci::config::ExecutorConfig::default(),
+                            )
+                        }),
                         work_quota_mib: 2048,
-                        timeout_secs: 60,
+                        timeout_secs: if case == "timeout" { 1 } else { 60 },
                         io: &io,
-                        cache_base: None,
+                        cache_base: ram.then_some(cache_base.as_path()),
                         cache_disk: &at.join("cache-disk.raw"),
                         tree: &Default::default(),
-                        cache_data: None,
-                        exact_cache: false,
+                        cache_data: ram.then_some(1024),
+                        exact_cache: ram,
                         kept_data: &mut None,
                         save_cache: true,
                         work: &work,
@@ -3350,24 +3489,28 @@ esac
                     cancel,
                 )
                 .await;
-            assert_eq!(outcome, Outcome::Exited(0), "link={link}");
+            assert_eq!(outcome, expected, "{ram} {case}");
+            assert_eq!(state.join("args-bv-collect-a1").exists(), !ram, "{case}");
             let mut text = String::new();
             while let Ok(bytes) = logs.try_recv() {
                 text.push_str(&String::from_utf8_lossy(&bytes));
             }
             let line = format!("[branvil] packing {ARTIFACTS} failed\n");
-            assert_eq!(text.contains(&line), link, "{line} in {text}");
-            let meta = std::fs::symlink_metadata(io.join(ARTIFACTS)).unwrap();
-            assert_eq!(meta.file_type().is_symlink(), link);
-            assert_eq!(meta.is_file(), !link);
-            if link {
-                assert!(text.contains("artifacts: unpacking failed:"), "{text}");
-                assert!(!work.join("out/report.txt").exists());
+            assert_eq!(
+                text.matches(&line).count(),
+                usize::from(matches!(case, "missing" | "link" | "timeout")),
+                "{ram} {case}: {text}",
+            );
+            assert_eq!(
+                text.contains("artifacts: unpacking failed:"),
+                case == "link",
+                "{ram} {case}: {text}",
+            );
+            let report = work.join("out/report.txt");
+            if case == "file" {
+                assert_eq!(std::fs::read_to_string(report).unwrap(), "ok");
             } else {
-                assert_eq!(
-                    std::fs::read_to_string(work.join("out/report.txt")).unwrap(),
-                    "ok"
-                );
+                assert!(!report.exists());
             }
         }
     }

@@ -278,7 +278,7 @@ async fn check_responses_follow_claim_order_and_move_a_retry_to_its_new_position
 }
 
 #[tokio::test]
-async fn schema_40_upgrade_preserves_records() {
+async fn previous_schema_upgrade_preserves_records() {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     let ci = format!(
@@ -345,7 +345,7 @@ async fn schema_40_upgrade_preserves_records() {
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let indexed_memory = tables(&db)["ix_ci_memory"].clone();
     let prior_runs = records(&db, "ci_runs");
-    as_schema_40(&db);
+    as_schema_41(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
     assert_eq!(before["ix_ci_memory"], indexed_memory);
@@ -356,7 +356,7 @@ async fn schema_40_upgrade_preserves_records() {
     );
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 40 to 41"), "{output}");
+    assert!(output.contains("from schema version 41 to 42"), "{output}");
     assert_eq!(
         tables(&db).get("ix_repair_unnotified"),
         before.get("ix_repair_unnotified")
@@ -1489,7 +1489,7 @@ async fn a_head_runs_its_own_pipeline_and_reports_logs_and_artifacts() {
     // The head changes its pipeline; its own pipeline runs.
     sync_main(&w);
     let changed = format!(
-        "{}\ntmpfs_mib = 2048\n",
+        "{}\ntmpfs_mib = 2048\nram_workspace = {{ paths = [\"report/data\"], max_mib = 4608 }}\n",
         artifact_pipeline(&["test"]).replace("echo test", "echo changed")
     );
     std::fs::write(w.work.join(".guildbotics-ci.toml"), changed).unwrap();
@@ -1511,6 +1511,10 @@ async fn a_head_runs_its_own_pipeline_and_reports_logs_and_artifacts() {
     // The runner's limits apply: the pipeline gives no time limit.
     assert!(c["job"]["timeout_secs"].is_null(), "{c}");
     assert_eq!(c["job"]["tmpfs_mib"], 2048);
+    assert_eq!(
+        c["job"]["ram_workspace"],
+        json!({"paths": ["report/data"], "max_mib": 4608})
+    );
     assert!(c["job"].get("cpus").is_none(), "{c}");
     assert_eq!(c["repo"], REPO);
     assert_eq!(c["network"], false);
