@@ -19,13 +19,13 @@ function routes(extra: Parameters<typeof fakeApi>[0] = {}) {
   };
 }
 
-describe.each(["/acme/-/board", "/acme"])("ticket deletion on %s", (page) => {
+describe("ticket deletion in the task flow", () => {
   it("removes a card when another screen's deletion emits a ticket event", async () => {
     let deleted = false;
     const fake = fakeApi(routes({
       "GET /api/v1/workspaces/acme/board/cards": () => json(200, { items: deleted ? [] : [card("1", "ready")], next_cursor: null }),
     }));
-    const { client } = renderApp(page);
+    const { client } = renderApp("/acme");
     await screen.findByText("Title of 1");
     deleted = true;
     act(() => applyChange({ kind: "ticket", path: "acme/demo", id: "1" }, client));
@@ -41,7 +41,7 @@ describe.each(["/acme/-/board", "/acme"])("ticket deletion on %s", (page) => {
     }));
     const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
     const user = userEvent.setup();
-    renderApp(page);
+    renderApp("/acme");
     await user.click(await screen.findByRole("button", { name: "Actions of acme/demo#1" }));
     const menu = await screen.findByRole("menu");
     expect(within(menu).getAllByRole("menuitem").at(-1)).toHaveTextContent("Delete");
@@ -67,7 +67,7 @@ describe.each(["/acme/-/board", "/acme"])("ticket deletion on %s", (page) => {
     fakeApi(routes({ "DELETE /api/v1/repos/acme/demo/tickets/1": apiError(409, code, "Storage busy.") }));
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const user = userEvent.setup();
-    renderApp(page);
+    renderApp("/acme");
     await user.click(await screen.findByRole("button", { name: "Actions of acme/demo#1" }));
     await user.click(await screen.findByRole("menuitem", { name: "Delete" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(message);
@@ -78,7 +78,7 @@ describe.each(["/acme/-/board", "/acme"])("ticket deletion on %s", (page) => {
   it("does not offer deletion to an agent", async () => {
     fakeApi(routes({ "GET /api/v1/session": json(200, { ...SESSION, me: { ...SESSION.me, kind: "agent" } }) }));
     const user = userEvent.setup();
-    renderApp(page);
+    renderApp("/acme");
     await user.click(await screen.findByRole("button", { name: "Actions of acme/demo#1" }));
     const menu = await screen.findByRole("menu");
     expect(within(menu).queryByRole("menuitem", { name: "Delete" })).not.toBeInTheDocument();

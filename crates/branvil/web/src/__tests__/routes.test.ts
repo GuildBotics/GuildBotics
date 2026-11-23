@@ -11,7 +11,6 @@ describe("routes", () => {
     // A workspace's page is its task flow; its pull requests have a page of their own.
     expect(parseRoute("/acme")).toEqual({ name: "workspace", workspace: "acme" });
     expect(parseRoute("/acme/-/pulls")).toEqual({ name: "pulls", workspace: "acme" });
-    expect(parseRoute("/acme/-/board")).toEqual({ name: "board", workspace: "acme" });
   });
 
   it("parses app routes", () => {
@@ -30,6 +29,7 @@ describe("routes", () => {
     expect(parseRoute("/-/boards/acme").name).toBe("not_found");
     expect(parseRoute("/acme/-/pulls/1").name).toBe("not_found");
     expect(parseRoute("/acme/-/relations").name).toBe("not_found");
+    expect(parseRoute("/acme/-/board").name).toBe("not_found");
     expect(parseRoute("/acme/-/board/1").name).toBe("not_found");
     expect(parseRoute("/acme/-/tickets").name).toBe("not_found");
     expect(parseRoute("/acme/demo/-/pulls/0").name).toBe("not_found");
@@ -47,7 +47,6 @@ describe("routes", () => {
     expect(parseRoute(href.ticket("a/b", "7"))).toEqual({ name: "ticket", repo: "a/b", key: "7" });
     expect(parseRoute(href.workspace("a"))).toEqual({ name: "workspace", workspace: "a" });
     expect(parseRoute(href.pulls("a"))).toEqual({ name: "pulls", workspace: "a" });
-    expect(parseRoute(href.board("a b"))).toEqual({ name: "board", workspace: "a b" });
   });
 
   it("keeps foreign URLs out of the app", () => {

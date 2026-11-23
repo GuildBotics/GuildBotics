@@ -21,7 +21,7 @@ function routes(cards: () => Card[], extra: Parameters<typeof fakeApi>[0] = {}) 
 
 const ancestor = { url: `${window.location.origin}/acme/demo/-/tickets/9`, repository: "acme/demo", key: "9", title: "Title of 9", state: "open" as const, state_reason: null };
 
-describe.each(["/acme/-/board", "/acme"])("the interactive item of a card's menu on %s", (page) => {
+describe("the interactive item of a task flow card", () => {
   it("turns a ticket's interactive on, closes the menu, and shows the card's badge once read again", async () => {
     let interactive = false;
     const fake = fakeApi(routes(() => [card("1", "ready", { interactive })], {
@@ -31,7 +31,7 @@ describe.each(["/acme/-/board", "/acme"])("the interactive item of a card's menu
       },
     }));
     const user = userEvent.setup();
-    renderApp(page);
+    renderApp("/acme");
     await user.click(await screen.findByRole("button", { name: "Actions of acme/demo#1" }));
     await user.click(await screen.findByRole("menuitem", { name: "Interactive" }));
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
@@ -48,7 +48,7 @@ describe.each(["/acme/-/board", "/acme"])("the interactive item of a card's menu
   it("cannot turn off what a ticket inherits from its ancestor", async () => {
     fakeApi(routes(() => [card("1", "ready", { interactive_ancestor: ancestor })]));
     const user = userEvent.setup();
-    renderApp(page);
+    renderApp("/acme");
     await user.click(await screen.findByRole("button", { name: "Actions of acme/demo#1" }));
     expect(await screen.findByRole("menuitem", { name: "Interactive" })).toBeDisabled();
   });
@@ -56,7 +56,7 @@ describe.each(["/acme/-/board", "/acme"])("the interactive item of a card's menu
   it("keeps the menu open with the refusal when the change is refused", async () => {
     fakeApi(routes(() => [card("1", "ready")], { "PATCH /api/v1/repos/acme/demo/tickets/1": apiError(503, "unavailable", "Storage busy.") }));
     const user = userEvent.setup();
-    renderApp(page);
+    renderApp("/acme");
     await user.click(await screen.findByRole("button", { name: "Actions of acme/demo#1" }));
     await user.click(await screen.findByRole("menuitem", { name: "Interactive" }));
     expect(await within(screen.getByRole("menu")).findByRole("alert")).toHaveTextContent("Storage busy.");

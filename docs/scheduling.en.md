@@ -61,7 +61,7 @@ routine_commands:
 
 **Typical uses**:
 
-- Periodic task board checks (for example `workflows/ticket_driven_workflow`)
+- Periodic ticket patrols (for example `workflows/ticket_driven_workflow`)
 - Continuous monitoring tasks
 - Patrol-style processing
 

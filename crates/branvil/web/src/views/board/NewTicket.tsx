@@ -1,13 +1,9 @@
-// Adding a ticket to a lane, as GitHub's project boards do: a title typed at
-// the foot of the lane, or a modal for its body and labels too.
-
-import { Anchor, Button, Chip, Group, Modal, Select, Stack, Text, Textarea, TextInput, UnstyledButton } from "@mantine/core";
+import { Button, Chip, Group, Modal, Select, Stack, Text, TextInput } from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import * as api from "../../api/endpoints";
-import { ticketRef, type Lane, type Repository, type Ticket } from "../../api/types";
-import { ErrorMessage, Notice } from "../../components/common";
+import type { Lane, Repository, Ticket } from "../../api/types";
+import { ErrorMessage } from "../../components/common";
 import { hasAttachment, MarkdownField } from "../../components/MarkdownField";
 import { useT } from "../../i18n";
 import { useRepos } from "../../query/hooks";
@@ -40,14 +36,12 @@ function useCreate(workspace: string, onCreated: (t: Ticket) => void) {
 }
 
 /** Chooses among the workspace's repositories; shown only when there is more than one. */
-function RepoChoice({ repos, value, onChange, size, fixed }: { repos: Repository[]; value: string; onChange: (r: string) => void; size?: "xs"; fixed?: string }) {
+function RepoChoice({ repos, value, onChange, fixed }: { repos: Repository[]; value: string; onChange: (r: string) => void; fixed?: string }) {
   const t = useT();
   if (repos.length < 2) return null;
   return (
     <Select
-      label={size ? undefined : t("board.repository")}
-      aria-label={t("board.repository")}
-      size={size}
+      label={t("board.repository")}
       data={repos.map((r) => r.path)}
       value={value}
       onChange={(v) => v && onChange(v)}
@@ -58,105 +52,11 @@ function RepoChoice({ repos, value, onChange, size, fixed }: { repos: Repository
   );
 }
 
-/** The foot of a lane: "Add ticket", which opens a title field in place. */
-export function LaneAdd({
-  workspace,
-  lane,
-  repos,
-  repo,
-  onRepo,
-  onMore,
-}: {
-  workspace: string;
-  lane: Lane;
-  repos: Repository[];
-  repo: string;
-  onRepo: (repo: string) => void;
-  onMore: (lane: Lane, title: string) => void;
-}) {
-  const t = useT();
-  const [open, setOpen] = useState(false);
-  const [title, setTitle] = useState("");
-  const [created, setCreated] = useState<string | null>(null);
-  const create = useCreate(workspace, (tk) => {
-    setTitle("");
-    setCreated(ticketRef(tk));
-  });
-  const submit = () => {
-    if (!title.trim() || !repo) return;
-    create.mutate({ draft: { repo, title, body: "", labels: [] }, lane });
-  };
-  const close = () => {
-    setOpen(false);
-    setTitle("");
-    setCreated(null);
-    create.reset();
-  };
-  const laneName = t(`lane.${lane}`);
-  return (
-    <div className="lane-foot">
-      {!open ? (
-        <UnstyledButton
-          className="nav-item"
-          style={{ minHeight: 32, width: "100%", fontSize: 14 }}
-          onClick={() => setOpen(true)}
-          disabled={!repo}
-          aria-label={t("board.addToLane", { lane: laneName })}
-        >
-          <Plus size={16} />
-          {t("board.add")}
-        </UnstyledButton>
-      ) : (
-        <form
-          className="lane-composer"
-          aria-label={t("board.addToLane", { lane: laneName })}
-          onSubmit={(e) => {
-            e.preventDefault();
-            submit();
-          }}
-        >
-          <RepoChoice repos={repos} value={repo} onChange={onRepo} size="xs" />
-          <Textarea
-            aria-label={t("ticket.title")}
-            placeholder={t("ticket.title")}
-            value={title}
-            onChange={(e) => {
-              setTitle(e.currentTarget.value);
-              setCreated(null);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                submit();
-              } else if (e.key === "Escape") close();
-            }}
-            rows={2}
-            autoFocus
-          />
-          {create.isError && <ErrorMessage error={create.error} />}
-          {created && <Notice>{t("board.created", { key: created })}</Notice>}
-          <Group gap={6} wrap="nowrap" justify="flex-end">
-            <Button size="xs" variant="default" onClick={close}>
-              {t("common.cancel")}
-            </Button>
-            <Button size="xs" type="submit" disabled={create.isPending || !title.trim()}>
-              {t("board.addSubmit")}
-            </Button>
-          </Group>
-          <Anchor component="button" type="button" size="xs" ta="left" onClick={() => onMore(lane, title)}>
-            {t("board.more")}
-          </Anchor>
-        </form>
-      )}
-    </div>
-  );
-}
-
 /** A new ticket with its body and labels, in the lane it was asked for. */
 export function NewTicketModal({
   workspace,
   lanes,
-  start,
+  initialLane,
   repos,
   repo,
   onRepo,
@@ -166,8 +66,8 @@ export function NewTicketModal({
 }: {
   workspace: string;
   lanes: Lane[];
-  /** The lane and title it opened with; null while closed. */
-  start: { lane: Lane; title: string } | null;
+  /** The lane it opened with, or null while closed. */
+  initialLane: Lane | null;
   repos: Repository[];
   repo: string;
   onRepo: (repo: string) => void;
@@ -180,8 +80,8 @@ export function NewTicketModal({
   const [lane, setLane] = useState<Lane | null>(null);
   const [draft, setDraft] = useState<Omit<Draft, "repo"> | null>(null);
   const [uploading, setUploading] = useState(false);
-  const current = draft ?? { title: start?.title ?? "", body: "", labels: [] };
-  const chosenLane = lane ?? start?.lane ?? lanes[0] ?? "new";
+  const current = draft ?? { title: "", body: "", labels: [] };
+  const chosenLane = lane ?? initialLane ?? lanes[0] ?? "new";
   const repository = repos.find((r) => r.path === repo);
   const create = useCreate(workspace, (ticket) => {
     onCreated?.(ticket);
@@ -195,7 +95,7 @@ export function NewTicketModal({
   }
   return (
     <Modal
-      opened={start !== null}
+      opened={initialLane !== null}
       onClose={close}
       title={t("board.newTicketIn", { lane: t(`lane.${chosenLane}`) })}
       closeButtonProps={{ "aria-label": t("common.close") }}

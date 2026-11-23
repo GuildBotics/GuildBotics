@@ -251,7 +251,7 @@ Invocation example:
 
 ```shell
 $ guildbotics run summarize file=README.md
-GuildBotics is an alpha tool for collaborating with AI agents and a task board; users should test in isolated environments due to potential breaking changes and risks.
+GuildBotics is an alpha tool for collaborating with AI agents through ticket workflows; users should test in isolated environments due to potential breaking changes and risks.
 ```
 
 The AI CLI tool works in the command's working directory, which is decided by how the command is run:

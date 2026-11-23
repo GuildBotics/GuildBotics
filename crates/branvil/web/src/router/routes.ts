@@ -1,6 +1,6 @@
 // Client-side routes. The permanent web URLs of docs/api.md are
 // `/{repo}/-/{kind}/{id}` where `{repo}` is `<workspace>/<name>`; a workspace's
-// page (its task flow) is `/{workspace}`, its board `/{workspace}/-/board`,
+// page (its task flow) is `/{workspace}`,
 // its pull requests `/{workspace}/-/pulls`,
 // and a repository's page `/{repo}` lists that repository's pull requests;
 // app routes live under `/-/` (`/-/settings/repos/{repo}` opens a repository's
@@ -11,7 +11,6 @@ export type Route =
   | { name: "settings"; section: string | null; repo?: string }
   | { name: "workspace"; workspace: string }
   | { name: "pulls"; workspace: string }
-  | { name: "board"; workspace: string }
   | { name: "ticket"; repo: string; key: string }
   | { name: "pull"; repo: string; number: number }
   | { name: "commit"; repo: string; sha: string }
@@ -45,8 +44,8 @@ export function parseRoute(pathname: string): Route {
   }
 
   const dash = segs.indexOf("-");
-  if (dash === 1 && segs.length === 3 && (segs[2] === "pulls" || segs[2] === "board"))
-    return { name: segs[2], workspace: segs[0] as string };
+  if (dash === 1 && segs.length === 3 && segs[2] === "pulls")
+    return { name: "pulls", workspace: segs[0] as string };
   if (dash === -1) {
     if (segs.length === 1) return { name: "workspace", workspace: segs[0] as string };
     return segs.length === 2 ? { name: "repo", repo: segs.join("/") } : { name: "not_found", pathname };
@@ -79,7 +78,6 @@ export const href = {
   repoSettings: (repo: string) => `/-/settings/repos/${joinPath(repo)}`,
   workspace: (workspace: string) => `/${encodeURIComponent(workspace)}`,
   pulls: (workspace: string) => `/${encodeURIComponent(workspace)}/-/pulls`,
-  board: (workspace: string) => `/${encodeURIComponent(workspace)}/-/board`,
   ticket: (repo: string, key: string) => `/${joinPath(repo)}/-/tickets/${key}`,
   pull: (repo: string, number: number) => `/${joinPath(repo)}/-/pulls/${number}`,
   commit: (repo: string, sha: string) => `/${joinPath(repo)}/-/commits/${encodeURIComponent(sha)}`,

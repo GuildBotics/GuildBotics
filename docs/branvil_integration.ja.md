@@ -1,7 +1,7 @@
 # Branvil 連携ガイド
 
-Branvil は自分で動かすコードホスト兼ボードです。ワークスペースにまとめた Smart HTTP の Git
-リポジトリ、レビューと CI 付きの pull request、ワークスペースのボードに載る各リポジトリの
+Branvil は自分で動かすコードホストです。ワークスペースにまとめた Smart HTTP の Git
+リポジトリ、レビューと CI 付きの pull request、ワークスペースのタスクフローで扱う各リポジトリの
 チケットを持ちます。GuildBotics は `branvil`
 provider を通じて、GitHub の代わりにコードホスト（`services.code_hosting_service`）と
 チケット（`services.ticket_service`）として使います。チャットはプロジェクトが選んだもの

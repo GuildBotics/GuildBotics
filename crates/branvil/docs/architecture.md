@@ -541,24 +541,18 @@ from a cross-site frame.
 
 ## GUI files
 
-A workspace's task flow is at `/{workspace}`, its task board at
-`/{workspace}/-/board`, and its pull requests at `/{workspace}/-/pulls`.
-`/` and workspace creation always open the task flow. The display preference
-only hides the board's sidebar link; direct board URLs remain usable. Switching
-workspaces keeps the task flow, pull requests, or settings, and the board when
-its sidebar link is shown; other pages lead to the task flow. The removed
-`/{workspace}/-/relations` path is not redirected.
+A workspace's task flow is at `/{workspace}` and its pull requests are at
+`/{workspace}/-/pulls`. `/` and workspace creation always open the task flow.
+Switching workspaces keeps the task flow, pull requests, or settings. Other
+pages lead to the task flow. The former `/{workspace}/-/board` and
+`/{workspace}/-/relations` URLs show the page-not-found screen.
 
 The GUI is built with Mantine and looks like GuildBotics Desktop: the same
 Mantine version and theme (`web/src/theme.ts`), and GuildBotics' design tokens
 and component overrides copied into `web/src/styles.css` (kept identical), so
-it can sit beside or inside Desktop. Its pages: a sidebar (the workspace, its
-task flow, task board and pull requests, settings), the task board (lanes as tall as the window, a
-ticket added at the foot of a lane, a card marked when a blocker is open,
-its lane and assignee changed from the card, the ticket made interactive or
-not and its URL copied from the card's menu, which says that it copied and
-then closes),
-the task flow (the board's cards laid out left to right by their blockers, a
+it can sit beside or inside Desktop. The sidebar shows the workspace and links
+to its task flow, pull requests, and settings.
+The GUI includes the task flow (the board's cards laid out left to right by their blockers, a
 column's tickets in progress first, then ready, new, and done, each lane in the
 board's order, a ticket pushed down, that order kept, to stand level with the
 topmost ticket it waits for,
@@ -593,10 +587,10 @@ the figure and are reordered by dragging or with the keyboard
 (`PickupPanel.tsx`);
 `web/src/views/relations/`), a ticket (body and comments, with comments editable
 and permanently deletable by their author or the owner after confirmation; its lane, labels,
-upstream issue, relations to other tickets, and assignee; from the board and
-the task flow it opens in a drawer over them, whose URL stays, with a button
-that copies the ticket's URL, and a ticket linked from the drawer replaces
-it), a pull request (body, conversation,
+upstream issue, relations to other tickets, and assignee; from the task flow
+it opens in a drawer at the task flow's URL, with a button that copies the
+ticket's URL. Following a ticket link in the drawer opens it there), a pull
+request (body, conversation,
 checks, merge or publish; files and a check's job and log in drawers), and
 settings (the shown workspace with its repositories, and Branvil's members, CI,
 and notifications).

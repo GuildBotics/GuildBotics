@@ -25,49 +25,47 @@ const pageOf = (items: unknown[]) => ({ items, next_cursor: null });
 for (const locale of ["en-US", "ja-JP"]) {
   test.describe(locale, () => {
     test.use({ locale });
-    for (const path of ["/GuildBotics/-/board", "/GuildBotics"]) {
-      test(`keeps every card's contents inside it and clear of its menu on ${path}`, async ({ page }, info) => {
-        await page.setViewportSize({ width: 1280, height: 1000 });
-        await page.route("**/api/v1/**", async (route) => {
-          const url = decodeURIComponent(new URL(route.request().url()).pathname);
-          let body: unknown;
-          if (url.endsWith("/session")) body = { me: { name: "owner", kind: "owner" }, csrf: "fixture-only" };
-          else if (url.endsWith("/workspaces")) body = pageOf([{ name: "GuildBotics", lanes: ["new", "ready", "in_progress", "done"] }]);
-          else if (url.endsWith("/workspaces/GuildBotics")) body = { name: "GuildBotics", lanes: ["new", "ready", "in_progress", "done"] };
-          else if (url.endsWith("/board/cards")) body = pageOf(CARDS);
-          else if (url.endsWith("/members") || url.endsWith("/repos")) body = pageOf([]);
-          else if (url.endsWith("/diagnostics")) body = {};
-          else if (url.endsWith("/events")) {
-            await route.fulfill({ status: 200, contentType: "text/event-stream", body: ": fixture\n\n" });
-            return;
-          } else {
-            await route.fulfill({ status: 404, json: { error: { code: "not_found", message: "No fixture branch" } } });
-            return;
-          }
-          await route.fulfill({ json: body });
-        });
-        await page.goto(path);
-        await expect(page.locator("article.card")).toHaveCount(CARDS.length);
-        const issues = await page.locator("article.card").evaluateAll((cards) => {
-          const issues: string[] = [];
-          const overlaps = (a: DOMRect, b: DOMRect) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
-          for (const card of cards) {
-            const name = card.getAttribute("aria-label");
-            const box = card.getBoundingClientRect();
-            const menu = card.querySelector(".card-menu")?.getBoundingClientRect();
-            for (const part of card.querySelectorAll<HTMLElement>(".card-head > *")) {
-              if (menu && overlaps(part.getBoundingClientRect(), menu)) issues.push(`${name}: "${part.textContent}" under the menu`);
-            }
-            for (const part of card.querySelectorAll<HTMLElement>(".title a, .card-row > *")) {
-              const r = part.getBoundingClientRect();
-              if (r.left < box.left - 1 || r.right > box.right + 1) issues.push(`${name}: "${part.textContent}" outside the card`);
-            }
-          }
-          return issues;
-        });
-        expect(issues).toEqual([]);
-        await page.screenshot({ path: info.outputPath("cards.png"), fullPage: true });
+    test("keeps every task flow card's contents inside it and clear of its menu", async ({ page }, info) => {
+      await page.setViewportSize({ width: 1280, height: 1000 });
+      await page.route("**/api/v1/**", async (route) => {
+        const url = decodeURIComponent(new URL(route.request().url()).pathname);
+        let body: unknown;
+        if (url.endsWith("/session")) body = { me: { name: "owner", kind: "owner" }, csrf: "fixture-only" };
+        else if (url.endsWith("/workspaces")) body = pageOf([{ name: "GuildBotics", lanes: ["new", "ready", "in_progress", "done"] }]);
+        else if (url.endsWith("/workspaces/GuildBotics")) body = { name: "GuildBotics", lanes: ["new", "ready", "in_progress", "done"] };
+        else if (url.endsWith("/board/cards")) body = pageOf(CARDS);
+        else if (url.endsWith("/members") || url.endsWith("/repos")) body = pageOf([]);
+        else if (url.endsWith("/diagnostics")) body = {};
+        else if (url.endsWith("/events")) {
+          await route.fulfill({ status: 200, contentType: "text/event-stream", body: ": fixture\n\n" });
+          return;
+        } else {
+          await route.fulfill({ status: 404, json: { error: { code: "not_found", message: "No fixture branch" } } });
+          return;
+        }
+        await route.fulfill({ json: body });
       });
-    }
+      await page.goto("/GuildBotics");
+      await expect(page.locator("article.card")).toHaveCount(CARDS.length);
+      const issues = await page.locator("article.card").evaluateAll((cards) => {
+        const issues: string[] = [];
+        const overlaps = (a: DOMRect, b: DOMRect) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+        for (const card of cards) {
+          const name = card.getAttribute("aria-label");
+          const box = card.getBoundingClientRect();
+          const menu = card.querySelector(".card-menu")?.getBoundingClientRect();
+          for (const part of card.querySelectorAll<HTMLElement>(".card-head > *")) {
+            if (menu && overlaps(part.getBoundingClientRect(), menu)) issues.push(`${name}: "${part.textContent}" under the menu`);
+          }
+          for (const part of card.querySelectorAll<HTMLElement>(".title a, .card-row > *")) {
+            const r = part.getBoundingClientRect();
+            if (r.left < box.left - 1 || r.right > box.right + 1) issues.push(`${name}: "${part.textContent}" outside the card`);
+          }
+        }
+        return issues;
+      });
+      expect(issues).toEqual([]);
+      await page.screenshot({ path: info.outputPath("cards.png"), fullPage: true });
+    });
   });
 }
