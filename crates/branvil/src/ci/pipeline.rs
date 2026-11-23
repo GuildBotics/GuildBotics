@@ -101,6 +101,14 @@ fn one() -> u32 {
 struct JobSchema {
     #[serde(default)]
     verified_sha: bool,
+    /// What the branch demands of a PR, not how the job runs: it stays out of
+    /// `JobDef`, so stored runs, reuse and the runner's messages do not change.
+    #[serde(default)]
+    #[expect(
+        dead_code,
+        reason = "validated now; landing reads it once required checks move here (#437)"
+    )]
+    required: bool,
     name: String,
     image: String,
     commands: Vec<String>,
@@ -455,6 +463,22 @@ mod tests {
         assert!(!valid_digest("sha256:abc"));
         assert!(!valid_digest(&DIGEST.replace("sha256", "sha512")));
     }
+    #[test]
+    fn required_is_an_optional_boolean_that_leaves_the_job_definition_alone() {
+        let job = "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n";
+        for value in ["true", "false"] {
+            assert_eq!(
+                parse(&format!("{job}required={value}\n")).unwrap(),
+                parse(job).unwrap(),
+                "{value}"
+            );
+        }
+        for value in ["'yes'", "1"] {
+            let error = parse(&format!("{job}required={value}\n")).unwrap_err();
+            assert!(error.contains("required"), "{value}: {error}");
+        }
+    }
+
     #[test]
     fn verified_sha_is_an_explicit_optional_pipeline_input() {
         let job = "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n";
