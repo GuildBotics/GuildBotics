@@ -12,8 +12,8 @@ import "./i18n";
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
 import "@guildbotics/ui/styles.css";
-import "./styles.css";
 import "@guildbotics/ui/components.css";
+import "./styles.css";
 
 const queryClient = new QueryClient();
 
