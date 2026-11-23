@@ -140,7 +140,7 @@ async fn the_hosts_session_and_owner_token_identify_the_owner() {
         ),
         (&json!("alice"), &json!("owner"), &json!(csrf))
     );
-    assert_eq!(session["host_navigation"]["url"], "/-/guildbotics/");
+    assert_eq!(session["host_navigation"]["url"], "/");
     assert_eq!(
         s.get("/session", "unknown").await.0,
         StatusCode::UNAUTHORIZED
