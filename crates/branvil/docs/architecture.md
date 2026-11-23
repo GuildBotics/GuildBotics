@@ -630,17 +630,16 @@ or the next action. Merge and publish buttons are enabled for `owner_merge`
 and `owner_publish` respectively, and the server rechecks on submission.
 Stopped publication is replaced directly by the owner's publish.
 While a card is dragged, the box under the pointer scrolls when the pointer is
-near its edge, faster the nearer (`web/src/dragScroll.ts`).
+near its edge, faster the nearer (`desktop/src/repository/dragScroll.ts`).
 The service's state is not a page: the GUI warns at the top of every page only
 when the page has lost its event stream for 5 seconds (it may be out of date
 until the stream is back), CI cannot run, or an upstream cannot be followed.
 
-`web/dist` is embedded with rust-embed (`allow_missing`, so the service builds
-without it). Debug builds read the folder from disk, so a GUI built again
-shows on reload; release builds, which the [Hub LaunchAgent](../../../docs/hub-server.md) runs, carry the GUI
-of their build. Every GET path that is not
-`/api/…`, `/git/…`, or `/-/hooks/…` and not a file is answered with `index.html`, so
-the web URLs of `api.md` open the single-page GUI. Every response carries
+The GuildBotics server serves the Vite build from `desktop/dist`. Its page
+routes return the same `index.html`, including direct links under
+`/workspaces/{workspace}/repos/{repo}/`. The API, Git, and hook routes still
+reach the embedded service.
+Every response carries
 `Content-Security-Policy` (`script-src 'self'`, no inline scripts; `style-src
 'self' 'unsafe-inline'`, because the GUI's components (Mantine, as in GuildBotics
 Desktop) set their look through `style` attributes), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and

@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Text } from "@mantine/core";
-import { HubStatusBand, HubVersionLabel, type HubStatus } from "@guildbotics/ui/HubStatus";
+import { HubStatusBand, HubVersionLabel, type HubStatus } from "./ui/HubStatus";
 import { request } from "./api/client";
 const useHubStatus = () =>
   useQuery({

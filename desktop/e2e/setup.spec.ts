@@ -18,7 +18,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
 }) => {
   const ctx = readStackContext("setup");
 
-  await page.goto("/-/guildbotics/");
+  await page.goto("/");
 
   // The empty temp workspace has no config, so the landing redirect lands on the
   // first-setup screen.
@@ -83,7 +83,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
   // environment carries "Open setup" links that a substring match would also
   // resolve to.
   await page.getByRole("link", { name: "Service", exact: true }).click();
-  await expect(page).toHaveURL(/#\/service$/);
+  await expect(page).toHaveURL(/\/service$/);
   await expect(page.getByRole("heading", { name: "Service Runtime" })).toBeVisible();
 
   // The REAL backend wrote project.yml under the temp workspace: each kind's
@@ -95,7 +95,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
   expect(JSON.parse(projectYaml).services.chat_service.name).toBe("slack");
 
   const memberFile = join(ctx.configDir, "team", "members", "local-agent", "member.yml");
-  await page.goto("/-/guildbotics/#/setup?section=members&person_id=local-agent&tab=slack");
+  await page.goto("/setup?section=members&person_id=local-agent&tab=slack");
   await page.getByRole("tab", { name: "Basic", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "Display name", exact: true })).toHaveValue(
     "Local Agent",
@@ -190,42 +190,26 @@ test("first-run setup happy path writes project.yml and enters the service view"
 
 test("one entry opens both screens, APIs and the consent page", async ({ page, context }) => {
   await expect.poll(async () => (await page.request.get("/api/v1/session")).status()).toBe(200);
-  const result = await page.evaluate(async () => {
-    const gb = await fetch("/-/guildbotics/api/session").then((r) => r.json());
-    const bvResponse = await fetch("/api/v1/session");
-    const bv = await bvResponse.json();
-    const write = (csrf: string) =>
-      fetch("/api/v1/workspaces", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-guildbotics-csrf": csrf },
-        body: JSON.stringify({ name: "shared-session" }),
-      });
-    return {
-      gb,
-      bv,
-      status: bvResponse.status,
-      refused: (await write("wrong")).status,
-      created: (await write(bv.csrf)).status,
-    };
-  });
-  expect(result.status).toBe(200);
-  expect(result.bv.me.kind).toBe("owner");
-  expect(result.bv.csrf).toBe(result.gb.csrf);
-  expect(result.refused).toBe(403);
-  expect(result.created).toBe(201);
-  const link = await page.evaluate(async () => {
-    const session = await fetch("/api/v1/session").then((r) => r.json());
-    return fetch("/-/guildbotics/api/session/links", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-guildbotics-csrf": session.csrf },
-      body: JSON.stringify({ next: "/" }),
-    }).then((r) => r.json());
-  });
-  expect(new URL(link.url).pathname).toBe("/-/guildbotics/-/enter");
+  const gb = await (await page.request.get("/-/guildbotics/api/session")).json();
+  const bv = await (await page.request.get("/api/v1/session")).json();
+  expect(bv.me.kind).toBe("owner");
+  expect(bv.csrf).toBe(gb.csrf);
+  const write = (csrf: string) =>
+    page.request.post("/api/v1/workspaces", {
+      headers: { "x-guildbotics-csrf": csrf },
+      data: { name: "shared-session" },
+    });
+  expect((await write("wrong")).status()).toBe(403);
+  expect((await write(bv.csrf)).status()).toBe(201);
+  const link = await (await page.request.post("/-/guildbotics/api/session/links", {
+    headers: { "x-guildbotics-csrf": bv.csrf },
+    data: { next: "/" },
+  })).json();
+  expect(new URL(link.url).pathname).toBe("/enter");
   await context.clearCookies();
   await page.goto(link.url);
-  await page.waitForURL((address) => address.pathname === "/");
-  await page.goto("/shared-session");
+  await page.waitForURL((address) => address.pathname !== "/enter");
+  await page.goto("/workspaces/shared-session/task-flow");
   await expect(page.getByRole("heading", { name: /^(Task flow|タスクフロー)$/ })).toBeVisible();
   const query = new URLSearchParams({
     client: "test-app",
@@ -234,9 +218,9 @@ test("one entry opens both screens, APIs and the consent page", async ({ page, c
     code_challenge: "a".repeat(43),
     code_challenge_method: "S256",
   });
-  await page.goto(`/-/guildbotics/-/authorize?${query}`);
+  await page.goto(`/authorize?${query}`);
   await expect(page.getByRole("button", { name: /^(Allow|許可する|許可)$/ })).toBeVisible();
-  await page.goto("/-/guildbotics/");
+  await page.goto("/");
   expect((await page.request.get("/-/guildbotics/api/session")).status()).toBe(200);
   expect(
     (await page.request.post("/api/v1/session", { data: { code: "old-code" } })).status(),
@@ -251,7 +235,7 @@ test("unsigned consent resumes through the common entry", async ({ page, context
     code_challenge: "a".repeat(43),
     code_challenge_method: "S256",
   });
-  const path = "/-/guildbotics/-/authorize";
+  const path = "/authorize";
   await context.clearCookies();
   await page.goto(`${path}?${query}`);
   await expect(page.getByRole("button", { name: /^(Allow|許可する|許可)$/ })).toHaveCount(0);

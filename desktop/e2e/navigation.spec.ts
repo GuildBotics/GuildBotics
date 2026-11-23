@@ -2,7 +2,7 @@ import { expect } from "@playwright/test";
 import { test } from "./stack-context";
 
 test("moves between both screens with one session and language preference", async ({ page }) => {
-  await page.goto("/-/guildbotics/#/service");
+  await page.goto("/service");
   await page.getByRole("link", { name: "Branvil", exact: true }).click();
   await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
   await page.getByRole("combobox", { name: "Display language", exact: true }).click();

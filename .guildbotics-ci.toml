@@ -69,7 +69,7 @@ timeout_secs = 300
 
 [[jobs]]
 name = "desktop-quality"
-paths = ["packages/ui/**", "desktop/**", "package.json", "package-lock.json", "crates/branvil/web/package.json", ".prettierrc.json", "jscpd.config.json"]
+paths = ["desktop/**", "crates/branvil/tests/fixtures/**", "package.json", "package-lock.json", ".prettierrc.json", "jscpd.config.json"]
 image = "guildbotics/agent-environment:dev"
 commands = [
   "npm_config_cache=/work/.ci/npm npm ci",
@@ -77,6 +77,7 @@ commands = [
 ]
 timeout_secs = 1800
 cache = { paths = [".ci/npm"], key_files = ["package-lock.json"] }
+artifacts = [{ name = "web-tests", paths = ["desktop/test-results/timing.json"] }]
 
 [[jobs]]
 name = "rust-fmt"
@@ -223,22 +224,6 @@ image = "guildbotics/agent-environment:dev"
 commands = ["npm_config_cache=/work/.ci/npm npx --yes jscpd@5.0.14 --config jscpd.rust.json"]
 timeout_secs = 300
 cache = { paths = [".ci/npm"], key_files = ["jscpd.rust.json"] }
-
-[[jobs]]
-name = "branvil-web"
-paths = ["packages/ui/**", "crates/branvil/web/**", "crates/branvil/tests/fixtures/**", "package.json", "package-lock.json", "desktop/package.json", "desktop/src/**", ".prettierrc.json", "jscpd.config.json"]
-image = "guildbotics/agent-environment:dev"
-commands = [
-  "npm_config_cache=/work/.ci/npm npm ci",
-  "cd crates/branvil/web && npm run format:check",
-  "cd crates/branvil/web && npm run duplicates",
-  "cd crates/branvil/web && npm run lint",
-  "cd crates/branvil/web && npm run typecheck",
-  "cd crates/branvil/web && npm run test",
-]
-timeout_secs = 1200
-cache = { paths = [".ci/npm"], key_files = ["package-lock.json"] }
-artifacts = [{ name = "web-tests", paths = ["crates/branvil/web/test-results/timing.json"] }]
 
 [[jobs]]
 name = "client-windows"

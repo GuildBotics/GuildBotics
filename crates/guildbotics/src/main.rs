@@ -498,9 +498,9 @@ fn open(print: bool, branvil: bool) -> ExitCode {
         .map_err(|e| e.to_string())
         .and_then(|runtime| {
             runtime.block_on(gb_server::client::entry_link_for(if branvil {
-                "/"
+                "/workspaces"
             } else {
-                "/-/guildbotics/"
+                "/"
             }))
         });
     match link {

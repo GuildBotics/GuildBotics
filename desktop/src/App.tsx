@@ -1,6 +1,7 @@
+import { workspacePath } from "./repository/router/routes";
 import { HubBand, HubVersion } from "./HubStatus";
 import { RunFiles } from "./commands/RunFiles";
-import { AppShell } from "@guildbotics/ui/AppShell";
+import { AppShell } from "./ui/AppShell";
 import {
   ActionIcon,
   Alert,
@@ -136,7 +137,7 @@ const MEMORY_FOCUS_SEARCH_PARAMS = [
   "person_id",
 ] as const;
 
-export function App() {
+export function App({ scoped }: { scoped?: boolean } = {}) {
   const { t, i18n } = useTranslation();
   const appLanguage = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
   const config = useQuery({
@@ -232,7 +233,7 @@ export function App() {
         <Route element={<CommandsPage />} path="/commands" />
         <Route element={<DiagnosticsPage />} path="/diagnostics" />
         <Route element={<SetupPage />} path="/setup" />
-        <Route element={<IndexRedirect />} path="*" />
+        <Route element={<IndexRedirect scoped={scoped} />} path="*" />
       </Routes>
     </AppShell>
   );
@@ -516,7 +517,7 @@ function ConfiguredRoute({ configured, loading }: { configured: boolean; loading
   return configured ? <ActivityHistoryPage /> : <Navigate replace to="/setup" />;
 }
 
-function IndexRedirect() {
+function IndexRedirect({ scoped }: { scoped?: boolean }) {
   // The landing route picks the first screen based on whether setup is done:
   // a configured workspace opens the service screen, otherwise the setup screen.
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
@@ -524,7 +525,16 @@ function IndexRedirect() {
     return null;
   }
   const configured = Boolean(config.data?.project_file_exists);
-  return <Navigate replace to={configured ? "/activity" : "/setup"} />;
+  const page = configured ? "/activity" : "/setup";
+  if (scoped === false && config.data?.workspace_name) {
+    return <WorkspaceLanding to={workspacePath(config.data.workspace_name) + page} />;
+  }
+  return <Navigate replace to={page} />;
+}
+
+function WorkspaceLanding({ to }: { to: string }) {
+  useEffect(() => window.location.replace(to), [to]);
+  return null;
 }
 
 const SERVICE_SETTINGS_QUERY_KEY = ["service-settings"];

@@ -666,7 +666,7 @@ async fn answer_git_credential_input(
 /// A single-use link into the screens of the server on this machine's port,
 /// or the sentence saying why there is none.
 pub async fn entry_link() -> Result<String, String> {
-    entry_link_for("/-/guildbotics/").await
+    entry_link_for("/").await
 }
 
 /// The server of this machine and its owner's token, read from disk, once the

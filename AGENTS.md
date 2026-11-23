@@ -17,7 +17,7 @@
 scripts/dev.sh --data-dir /absolute/path/to/dev-data
 ```
 
-開発用のデータとポート（両サービス共通で 8866）で両方の画面を開く。GuildBotics の画面は `/-/guildbotics/`、API（WebSocket を含む）は `/-/guildbotics/api` の下にある。作業用ワークスペースを選ぶ。ポートを変える場合も、本番のデータやワークスペースを指定しない。本番Hubの起動・更新は [macOS Hubの起動と更新](docs/hub-server.md) を参照する。HubはApple Silicon搭載のMac。Branvil の CI は Linux、GitHub Actions は macOS の Clippy と Windows クライアントの契約テストを行う。Windows のクライアントは OpenSSH で Hub へ接続する。
+開発用のデータとポート（両サービス共通で 8866）で両方の画面を開く。GuildBotics の画面は `/`、API（WebSocket を含む）は `/-/guildbotics/api` の下にある。作業用ワークスペースを選ぶ。ポートを変える場合も、本番のデータやワークスペースを指定しない。本番Hubの起動・更新は [macOS Hubの起動と更新](docs/hub-server.md) を参照する。HubはApple Silicon搭載のMac。Branvil の CI は Linux、GitHub Actions は macOS の Clippy と Windows クライアントの契約テストを行う。Windows のクライアントは OpenSSH で Hub へ接続する。
 
 ## 実装と責務境界
 
@@ -73,7 +73,7 @@ GuildBotics の共有記録を古い版で読めない形へ変えるときは `
 - 保存形式を変える場合は互換コードを追加しない規則の例外として、`crates/branvil/src/store.rs` の `SCHEMA_VERSION` を上げ、`upgrade.rs` に直前の1版からの変換を置く。`server hub-data upgrade` と `restore` が使う。古い版を通常の読み取りで扱わない。秘密は起動するプロセスが渡す `vault::Vault` 越しにidentityのstoreへ保存し、平文のファイルへ逃がさない。カーソルの署名鍵はプロセスごとにメモリで作る。実データやtokenの中身を参照しない。
 - 内部のHTTP APIを変えたら [API文書](crates/branvil/docs/api.md) と画面とagentモジュールを合わせ、`cargo nextest run --locked -p branvil --features test-support -E 'test(/^agent/)'` で結合を確認する。上流サービス固有の処理は `upstream::Host` の実装に置く。自然言語の意味判定はGuildBoticsが扱う。
 - loopbackだけで待ち受ける。リモート接続はOSが管理するOpenSSHの転送を使う。HubはmacOS、CIはLinux。サービスのGitは `src/git.rs` を通し、システム・ユーザーのGit設定や `GIT_*` を継承しない。テストでは `tests/common/mod.rs` の `git` / `git_as` を使う。自前で起動する場合は `GIT_CONFIG_NOSYSTEM=1`、空の `GIT_CONFIG_GLOBAL`、`GIT_TERMINAL_PROMPT=0`、`-c credential.helper=` を指定し、トークンは `GIT_ASKPASS` と環境変数で渡す。URLや引数に含めず、テストのメンバー名は架空のものにする。
-- 画面のテーマ・トークン・Mantineの版はGuildBotics Desktopとそろえる。共通部品は `packages/ui/` に置く。詳細は [Branvilの構成](crates/branvil/docs/architecture.md) と [文書一覧](crates/branvil/README.md#documents) を参照する。
+- 画面のテーマ・トークン・Mantineの版はGuildBotics Desktopとそろえる。共通部品は `desktop/src/ui/` に置く。詳細は [Branvilの構成](crates/branvil/docs/architecture.md) と [文書一覧](crates/branvil/README.md#documents) を参照する。
 
 ## Hub の手作業が必要な更新
 
@@ -122,7 +122,7 @@ CLIを変更したら `cargo run --locked -p guildbotics -- generate-cli-referen
 - Rust のテストは1本あたり120秒を上限とする（`.config/nextest.toml` の `slow-timeout`: 60秒ごとに警告、2回目で終了させて失敗）。#352 後の CI の最長56.843秒に対して、ランナーの変動に余裕を持たせた値。単独実行の overrides にも同じ上限が適用される。手元の一括実行で超えたら、対象テストを単独で再実行し、CI の所要時間と比較して並列実行時の競合とテスト自体の遅さを切り分けてから修正対象を判断する。超えたら待ち・ポーリングを条件成立や制御した時計で終える、独立した契約を状態を共有しないテストへ分ける、不要な準備を除く、の順で原因に合う修正を行い、検証する契約を弱めない。上限の延長やテスト個別の除外で回避しない。
 - 確認コマンドは、CI とこのファイルに明記された範囲、および変更内容に直接対応する関連テストに限定する。指定範囲より広い確認（例: CI で `ruff check` 対象外の `tests/` に対する `ruff check`、関連範囲を超える全量 E2E、LaunchAgent の実機での登録など）は、ユーザーが明示した場合、または事前に目的・追加コストを説明して承認を得た場合だけ実行する。「念のため」の広範囲チェックを無断で追加しない。
 - Python コードを変更したら、原則として `ruff format --check` と `ruff check` と `mypy` と `lint-imports` と関連 `pytest` を実行してから完了報告する（`ruff check` と `ruff format --check` は別物。`ruff format --check` の対象は `guildbotics` と `tests`、`ruff check` / `mypy` / `pylint` の対象は `guildbotics` のみ。整形漏れは CI の `test` ジョブで落ちるため、`ruff format --check` を必ず含める。整形が必要なら `uv run --no-sync ruff format guildbotics tests` を実行）
-- Rust のコードを変更したら、原則として `cargo fmt --all --check` と `cargo clippy --locked --workspace --all-targets -- -D warnings` と関連する `cargo nextest run` を実行してから完了報告する（複数ファイルの通常の結合テストは `tests/main.rs` のモジュールにまとめる。1 ファイルだけなら `cargo nextest run -p <crate> --test main -E 'test(/^<file>::/)'`。位置引数の `<file>::` は部分一致なので、名前が重なる別モジュールも選ばれる）。重複は `npx --yes jscpd@5.0.14 --config jscpd.rust.json` で確かめる。`crates/branvil/web` を変更したら、そこで `npm run lint`・`npm run typecheck`・関連する `npm run test` を実行する
+- Rust のコードを変更したら、原則として `cargo fmt --all --check` と `cargo clippy --locked --workspace --all-targets -- -D warnings` と関連する `cargo nextest run` を実行してから完了報告する（複数ファイルの通常の結合テストは `tests/main.rs` のモジュールにまとめる。1 ファイルだけなら `cargo nextest run -p <crate> --test main -E 'test(/^<file>::/)'`。位置引数の `<file>::` は部分一致なので、名前が重なる別モジュールも選ばれる）。重複は `npx --yes jscpd@5.0.14 --config jscpd.rust.json` で確かめる。画面の変更は下の desktop TypeScript の品質確認に従う。
 - 重複コード確認は `uv run --no-sync pylint guildbotics` を使う（`pyproject.toml` で `duplicate-code` のみ有効化）
 - 対象範囲（リポジトリ直下、`docs/`、`desktop/`、`skills/`、`crates/`）の Markdown を変更したら、上記の `lychee` コマンドを実行する
 - 最低限の確認コマンドは上記「開発時の基本コマンド（CI 準拠）」と同じ（`pytest` は関連範囲に絞ってよい）

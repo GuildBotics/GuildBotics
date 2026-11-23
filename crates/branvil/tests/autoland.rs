@@ -253,7 +253,7 @@ async fn main_failure_notifies_creation_once_and_recovery_sends_nothing() {
         "(test)",
         "Range:",
         "pull request(s): !",
-        "/acme/demo/-/tickets/",
+        "/workspaces/acme/repos/demo/tickets/",
         "assigned to",
     ] {
         assert!(text.contains(part), "{text}");

@@ -136,8 +136,12 @@ async fn evidence(
                 .cloned()
         })
         .collect();
-    let root = format!("{}/{}", app.base_url, repo.path);
-    let commit_link = |sha: &str| format!("[{}]({root}/-/commit/{sha})", short(sha));
+    let root = format!(
+        "{}{}",
+        app.base_url,
+        crate::util::repository_page(&repo.path)
+    );
+    let commit_link = |sha: &str| format!("[{}]({root}/commits/{sha})", short(sha));
     let mut body = format!(
         "Branvil created this repair ticket because verification of {} failed at {}. Restore passing verification of main, regardless of whose change caused the failure. Branvil will close this ticket when verification of main passes.\n\n## Failed jobs\n",
         text(&repo.default_branch),
@@ -159,13 +163,13 @@ async fn evidence(
         let (label, link, log) = if let Some(id) = &f.attempt_id {
             (
                 "Job",
-                format!("{root}/-/jobs/{id}"),
+                format!("{root}/jobs/{id}"),
                 app.ci.log_tail(id, 8192).await?.0,
             )
         } else {
             (
                 "Commit",
-                format!("{root}/-/commit/{}", pending.sha),
+                format!("{root}/commits/{}", pending.sha),
                 String::new(),
             )
         };
@@ -212,7 +216,7 @@ async fn evidence(
         let pull = matched.iter().find(|p| p.merge_sha.as_ref() == Some(sha));
         let cells = if let Some(p) = pull {
             format!(
-                "[!{}: {}]({root}/-/pulls/{}) | {}",
+                "[!{}: {}]({root}/pulls/{}) | {}",
                 p.number,
                 text(&p.title),
                 p.number,
@@ -544,10 +548,14 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
             }
         }
         for f in &p.failures {
-            let root = format!("{}/{}", app.base_url, repo.path);
+            let root = format!(
+                "{}{}",
+                app.base_url,
+                crate::util::repository_page(&repo.path)
+            );
             let link = f.attempt_id.as_ref().map_or_else(
-                || format!("{root}/-/commit/{}", p.sha),
-                |id| format!("{root}/-/jobs/{id}"),
+                || format!("{root}/commits/{}", p.sha),
+                |id| format!("{root}/jobs/{id}"),
             );
             let job = text(&f.name);
             if !repair.jobs.contains(&f.name) {
@@ -755,7 +763,7 @@ mod tests {
                         match state {
                             "found" => assert!(c.body.contains("passes at aaaaaaa and fails at bbbbbbb, the first commit where it fails (not from a pull request of this Branvil)")),
                             "outside" => assert!(c.body.contains("also fails at aaaaaaa, the last verified commit")),
-                            "inconsistent" => assert!(c.body.contains("aaaaaaa: success [Job](/acme/demo/-/jobs/pass), bbbbbbb: failure [Job](/acme/demo/-/jobs/fail)")),
+                            "inconsistent" => assert!(c.body.contains("aaaaaaa: success [Job](/workspaces/acme/repos/demo/jobs/pass), bbbbbbb: failure [Job](/workspaces/acme/repos/demo/jobs/fail)")),
                             "not_reproduced" => assert_eq!(c.body, "Hint: Main verification marked test as failed at fffffff. Narrowing observed no failing result for the job and stopped after two successful diagnostic runs at that commit."),
                             _ => unreachable!(),
                         }
@@ -905,7 +913,7 @@ mod tests {
         assert_eq!(
             ticket.repair.as_ref().unwrap().notice.as_deref(),
             Some(
-                "Main verification failed: acme/demo main abcdef0 (test)\nRange: 1234567..abcdef0, 2 pull request(s): !12 !13\nRepair ticket: http://127.0.0.1:7878/acme/demo/-/tickets/1, assigned to agent"
+                "Main verification failed: acme/demo main abcdef0 (test)\nRange: 1234567..abcdef0, 2 pull request(s): !12 !13\nRepair ticket: http://127.0.0.1:7878/workspaces/acme/repos/demo/tickets/1, assigned to agent"
             )
         );
         async fn sweep(app: &App) {

@@ -119,7 +119,7 @@ pub(crate) async fn view(app: &Shared, a: &Attempt) -> AppResult<AttemptView> {
         retry_wait: app.ci.retry_wait(a),
         runner_deferrals: a.runner_deferrals.clone(),
         runner_recovery: recovery,
-        url: format!("{}/{}/-/jobs/{}", app.base_url, a.repo_path, a.id),
+        url: crate::util::item_url(&app.base_url, &a.repo_path, "jobs", &a.id),
         repository: a.repo_path.clone(),
         job: a.job.name.clone(),
         attempt: a.number,

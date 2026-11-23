@@ -173,7 +173,7 @@ workspace, and each GuildBotics workspace chooses the code host's workspace its 
 
 The server uses one browser entry and session for all of its screens.
 `guildbotics open` and `guildbotics open --branvil` issue links to
-`/-/guildbotics/-/enter`; only the landing screen differs.
+`/enter`; only the landing screen differs.
 
 ## Set up the code host and the tickets
 

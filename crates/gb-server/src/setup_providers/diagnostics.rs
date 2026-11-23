@@ -97,54 +97,62 @@ impl Registry {
             })
             .collect()
     }
-    /// Whether each distinct workspace the services name exists.
-    pub async fn diagnose_branvil(&self, services: &Value, lang: &str) -> Vec<ProviderCheck> {
-        let mut scopes: Vec<String> = vec![];
-        for kind in ["code_hosting_service", "ticket_service"] {
-            let scope = services[kind]["workspace"]
-                .as_str()
-                .unwrap_or("")
-                .to_owned();
-            if services[kind]["name"] == "branvil" && !scopes.contains(&scope) {
-                scopes.push(scope);
-            }
+    /// Checks the registration of this execution directory when it uses the code host.
+    pub async fn diagnose_branvil(
+        &self,
+        services: &Value,
+        root: &std::path::Path,
+        lang: &str,
+    ) -> Vec<ProviderCheck> {
+        if !["code_hosting_service", "ticket_service"]
+            .iter()
+            .any(|kind| {
+                services[*kind]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("branvil"))
+            })
+        {
+            return Vec::new();
         }
         let Some(data) = self.0.as_ref().and_then(|api| api.branvil.get()) else {
-            return scopes
-                .iter()
-                .map(|scope| {
-                    ProviderCheck::new(
-                        "branvil",
-                        "branvil_workspace",
-                        "error",
-                        say(lang, "integrations.branvil.api.stopped", &[]),
-                    )
-                    .target(scope)
-                })
-                .collect();
+            return vec![ProviderCheck::new(
+                "branvil",
+                "branvil_workspace",
+                "error",
+                say(lang, "integrations.branvil.api.stopped", &[]),
+            )];
         };
-        let mut checks = vec![];
-        for scope in scopes {
-            let result = data.owner().repos_get_workspace(&scope).await;
-            checks.push(
-                ProviderCheck::new(
-                    "branvil",
-                    "branvil_workspace",
-                    if result.is_ok() { "ok" } else { "error" },
-                    result
-                        .map(|_| {
-                            say(
-                                lang,
-                                "integrations.branvil.provider.workspace",
-                                &[("workspace", &scope)],
-                            )
-                        })
-                        .unwrap_or_else(|e| message_for(e, "repos_get_workspace", lang)),
-                )
-                .target(&scope),
-            );
-        }
-        checks
+        let registration = data.workspace_for_execution(root);
+        let check = match registration {
+            Ok(Some(workspace)) => ProviderCheck::new(
+                "branvil",
+                "branvil_workspace",
+                "ok",
+                say(
+                    lang,
+                    "integrations.branvil.provider.workspace",
+                    &[("workspace", &workspace.name)],
+                ),
+            )
+            .target(&workspace.name),
+            Ok(None) => ProviderCheck::new(
+                "branvil",
+                "branvil_workspace",
+                "error",
+                say(
+                    lang,
+                    "setup.provider_unconfigured",
+                    &[("target", &root.display().to_string())],
+                ),
+            ),
+            Err(error) => ProviderCheck::new(
+                "branvil",
+                "branvil_workspace",
+                "error",
+                message_for(error, "workspace_for_execution", lang),
+            ),
+        };
+        vec![check]
     }
 }
 

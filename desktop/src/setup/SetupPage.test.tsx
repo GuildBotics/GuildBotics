@@ -324,7 +324,6 @@ vi.mock("./providers/branvil/api", async (importOriginal) => {
   return {
     ...actual,
     getGitConfig: vi.fn(async () => ({ git_config: CODE_HOST_GIT_CONFIG })),
-    listWorkspaces: vi.fn(async () => ({ workspaces: ["acme", "other"] })),
   };
 });
 vi.mock("../openExternal", () => ({ openExternal: vi.fn(async () => {}) }));
@@ -953,19 +952,20 @@ describe("SetupPage", () => {
     expect(screen.queryByRole("option", { name: "Branvil" })).not.toBeInTheDocument();
     await user.keyboard("{Escape}");
     await chooseProvider(user, "ticket_service", "Branvil");
-    expect(screen.getByText("Input progress: 0 of 4 sections completed")).toBeInTheDocument();
-    await user.click(screen.getByRole("combobox", { name: t("setup.branvil.workspace") }));
-    await user.click(await screen.findByRole("option", { name: "acme" }));
     await chooseProvider(user, "code_hosting_service", "Branvil");
-    expect(screen.getAllByRole("combobox", { name: t("setup.branvil.workspace") })).toHaveLength(2);
+    expect(
+      screen.queryByRole("combobox", { name: t("setup.branvil.workspace") }),
+    ).not.toBeInTheDocument();
     await chooseProvider(user, "ticket_service", t("setup.integrations.none"));
-    expect(screen.getAllByRole("combobox", { name: t("setup.branvil.workspace") })).toHaveLength(1);
+    expect(
+      screen.queryByRole("combobox", { name: t("setup.branvil.workspace") }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the owner's git configuration once for every kind, outside the services", async () => {
     const user = userEvent.setup();
     vi.mocked(getProviders).mockResolvedValue(PROVIDERS);
-    const branvil = { name: "branvil", workspace: "acme" };
+    const branvil = { name: "branvil" };
     vi.mocked(getProjectConfig).mockResolvedValue(
       projectConfig({ services: { code_hosting_service: branvil, ticket_service: branvil } }),
     );
@@ -995,8 +995,6 @@ describe("SetupPage", () => {
     await waitFor(() => expect(description).toHaveValue("Demo project"));
     await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
     await chooseProvider(user, "ticket_service", "Branvil");
-    await user.click(screen.getByRole("combobox", { name: t("setup.branvil.workspace") }));
-    await user.click(await screen.findByRole("option", { name: "acme" }));
     await chooseProvider(user, "code_hosting_service", "Branvil");
     await chooseProvider(user, "chat_service", "Slack");
     await saveSection(user);
@@ -1522,8 +1520,8 @@ const PROVIDERS: ProviderOption[] = [
 
 /** A Branvil project with Slack chat. */
 const CODE_HOST_AND_SLACK: ProjectServices = {
-  code_hosting_service: { name: "branvil", workspace: "acme" },
-  ticket_service: { name: "branvil", workspace: "acme" },
+  code_hosting_service: { name: "branvil" },
+  ticket_service: { name: "branvil" },
   chat_service: { name: "slack" },
 };
 
@@ -1686,16 +1684,14 @@ describe("createProjectSchema", () => {
     expect(schema.safeParse(baseProjectValues({ services: {} })).success).toBe(true);
   });
 
-  it("rejects a chosen provider whose items are incomplete", () => {
-    const result = schema.safeParse(
-      baseProjectValues({
-        services: { ticket_service: { name: "branvil", workspace: "bad/name" } },
-      }),
-    );
-    expect(result.success).toBe(false);
-    expect(result.success ? [] : result.error.issues.map((issue) => issue.path.join("."))).toEqual([
-      "services.ticket_service",
-    ]);
+  it("accepts the code host without a second workspace selection", () => {
+    expect(
+      schema.safeParse(
+        baseProjectValues({
+          services: { ticket_service: { name: "branvil" } },
+        }),
+      ).success,
+    ).toBe(true);
   });
 
   it("accepts every chosen provider with valid items", () => {
@@ -2858,7 +2854,7 @@ describe("MembersSection", () => {
   it("offers no account tab for Branvil", async () => {
     vi.mocked(getProviders).mockResolvedValue(PROVIDERS);
     vi.mocked(getProjectConfig).mockResolvedValue(
-      projectConfig({ services: { ticket_service: { name: "branvil", workspace: "acme" } } }),
+      projectConfig({ services: { ticket_service: { name: "branvil" } } }),
     );
     vi.mocked(getTeam).mockResolvedValue({
       project: { name: "Demo", language_code: "en", language_name: "English" },

@@ -13,13 +13,20 @@ use axum::routing::get;
 
 use crate::i18n;
 
-/// The main screen's paths: its own routes are in the fragment, and the
-/// entry and consent pages are told apart by their path.
+/// The application's screens. APIs and assets have separate routes.
 pub(crate) const MAIN_PATHS: &[&str] = &[
-    "/-/guildbotics/",
-    "/-/guildbotics/index.html",
-    "/-/guildbotics/-/enter",
-    "/-/guildbotics/-/authorize",
+    "/",
+    "/workspaces",
+    "/workspaces/{*page}",
+    "/settings/repositories",
+    "/settings/repositories/{section}",
+    "/setup",
+    "/activity",
+    "/commands",
+    "/service",
+    "/diagnostics",
+    "/enter",
+    "/authorize",
 ];
 
 /// The build of the checkout's screens.
@@ -30,7 +37,7 @@ pub fn directory() -> PathBuf {
         .join("desktop/dist")
 }
 
-pub(crate) const ASSET_PATH: &str = "/-/guildbotics/assets/{*path}";
+pub(crate) const ASSET_PATH: &str = "/assets/{*path}";
 
 #[cfg(test)]
 pub(crate) fn route_inventory() -> Vec<loopback_auth::Route> {
@@ -159,13 +166,20 @@ mod tests {
     #[tokio::test]
     async fn the_main_page_answers_its_own_paths() {
         let dir = built();
-        for path in MAIN_PATHS {
+        for path in [
+            "/",
+            "/workspaces/acme/task-flow",
+            "/workspaces/acme/repos/demo/tickets/1",
+            "/workspaces/acme/repos/demo/pulls/2",
+            "/workspaces/acme/commands",
+            "/enter",
+        ] {
             let (status, headers, text) = get(dir.path(), path).await;
             assert_eq!((status, text.as_str()), (StatusCode::OK, "main"), "{path}");
             assert_eq!(headers[header::CACHE_CONTROL], "no-cache");
             assert_eq!(headers[header::CONTENT_TYPE], "text/html; charset=utf-8");
         }
-        let (status, headers, text) = get(dir.path(), "/-/guildbotics/assets/app.js").await;
+        let (status, headers, text) = get(dir.path(), "/assets/app.js").await;
         assert_eq!((status, text.as_str()), (StatusCode::OK, "js"));
         assert_eq!(
             headers[header::CONTENT_TYPE],
@@ -186,11 +200,11 @@ mod tests {
         .unwrap();
         for path in [
             "/quick.html",
-            "/service",
-            "/-/guildbotics/assets/../index.html",
-            "/-/guildbotics/assets/%2E%2E/index.html",
-            "/-/guildbotics/assets/linked.js",
-            "/-/guildbotics/assets/missing.js",
+            "/unregistered",
+            "/assets/../index.html",
+            "/assets/%2E%2E/index.html",
+            "/assets/linked.js",
+            "/assets/missing.js",
         ] {
             assert_eq!(
                 get(dir.path(), path).await.0,
@@ -228,8 +242,8 @@ mod tests {
         }
         let absolute = fifos[0].display().to_string();
         for path in [
-            format!("/-/guildbotics/assets/{}", absolute.replace('/', "%2F")),
-            "/-/guildbotics/assets/pipe".to_owned(),
+            format!("/assets/{}", absolute.replace('/', "%2F")),
+            "/assets/pipe".to_owned(),
         ] {
             let answered =
                 tokio::time::timeout(std::time::Duration::from_secs(5), get(dir.path(), &path))
@@ -251,7 +265,7 @@ mod tests {
     #[tokio::test]
     async fn unbuilt_screens_say_so() {
         let dir = tempfile::tempdir().unwrap();
-        let (status, _, text) = get(&dir.path().join("missing"), "/-/guildbotics/").await;
+        let (status, _, text) = get(&dir.path().join("missing"), "/").await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert!(text.contains("are not built"), "{text}");
     }

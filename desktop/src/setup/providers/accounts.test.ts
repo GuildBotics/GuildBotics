@@ -127,22 +127,9 @@ describe("isSlackChannel", () => {
 });
 
 describe("branvil services", () => {
-  it("start from the workspace the other kind names", () => {
-    expect(branvilTickets.initial({})).toEqual({ workspace: "" });
-    expect(
-      branvilCodeHosting.initial({ ticket_service: { name: "branvil", workspace: "acme" } }),
-    ).toEqual({ workspace: "acme" });
-  });
-
-  it("refuse what names no workspace", () => {
-    const value = { name: "branvil", workspace: "acme/team" };
-
-    expect(branvilTickets.errors(value, t)).toEqual({
-      workspace: t("setup.branvil.workspaceInvalid"),
-    });
-    expect(branvilCodeHosting.errors({ ...value, workspace: " " }, t)).toEqual({
-      workspace: t("setup.branvil.workspaceRequired"),
-    });
-    expect(branvilTickets.errors({ name: "branvil", workspace: "acme" }, t)).toEqual({});
+  it("uses the existing workspace without a service-specific selection", () => {
+    expect(branvilTickets.initial({})).toEqual({});
+    expect(branvilCodeHosting.initial({ ticket_service: { name: "branvil" } })).toEqual({});
+    expect(branvilTickets.errors({ name: "branvil" }, t)).toEqual({});
   });
 });

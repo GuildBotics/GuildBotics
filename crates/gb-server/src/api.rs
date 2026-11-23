@@ -819,21 +819,11 @@ routes!(
     outer_routes,
     OUTER_ROUTES,
     OUTER_CLASSIFIED,
-    (Public, get, "/-/guildbotics", redirect_to_ui),
     (Public, any, "/-/guildbotics/{*path}", reserved_not_found),
 );
-async fn redirect_to_ui() -> axum::response::Redirect {
-    axum::response::Redirect::temporary("/-/guildbotics/")
-}
 async fn reserved_not_found() -> StatusCode {
     StatusCode::NOT_FOUND
 }
-
-const ROOT_ROUTE: loopback_auth::Route = loopback_auth::Route {
-    method: "get",
-    path: "/",
-    auth: loopback_auth::RouteAuth::Public,
-};
 
 #[cfg(test)]
 pub fn router(api: Shared) -> Router {
@@ -864,12 +854,7 @@ pub(crate) fn router_with_host(api: Shared, host: Option<Router>) -> Router {
         .route_layer(middleware::from_fn_with_state(api.clone(), authenticate));
     let anyone = public_routes();
     let integrated = host.is_some();
-    let host = host.unwrap_or_else(|| {
-        Router::new().route(
-            ROOT_ROUTE.path,
-            get(|| async { axum::response::Redirect::temporary("/-/guildbotics/") }),
-        )
-    });
+    let host = host.unwrap_or_default();
     outer_routes()
         .nest("/-/guildbotics/api", owners.merge(anyone))
         .merge(crate::ui::router(crate::ui::directory()))
@@ -1120,7 +1105,7 @@ struct EntryLinkRequest {
 }
 
 fn root() -> String {
-    "/-/guildbotics/".into()
+    "/".into()
 }
 
 /// A path of this server: not `//host` or `/\host`, which a browser reads as
@@ -1338,7 +1323,7 @@ mod tests {
             root.path().into(),
         );
         let consent = api.auth.test_consent();
-        let entry = api.auth.entry_link("/-/guildbotics/");
+        let entry = api.auth.entry_link("/");
         let url = url::Url::parse(&entry.url).unwrap();
         let code = url.fragment().unwrap();
         let (cookie, _) = api.auth.start_session(code).unwrap().unwrap();
@@ -1505,7 +1490,7 @@ mod tests {
     #[test]
     fn routers_register_routes_only_through_the_classified_catalogs() {
         for (file, source, direct_routes) in [
-            ("api.rs", include_str!("api.rs"), 2), // The catalog macro and standalone root.
+            ("api.rs", include_str!("api.rs"), 1), // The catalog macro.
             ("ui.rs", include_str!("ui.rs"), 2),   // MAIN_PATHS and ASSET_PATH.
         ] {
             let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
@@ -1638,7 +1623,6 @@ mod tests {
                 .chain(crate::ui::route_inventory().iter())
                 .map(|r| (r.path.to_owned(), *r)),
         );
-        routes.push((ROOT_ROUTE.path.to_owned(), ROOT_ROUTE));
         let branvil = branvil::route_inventory();
         for (path, _) in &branvil {
             assert!(!path.starts_with("/-/guildbotics"), "Branvil owns {path}");
@@ -1755,7 +1739,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn old_routes_are_absent_and_root_redirects_under_the_guard() {
+    async fn old_routes_are_absent_and_root_is_under_the_guard() {
         use tower::ServiceExt;
         let root = tempfile::tempdir().unwrap();
         let api = Arc::new(Api::new(
@@ -1793,7 +1777,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
         }
         for (host, status) in [
-            ("127.0.0.1:8765", StatusCode::TEMPORARY_REDIRECT),
+            ("127.0.0.1:8765", StatusCode::SERVICE_UNAVAILABLE),
             ("evil.example", StatusCode::MISDIRECTED_REQUEST),
         ] {
             let response = app
@@ -1808,42 +1792,6 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), status);
             assert!(response.headers().contains_key("content-security-policy"));
-            if status == StatusCode::TEMPORARY_REDIRECT {
-                assert_eq!(response.headers()["location"], "/-/guildbotics/");
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn guildbotics_entry_redirect_precedes_the_host_fallback() {
-        use super::*;
-        use tower::ServiceExt;
-        let root = tempfile::tempdir().unwrap();
-        let api = Arc::new(Api::new(
-            Selected::default(),
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            ServerAuth::open(root.path(), 7878).unwrap(),
-            "fixture".into(),
-            root.path().into(),
-        ));
-        let app = router_with_host(api, Some(Router::new().fallback(|| async { "host GUI" })));
-        for path in ["/-/guildbotics", "/other"] {
-            let response = app
-                .clone()
-                .oneshot(
-                    axum::http::Request::get(path)
-                        .header("host", "127.0.0.1:7878")
-                        .body(axum::body::Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            if path == "/other" {
-                assert_eq!(response.status(), StatusCode::OK);
-            } else {
-                assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
-                assert_eq!(response.headers()["location"], "/-/guildbotics/");
-            }
         }
     }
 

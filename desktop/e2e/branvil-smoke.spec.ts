@@ -25,12 +25,12 @@ test.afterEach(({ page }) => {
 });
 
 async function openTaskFlow(page: Page) {
-  await enter(page, `/${env.workspace}`);
+  await enter(page, `/workspaces/${env.workspace}/task-flow`);
   await expect(page.getByRole("heading", { name: /^(Task flow|タスクフロー)$/ })).toBeVisible();
 }
 
 test("enters through the host session and keeps it across reloads", async ({ page, context }) => {
-  await enter(page);
+  await enter(page, "/workspaces");
   await page.reload();
   await expect(page.getByRole("link", { name: /^(Settings|設定)$/ })).toBeVisible();
   // No secret is kept in web storage.
@@ -38,13 +38,11 @@ test("enters through the host session and keeps it across reloads", async ({ pag
   expect(stored).not.toMatch(/bvt_/);
   // Without the session cookie every page shows how to get one; an unknown code is refused.
   await context.clearCookies();
-  await page.goto("/-/settings");
-  await expect(page.getByText("guildbotics open --print", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText(/address bar of this same browser|この画面と同じブラウザのアドレスバー/),
-  ).toBeVisible();
+  await page.goto("/settings/repositories");
+  await expect(page.getByText("guildbotics open", { exact: true })).toBeVisible();
+  await expect(page.getByText("ssh <server> guildbotics open --print", { exact: true })).toBeVisible();
   await expect(page.getByRole("textbox")).toHaveCount(0);
-  await page.goto("/-/guildbotics/-/enter#reused-or-made-up");
+  await page.goto("/enter#reused-or-made-up");
   await expect(
     page.getByText(/already been used or has expired|使用済みか、期限が切れています/),
   ).toBeVisible();
@@ -104,5 +102,20 @@ test("shows a change made elsewhere without a reload (event stream)", async ({ p
   });
   expect(created.status()).toBe(201);
   await expect(page.getByRole("article", { name: new RegExp(title) })).toBeVisible();
+  const ticket = (await created.json()) as { url: string; key: string };
+  const posted = await api.post(`/api/v1/repos/${encodeURIComponent(repo)}/tickets/${ticket.key}/comments`, {
+    headers: { "X-GuildBotics-CSRF": csrf },
+    data: { body: "Opened through a comment link" },
+  });
+  expect(posted.status()).toBe(201);
+  const comment = (await posted.json()) as { url: string; id: string };
+  expect(new URL(ticket.url).pathname).toBe(`/workspaces/acme/repos/demo/tickets/${ticket.key}`);
+  const tab = await page.context().newPage();
+  await tab.goto(comment.url);
+  const target = tab.locator(`[id="${comment.id}"]`);
+  await expect(target).toHaveAttribute("data-target", "true");
+  await tab.reload();
+  await expect(target).toHaveAttribute("data-target", "true");
+  await tab.close();
   await api.dispose();
 });

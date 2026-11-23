@@ -142,7 +142,17 @@ async fn served_returned(
     admitted: tokio::sync::OwnedRwLockReadGuard<()>,
     returned: gb_environment::worktree::transfer::Returned,
 ) -> Result<Ran, Response> {
-    let selected = api.selected();
+    let active = api.selected();
+    let workspace = crate::workspace::for_request(api, headers).await?;
+    let selected = if active.workspace == workspace {
+        active
+    } else {
+        std::sync::Arc::new(crate::api::Selected::open(
+            workspace,
+            api,
+            api.branvil.get().cloned(),
+        ))
+    };
     let state = RunState {
         home: api.home.clone(),
         identity_root: api.identity_root.clone(),

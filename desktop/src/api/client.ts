@@ -1,14 +1,24 @@
-import { createApiClient } from "@guildbotics/ui/api";
+import { createApiClient } from "../ui/api";
 // Every request goes to the server that served this page, under `/-/guildbotics/api`. The
 // HttpOnly session cookie authenticates it; the session's CSRF value is kept
 // only in this module's memory (never in storage) and goes with every write.
+
+export function workspaceFromPath(path: string): string | undefined {
+  return /^\/workspaces\/([A-Za-z0-9_.-]+)(?:\/|$)/.exec(path)?.[1];
+}
 
 const API_PREFIX = "/-/guildbotics/api";
 
 const transport = createApiClient({
   prefix: API_PREFIX,
   csrfHeader: "X-GuildBotics-CSRF",
-  headers: () => ({ "X-GuildBotics-Language": apiLanguage }),
+  headers: () => {
+    const workspace = workspaceFromPath(window.location.pathname);
+    return {
+      "X-GuildBotics-Language": apiLanguage,
+      ...(workspace && { "X-GuildBotics-Workspace": workspace }),
+    };
+  },
   readError: async (response) => new ApiRequestError(await readError(response)),
   onConnectionLost: (loss) => lossListeners.forEach((listener) => listener(loss)),
 });
@@ -78,6 +88,7 @@ export type ConfigStatus = {
   input_store_problem?: string;
   cwd: string;
   workspace: string | null;
+  workspace_name?: string;
   config_dir: string | null;
   project_file: string | null;
   project_file_exists: boolean;

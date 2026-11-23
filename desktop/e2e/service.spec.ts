@@ -48,7 +48,7 @@ test.beforeEach(async ({ page }) => {
   // Each test starts from a stopped runtime, regardless of order. The service
   // screen only renders the Stop button while running, so this no-ops when the
   // runtime is already stopped.
-  await page.goto("/-/guildbotics/#/service");
+  await page.goto("/service");
   await expect(page.getByRole("heading", { name: "Service Runtime" })).toBeVisible();
   await ensureStopped(page);
 });
@@ -108,7 +108,7 @@ test("keeps warning bands at their content height on a long page and preserves t
   }
 
   await page.setViewportSize({ width: 1000, height: 1100 });
-  await page.goto("/-/guildbotics/#/commands");
+  await page.goto("/commands");
   const fill = workspace.locator(":scope > .workspace-fill");
   await expect(fill).toBeVisible();
   await expect(page.locator(".cm-content")).toBeVisible();
@@ -133,7 +133,7 @@ test("keeps warning bands at their content height on a long page and preserves t
 });
 
 test("starts the events target, reaches running via real events, then stops", async ({ page }) => {
-  await page.goto("/-/guildbotics/#/service");
+  await page.goto("/service");
   await expect(page.getByRole("heading", { name: "Service Runtime" })).toBeVisible();
 
   const patrolPanel = panel(page, "Patrol commands");

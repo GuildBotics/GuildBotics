@@ -58,12 +58,9 @@ fn provider_models_validate_items_and_keep_local_unmodelled_items() {
     }
     assert_eq!(
         registry
-            .service(
-                ServiceKind::TicketService,
-                &json!({"name":"Branvil","workspace":"acme"})
-            )
+            .service(ServiceKind::TicketService, &json!({"name":"Branvil"}))
             .unwrap(),
-        json!({"name":"branvil","workspace":"acme"})
+        json!({"name":"branvil"})
     );
     assert_eq!(
         registry
@@ -133,13 +130,11 @@ fn registry_declares_exact_provider_accounts_secrets_and_service_models() {
     }
     for kind in [ServiceKind::CodeHostingService, ServiceKind::TicketService] {
         assert_eq!(
-            registry
-                .service(kind, &json!({"name":"Branvil","workspace":" acme "}))
-                .unwrap(),
-            json!({"name":"branvil","workspace":"acme"})
+            registry.service(kind, &json!({"name":"Branvil"})).unwrap(),
+            json!({"name":"branvil"})
         );
         for form in [
-            json!({"name":"branvil"}),
+            json!({"name":"branvil","workspace":"acme"}),
             json!({"name":"branvil","workspace":"acme","other":true}),
             json!({"name":"branvil","workspace":"acme","base_url":"http://hub"}),
             json!({"name":"branvil","workspace":"acme","board":"acme/board"}),

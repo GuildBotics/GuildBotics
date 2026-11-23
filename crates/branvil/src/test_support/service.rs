@@ -38,12 +38,12 @@ impl crate::host::Host for TestHost {
         token == OWNER_TOKEN
     }
     fn entry_path(&self) -> &str {
-        "/-/guildbotics/-/enter?next=%2F"
+        "/enter?next=%2Fworkspaces"
     }
     fn navigation(&self) -> crate::host::Navigation {
         crate::host::Navigation {
             label: "GuildBotics".into(),
-            url: "/-/guildbotics/".into(),
+            url: "/".into(),
         }
     }
 }

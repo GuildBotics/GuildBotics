@@ -5,7 +5,7 @@ use tracing::{Instrument, info_span};
 
 impl CodeAgent {
     pub fn commit_url_for(api: &crate::api::DataApi, repo: &str, sha: &str) -> String {
-        format!("{}/{repo}/-/commits/{sha}", api.base_url())
+        crate::util::item_url(api.base_url(), repo, "commits", sha)
     }
     pub fn repository_for_remote(api: &crate::api::DataApi, url: &str) -> Option<String> {
         let path = url
@@ -23,28 +23,20 @@ impl CodeAgent {
     ) -> ServiceFuture<'a, String> {
         Box::pin(async move {
             self.fault("retry_job", url).await?;
-            let path = url
-                .strip_prefix(self.data().base_url())
-                .and_then(|p| p.strip_prefix('/'))
+            let (repo, id) = crate::util::parse_item_url(self.data().base_url(), url, "jobs")
                 .ok_or(ServiceError::NotFound)?;
-            let (repo, id) = path.split_once("/-/jobs/").ok_or(ServiceError::NotFound)?;
-            if !crate::agent::port::valid_repository_path(repo)
-                || id.is_empty()
-                || id.contains(['/', '?', '#', '%'])
-            {
-                return Err(ServiceError::NotFound);
-            }
-            self.writable(repo)?;
+            self.writable(&repo)?;
             let attempt = self
                 .member()
                 .await?
-                .job_retry(repo, id, selection)
+                .job_retry(&repo, &id, selection)
                 .await
                 .map_err(|e| error(e, "job_retry"))?;
-            Ok(format!(
-                "{}/{repo}/-/jobs/{}",
+            Ok(crate::util::item_url(
                 self.data().base_url(),
-                attempt.id
+                &repo,
+                "jobs",
+                attempt.id,
             ))
         })
     }
@@ -287,13 +279,16 @@ impl CodeAgent {
                 }
             }
             if r.base.is_empty() {
-                let prefix = format!("{}/{}/-/tickets/", self.data().base_url(), r.repository);
-                r.base =
-                    if let Some(key) = r.tickets.iter().find_map(|t| t.url.strip_prefix(&prefix)) {
-                        self.ticket_base(&r.repository, key).await?
-                    } else {
-                        self.default_branch(&r.repository).await?
-                    };
+                let ticket = r.tickets.iter().find_map(|t| {
+                    let (repo, key) =
+                        crate::util::parse_item_url(self.data().base_url(), &t.url, "tickets")?;
+                    (repo == r.repository).then_some(key)
+                });
+                r.base = if let Some(key) = ticket {
+                    self.ticket_base(&r.repository, &key).await?
+                } else {
+                    self.default_branch(&r.repository).await?
+                };
             }
             let links = r.tickets;
             self.writable(&r.repository)?;
@@ -603,7 +598,12 @@ impl CodeAgent {
                             && fold(&pull.author) == me
                             && !crate::domain::pulls::interactive(rd, &pull)?
                         {
-                            out.push(format!("{}/{}/-/pulls/{}", base, repo.path, pull.number));
+                            out.push(crate::util::item_url(
+                                &base,
+                                &repo.path,
+                                "pulls",
+                                pull.number,
+                            ));
                         }
                     }
                     out.sort();

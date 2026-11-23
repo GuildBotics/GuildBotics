@@ -1,9 +1,9 @@
-import { createAppI18n } from "@guildbotics/ui/i18n";
+import { createAppI18n } from "./ui/i18n";
 import { setApiLanguage } from "./api/client";
 import { resources } from "./locales";
 import { providerResources } from "./setup/providers/resources";
 
-export { normalizeLanguage, type AppLanguage } from "@guildbotics/ui/i18n";
+export { normalizeLanguage, type AppLanguage } from "./ui/i18n";
 
 for (const provider of providerResources) {
   for (const language of ["en", "ja"] as const) {

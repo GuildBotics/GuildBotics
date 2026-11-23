@@ -691,7 +691,7 @@ async fn a_browser_enters_once_with_a_link_and_writes_with_its_csrf() {
     assert_eq!(status, StatusCode::CREATED);
     let url = link["url"].as_str().unwrap();
     let (page, code) = url.split_once('#').unwrap();
-    assert_eq!(page, server.url("/-/guildbotics/-/enter?next=%2Fcommands"));
+    assert_eq!(page, server.url("/enter?next=%2Fcommands"));
 
     let entered = server
         .http
@@ -758,7 +758,7 @@ async fn a_browser_enters_once_with_a_link_and_writes_with_its_csrf() {
         with["url"]
             .as_str()
             .unwrap()
-            .starts_with(&server.url("/-/guildbotics/-/enter#"))
+            .starts_with(&server.url("/enter#"))
     );
     let elsewhere = server
         .http
@@ -803,7 +803,7 @@ async fn open_prints_an_entry_link_a_browser_enters_with_once() {
     assert_ok(&opened);
     let url = String::from_utf8(opened.stdout).unwrap();
     let (page, code) = url.trim().split_once('#').unwrap();
-    assert_eq!(page, server.url("/-/guildbotics/-/enter"));
+    assert_eq!(page, server.url("/enter"));
     for expected in [StatusCode::OK, StatusCode::UNAUTHORIZED] {
         let entered = server
             .http
@@ -1128,7 +1128,7 @@ async fn open_commands_share_the_entry_and_browser_session() {
         let link = String::from_utf8(opened.stdout).unwrap();
         let link = reqwest::Url::parse(link.trim()).unwrap();
         assert_eq!(link.origin().ascii_serialization(), server.url(""));
-        assert_eq!(link.path(), "/-/guildbotics/-/enter");
+        assert_eq!(link.path(), "/enter");
         assert_eq!(
             link.query_pairs()
                 .find(|(key, _)| key == "next")
@@ -2363,7 +2363,7 @@ fn open_passes_one_entry_link_to_the_browser() {
         .env("LANGUAGE", "en")
         .output()
         .unwrap();
-    let expected = server.url("/-/guildbotics/-/enter#");
+    let expected = server.url("/enter#");
     server.stop();
     assert_ok(&output);
     assert!(output.stdout.is_empty());

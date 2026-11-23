@@ -177,13 +177,19 @@ async fn agents_supply_roster_names_to_task_comments() {
     let aiko = member("aiko", "Aiko", "aiko");
     // Deliberately vary case and include account whitespace as in saved identities.
     let roster = [aiko.clone(), member("ototadana", "Otota", " OWNER1 ")];
-    let project = json!({"services":{"ticket_service":{"workspace":"acme"}}});
-    let tasks = gb_server::member::Agents::new(Some(&fixture.data()), &project, &aiko, &roster)
-        .tickets()
-        .unwrap()
-        .candidates()
-        .await
-        .unwrap();
+    let project = json!({"services":{"ticket_service":{"name":"branvil"}}});
+    let tasks = gb_server::member::Agents::new(
+        Some(&fixture.data()),
+        &project,
+        Some("acme"),
+        &aiko,
+        &roster,
+    )
+    .tickets()
+    .unwrap()
+    .candidates()
+    .await
+    .unwrap();
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].comments[0].author, "Otota");
     assert_eq!(tasks[0].comments[0].author_type, "User");

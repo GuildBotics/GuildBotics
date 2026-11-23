@@ -133,7 +133,13 @@ describe("i18n resources", () => {
     });
     const keys = new Set<string>();
     for (const [path, source] of Object.entries(sources)) {
-      if (/\.(test|spec)\./.test(path) || path.startsWith("./test/")) continue;
+      if (
+        /\.(test|spec)\./.test(path) ||
+        path.startsWith("./test/") ||
+        path.startsWith("./repository/") ||
+        path.startsWith("./ui/")
+      )
+        continue;
       const tree = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
       const visit = (node: ts.Node) => {
         if (ts.isCallExpression(node)) {

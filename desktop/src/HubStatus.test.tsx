@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { HubStatusBand, type HubStatus } from "@guildbotics/ui/HubStatus";
+import { HubStatusBand, type HubStatus } from "./ui/HubStatus";
 import { TestMantineProvider } from "./test/TestMantineProvider";
 import i18n from "./i18n";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

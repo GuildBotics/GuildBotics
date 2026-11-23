@@ -407,7 +407,7 @@ async fn completion_revalidates_only_owned_open_prs_and_preserves_read_failures(
         );
     }
     // A ticket kept outside this code host has no pull requests here.
-    let foreign = "https://elsewhere.invalid/acme/repo/-/tickets/1";
+    let foreign = "https://elsewhere.invalid/workspaces/acme/repos/repo/tickets/1";
     assert!(
         completion_readiness(&provider, Some(foreign), &[])
             .await
@@ -849,7 +849,7 @@ async fn waits_record_each_success_and_retain_all_work_status_fields() {
     }
     // The notice on a pull request that no longer exists fails after the first.
     let gone = readiness_of(
-        &format!("{}/{}/-/pulls/999", p.base(), support::REPO),
+        &format!("{}/workspaces/acme/repos/demo/pulls/999", p.base()),
         "running",
     );
     let r = Repository {

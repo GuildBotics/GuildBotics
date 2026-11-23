@@ -65,7 +65,7 @@ Build the screens and the executable from the Hub checkout. To try the setup fro
 ```sh
 git clone https://github.com/GuildBotics/GuildBotics.git
 cd GuildBotics
-npm ci && npm run build --workspace desktop --workspace crates/branvil/web
+npm ci && npm run build --workspace desktop
 cargo build --locked -p guildbotics
 target/debug/guildbotics install
 "$HOME/.guildbotics/bin/guildbotics" server start
@@ -171,7 +171,7 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
 
 ## Delegate Branvil Tickets
 
-The default `ticket_driven_workflow` investigates a Branvil ticket, implements the change, and opens a pull request. In **Setup → Integrations**, choose Branvil for code hosting and tickets, and select the workspace. For the repositories and the board, see the [Branvil integration guide](docs/branvil_integration.en.md).
+The default `ticket_driven_workflow` investigates a Branvil ticket, implements the change, and opens a pull request. In **Setup → Integrations**, choose Branvil for code hosting and tickets. Both services use the project’s workspace. For the repositories and the board, see the [Branvil integration guide](docs/branvil_integration.en.md).
 
 Under **Setup → Agent execution environment**, confirm that the environment is ready and that the AI CLI login is saved. From a terminal, run `guildbotics environment status`.
 
@@ -466,7 +466,7 @@ The browser opens with a single-use entry link that expires after 60 seconds. Th
 
 The server uses one browser entry and session for all of its screens.
 `guildbotics open` and `guildbotics open --branvil` issue links to
-`/-/guildbotics/-/enter`; only the landing screen differs.
+`/enter`; only the landing screen differs.
 
 **Install the Windows client**
 

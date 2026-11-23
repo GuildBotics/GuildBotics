@@ -1,6 +1,6 @@
 # GuildBotics の画面（`desktop/`）
 
-画面の外枠は npm workspace の `@guildbotics/ui`（`../packages/ui`）に置きます。
+画面の外枠は `src/ui`に置きます。
 `AppShell`、Mantine のテーマ、トークン・部品の CSS、フォーム部品、i18next の初期化、
 Markdown の安全な HTML 化・表示・図の描画を共有します。ルート、API、翻訳辞書と
 provider ごとの設定は各アプリ側が持ちます。CSS は Mantine、共有トークン、アプリ固有、
@@ -94,7 +94,7 @@ npm run quality       # format:check + lint + typecheck + duplicates + test（E2
 
 ### E2E（Playwright・実ブラウザ + 実 Local API backend）
 
-Branvil の画面の検証も同じ構成で動かします。`npm run e2e -- --project=branvil`
+Branvil の画面の検証も同じ構成で動かします。`npm run e2e -- --project=configured`
 でチケットの作成・移動・イベント反映、セッションの復帰と表示の検証を実行します。
 一時サーバーの共有セッションを使い、単体の Branvil バイナリは起動しません。
 1 枚のカードだけの一時盤面の計測には `GUILDBOTICS_E2E_PERF=1` を指定します。

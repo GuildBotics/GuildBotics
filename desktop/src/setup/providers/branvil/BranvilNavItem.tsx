@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 export function BranvilNavItem() {
   const { t } = useTranslation();
   return (
-    <a className="nav-item" href="/">
+    <a className="nav-item" href="/workspaces">
       <ArrowLeftRight size={18} aria-hidden="true" />
       {t("setup.branvil.nav.label")}
     </a>

@@ -160,7 +160,9 @@ async fn write(
     headers: &HeaderMap,
     change: impl FnOnce(&CommandRoots, &mut Writer<'_>, &str) -> anyhow::Result<Value> + Send + 'static,
 ) -> Response {
-    if api.selected().workspace.is_none() {
+    if !headers.contains_key(crate::workspace::WORKSPACE_HEADER)
+        && api.selected().workspace.is_none()
+    {
         return unconfigured(headers, "workspace_not_configured.commands");
     }
     let workspace = match crate::command_catalog::workspace(api, headers).await {

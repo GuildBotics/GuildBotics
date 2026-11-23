@@ -1,7 +1,6 @@
 // Browser layout regression coverage against the Desktop Branvil stack.
-import { expect, test } from "@playwright/test";
-
-
+import { expect } from "@playwright/test";
+import { test } from "./stack-context";
 
 const AUTHOR = "build-bot-with-a-name-that-needs-to-be-truncated";
 const AT = "2026-10-23T12:00:00Z";
@@ -16,7 +15,7 @@ const STATES = [
 const COUNTS = [0, 1, 4, 12, 4];
 const pulls = STATES.map((_, i) => ({
   number: 100000 + i, label: `!${100000 + i}`, repository: "acme/demo",
-  url: `http://localhost/acme/demo/-/pulls/${100000 + i}`,
+  url: `http://localhost/workspaces/acme/repos/demo/pulls/${100000 + i}`,
   title: `Layout fixture ${i}: a long title remains readable through its pull request`,
   author: AUTHOR, state: "open", merged: false, draft: true,
   head: `feature/${i}`, head_sha: SHA, base: "main", base_sha: SHA,
@@ -57,7 +56,7 @@ for (const locale of ["en-US", "ja-JP"]) {
           }
           await route.fulfill({ json: body });
         });
-        await page.goto("/acme/-/pulls");
+        await page.goto("/workspaces/acme/pulls");
         const table = page.getByRole("table");
         await expect(table.getByRole("row")).toHaveCount(6);
         await expect(table.locator('[role="cell"]:nth-child(5) .mantine-Badge-root')).toHaveCount(5);

@@ -162,21 +162,27 @@ fn reference_at(s: &[u8], i: usize, base_url: &str) -> Option<(Reference, usize)
     if !starts_word {
         return None;
     }
-    // A Branvil URL: {base}/{workspace}/{name}/-/tickets|pulls/{n}
-    if s[i..].starts_with(format!("{base_url}/").as_bytes()) {
-        let at = i + base_url.len() + 1;
+    let prefix = format!("{base_url}/workspaces/");
+    if s[i..].starts_with(prefix.as_bytes()) {
+        let at = i + prefix.len();
         let ws = name_at(s, at)?;
-        let name = name_at(s, ws.checked_add(1).filter(|_| s.get(ws) == Some(&b'/'))?)?;
+        let repo = ws + b"/repos/".len();
+        if !s[ws..].starts_with(b"/repos/") {
+            return None;
+        }
+        let name = name_at(s, repo)?;
         let tail = &s[name..];
-        let (kind, skip) = if tail.starts_with(b"/-/tickets/") {
-            (Kind::Ticket, 11)
-        } else if tail.starts_with(b"/-/pulls/") {
-            (Kind::Pull, 9)
+        let (kind, skip) = if tail.starts_with(b"/tickets/") {
+            (Kind::Ticket, b"/tickets/".len())
+        } else if tail.starts_with(b"/pulls/") {
+            (Kind::Pull, b"/pulls/".len())
         } else {
             return None;
         };
         let (number, end) = number_at(s, name + skip)?;
-        let repository = std::str::from_utf8(&s[at..name]).ok()?.to_string();
+        let workspace = std::str::from_utf8(&s[at..ws]).ok()?;
+        let name = std::str::from_utf8(&s[repo..name]).ok()?;
+        let repository = format!("{workspace}/{name}");
         return Some((
             Reference {
                 kind,
@@ -305,9 +311,9 @@ mod tests {
 
     #[test]
     fn branvil_urls_are_references() {
-        let md = "See http://127.0.0.1:7878/acme/demo/-/tickets/3 and \
-                  http://127.0.0.1:7878/acme/demo/-/pulls/4, not \
-                  http://127.0.0.1:7878/acme/demo/-/jobs/5 or https://github.com/a/b/issues/6.";
+        let md = "See http://127.0.0.1:7878/workspaces/acme/repos/demo/tickets/3 and \
+                  http://127.0.0.1:7878/workspaces/acme/repos/demo/pulls/4, not \
+                  http://127.0.0.1:7878/workspaces/acme/repos/demo/jobs/5 or https://github.com/a/b/issues/6.";
         let found = find(md, BASE);
         assert_eq!(found.len(), 2);
         assert_eq!(

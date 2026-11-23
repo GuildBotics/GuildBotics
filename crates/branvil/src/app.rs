@@ -311,7 +311,7 @@ impl App {
     }
 
     pub fn pull_url(&self, repo: &str, number: u64) -> String {
-        format!("{}/{repo}/-/pulls/{number}", self.base_url)
+        crate::util::item_url(&self.base_url, repo, "pulls", number)
     }
     pub fn repo_url(&self, repo: &str) -> String {
         format!("{}/{repo}", self.base_url)

@@ -1055,7 +1055,7 @@ esac
             assert_eq!(view["reused_from"]["basis"], "tree");
             assert_eq!(
                 view["reused_from"]["url"],
-                format!("{}/acme/demo/-/jobs/{}", s.url, first.id)
+                format!("{}/workspaces/acme/repos/demo/jobs/{}", s.url, first.id)
             );
             assert_eq!(view["artifact_names"], serde_json::json!([]));
             assert!(view["details"].is_null());

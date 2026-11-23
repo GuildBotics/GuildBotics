@@ -262,7 +262,7 @@ mod tests {
         std::fs::create_dir_all(&config).unwrap();
         std::fs::write(
             config.join("project.yml"),
-            r#"{"services":{"code_hosting_service":{"name":"branvil","workspace":"acme"}}}"#,
+            r#"{"services":{"code_hosting_service":{"name":"branvil"}}}"#,
         )
         .unwrap();
         let data = root.path().join("branvil");
@@ -307,11 +307,17 @@ mod tests {
         assert_eq!(value["current"]["subject"], "Current title");
         assert_eq!(
             value["current"]["url"],
-            format!("{base}/acme/demo/-/commits/{}", "a".repeat(40))
+            format!(
+                "{base}/workspaces/acme/repos/demo/commits/{}",
+                "a".repeat(40)
+            )
         );
         assert_eq!(
             value["target"]["url"],
-            format!("{base}/acme/demo/-/commits/{}", "b".repeat(40))
+            format!(
+                "{base}/workspaces/acme/repos/demo/commits/{}",
+                "b".repeat(40)
+            )
         );
         let unknown =
             snapshot_with_build(&api, metadata("https://unrecognized.test/demo.git".into())).await;

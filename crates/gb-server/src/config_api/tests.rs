@@ -559,7 +559,7 @@ async fn the_project_is_read_and_saved_without_touching_what_the_form_does_not_n
             "PUT",
             "/config/project",
             json!({"language": "ja", "description": "New", "llm_api_type": "gemini", "cli_agent": "codex",
-                "services": {"chat_service": {"name": "Local"}, "code_hosting_service": {"name": "branvil", "workspace": "acme"}}, "expected_revisions": read["revisions"]}),
+                "services": {"chat_service": {"name": "Local"}, "code_hosting_service": {"name": "branvil"}}, "expected_revisions": read["revisions"]}),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
@@ -571,7 +571,7 @@ async fn the_project_is_read_and_saved_without_touching_what_the_form_does_not_n
     assert_eq!(
         project["services"],
         json!({"chat_service": {"name": "local"},
-            "code_hosting_service": {"name": "branvil", "workspace": "acme"}})
+            "code_hosting_service": {"name": "branvil"}})
     );
     let again = f.get("/config/project").await;
     assert_eq!(again["services"], project["services"]);

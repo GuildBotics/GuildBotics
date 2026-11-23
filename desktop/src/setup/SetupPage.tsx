@@ -1,7 +1,7 @@
 import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
 import { DecisionSettings } from "./DecisionSettings";
 import { MASKED_SECRET_PLACEHOLDER } from "./secretInput";
-import { InfoCallout, RequiredLabel } from "@guildbotics/ui/formParts";
+import { InfoCallout, RequiredLabel } from "../ui/formParts";
 import { ServerMachineBadge, useServerMachineLabel, useServerPathHint } from "../serverMachine";
 import {
   Avatar,

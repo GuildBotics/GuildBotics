@@ -59,10 +59,17 @@ pub async fn restore(from: &Path, data_dir: &Path) -> anyhow::Result<()> {
         "the restored code host data has problems"
     );
     fs::copy(from.join("manifest.json"), data_dir.join("manifest.json"))?;
-    for root in archive_roots(&data_dir)? {
-        check_root(&root, files::SHARED_RECORD_SCHEMA_VERSION)?;
+    let files = archive_roots(&data_dir)?;
+    for root in &files {
+        check_root(root, files::SHARED_RECORD_SCHEMA_VERSION)?;
     }
-    Ok(())
+    let mut migration = crate::workspace::Migration::plan(&files, &archive_manifest_roots(from)?)?;
+    branvil::maintain_with_execution_roots(
+        branvil::Maintenance::Upgrade,
+        &data_dir.join(CODE_HOST),
+        std::mem::take(&mut migration.roots),
+    )?;
+    migration.apply(&files[0])
 }
 
 /// Checks, upgrades, or reindexes the Hub's records with no server running:
@@ -72,8 +79,26 @@ pub fn maintain(operation: branvil::Maintenance, archive: Option<&Path>) -> anyh
         Some(archive) => archive.join(CODE_HOST),
         None => crate::endpoint::code_host_data()?,
     };
-    if !matches!(operation, branvil::Maintenance::Reindex) {
-        records(matches!(operation, branvil::Maintenance::Upgrade), archive)?;
+    if matches!(operation, branvil::Maintenance::Upgrade) {
+        let files = match archive {
+            Some(archive) => archive_roots(archive)?,
+            None => roots()?,
+        };
+        let locations = match archive {
+            Some(archive) => archive_manifest_roots(archive)?,
+            None => files.clone(),
+        };
+        let mut migration = crate::workspace::Migration::plan(&files, &locations)?;
+        records(true, archive)?;
+        branvil::maintain_with_execution_roots(
+            operation,
+            &code_host,
+            std::mem::take(&mut migration.roots),
+        )?;
+        return migration.apply(&files[0]);
+    }
+    if matches!(operation, branvil::Maintenance::Check) {
+        records(false, archive)?;
     }
     branvil::maintain(operation, &code_host)
 }
@@ -348,6 +373,17 @@ fn backup_with(
 
 /// The numbered copies of a backup, never the roots its manifest names.
 fn archive_roots(archive: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let roots = archive_manifest_roots(archive)?;
+    (0..roots.len())
+        .map(|index| {
+            let root = archive.join(index.to_string());
+            anyhow::ensure!(root.join(".guildbotics").is_dir(), "backup root is missing");
+            Ok(root)
+        })
+        .collect()
+}
+
+fn archive_manifest_roots(archive: &Path) -> anyhow::Result<Vec<PathBuf>> {
     host_path::directory(archive, false)?;
     let bytes = host_path::read_file_if_present(&archive.join("manifest.json"))?
         .ok_or_else(|| anyhow::anyhow!("backup manifest is missing"))?;
@@ -359,13 +395,7 @@ fn archive_roots(archive: &Path) -> anyhow::Result<Vec<PathBuf>> {
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("invalid backup roots"))?;
     anyhow::ensure!(!roots.is_empty(), "backup has no identity root");
-    (0..roots.len())
-        .map(|index| {
-            let root = archive.join(index.to_string());
-            anyhow::ensure!(root.join(".guildbotics").is_dir(), "backup root is missing");
-            Ok(root)
-        })
-        .collect()
+    Ok(serde_json::from_value(Value::Array(roots.clone()))?)
 }
 
 /// Checks the records under `root` against `newest`, the latest version a

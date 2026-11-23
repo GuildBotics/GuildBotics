@@ -1,13 +1,12 @@
 // Browser layout regression coverage against the Desktop Branvil stack.
-import { expect, test } from "@playwright/test";
-
-
+import { expect } from "@playwright/test";
+import { test } from "./stack-context";
 
 const AT = "2026-10-28T12:00:00Z";
 const REPO = "GuildBotics/Branvil";
-const ref = (key: string) => ({ url: `http://localhost/${REPO}/-/tickets/${key}`, repository: REPO, key, title: `Ticket ${key}`, state: "open", state_reason: null });
+const ref = (key: string) => ({ url: `http://localhost/workspaces/GuildBotics/repos/Branvil/tickets/${key}`, repository: REPO, key, title: `Ticket ${key}`, state: "open", state_reason: null });
 const card = (key: string, lane: string, extra: Record<string, unknown>) => ({
-  url: `http://localhost/${REPO}/-/tickets/${key}`, repository: REPO, key, title: `Ticket ${key}`, body: "",
+  url: `http://localhost/workspaces/GuildBotics/repos/Branvil/tickets/${key}`, repository: REPO, key, title: `Ticket ${key}`, body: "",
   state: "open", state_reason: null, author: "owner", assignee: null, labels: [], interactive: false,
   interactive_ancestor: null, upstream_issue: null, lane, rank: `0|${key}`, parent: null, children: [],
   blocked_by: [], blocks: [], created_at: AT, updated_at: AT, closed_at: null, revision: 1, comments: [],
@@ -45,7 +44,7 @@ for (const locale of ["en-US", "ja-JP"]) {
         }
         await route.fulfill({ json: body });
       });
-      await page.goto("/GuildBotics");
+      await page.goto("/workspaces/GuildBotics/task-flow");
       await expect(page.locator("article.card")).toHaveCount(CARDS.length);
       const issues = await page.locator("article.card").evaluateAll((cards) => {
         const issues: string[] = [];

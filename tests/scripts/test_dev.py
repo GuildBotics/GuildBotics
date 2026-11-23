@@ -406,7 +406,7 @@ def test_dependency_installation_tracks_the_workspace_lockfile(
     assert [call["args"] for call in launcher.events("npm")] == (
         [["ci"]] if installs else []
     ) + [
-        ["run", "build", "--workspace", "desktop", "--workspace", "crates/branvil/web"],
+        ["run", "build", "--workspace", "desktop"],
     ]
 
 

@@ -79,12 +79,12 @@ refused). The browser enters through GuildBotics (`guildbotics open`).
 
 | What | URL |
 | --- | --- |
-| Ticket | `{base}/{repo}/-/tickets/{number}` |
-| Pull request | `{base}/{repo}/-/pulls/{number}` |
-| Ticket comment | `{base}/{repo}/-/tickets/{number}#{comment_id}` |
-| PR comment, review, or inline reply | `{base}/{repo}/-/pulls/{number}#{entry_id}` |
-| Commit | `{base}/{repo}/-/commits/{sha}` |
-| CI attempt | `{base}/{repo}/-/jobs/{attempt_id}` |
+| Ticket | `{base}/workspaces/{workspace}/repos/{repo}/tickets/{number}` |
+| Pull request | `{base}/workspaces/{workspace}/repos/{repo}/pulls/{number}` |
+| Ticket comment | `{base}/workspaces/{workspace}/repos/{repo}/tickets/{number}#{comment_id}` |
+| PR comment, review, or inline reply | `{base}/workspaces/{workspace}/repos/{repo}/pulls/{number}#{entry_id}` |
+| Commit | `{base}/workspaces/{workspace}/repos/{repo}/commits/{sha}` |
+| CI attempt | `{base}/workspaces/{workspace}/repos/{repo}/jobs/{attempt_id}` |
 | Git remote | `{base}/git/{repo}.git` |
 
 Paths in these URLs are not percent-encoded (each name is URL-safe). The API's
@@ -381,7 +381,7 @@ every ticket is on it, in a lane.
 
 ```json
 {
-  "url": "http://127.0.0.1:7878/acme/demo/-/tickets/3",
+  "url": "http://127.0.0.1:7878/workspaces/acme/repos/demo/tickets/3",
   "repository": "acme/demo",
   "key": "3",
   "title": "Fix login",
@@ -398,7 +398,7 @@ every ticket is on it, in a lane.
   "upstream_issue": "https://github.com/acme/demo/issues/12",
   "lane": "ready",
   "rank": "0|hzzzzz",
-  "parent": {"url": "http://127.0.0.1:7878/acme/demo/-/tickets/1", "repository": "acme/demo",
+  "parent": {"url": "http://127.0.0.1:7878/workspaces/acme/repos/demo/tickets/1", "repository": "acme/demo",
              "key": "1", "title": "Sign-in", "state": "open", "state_reason": null},
   "children": [],
   "blocked_by": [ ...the same shape... ],
@@ -554,7 +554,7 @@ The comment shape:
  "mentions": [],
  "meta": {"kind": "workflow_error", "routing": "suppress", "reason": "failed"},
  "created_at": "...", "reactions": [{"author": "ken", "reaction": "ack"}],
- "url": "http://127.0.0.1:7878/acme/demo/-/tickets/3#cmt_01JA..."}
+ "url": "http://127.0.0.1:7878/workspaces/acme/repos/demo/tickets/3#cmt_01JA..."}
 ```
 
 `meta` is an opaque JSON object (at most 4 KiB serialized) a client stores with
@@ -664,7 +664,7 @@ and comments do not keep an attachment.
 
 ```json
 {
-  "url": "http://127.0.0.1:7878/acme/demo/-/pulls/3",
+  "url": "http://127.0.0.1:7878/workspaces/acme/repos/demo/pulls/3",
   "repository": "acme/demo",
   "number": 3,
   "label": "!3",
@@ -924,7 +924,7 @@ head directly replaces the host branch after checking the same conditions.
   "checks": [
     {"name": "test", "status": "completed", "conclusion": "success",
      "attempt_id": "att_01JA...", "attempt": 1, "runner": "runner-west",
-     "details_url": "http://127.0.0.1:7878/acme/demo/-/jobs/att_01JA...",
+     "details_url": "http://127.0.0.1:7878/workspaces/acme/repos/demo/jobs/att_01JA...",
      "artifact_names": ["report"],
      "started_at": "2026-10-24T09:50:00.000Z", "finished_at": "2026-10-24T09:53:12.000Z"}
   ],

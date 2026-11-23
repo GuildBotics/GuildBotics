@@ -5,17 +5,17 @@ import { resumeSession, type AppAuthorizationRequest } from "../api/client";
 
 /** This browser's session: whether it has one, taking up its CSRF value. */
 export const SESSION_QUERY = {
-  queryKey: ["session"],
+  queryKey: ["desktop-session"],
   queryFn: resumeSession,
   retry: false,
   refetchOnWindowFocus: false,
 } as const;
 
 /** Where an entry link (`guildbotics open`) lands, with its code in the fragment. */
-export const ENTER_PATH = "/-/guildbotics/-/enter";
+export const ENTER_PATH = "/enter";
 
 /** Where a local app asks the owner to allow it (`guildbotics connect`). */
-export const AUTHORIZE_PATH = "/-/guildbotics/-/authorize";
+export const AUTHORIZE_PATH = "/authorize";
 
 const LOOPBACK = ["127.0.0.1", "localhost", "[::1]"];
 
@@ -77,4 +77,4 @@ export function samePagePath(next: string | null): string | null {
   return next !== null && /^\/(?![/\\])[^\s#\x00-\x1f\x7f]*$/.test(next) ? next : null;
 }
 
-export { rememberReturn, takeReturn } from "@guildbotics/ui/entryReturn";
+export { rememberReturn, takeReturn } from "../ui/entryReturn";

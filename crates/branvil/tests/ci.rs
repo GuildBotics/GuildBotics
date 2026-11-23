@@ -1618,7 +1618,7 @@ async fn a_head_runs_its_own_pipeline_and_reports_logs_and_artifacts() {
     let id = t["attempt_id"].as_str().unwrap();
     assert_eq!(
         t["details_url"].as_str().unwrap(),
-        format!("{}/{REPO}/-/jobs/{id}", w.server.url)
+        format!("{}/workspaces/acme/repos/demo/jobs/{id}", w.server.url)
     );
     let job = w
         .server
@@ -2120,7 +2120,7 @@ async fn a_commit_shows_its_checks_with_or_without_a_pull_request() {
         (Some("completed"), Some("success"))
     );
     assert!(
-        t["details_url"].as_str().unwrap().contains("/-/jobs/att_"),
+        t["details_url"].as_str().unwrap().contains("/jobs/att_"),
         "{t}"
     );
 
@@ -3138,10 +3138,13 @@ async fn verification_api_auth_first_parent_and_cursor_pages() {
             .contains(last["attempt_id"].as_str().unwrap())
     );
     let failed = w.server.ok(&url, &w.owner).await;
-    assert_eq!(
-        failed["repair"]["url"],
-        format!("{}/{path}/-/tickets/1", w.server.url)
-    );
+    assert_eq!(failed["repair"]["url"], {
+        let (workspace, name) = path.split_once('/').unwrap();
+        format!(
+            "{}/workspaces/{workspace}/repos/{name}/tickets/1",
+            w.server.url
+        )
+    });
     assert_eq!(failed["failing_since"], failed["tip"]);
     assert_eq!(
         w.server.ok(&format!("{url}/commits"), &w.aiko).await["items"][0]["mark"],

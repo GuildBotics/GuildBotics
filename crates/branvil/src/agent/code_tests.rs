@@ -35,7 +35,10 @@ async fn member_identity_scope_and_resource_boundaries() {
     }
     assert_eq!(
         service.commit_url("test/repo", "sha"),
-        format!("{}/test/repo/-/commits/sha", running.data.base_url())
+        format!(
+            "{}/workspaces/test/repos/repo/commits/sha",
+            running.data.base_url()
+        )
     );
     assert_eq!(
         service.repository_from_remote(&format!(
@@ -233,7 +236,7 @@ async fn interactive_links_are_read_only_after_pull_patrol_selects_work() {
         "aiko".into(),
         "Aiko".into(),
     );
-    let mut pull = json!({"url":format!("{}/test/repo/-/pulls/1", running.data.base_url()),"repository":"test/repo","author":"aiko","head_sha":"head","state":"open","tickets":[{"url":format!("{}/test/repo/-/tickets/999",running.data.base_url())}]});
+    let mut pull = json!({"url":format!("{}/workspaces/test/repos/repo/pulls/1", running.data.base_url()),"repository":"test/repo","author":"aiko","head_sha":"head","state":"open","tickets":[{"url":format!("{}/workspaces/test/repos/repo/tickets/999",running.data.base_url())}]});
     for patch in [
         json!({}),
         json!({"draft":true}),

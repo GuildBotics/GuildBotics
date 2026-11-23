@@ -9,7 +9,7 @@ describe("Branvil sidebar entry", () => {
     async (language) => {
       await i18n.changeLanguage(language);
       render(<BranvilNavItem />);
-      expect(screen.getByRole("link", { name: "Branvil" })).toHaveAttribute("href", "/");
+      expect(screen.getByRole("link", { name: "Branvil" })).toHaveAttribute("href", "/workspaces");
     },
   );
 });

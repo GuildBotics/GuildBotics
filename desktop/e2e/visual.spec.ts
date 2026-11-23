@@ -20,8 +20,8 @@ test("capture the desktop presentation for review", async ({ page }) => {
     for (const route of ["service", "commands", "diagnostics", "setup"]) {
       await page.goto(
         route === "diagnostics"
-          ? "/-/guildbotics/#/diagnostics?tab=memory"
-          : `/-/guildbotics/#/${route}`,
+          ? "/diagnostics?tab=memory"
+          : `/${route}`,
       );
       await expect(page.locator("main")).toBeVisible();
       await page.waitForLoadState("networkidle");

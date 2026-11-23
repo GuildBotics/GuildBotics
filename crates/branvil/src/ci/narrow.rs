@@ -489,7 +489,7 @@ mod tests {
             let target = crate::model::Target::Ticket { repo: "repo".into(), number: 1 };
             let comments = crate::domain::tickets::comments_of(w, &target)?;
             assert_eq!(comments.len(), 1);
-            assert!(comments[0].body.contains("[!2](/acme/demo/-/pulls/2) by agent"));
+            assert!(comments[0].body.contains("[!2](/workspaces/acme/repos/demo/pulls/2) by agent"));
             assert!(comments[0].body.contains("the assignment stays"));
             Ok(())
         }).await.unwrap();

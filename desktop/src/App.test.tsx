@@ -185,7 +185,7 @@ describe("App", () => {
       await waitFor(() => expect(getConfigStatus).toHaveBeenCalled());
       if (available) {
         const entry = await screen.findByRole("link", { name: "Branvil" });
-        expect(entry).toHaveAttribute("href", "/");
+        expect(entry).toHaveAttribute("href", "/workspaces");
         expect(screen.getByRole("link", { name: t()("app.nav.setup") }).nextElementSibling).toBe(
           entry,
         );

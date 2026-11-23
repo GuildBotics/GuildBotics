@@ -1,17 +1,19 @@
 import type { ClientRequest } from "node:http";
 
 import react from "@vitejs/plugin-react";
-import { defineConfig, type HttpProxy } from "vite";
+import type { HttpProxy } from "vite";
+import { defineConfig } from "vitest/config";
 
 // The backend `vite dev` stands in front of: the pages come from Vite (with
 // HMR) and every `/-/guildbotics/api` request, the event stream included, from the backend.
 const BACKEND = `http://127.0.0.1:${process.env.GUILDBOTICS_SERVER_PORT ?? 7878}`;
 
 export default defineConfig({
-  base: "/-/guildbotics/",
   plugins: [react()],
   clearScreen: false,
   build: {
+    assetsInlineLimit: 0,
+    modulePreload: { polyfill: false },
     rolldownOptions: {
       output: {
         // A single group whose `name` decides per module: returning `null`
@@ -26,6 +28,8 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     proxy: {
+      "/api": { target: BACKEND, changeOrigin: true, configure: asBackendOrigin },
+      "/git": { target: BACKEND, changeOrigin: true, configure: asBackendOrigin },
       "/-/guildbotics/api": {
         target: BACKEND,
         changeOrigin: true,
@@ -38,6 +42,10 @@ export default defineConfig({
     // Bound memory and CPU use in the development VM and shared CI image.
     maxWorkers: 2,
     environment: "jsdom",
+    reporters: ["default", "./test-timing.ts"],
+    globals: true,
+    unstubGlobals: true,
+    restoreMocks: true,
     setupFiles: "./src/test/setup.ts",
     // Reset implementations and unused one-shot responses before every test.
     mockReset: true,
@@ -88,7 +96,7 @@ function vendorChunkName(id: string): string | null {
   if (packageName === "lucide-react") {
     return "vendor-icons";
   }
-  return "vendor";
+  return null;
 }
 
 function getPackageName(id: string): string | null {

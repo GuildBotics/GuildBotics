@@ -484,7 +484,7 @@ async fn patrol_files_links_and_draft_rules() {
     assert_eq!(v["error"]["code"], "closes_foreign");
     for key in ["99", "01"] {
         let (st, _) = s
-            .post(&pulls(&w), &w.aiko, json!({"head": "feature", "title": "x", "tickets": [{"url": format!("{}/{REPO}/-/tickets/{key}", s.url), "closes": false}]}))
+            .post(&pulls(&w), &w.aiko, json!({"head": "feature", "title": "x", "tickets": [{"url": format!("{}/workspaces/acme/repos/demo/tickets/{key}", s.url), "closes": false}]}))
             .await;
         assert_eq!(st, 404, "{key}");
     }

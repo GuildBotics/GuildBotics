@@ -83,9 +83,7 @@ describe("parseAppRequest", () => {
 describe("samePagePath", () => {
   it("keeps only a page of this server", () => {
     expect(samePagePath("/index.html")).toBe("/index.html");
-    expect(samePagePath("/-/guildbotics/-/authorize?client=a%20b")).toBe(
-      "/-/guildbotics/-/authorize?client=a%20b",
-    );
+    expect(samePagePath("/authorize?client=a%20b")).toBe("/authorize?client=a%20b");
     expect(samePagePath(null)).toBeNull();
     expect(samePagePath("")).toBeNull();
     expect(samePagePath("//attacker.example/")).toBeNull();
@@ -107,7 +105,7 @@ describe("samePagePath", () => {
 });
 
 describe("the remembered consent page", () => {
-  const page = `/-/guildbotics/-/authorize?${new URLSearchParams(PARAMS)}`;
+  const page = `/authorize?${new URLSearchParams(PARAMS)}`;
 
   it("is returned to once", () => {
     window.history.replaceState(null, "", page);

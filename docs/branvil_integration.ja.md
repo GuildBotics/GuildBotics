@@ -166,7 +166,7 @@ macOS は `ThrottleInterval` により起動が 15 秒に 1 回を超えない�
 共通です。メンバーが作業するコードホストのワークスペースは、GuildBotics のワークスペースごとに選びます。
 
 サーバーのすべての画面で、入口とブラウザセッションを共用します。
-`guildbotics open` と `guildbotics open --branvil` は `/-/guildbotics/-/enter` の
+`guildbotics open` と `guildbotics open --branvil` は `/enter` の
 入口リンクを表示し、入った後の画面だけが異なります。
 
 ## コードホストとチケットを設定する

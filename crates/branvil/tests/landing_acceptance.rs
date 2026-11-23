@@ -267,7 +267,7 @@ async fn held_host_pulls_keep_sending_heads_and_release_unpublished_work() {
     w.push_change("repair", "repair.txt", "fix");
     w.open_pull(
         "repair",
-        json!([{"url":format!("{}/{}/-/tickets/1",w.server.url,REPO),"closes":false}]),
+        json!([{"url":format!("{}/workspaces/acme/repos/demo/tickets/1",w.server.url),"closes":false}]),
     )
     .await;
     runner.drain("success").await;

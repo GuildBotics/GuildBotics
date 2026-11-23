@@ -24,7 +24,11 @@ async fn service(api: &Shared, person: &str) -> anyhow::Result<Arc<branvil::agen
     let project = gb_config::yaml_value(&std::fs::read_to_string(
         roots.config.join("team/project.yml"),
     )?)?;
-    Ok(crate::member::Agents::new(api.branvil.get(), &project, &person, &[]).code()?)
+    let name = crate::workspace::execution_name(api.branvil.get(), workspace)?;
+    Ok(
+        crate::member::Agents::new(api.branvil.get(), &project, name.as_deref(), &person, &[])
+            .code()?,
+    )
 }
 
 pub(super) async fn recognized(

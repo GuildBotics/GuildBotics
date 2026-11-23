@@ -64,7 +64,7 @@ Hubのチェックアウトから画面と実行ファイルを作ります。�
 ```sh
 git clone https://github.com/GuildBotics/GuildBotics.git
 cd GuildBotics
-npm ci && npm run build --workspace desktop --workspace crates/branvil/web
+npm ci && npm run build --workspace desktop
 cargo build --locked -p guildbotics
 target/debug/guildbotics install
 "$HOME/.guildbotics/bin/guildbotics" server start
@@ -464,7 +464,7 @@ guildbotics open
 ブラウザが、一度だけ使える入口リンク（60 秒で失効します）で開きます。サインインの画面はなく、`~/.guildbotics/data/server/<port>/owner.token` を読める OS のユーザーがオーナーです。セッションは 30 日続きます。期限が切れたら、もう一度 `guildbotics open` を実行してください。
 
 サーバーのすべての画面で、入口とブラウザセッションを共用します。
-`guildbotics open` と `guildbotics open --branvil` は `/-/guildbotics/-/enter` の
+`guildbotics open` と `guildbotics open --branvil` は `/enter` の
 入口リンクを表示し、入った後の画面だけが異なります。
 
 **Windows クライアントの導入**

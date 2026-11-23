@@ -1,5 +1,5 @@
 //! HTTP boundary: routing, authentication, idempotency, request parsing, and
-//! the GUI's static files. Handlers only parse the request and call `domain`.
+//! request handling. Handlers only parse the request and call `domain`.
 //! The host checks Host and Origin and sets the security headers.
 
 use std::collections::BTreeMap;
@@ -879,53 +879,6 @@ async fn hook_post_receive(
     }
 }
 
-// ---------------------------------------------------------------- GUI
-
-#[derive(rust_embed::RustEmbed)]
-#[folder = "web/dist"]
-#[allow_missing = true]
-struct Gui;
-
-async fn gui(method: Method, uri: axum::http::Uri) -> Response {
-    if method != Method::GET && method != Method::HEAD {
-        return AppError::not_found("No such endpoint.").into_response();
-    }
-    let path = uri.path().trim_start_matches('/');
-    if path.starts_with("api/") || path.starts_with("git/") || path.starts_with("-/hooks/") {
-        return AppError::not_found("No such endpoint.").into_response();
-    }
-    let (file, name) = match Gui::get(path).filter(|_| !path.is_empty()) {
-        Some(f) => (f, path.to_string()),
-        // Every other path is a page of the single-page GUI (ticket, pull
-        // request, commit, and job URLs included).
-        None => match Gui::get("index.html") {
-            Some(f) => (f, "index.html".to_string()),
-            None => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-                    "The Branvil GUI is not built into this binary (web/dist was empty).\n",
-                )
-                    .into_response();
-            }
-        },
-    };
-    let mime = mime_guess::from_path(&name).first_or_octet_stream();
-    let cache = if name == "index.html" {
-        "no-cache"
-    } else {
-        "public, max-age=3600"
-    };
-    (
-        [
-            (header::CONTENT_TYPE, mime.essence_str().to_string()),
-            (header::CACHE_CONTROL, cache.to_string()),
-        ],
-        Body::from(file.data.into_owned()),
-    )
-        .into_response()
-}
-
 // ---------------------------------------------------------------- middleware
 
 /// Replays the first response of a repeated `Idempotency-Key` (per member,
@@ -1124,13 +1077,8 @@ const GIT_ROUTE: loopback_auth::Route = loopback_auth::Route {
     path: "/git/{*rest}",
     auth: loopback_auth::RouteAuth::Basic,
 };
-const GUI_ROUTE: loopback_auth::Route = loopback_auth::Route {
-    method: "any",
-    path: "/{*path}",
-    auth: loopback_auth::RouteAuth::Public,
-};
 
-/// Every Branvil route, with absolute paths, including the GUI fallback.
+/// Every API, hook, and Git route, with absolute paths.
 /// GET declarations also admit HEAD; `any` includes every HTTP method.
 pub fn route_inventory() -> Vec<(String, loopback_auth::Route)> {
     let mut routes = Vec::new();
@@ -1148,7 +1096,7 @@ pub fn route_inventory() -> Vec<(String, loopback_auth::Route)> {
     routes.extend(
         HOOK_ROUTES
             .iter()
-            .chain([GIT_ROUTE, GUI_ROUTE].iter())
+            .chain([GIT_ROUTE].iter())
             .map(|r| (r.path.to_owned(), *r)),
     );
     routes
@@ -1177,6 +1125,5 @@ pub(crate) fn router_with(app: Shared, extra: Router<Shared>) -> Router {
             GIT_ROUTE.path,
             any(crate::smart_http::handle).layer(axum::extract::DefaultBodyLimit::disable()),
         )
-        .fallback(gui)
         .with_state(app)
 }
