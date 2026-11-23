@@ -169,7 +169,7 @@ impl Microsandbox {
     pub(super) async fn sdk_job(
         &self,
         job: &mut JobRun<'_>,
-        disk: DiskMount<'_>,
+        (disk, ram): (DiskMount<'_>, Option<&ram_workspace::RamWorkspace<'_>>),
         image_lock: ImageLock,
         log: &mpsc::Sender<Vec<u8>>,
         cancel: &mut watch::Receiver<bool>,
@@ -184,9 +184,19 @@ impl Microsandbox {
             .attach_to_sdk(builder, "/work")
             .cpus(job.cpus as u8)
             .memory(job.memory_mib as u32)
-            .user(format!("{JOB_USER_ID}:{JOB_USER_ID}"))
             .workdir("/work")
             .max_duration(job.timeout_secs + 60);
+        let builder = if let Some(ram) = ram {
+            builder
+                .user("0:0")
+                .volume(ram_workspace::RETURN_MOUNT, |m| {
+                    m.bind(&ram.returned)
+                        .owner(0, 0)
+                        .quota(ram.quota_mib as u32)
+                })
+        } else {
+            builder.user(format!("{JOB_USER_ID}:{JOB_USER_ID}"))
+        };
         let builder = self.mount_job_tmp_sdk(builder, job.attempt_id, job.job.tmpfs_mib);
         let builder = if job.network {
             // Allow public destinations only; the host and private networks stay blocked.
@@ -208,25 +218,44 @@ impl Microsandbox {
         };
         let deadline = tokio::time::Instant::now()
             + Duration::from_secs(job.timeout_secs).saturating_sub(started.elapsed());
-        let outcome = tokio::select! {
-            biased;
-            _ = cancel.wait_for(|stop| *stop) => Outcome::Cancelled,
-            result = tokio::time::timeout_at(deadline, stream_job(&vm, job, log, started)) => {
-                result.unwrap_or(Outcome::TimedOut)
-            }
-        };
-        let outcome = if outcome == Outcome::TimedOut && !job.job.artifacts.is_empty() {
-            tokio::select! {
+        let outcome = {
+            let has_artifacts = !job.job.artifacts.is_empty();
+            let stream = stream_job(&vm, job, ram, log, started);
+            tokio::pin!(stream);
+            let mut outcome = tokio::select! {
                 biased;
                 _ = async { let _ = cancel.wait_for(|stop| *stop).await; } => Outcome::Cancelled,
-                flushed = tokio::time::timeout(TIMEOUT_FLUSH, vm.exec("sync", [] as [&str; 0])) => {
-                    if !flushed.is_ok_and(|result| result.is_ok_and(|out| out.status().success)) {
-                        let _ = log.send(b"[branvil] flushing the job at its timeout failed: its artifacts may miss what it wrote last\n".to_vec()).await;
+                result = &mut stream => result,
+                _ = tokio::time::sleep_until(deadline) => Outcome::TimedOut,
+            };
+            if outcome == Outcome::TimedOut && has_artifacts {
+                let flush = async {
+                    if ram.is_some() {
+                        vm.exec(
+                            "/bin/sh",
+                            ["-c", &ram_workspace::RamWorkspace::flush_script()],
+                        )
+                        .await
+                    } else {
+                        vm.exec("sync", [] as [&str; 0]).await
                     }
-                    outcome
-                }
+                };
+                outcome = tokio::select! {
+                    biased;
+                    _ = async { let _ = cancel.wait_for(|stop| *stop).await; } => Outcome::Cancelled,
+                    flushed = tokio::time::timeout(TIMEOUT_FLUSH, flush) => {
+                        if !flushed.is_ok_and(|result| result.is_ok_and(|out| out.status().success)) {
+                            let _ = log.send(b"[branvil] flushing the job at its timeout failed: its artifacts may miss what it wrote last\n".to_vec()).await;
+                        }
+                        Outcome::TimedOut
+                    }
+                };
             }
-        } else {
+            if outcome == Outcome::TimedOut
+                && let Some(code) = ram.and_then(|r| r.exit_code())
+            {
+                outcome = Outcome::Exited(code);
+            }
             outcome
         };
         vm.close().await;
@@ -237,10 +266,14 @@ impl Microsandbox {
 async fn stream_job(
     vm: &Sandbox,
     job: &mut JobRun<'_>,
+    ram: Option<&ram_workspace::RamWorkspace<'_>>,
     log: &mpsc::Sender<Vec<u8>>,
     boot_started: Instant,
 ) -> Outcome {
-    let script = job_script(&job.job.commands, false);
+    let script = ram.map_or_else(
+        || job_script(&job.job.commands, false),
+        |ram| ram.script(job.job, false),
+    );
     let mut exec = match vm
         .exec_stream_with("/bin/sh", |exec| {
             exec.args(["-c", &script]).envs(job.env.iter().cloned())

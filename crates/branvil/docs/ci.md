@@ -86,6 +86,7 @@ paths = ["src/**", "tests/*.rs", "Cargo.lock"]  # optional; empty/omitted runs e
 verified_sha = false             # optional; declares GB_CI_VERIFIED_SHA as an input
 timeout_secs = 600                # optional, 1-86400; default the runner's time limit
 tmpfs_mib = 2048                   # optional, 1-4096; /tmp uses a 4 GiB disk by default
+# ram_workspace = { paths = ["out/cache"], max_mib = 4608 }  # optional, see below
 artifacts = [{ name = "report", paths = ["out/report/", "coverage.xml"] }]   # up to 16
 cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # optional
 ```
@@ -278,6 +279,50 @@ What a job's commands find, as on common CI services:
   checkout and the restored cache is `ci.executor.work_quota_mib` (16 GiB by
   default; a workspace built from scratch outgrows microsandbox's 4 GiB
   default). They are the runner's, not the pipeline's.
+
+### RAM workspace
+
+Set `ram_workspace = { paths = ["out/cache"], max_mib = 4608 }` on a job to
+keep changes to the selected directories in RAM. Specify one to eight distinct,
+non-overlapping paths relative to `/work`. Each path must name an existing
+directory after checkout and cache restore, without symbolic links. The
+directories remain at their usual paths and serve as mount points for the job.
+Changes within them, including deletions, disappear when the VM shuts down.
+The selected directories share one tmpfs of 1–65536 MiB. The job's separate
+`tmpfs_mib` continues to control `/tmp`.
+
+The Hub SDK and remote `msb` CLI use the same Linux guest implementation.
+The image needs Python 3.8 or later and the `mount`, `umount`, `setpriv`,
+and `unshare` tools. The guest kernel must support OverlayFS, tmpfs, and a PID
+namespace for the job processes. The runner uses RAM only after it restores an
+exact cache hit whose changes do not need to be saved. It keeps 1024 MiB of
+VM memory beyond the sum of both tmpfs limits for commands. It also checks
+that the host's usable physical memory can cover a full VM for each configured
+slot and that current available memory can cover this VM, retaining the runner's
+configured reserve in both checks. On Windows it also checks available commit.
+For example, start with an 8192 MiB VM, `max_mib = 4608`, and
+`tmpfs_mib = 2048`. The job log records whether RAM was enabled and the reason
+when it uses disk.
+
+The runner packs changed files at declared artifact paths while the job VM
+still holds the RAM changes. Unchanged files from the cache and deleted files
+are omitted. Successful and failed commands retain their exit codes, and
+timed-out jobs can return completed artifacts. Cancelled jobs return no
+artifacts. Artifact limits and download routes are the same as for disk jobs.
+
+Deploy the version that supports `ram_workspace` to the Hub and every runner
+that can claim the job before committing a pipeline that uses it. Verify that
+the Runners view reports the same updated build version as the Hub. An older
+Hub rejects the new pipeline key. The optional real-VM fixture uses a disposable
+runtime data directory with `guildbotics/agent-environment:dev` already loaded.
+
+```sh
+GUILDBOTICS_REAL_EXECUTOR=1 GUILDBOTICS_REAL_EXECUTOR_DATA=/absolute/test-data \
+  cargo nextest run --locked -p gb-runner --features host --run-ignored only -E 'test(ram_workspace_in_real_microvms)'
+```
+
+Set `GUILDBOTICS_RAM_TEST_EXECUTOR=cli` to exercise the remote CLI path against
+the same fixture.
 
 ## Trust: where the pipeline comes from
 

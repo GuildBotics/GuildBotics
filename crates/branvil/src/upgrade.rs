@@ -1,11 +1,11 @@
-//! 40 → 41: give recorded CI jobs their previous disk-backed /tmp.
+//! 41 → 42: keep recorded CI jobs on disk-backed workspaces.
 use anyhow::Context;
 use serde_json::Value;
 
 use crate::config::Layout;
 use crate::store::{self, Rd, Tbl, Upgraded, Upgrading, Wtx};
 
-pub const FROM: u64 = 40;
+pub const FROM: u64 = 41;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
@@ -14,7 +14,7 @@ pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
     };
     db.finish(|w| {
         let attempts = update_rows(w, store::CI_ATTEMPTS, |attempt| {
-            disk_tmp(&mut attempt["job"])
+            disk_workspace(&mut attempt["job"])
         })?;
         let runs = update_rows(w, store::CI_RUNS, |run| {
             let pipeline = &mut run["pipeline"];
@@ -24,7 +24,7 @@ pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
                         .as_array_mut()
                         .context("CI pipeline is missing its jobs")?;
                     for job in jobs {
-                        disk_tmp(job)?;
+                        disk_workspace(job)?;
                     }
                 }
                 Some("absent" | "invalid") => {}
@@ -33,16 +33,16 @@ pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
             Ok(())
         })?;
         Ok(format!(
-            "set disk /tmp for jobs in {attempts} CI attempts and {runs} CI runs"
+            "set disk workspaces for jobs in {attempts} CI attempts and {runs} CI runs"
         ))
     })
     .map(Some)
 }
 
-fn disk_tmp(job: &mut Value) -> anyhow::Result<()> {
+fn disk_workspace(job: &mut Value) -> anyhow::Result<()> {
     job.as_object_mut()
         .context("CI record is missing its job definition")?
-        .insert("tmpfs_mib".into(), Value::Null);
+        .insert("ram_workspace".into(), Value::Null);
     Ok(())
 }
 
@@ -82,7 +82,7 @@ mod tests {
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
         let job = json!({
             "verified_sha": false, "name": "test", "image": "alpine", "commands": ["true"],
-            "paths": [], "timeout_secs": null, "artifacts": [], "cache": null,
+            "paths": [], "timeout_secs": null, "tmpfs_mib": 1024, "artifacts": [], "cache": null,
         });
         let mut lint = job.clone();
         lint["name"] = json!("lint");
@@ -112,7 +112,10 @@ mod tests {
         let attempt: Value = r.get(store::CI_ATTEMPTS, b"a").unwrap().unwrap();
         assert_eq!(attempt["number"], 3);
         let job: JobDef = serde_json::from_value(attempt["job"].clone()).unwrap();
-        assert_eq!((job.name.as_str(), job.tmpfs_mib), ("test", None));
+        assert_eq!(
+            (job.name.as_str(), job.tmpfs_mib, job.ram_workspace),
+            ("test", Some(1024), None)
+        );
         let run: Value = r.get(store::CI_RUNS, b"jobs").unwrap().unwrap();
         let PipelineState::Jobs { jobs } = serde_json::from_value(run["pipeline"].clone()).unwrap()
         else {
@@ -120,9 +123,9 @@ mod tests {
         };
         assert_eq!(
             jobs.iter()
-                .map(|job| (job.name.as_str(), job.tmpfs_mib))
+                .map(|job| (job.name.as_str(), job.tmpfs_mib, job.ram_workspace.as_ref()))
                 .collect::<Vec<_>>(),
-            [("test", None), ("lint", None)]
+            [("test", Some(1024), None), ("lint", Some(1024), None)]
         );
         assert_eq!(r.get(store::CI_RUNS, b"absent").unwrap(), Some(absent));
         assert_eq!(r.get(store::CI_RUNS, b"invalid").unwrap(), Some(invalid));

@@ -108,6 +108,7 @@ struct JobSchema {
     paths: Vec<String>,
     timeout_secs: Option<u64>,
     tmpfs_mib: Option<u32>,
+    ram_workspace: Option<gb_runner::ci::pipeline::RamWorkspace>,
     #[serde(default)]
     artifacts: Vec<ArtifactDef>,
     cache: Option<CacheDef>,
@@ -192,6 +193,9 @@ fn validate_job(j: JobSchema) -> Result<JobDef, String> {
             "tmpfs_mib must be between 1 and {MAX_TMPFS_MIB}."
         )));
     }
+    if let Some(ram) = &j.ram_workspace {
+        ram.validate().map_err(|m| at(&m))?;
+    }
     if j.paths.len() > MAX_PATHS {
         return Err(at(&format!("paths takes at most {MAX_PATHS} entries.")));
     }
@@ -246,6 +250,7 @@ fn validate_job(j: JobSchema) -> Result<JobDef, String> {
         paths: j.paths,
         timeout_secs: j.timeout_secs,
         tmpfs_mib: j.tmpfs_mib,
+        ram_workspace: j.ram_workspace,
         artifacts: j.artifacts,
         cache: j.cache,
     })
@@ -336,6 +341,42 @@ mod tests {
             let error = parse(&format!("{pipeline}tmpfs_mib = {value}")).unwrap_err();
             assert!(error.contains("tmpfs_mib"), "{value}: {error}");
         }
+    }
+
+    #[test]
+    fn ram_workspace_paths_are_distinct_local_directories() {
+        let pipeline = "[[jobs]]\nname='demo'\nimage='alpine'\ncommands=['true']\n";
+        assert!(parse(pipeline).unwrap()[0].ram_workspace.is_none());
+        let job = parse(&format!("{pipeline}tmpfs_mib = 2048\nram_workspace = {{ paths = ['out/cache/', 'out/logs'], max_mib = 4608 }}")).unwrap().remove(0);
+        assert_eq!(job.tmpfs_mib, Some(2048));
+        assert_eq!(job.ram_workspace.unwrap().paths, ["out/cache/", "out/logs"]);
+        for (paths, size) in [
+            ("[]", 1),
+            ("['/work/out']", 1),
+            ("['../out']", 1),
+            ("['out/../build']", 1),
+            ("['out//build']", 1),
+            ("['.git/objects']", 1),
+            ("['out', 'out/']", 1),
+            ("['a/b', 'a']", 1),
+            ("['a', 'a/b']", 1),
+            ("['out']", 0),
+            ("['out']", 65_537),
+        ] {
+            assert!(
+                parse(&format!(
+                    "{pipeline}ram_workspace = {{ paths = {paths}, max_mib = {size} }}"
+                ))
+                .is_err(),
+                "{paths} {size}"
+            );
+        }
+        assert!(
+            parse(&format!(
+                "{pipeline}ram_workspace = {{ paths = ['out'], max_mib = 65536 }}"
+            ))
+            .is_ok()
+        );
     }
 
     #[test]

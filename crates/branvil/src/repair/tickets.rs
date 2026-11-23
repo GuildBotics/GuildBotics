@@ -1005,7 +1005,7 @@ mod tests {
                     tree: None, branch: "protected".into(), protected: true,
                     pipeline: queue::PipelineState::Jobs { jobs: vec![serde_json::from_value(json!({
                         "name":"test", "image":"alpine", "commands":["true"],
-                        "timeout_secs":null, "tmpfs_mib":null, "artifacts":[], "cache":null, "paths":[], "verified_sha":false
+                        "timeout_secs":null, "tmpfs_mib":null, "ram_workspace":null, "artifacts":[], "cache":null, "paths":[], "verified_sha":false
                     })).unwrap()] }, network: false, order: vec![], inputs: Default::default(), selection: None
                 }, 10, "2026-01-01T00:00:00Z")?;
                 let mut number = 0;

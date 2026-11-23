@@ -123,6 +123,14 @@ pub struct JobLimits {
     pub cpu_multiplier_percent: u32,
 }
 
+impl JobLimits {
+    pub fn memory_reserve_mib(&self, total_mib: u64) -> u64 {
+        total_mib
+            .saturating_mul(self.memory_reserve_percent.into())
+            .div_ceil(100)
+    }
+}
+
 fn memory_reserve_percent() -> u32 {
     10
 }

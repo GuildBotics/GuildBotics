@@ -3,6 +3,7 @@
 //! There is no host executor: when the executor is unusable, jobs conclude
 //! `startup_failure`.
 
+mod ram_workspace;
 #[cfg(feature = "host")]
 mod sdk;
 use std::future::Future;
@@ -112,6 +113,7 @@ pub struct JobRun<'a> {
     pub image_lock: ImageLock,
     pub cpus: u32,
     pub memory_mib: u64,
+    pub ram_limits: Option<crate::ci::config::JobLimits>,
     /// What the job may write to `/work` beyond what it holds at the start.
     pub work_quota_mib: u64,
     pub timeout_secs: u64,
@@ -1424,6 +1426,10 @@ impl Executor for Microsandbox {
         let fresh_name = Self::fresh_volume(&name);
         let image_lock = std::mem::take(&mut job.image_lock);
         let preparing = Instant::now();
+        let mut prep_script = prepare_script("/work", IO_MOUNT, restore.as_ref());
+        if job.job.ram_workspace.is_some() && job.exact_cache && restore.is_some() {
+            ram_workspace::probe(&mut prep_script);
+        }
         let mut prepared = self
             .helper(
                 &job,
@@ -1434,7 +1440,7 @@ impl Executor for Microsandbox {
                     work: disk,
                     cache: None,
                 },
-                &prepare_script("/work", IO_MOUNT, restore.as_ref()),
+                &prep_script,
                 &mut cancel,
             )
             .await;
@@ -1487,6 +1493,7 @@ impl Executor for Microsandbox {
             say(format!("the image has no resize2fs: /work keeps the cache entry's file system, {fs} MiB rather than {disk_mib} MiB")).await;
         }
         let used_exact_cache = job.exact_cache && restore.is_some() && !dropped && prepared.is_ok();
+        let mut ram = None;
         let mut outcome = match prepared {
             Err(e) => {
                 drop(image_lock);
@@ -1501,11 +1508,25 @@ impl Executor for Microsandbox {
                     preparing.elapsed().as_millis()
                 ))
                 .await;
+                if let Some(config) = &job.job.ram_workspace {
+                    match ram_workspace::RamWorkspace::select(
+                        config,
+                        &job,
+                        used_exact_cache,
+                        collect_mib,
+                        || self.machine(),
+                    ) {
+                        Ok(selected) => ram = Some(selected),
+                        Err(reason) => {
+                            say(format!("RAM workspace disabled: {reason}; using disk")).await
+                        }
+                    }
+                }
                 match output {
                     Some(output) => {
                         self.run_job(
                             &mut job,
-                            (disk, &log_dir),
+                            (disk, &log_dir, ram.as_ref()),
                             output,
                             image_lock,
                             &log,
@@ -1515,8 +1536,14 @@ impl Executor for Microsandbox {
                     }
                     #[cfg(feature = "host")]
                     None => {
-                        self.sdk_job(&mut job, disk, image_lock, &log, &mut cancel)
-                            .await
+                        self.sdk_job(
+                            &mut job,
+                            (disk, ram.as_ref()),
+                            image_lock,
+                            &log,
+                            &mut cancel,
+                        )
+                        .await
                     }
                     #[cfg(not(feature = "host"))]
                     None => unreachable!("the client always uses the CLI executor"),
@@ -1529,6 +1556,15 @@ impl Executor for Microsandbox {
         let name = Self::sandbox_name(job.attempt_id);
         self.clean("the job's sandbox", &["remove", "--force", "-q", &name])
             .await;
+        if let Some(ram) = &ram
+            && let Outcome::Exited(code) = outcome
+            && !ram.active()
+            && !ram.used_disk()
+        {
+            outcome = Outcome::StartupFailure(format!(
+                "RAM workspace setup exited with code {code} before starting the job"
+            ));
+        }
         let artifacts: Vec<&str> = match outcome {
             Outcome::Exited(_) | Outcome::TimedOut => job
                 .job
@@ -1538,6 +1574,10 @@ impl Executor for Microsandbox {
                 .collect(),
             _ => Vec::new(),
         };
+        let ram_archive = ram
+            .as_ref()
+            .filter(|ram| !ram.used_disk())
+            .map(|ram| ram.returned.join(ARTIFACTS));
         let cache_name = self.cache_volume(job.attempt_id);
         let cache = if outcome == Outcome::Exited(0)
             && job.save_cache
@@ -1573,7 +1613,7 @@ impl Executor for Microsandbox {
                 let _ = std::fs::remove_file(job.io.join(format!("{name}{suffix}")));
             }
         }
-        if !artifacts.is_empty() || cache.is_some() {
+        if ram_archive.is_none() && (!artifacts.is_empty() || cache.is_some()) {
             let collecting = Instant::now();
             let script = collect_script(
                 "/work",
@@ -1697,7 +1737,8 @@ impl Executor for Microsandbox {
         // checkout: a path the job did not leave has no artifact.
         if !artifacts.is_empty() {
             // Off the async threads, where the other jobs' heartbeats run.
-            let (work, returned) = (job.work.to_path_buf(), job.io.join(ARTIFACTS));
+            let work = job.work.to_path_buf();
+            let returned = ram_archive.unwrap_or_else(|| job.io.join(ARTIFACTS));
             let unpacked = super::blocking(move || {
                 std::fs::remove_dir_all(&work)
                     .and_then(|_| std::fs::create_dir(&work))
@@ -1755,7 +1796,11 @@ impl Microsandbox {
     async fn run_job(
         &self,
         job: &mut JobRun<'_>,
-        (disk, log_dir): (DiskMount<'_>, &str),
+        (disk, log_dir, ram): (
+            DiskMount<'_>,
+            &str,
+            Option<&ram_workspace::RamWorkspace<'_>>,
+        ),
         mut output: tokio::fs::File,
         image_lock: ImageLock,
         log: &mpsc::Sender<Vec<u8>>,
@@ -1770,11 +1815,25 @@ impl Microsandbox {
         cmd.args(["run", "--name", &name, "--quiet", "--pull", "never"]);
         disk.attach_to_cli(&mut cmd, "/work");
         self.mount_job_tmp_cli(&mut cmd, job.attempt_id, j.tmpfs_mib);
+        let user = if let Some(ram) = ram {
+            cmd.args([
+                "--mount-dir",
+                &format!(
+                    "{}:{}:uid=0,gid=0,quota={}M",
+                    ram.returned.display(),
+                    ram_workspace::RETURN_MOUNT,
+                    ram.quota_mib,
+                ),
+            ]);
+            "0:0".to_owned()
+        } else {
+            format!("{JOB_USER_ID}:{JOB_USER_ID}")
+        };
         cmd.args(["--label", &format!("branvil.runner={}", self.runner)])
             .args(["--label", &format!("branvil.job={}", job.attempt_id)])
             .args(["--cpus", &job.cpus.to_string()])
             .args(["--memory", &format!("{}M", job.memory_mib)])
-            .args(["--user", &format!("{JOB_USER_ID}:{JOB_USER_ID}")])
+            .args(["--user", &user])
             // What the job writes to the host is bounded as `/work` is.
             .args([
                 "--mount-dir",
@@ -1796,8 +1855,9 @@ impl Microsandbox {
         for (k, v) in &job.env {
             cmd.args(["--env", &format!("{k}={v}")]);
         }
+        let script = ram.map_or_else(|| script(&j.commands), |ram| ram.script(j, true));
         cmd.arg(&j.image)
-            .args(["--", "/bin/sh", "-c", &script(&j.commands)])
+            .args(["--", "/bin/sh", "-c", &script])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut job_log = JobLog {
@@ -1896,7 +1956,13 @@ impl Microsandbox {
                     // Its artifacts are collected: flush what it wrote,
                     // which the kill would lose (the job's own flush runs
                     // only when its script exits). A stop does not wait.
-                    let flush = ["exec", name.as_str(), "--", "sync"];
+                    let mut flush = vec!["exec"];
+                    let flush_script = ram.map(|_| ram_workspace::RamWorkspace::flush_script());
+                    if let Some(script) = &flush_script {
+                        flush.extend(["--user", "0:0", &name, "--", "/bin/sh", "-c", script]);
+                    } else {
+                        flush.extend([&name, "--", "sync"]);
+                    }
                     let flushed = tokio::select! {
                         out = self.output_within(&flush, TIMEOUT_FLUSH) => {
                             Some(out.is_ok_and(|out| out.status.success()))
@@ -1916,7 +1982,11 @@ impl Microsandbox {
                 // Killing `msb run` stops the VM (its watchdog watches the
                 // parent), and every process inside it with it.
                 let _ = child.kill().await;
-                o
+                if o == Outcome::TimedOut {
+                    ram.and_then(|r| r.exit_code()).map_or(o, Outcome::Exited)
+                } else {
+                    o
+                }
             }
             None => match child.wait().await {
                 Ok(status) => {
@@ -2409,6 +2479,7 @@ esac
             commands: vec![],
             timeout_secs: None,
             tmpfs_mib: None,
+            ram_workspace: None,
             artifacts: vec![],
             cache: None,
         };
@@ -2422,6 +2493,7 @@ esac
                 image_lock,
                 cpus: 1,
                 memory_mib: 256,
+                ram_limits: None,
                 work_quota_mib: 2048,
                 timeout_secs: 60,
                 io: &io,
@@ -2639,6 +2711,7 @@ esac
             commands: vec![],
             timeout_secs: None,
             tmpfs_mib: None,
+            ram_workspace: None,
             artifacts: vec![crate::ci::pipeline::ArtifactDef {
                 name: "report".into(),
                 paths: vec!["out/".into()],
@@ -2830,6 +2903,7 @@ esac
                             image_lock: ImageLock::default(),
                             cpus: 1,
                             memory_mib: 256,
+                            ram_limits: None,
                             work_quota_mib: 2048,
                             timeout_secs: if ending.starts_with("timeout")
                                 || ending == "stop-while-flushing"
@@ -3157,6 +3231,7 @@ esac
                         image_lock: ImageLock::default(),
                         cpus: 1,
                         memory_mib: 256,
+                        ram_limits: None,
                         work_quota_mib: 2048,
                         timeout_secs: 60,
                         io: &io,
@@ -3331,6 +3406,7 @@ esac
                         image_lock: ImageLock::default(),
                         cpus: 1,
                         memory_mib: 256,
+                        ram_limits: None,
                         work_quota_mib: 2048,
                         timeout_secs: 60,
                         io: &io,

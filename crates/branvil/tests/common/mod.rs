@@ -814,22 +814,22 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
     txn.commit().unwrap();
 }
 
-const PREVIOUS_SCHEMA_VERSION: u64 = 40;
+const PREVIOUS_SCHEMA_VERSION: u64 = 41;
 
 /// Recreates the immediately preceding schema in a stopped database.
-pub fn as_schema_40(db: &Path) {
+pub fn as_schema_41(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
             *v = json!(PREVIOUS_SCHEMA_VERSION);
         }
     });
     edit_records(db, "ci_attempts", |v| {
-        v["job"].as_object_mut().unwrap().remove("tmpfs_mib");
+        v["job"].as_object_mut().unwrap().remove("ram_workspace");
     });
     edit_records(db, "ci_runs", |v| {
         if let Some(jobs) = v["pipeline"].get_mut("jobs").and_then(Value::as_array_mut) {
             for job in jobs {
-                job.as_object_mut().unwrap().remove("tmpfs_mib");
+                job.as_object_mut().unwrap().remove("ram_workspace");
             }
         }
     });

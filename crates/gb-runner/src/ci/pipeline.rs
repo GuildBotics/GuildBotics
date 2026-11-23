@@ -15,8 +15,50 @@ pub struct JobDef {
     /// The maximum size of the job's /tmp in MiB. None uses a disk.
     #[serde(deserialize_with = "Deserialize::deserialize")]
     pub tmpfs_mib: Option<u32>,
+    /// Selected work directories with a shared RAM limit on an exact cache hit.
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    pub ram_workspace: Option<RamWorkspace>,
     pub artifacts: Vec<ArtifactDef>,
     pub cache: Option<CacheDef>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RamWorkspace {
+    pub paths: Vec<String>,
+    pub max_mib: u32,
+}
+
+impl RamWorkspace {
+    pub fn validate(&self) -> Result<(), String> {
+        if !(1..=65_536).contains(&self.max_mib) {
+            return Err("ram_workspace.max_mib must be between 1 and 65536.".into());
+        }
+        if !(1..=8).contains(&self.paths.len()) {
+            return Err("ram_workspace.paths needs 1 to 8 directories.".into());
+        }
+        let mut seen: Vec<&str> = Vec::new();
+        for path in &self.paths {
+            check_relative(path)?;
+            let p = path.trim_end_matches('/');
+            if p.split('/').any(|part| part == ".git") {
+                return Err("ram_workspace.paths cannot include .git.".into());
+            }
+            if seen
+                .iter()
+                .any(|other| p == *other || below(p, other) || below(other, p))
+            {
+                return Err("ram_workspace.paths cannot overlap.".into());
+            }
+            seen.push(p);
+        }
+        Ok(())
+    }
+}
+
+fn below(path: &str, parent: &str) -> bool {
+    path.strip_prefix(parent)
+        .is_some_and(|rest| rest.starts_with('/'))
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

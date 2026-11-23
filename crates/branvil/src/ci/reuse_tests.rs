@@ -106,6 +106,7 @@ fn any_purpose_supplies_a_source_but_only_actual_kept_successes_of_the_same_job(
         "protected",
         "definition",
         "tmpfs",
+        "ram_workspace",
         "network",
         "pruned",
         "reused",
@@ -142,6 +143,12 @@ fn any_purpose_supplies_a_source_but_only_actual_kept_successes_of_the_same_job(
                 match case {
                     "definition" => jobs[0].commands.push("false".into()),
                     "tmpfs" => jobs[0].tmpfs_mib = Some(2048),
+                    "ram_workspace" => {
+                        jobs[0].ram_workspace = Some(gb_runner::ci::pipeline::RamWorkspace {
+                            paths: vec!["out".into()],
+                            max_mib: 64,
+                        })
+                    }
                     _ => {}
                 }
             }
