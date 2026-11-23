@@ -995,22 +995,6 @@ fn a_rollback_restores_the_copy_that_ran_whatever_happened_to_its_build() {
 }
 
 #[test]
-fn a_rollback_gives_the_build_before_the_rename_its_data_directory() {
-    let hub = Hub::new();
-    hub.install();
-    hub.commit("new");
-    hub.fail_start("new");
-    let out = hub.run("update", None, false);
-    assert!(text(&out).contains("The previous build is running again"));
-    hub.assert_runs_signed("old");
-    let data = hub.root().join("branvil").display().to_string();
-    assert_eq!(hub.lines("previous-code-host"), data);
-    assert!(fs::read_to_string(hub.plist()).unwrap().contains(&format!(
-        "<key>BRANVIL_DATA_DIR</key><string>{data}</string>"
-    )));
-}
-
-#[test]
 fn update_stops_before_any_change_without_the_renamed_setting() {
     let hub = Hub::new();
     hub.install();

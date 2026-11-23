@@ -486,38 +486,13 @@ CI設定の `[ci.microsandbox]` で旧ストアを指定していた場合は、
 
 ## CI の設定ファイルと環境変数の名前を変える更新（手作業の版 11）
 
-この版で、CI の設定ファイルは `.guildbotics-ci.toml`、ジョブが受け取る環境変数は `GB_CI_*`、コードホストのデータの場所を指す環境変数は `GUILDBOTICS_CODE_HOST_DATA_DIR` になります。データの場所は変わりません。自動更新は手作業が必要として止まります。
+自動更新がこの版で止まった版 10 の Hub は、先にコミット `148f4f56508088e96299a009428dd787fab123e4` まで手作業で更新します。このコミットは、更新に失敗して前のビルドへ戻っても同じデータを開けるように、新旧の設定を両方渡します。より新しいコミットへ直接更新しないでください。
 
-1. **ランナーの置き場所を固定します。** 設定のないランナーの msb のホームと作業場所の既定値は、`<machine root>/runner` の下に変わります。msb のホームの定義は絶対パスを持つので、フォルダーは移さず、今の場所を設定に書きます。ランナーは Hub の版に追従して再起動するので、Hub の更新より前に行います。
-   - Hub 以外のマシンでは、`ci.microsandbox.home` を設定していなければ、ランナーが読む設定ファイルに今のホームを書きます。既定は `<machine root>/runner/branvil.toml` で、起動時に `--config` や `--data-dir`、データディレクトリの環境変数を渡している場合は、その指す先のファイルです。
-   - Hub では、`ci.executor.work_dir` と `ci.microsandbox.home` を設定していなければ、コードホストのデータの `branvil.toml` に今の場所を書きます。
-   - `guildbotics runner install-msb` で置いた msb を使っているマシンでは、`ci.microsandbox.msb_path` に今の msb のパスも書きます。
-   - 起動スクリプトやサービスの定義で `BRANVIL_TOKEN`、`BRANVIL_URL`、`BRANVIL_DATA_DIR` を渡しているランナーには、`GUILDBOTICS_RUNNER_TOKEN`、`GUILDBOTICS_RUNNER_URL`、`GUILDBOTICS_CODE_HOST_DATA_DIR` も同じ値で渡し、サービスの定義を読み込み直してランナーを起動し直します。前の版は古い名前だけを読むので、古い名前は次の版へ更新するまで残します。
-   - パスは単一引用符で囲みます。Windows のパスの `\` もそのまま書けます。書いたあと、ランナーと同じ環境変数と引数で `guildbotics runner doctor` を実行し、msb が見つかることを確かめます。
+手順は、このコミットの文書の同じ節にあります。手順の `<確認済みのコミットのSHA>` には、上のコミットを指定します。
 
-   ```toml
-   [ci.executor]
-   work_dir = '/absolute/path/to/current-runner'
+```sh
+git fetch origin main
+git show 148f4f56508088e96299a009428dd787fab123e4:docs/hub-server.md
+```
 
-   [ci.microsandbox]
-   home = '/absolute/path/to/current-msb-home'
-   msb_path = '/absolute/path/to/current-msb'
-   ```
-
-2. **Hub を更新します。** 自動更新を止め、LaunchAgent に新しい名前を足してから更新します。前のビルドへ戻る場合に備えて、古い名前もこの版の間は残ります。
-
-   ```sh
-   scripts/hub-server.sh auto-uninstall
-   plist="$HOME/Library/LaunchAgents/local.guildbotics.plist"
-   data=$(plutil -extract EnvironmentVariables.BRANVIL_DATA_DIR raw -o - "$plist")
-   plutil -insert EnvironmentVariables.GUILDBOTICS_CODE_HOST_DATA_DIR -string "$data" "$plist"
-   git fetch origin main
-   git merge --ff-only <確認済みのコミットのSHA>
-   scripts/hub-server.sh update
-   scripts/hub-server.sh auto-install
-   ```
-
-3. **シェルの設定を直します。** `~/.zshrc` などで `BRANVIL_DATA_DIR` を設定している場合は、`GUILDBOTICS_CODE_HOST_DATA_DIR` に置き換えます。
-4. **ランナーを確かめます。** CI の設定画面で、各ランナーが新しい版で Hub に接続し、ジョブを取得することを確かめます。
-5. **ほかのリポジトリを切り替えます。** この Hub で CI を使うほかのリポジトリは、Hub の更新のあとに 1 つのコミットで、`.branvil/ci.toml` を `.guildbotics-ci.toml` へ改名し、コマンドとスクリプトが読むジョブの変数を `GB_CI_*`（`BRANVIL_CI` は `CI`）に変えます。このコミットが入るまでそのリポジトリの CI は動かないので、main へマージしません。更新前に受け付けたジョブは古いコマンドのまま新しい変数を受け取るので、再実行せず、このコミットで流し直します。
-6. **開いている PR に main を取り込みます。** 新しい Hub は `.guildbotics-ci.toml` だけを読むので、このファイルを含まない head の必須チェックは失敗します。
+このコミットへ更新したあとは、通常の更新で最新の版へ進みます。
