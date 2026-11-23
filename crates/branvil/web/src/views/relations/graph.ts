@@ -45,27 +45,38 @@ export interface Graph {
 }
 
 /** Whether a ticket has a parent, a child, or a dependency, shown or not: only one without is new. */
-export const hasRelations = (c: Card) => !!c.parent || c.children.length + c.blocked_by.length + c.blocks.length > 0;
+export const hasRelations = (c: Card) =>
+  !!c.parent || c.children.length + c.blocked_by.length + c.blocks.length > 0;
 
-export function buildGraph(board: Card[], options: {
-  includeClosed: boolean;
-  open: ReadonlySet<string>;
-  filter?: CardFilter;
-  /** Manual opening/closing during this filter; automatic expansion never changes saved preferences. */
-  openOverrides?: ReadonlyMap<string, boolean>;
-}): Graph {
+export function buildGraph(
+  board: Card[],
+  options: {
+    includeClosed: boolean;
+    open: ReadonlySet<string>;
+    filter?: CardFilter;
+    /** Manual opening/closing during this filter; automatic expansion never changes saved preferences. */
+    openOverrides?: ReadonlyMap<string, boolean>;
+  },
+): Graph {
   const cards = board.toSorted((a, b) => PRIORITY.indexOf(a.lane) - PRIORITY.indexOf(b.lane));
   const loaded = new Map(cards.map((c) => [ticketRef(c), c]));
   const ancestorsOf = (members: Card[]) => {
     const ancestors = new Set<string>();
     for (const c of members) {
-      for (let p = c.parent; p && !ancestors.has(ticketRef(p)); p = loaded.get(ticketRef(p))?.parent ?? null) ancestors.add(ticketRef(p));
+      for (
+        let p = c.parent;
+        p && !ancestors.has(ticketRef(p));
+        p = loaded.get(ticketRef(p))?.parent ?? null
+      )
+        ancestors.add(ticketRef(p));
     }
     return ancestors;
   };
   // A closed ticket with an open descendant stays shown.
   const kept = ancestorsOf(cards.filter((c) => c.state === "open"));
-  const eligible = cards.filter((c) => options.includeClosed || c.state === "open" || kept.has(ticketRef(c)));
+  const eligible = cards.filter(
+    (c) => options.includeClosed || c.state === "open" || kept.has(ticketRef(c)),
+  );
   const filter = options.filter;
   const filtering = filter !== undefined && hasFilter(filter);
   const matches = eligible.filter((c) => !filtering || matchesFilter(c, filter));
@@ -74,7 +85,9 @@ export function buildGraph(board: Card[], options: {
   const ancestors = filtering ? ancestorsOf(matches) : new Set<string>();
   const matched = new Set(matches.map(ticketRef));
   const shown = eligible.filter((c) => matched.has(ticketRef(c)) || ancestors.has(ticketRef(c)));
-  const isOpen = (ref: string) => (filtering ? options.openOverrides?.get(ref) : undefined) ?? (options.open.has(ref) || ancestors.has(ref));
+  const isOpen = (ref: string) =>
+    (filtering ? options.openOverrides?.get(ref) : undefined) ??
+    (options.open.has(ref) || ancestors.has(ref));
   const byRef = new Map(shown.map((c) => [ticketRef(c), c]));
   const parentOf = (c: Card) => (c.parent ? byRef.get(ticketRef(c.parent)) : undefined);
 
@@ -89,7 +102,10 @@ export function buildGraph(board: Card[], options: {
     return [...(p ? path(p) : []), ticketRef(c)];
   };
   /** The card itself, or its topmost closed ancestor. */
-  const rep = (c: Card) => path(c).slice(0, -1).find((a) => !isOpen(a)) ?? ticketRef(c);
+  const rep = (c: Card) =>
+    path(c)
+      .slice(0, -1)
+      .find((a) => !isOpen(a)) ?? ticketRef(c);
 
   // Within a level, sibling a precedes sibling b when a's subtree blocks b's subtree.
   const preds = new Map<string, string[]>();
@@ -143,7 +159,11 @@ export function buildGraph(board: Card[], options: {
     return level;
   };
 
-  return { level: levelOf(shown.filter((c) => !parentOf(c))), edges: [...edges.values()], shown: new Set(byRef.keys()) };
+  return {
+    level: levelOf(shown.filter((c) => !parentOf(c))),
+    edges: [...edges.values()],
+    shown: new Set(byRef.keys()),
+  };
 }
 
 function append<T>(map: Map<string, T[]>, key: string, value: T) {

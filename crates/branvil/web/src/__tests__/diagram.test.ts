@@ -5,14 +5,17 @@ import { svgImage } from "@guildbotics/ui/diagram";
 vi.mock("mermaid", () => ({ default: {} }));
 
 function decode(src: string): Document {
-  return new DOMParser().parseFromString(decodeURIComponent(src.slice(src.indexOf(",") + 1)), "image/svg+xml");
+  return new DOMParser().parseFromString(
+    decodeURIComponent(src.slice(src.indexOf(",") + 1)),
+    "image/svg+xml",
+  );
 }
 
 describe("svgImage", () => {
   it("makes Mermaid's HTML-written SVG a sized image named by its title and description", () => {
     const { src, alt } = svgImage(
-      '<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 120 40" style="max-width: 120px;">'
-        + "<title>承認の流れ</title><desc>レビューを経てマージ</desc><text>a&nbsp;b</text></svg>",
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 120 40" style="max-width: 120px;">' +
+        "<title>承認の流れ</title><desc>レビューを経てマージ</desc><text>a&nbsp;b</text></svg>",
     );
     expect(src).toMatch(/^data:image\/svg\+xml;charset=utf-8,/);
     const image = decode(src);
@@ -26,6 +29,8 @@ describe("svgImage", () => {
   });
 
   it("names nothing when the source gives no title", () => {
-    expect(svgImage('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"></svg>').alt).toBe("");
+    expect(svgImage('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"></svg>').alt).toBe(
+      "",
+    );
   });
 });

@@ -1,11 +1,29 @@
 // Small shared presentational components, built from Mantine as GuildBotics
 // Desktop's are.
 
-import { ActionIcon, Alert, Avatar, Badge, Button, Card, CopyButton as MantineCopy, Group, Menu, Text, Tooltip } from "@mantine/core";
+import {
+  ActionIcon,
+  Alert,
+  Avatar,
+  Badge,
+  Button,
+  Card,
+  CopyButton as MantineCopy,
+  Group,
+  Menu,
+  Text,
+  Tooltip,
+} from "@mantine/core";
 import { Anvil, Check, Copy, SmilePlus } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { ApiError, isApiError } from "../api/client";
-import { REACTIONS, type Comment, type MemberKind, type Reaction, type ReactionEntry } from "../api/types";
+import {
+  REACTIONS,
+  type Comment,
+  type MemberKind,
+  type Reaction,
+  type ReactionEntry,
+} from "../api/types";
 import { useI18n, useT, type Translate } from "../i18n";
 import { useMemberAvatar, useSession } from "../query/hooks";
 import { Link, useFragmentTarget } from "../router/Router";
@@ -44,7 +62,11 @@ export function errorText(error: unknown, t: Translate): string {
   if (isApiError(error, "network")) return t("common.networkError");
   if (error instanceof ApiError) {
     const { code } = error;
-    if (code === "retry_pr_head_required" || code === "retry_runner_ineligible" || code === "retry_runner_excluded") {
+    if (
+      code === "retry_pr_head_required" ||
+      code === "retry_runner_ineligible" ||
+      code === "retry_runner_excluded"
+    ) {
       return t(`ci.error.${code}`);
     }
   }
@@ -75,7 +97,9 @@ export function Time({ value, date }: { value: string | null | undefined; date?:
   const { lang } = useI18n();
   if (!value) return null;
   const d = new Date(value);
-  const shown = date ? d.toLocaleDateString(lang, { year: "numeric", month: "2-digit", day: "2-digit" }) : d.toLocaleString(lang);
+  const shown = date
+    ? d.toLocaleDateString(lang, { year: "numeric", month: "2-digit", day: "2-digit" })
+    : d.toLocaleString(lang);
   return (
     <time dateTime={value} title={value}>
       {Number.isNaN(d.getTime()) ? value : shown}
@@ -84,7 +108,15 @@ export function Time({ value, date }: { value: string | null | undefined; date?:
 }
 
 /** Every displayed commit ID opens that repository's commit page. */
-export function Sha({ repo, value, full = false }: { repo: string; value: string; full?: boolean }) {
+export function Sha({
+  repo,
+  value,
+  full = false,
+}: {
+  repo: string;
+  value: string;
+  full?: boolean;
+}) {
   if (!value) return <code>—</code>;
   return (
     <Link to={href.commit(repo, value)}>
@@ -101,7 +133,13 @@ export function CopyButton({ value, label }: { value: string; label?: string }) 
     <MantineCopy value={value} timeout={2000}>
       {({ copied, copy }) => (
         <Tooltip label={copied ? t("common.copied") : (label ?? t("common.copy"))} withArrow>
-          <ActionIcon variant="subtle" color="gray" size="sm" onClick={copy} aria-label={label ?? t("common.copy")}>
+          <ActionIcon
+            variant="subtle"
+            color="gray"
+            size="sm"
+            onClick={copy}
+            aria-label={label ?? t("common.copy")}
+          >
             {copied ? <Check size={14} /> : <Copy size={14} />}
           </ActionIcon>
         </Tooltip>
@@ -122,18 +160,42 @@ export function StateBadge({ children, tone = "neutral" }: { children: ReactNode
 }
 
 /** A member's avatar: their initial, teal for agents as GuildBotics shows members. */
-export function MemberAvatar({ name, kind, size = 22 }: { name: string; kind?: MemberKind; size?: number }) {
+export function MemberAvatar({
+  name,
+  kind,
+  size = 22,
+}: {
+  name: string;
+  kind?: MemberKind;
+  size?: number;
+}) {
   // The initial stands in while the picture loads, or when there is none.
   const src = useMemberAvatar(name);
   return (
-    <Avatar src={src} size={size} radius="xl" color={kind === "agent" ? "teal" : "gray"} variant="light" alt={name}>
-      {name.toLowerCase() === "branvil" ? <Anvil size={Math.round(size * 0.7)} role="img" aria-label="Branvil" /> : name.slice(0, 1).toUpperCase()}
+    <Avatar
+      src={src}
+      size={size}
+      radius="xl"
+      color={kind === "agent" ? "teal" : "gray"}
+      variant="light"
+      alt={name}
+    >
+      {name.toLowerCase() === "branvil" ? (
+        <Anvil size={Math.round(size * 0.7)} role="img" aria-label="Branvil" />
+      ) : (
+        name.slice(0, 1).toUpperCase()
+      )}
     </Avatar>
   );
 }
 
 /** Each reaction's display emoji; acknowledgement is distinct from agreement. */
-const REACTION_EMOJI: Record<Reaction, string> = { ack: "✅", agree: "👍", celebrate: "🎉", support: "❤️" };
+const REACTION_EMOJI: Record<Reaction, string> = {
+  ack: "✅",
+  agree: "👍",
+  celebrate: "🎉",
+  support: "❤️",
+};
 
 /** Gives (`on`) or takes back the signed-in member's reaction. */
 export type OnReact = (reaction: Reaction, on: boolean) => void;
@@ -143,7 +205,13 @@ export type OnReact = (reaction: Reaction, on: boolean) => void;
  * to add one. As on GitHub, the member's own reactions are highlighted and
  * clicking one (or choosing it again in the menu) takes it back.
  */
-export function Reactions({ reactions, onReact }: { reactions: ReactionEntry[]; onReact: OnReact }) {
+export function Reactions({
+  reactions,
+  onReact,
+}: {
+  reactions: ReactionEntry[];
+  onReact: OnReact;
+}) {
   const t = useT();
   const me = useSession().data?.me.name.toLowerCase();
   const whoGave = (r: Reaction) => reactions.filter((x) => x.reaction === r).map((x) => x.author);
@@ -201,16 +269,39 @@ export function Reactions({ reactions, onReact }: { reactions: ReactionEntry[]; 
 }
 
 /** The header strip of a post or comment: who wrote it and when, then any extras. */
-export function PostHead({ author, kind, at, url, children }: { author: string; kind?: MemberKind; at: string; url?: string; children?: ReactNode }) {
+export function PostHead({
+  author,
+  kind,
+  at,
+  url,
+  children,
+}: {
+  author: string;
+  kind?: MemberKind;
+  at: string;
+  url?: string;
+  children?: ReactNode;
+}) {
   const t = useT();
   return (
     <div className="post-head">
       <MemberAvatar name={author} kind={kind} />
       <strong>{author}</strong>
       <Text span size="xs" c="dimmed">
-        {url ? <Link to={url} title={t("comment.link")}><Time value={at} /></Link> : <Time value={at} />}
+        {url ? (
+          <Link to={url} title={t("comment.link")}>
+            <Time value={at} />
+          </Link>
+        ) : (
+          <Time value={at} />
+        )}
       </Text>
-      {url && <CopyButton value={new URL(url, window.location.origin).href} label={t("comment.copyUrl")} />}
+      {url && (
+        <CopyButton
+          value={new URL(url, window.location.origin).href}
+          label={t("comment.copyUrl")}
+        />
+      )}
       {children}
     </div>
   );
@@ -248,7 +339,12 @@ export function CommentView({
   const notice = comment.meta?.["routing"] === "suppress";
   const target = useFragmentTarget(comment.id);
   return (
-    <article {...target} className={notice ? "comment notice" : "comment"} id={comment.id} aria-label={notice ? t("comment.notice") : undefined}>
+    <article
+      {...target}
+      className={notice ? "comment notice" : "comment"}
+      id={comment.id}
+      aria-label={notice ? t("comment.notice") : undefined}
+    >
       <PostHead author={comment.author} kind={kind} at={comment.created_at} url={url}>
         {notice && <StateBadge tone="info">{t("comment.notice")}</StateBadge>}
         {actions}
@@ -302,7 +398,15 @@ export function ComposeForm({
         void onSubmit(body).then(clear, () => undefined);
       }}
     >
-      <MarkdownField aria-label={label} placeholder={label} value={body} onChange={setBody} rows={3} attachTo={attachTo} onUploading={setUploading} />
+      <MarkdownField
+        aria-label={label}
+        placeholder={label}
+        value={body}
+        onChange={setBody}
+        rows={3}
+        attachTo={attachTo}
+        onUploading={setUploading}
+      />
       {error ? <ErrorMessage error={error} /> : null}
       <Group justify="flex-end" gap="xs" mt="xs">
         {hint && (
@@ -311,7 +415,11 @@ export function ComposeForm({
           </Text>
         )}
         {actions?.(body, clear)}
-        <Button type="submit" variant={submitVariant} disabled={pending || uploading || !body.trim()}>
+        <Button
+          type="submit"
+          variant={submitVariant}
+          disabled={pending || uploading || !body.trim()}
+        >
           {submitLabel}
         </Button>
         {trailing?.(body, clear)}

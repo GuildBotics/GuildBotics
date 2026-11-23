@@ -2,15 +2,33 @@
 // dropped on it, or chosen. Each goes in at the cursor as a placeholder line
 // while it uploads, so typing goes on, and becomes `![name](url)` once stored.
 
-import { Button, FileButton, Group, Stack, Text, Textarea, type TextareaProps } from "@mantine/core";
+import {
+  Button,
+  FileButton,
+  Group,
+  Stack,
+  Text,
+  Textarea,
+  type TextareaProps,
+} from "@mantine/core";
 import { ImagePlus } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type DragEvent,
+} from "react";
 import { isApiError } from "../api/client";
 import { tickets } from "../api/endpoints";
 import { useT, type MessageKey } from "../i18n";
 import { ErrorMessage, Refusal } from "./common";
 
-const REFUSALS: Partial<Record<string, MessageKey>> = { invalid: "attach.invalid", too_large: "attach.tooLarge" };
+const REFUSALS: Partial<Record<string, MessageKey>> = {
+  invalid: "attach.invalid",
+  too_large: "attach.tooLarge",
+};
 
 /** Numbers the placeholders, so two uploads of one name stay apart. */
 let uploads = 0;
@@ -19,7 +37,8 @@ let uploads = 0;
 export const altText = (name: string) => name.replace(/[[\]\\\r\n]/g, " ");
 
 /** Whether `text` refers to an attachment: its id, as the service finds references. */
-export const hasAttachment = (text: string) => /(?<![0-9A-Za-z])atc_[0-9A-Za-z]{26}(?![0-9A-Za-z])/.test(text);
+export const hasAttachment = (text: string) =>
+  /(?<![0-9A-Za-z])atc_[0-9A-Za-z]{26}(?![0-9A-Za-z])/.test(text);
 
 export function MarkdownField({
   value,
@@ -64,7 +83,8 @@ export function MarkdownField({
   const splice = (from: number, to: number, insert: string) => {
     const el = field.current;
     if (!el) return;
-    const move = (p: number) => (p < from ? p : p >= to ? p + insert.length - (to - from) : from + insert.length);
+    const move = (p: number) =>
+      p < from ? p : p >= to ? p + insert.length - (to - from) : from + insert.length;
     // A splice not rendered yet holds the caret the field does not show yet.
     const [start, end] = caret.current ?? [el.selectionStart, el.selectionEnd];
     caret.current = [move(start), move(end)];
@@ -82,8 +102,15 @@ export function MarkdownField({
     if (!attachTo || !field.current || files.length === 0) return;
     setFailed(null);
     setPending((n) => n + files.length);
-    const queued = files.map((file) => ({ file, placeholder: `![${t("attach.placeholder", { name: altText(file.name) })}](#upload-${++uploads})` }));
-    splice(field.current.selectionStart, field.current.selectionEnd, queued.map((q) => q.placeholder).join("\n"));
+    const queued = files.map((file) => ({
+      file,
+      placeholder: `![${t("attach.placeholder", { name: altText(file.name) })}](#upload-${++uploads})`,
+    }));
+    splice(
+      field.current.selectionStart,
+      field.current.selectionEnd,
+      queued.map((q) => q.placeholder).join("\n"),
+    );
     for (const { file, placeholder } of queued) {
       void tickets
         .attach(attachTo, file, file.name)
@@ -109,13 +136,24 @@ export function MarkdownField({
     attach([...e.dataTransfer.files]);
   };
 
-  const textarea = <Textarea ref={field} {...props} value={value} onChange={(e) => onChange(e.currentTarget.value)} />;
+  const textarea = (
+    <Textarea
+      ref={field}
+      {...props}
+      value={value}
+      onChange={(e) => onChange(e.currentTarget.value)}
+    />
+  );
   if (!attachTo) return textarea;
   const refusal = isApiError(failed) ? REFUSALS[failed.code] : undefined;
   return (
     <Stack gap={4}>
       {/* Without dragover's default, the browser would open a dropped file instead. */}
-      <div onPaste={onPaste} onDrop={onDrop} onDragOver={(e) => e.dataTransfer.types.includes("Files") && e.preventDefault()}>
+      <div
+        onPaste={onPaste}
+        onDrop={onDrop}
+        onDragOver={(e) => e.dataTransfer.types.includes("Files") && e.preventDefault()}
+      >
         {textarea}
       </div>
       <Group gap="xs">
@@ -129,7 +167,13 @@ export function MarkdownField({
           }}
         >
           {(p) => (
-            <Button {...p} size="compact-xs" variant="subtle" color="gray" leftSection={<ImagePlus size={14} />}>
+            <Button
+              {...p}
+              size="compact-xs"
+              variant="subtle"
+              color="gray"
+              leftSection={<ImagePlus size={14} />}
+            >
               {t("attach.choose")}
             </Button>
           )}

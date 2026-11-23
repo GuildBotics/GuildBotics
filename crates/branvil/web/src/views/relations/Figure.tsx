@@ -1,7 +1,17 @@
 // The relations figure: the levels of cards and frames laid out by CSS, the
 // lines between them drawn over it in SVG, and the drags that relate and order tickets.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type PointerEvent,
+  type RefObject,
+} from "react";
 import { ticketRef, type Card, type Lane } from "../../api/types";
 import type { Person } from "../../components/PeoplePicker";
 import { useT } from "../../i18n";
@@ -131,16 +141,26 @@ export function Figure({
     if (point === pointedRef.current) return;
     pointedRef.current = point;
     const ref = point && standIn(point.ref);
-    const el = ref ? [...(contentRef.current?.querySelectorAll("[data-ticket]") ?? [])].find((e) => e.getAttribute("data-ticket") === ref) : undefined;
+    const el = ref
+      ? [...(contentRef.current?.querySelectorAll("[data-ticket]") ?? [])].find(
+          (e) => e.getAttribute("data-ticket") === ref,
+        )
+      : undefined;
     el?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
   }, [point, standIn]);
 
   // A ticket asked for is scrolled to once the figure shows it, and its card glows for a moment;
   // the frame of new tickets is opened when it is among them.
   useEffect(() => {
-    const inFresh = graph.level[0]?.some((n) => "fresh" in n && n.fresh.some((c) => ticketRef(c) === reveal));
+    const inFresh = graph.level[0]?.some(
+      (n) => "fresh" in n && n.fresh.some((c) => ticketRef(c) === reveal),
+    );
     if (reveal && !freshOpen && inFresh) return onFreshOpen(true);
-    const el = reveal && [...(contentRef.current?.querySelectorAll("[data-ticket]") ?? [])].find((e) => e.getAttribute("data-ticket") === reveal);
+    const el =
+      reveal &&
+      [...(contentRef.current?.querySelectorAll("[data-ticket]") ?? [])].find(
+        (e) => e.getAttribute("data-ticket") === reveal,
+      );
     if (!el) return;
     el.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
     el.querySelector(":scope > .rel-card > .card")?.animate?.(
@@ -157,7 +177,10 @@ export function Figure({
     return () => clearTimeout(timer);
   }, [dragging, target]);
 
-  const onLinkStart = useCallback((card: Card, e: PointerEvent<HTMLElement>) => startLinkRef.current(card, e), []);
+  const onLinkStart = useCallback(
+    (card: Card, e: PointerEvent<HTMLElement>) => startLinkRef.current(card, e),
+    [],
+  );
 
   // Cards are put level with what they wait for, and lines follow the cards:
   // done once the layout is and whenever a card or the figure changes size.
@@ -167,8 +190,14 @@ export function Figure({
     if (!scroll || !content) return;
     const draw = () => {
       // A line meets a ticket's own card: an open parent's is its frame's header, as wide as the frame.
-      const cardOf = (el: Element) => (el.querySelector(":scope > .rel-card") ?? el).getBoundingClientRect();
-      const anchors = new Map([...content.querySelectorAll<HTMLElement>("[data-ticket]")].map((el) => [el.dataset["ticket"] as string, el]));
+      const cardOf = (el: Element) =>
+        (el.querySelector(":scope > .rel-card") ?? el).getBoundingClientRect();
+      const anchors = new Map(
+        [...content.querySelectorAll<HTMLElement>("[data-ticket]")].map((el) => [
+          el.dataset["ticket"] as string,
+          el,
+        ]),
+      );
       // In document order, so what a ticket waits for (in a column to its left) already stands where it stays:
       // a ticket is pushed down so its card's middle meets the topmost of their middles, its column's order kept.
       // Only what comes before it counts: a cycle would push its tickets down without end.
@@ -176,12 +205,14 @@ export function Figure({
         const card = cardOf(el);
         const middles = graph.edges.flatMap((e) => {
           const from = e.to === ref ? anchors.get(e.from) : undefined;
-          if (!from || !(from.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) return [];
+          if (!from || !(from.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING))
+            return [];
           const r = cardOf(from);
           return [r.top + r.height / 2];
         });
         const natural = card.top - (parseFloat(el.style.marginTop) || 0);
-        const push = middles.length > 0 ? Math.round(Math.min(...middles) - card.height / 2 - natural) : 0;
+        const push =
+          middles.length > 0 ? Math.round(Math.min(...middles) - card.height / 2 - natural) : 0;
         el.style.marginTop = push > 0 ? `${push}px` : "";
       }
       const origin = content.getBoundingClientRect();
@@ -218,25 +249,49 @@ export function Figure({
     const el = e.target instanceof Element ? e.target.closest("[data-ticket]") : null;
     const from = draggedRef.current;
     const refOf = (n: Element | null) => n?.getAttribute("data-ticket") ?? "";
-    if (el && from && el !== from && el.parentElement === from.parentElement && refOf(el) !== FRESH) {
+    if (
+      el &&
+      from &&
+      el !== from &&
+      el.parentElement === from.parentElement &&
+      refOf(el) !== FRESH
+    ) {
       const box = el.getBoundingClientRect();
-      const band = (el.querySelector(":scope > .rel-card") ?? el).getBoundingClientRect().height / 4;
-      const side = e.clientY < box.top + band ? "before" : e.clientY > box.bottom - band ? "after" : null;
+      const band =
+        (el.querySelector(":scope > .rel-card") ?? el).getBoundingClientRect().height / 4;
+      const side =
+        e.clientY < box.top + band ? "before" : e.clientY > box.bottom - band ? "after" : null;
       if (side) {
-        const [above, below] = side === "before" ? [el.previousElementSibling, el] : [el, el.nextElementSibling];
+        const [above, below] =
+          side === "before" ? [el.previousElementSibling, el] : [el, el.nextElementSibling];
         if (above === from || below === from) return null;
         const inLane = (n: Element | null) => byRef.get(refOf(n))?.lane === dragged.lane;
-        const drop = inLane(below) ? { before: refOf(below) } : inLane(above) ? { after: refOf(above) } : null;
+        const drop = inLane(below)
+          ? { before: refOf(below) }
+          : inLane(above)
+            ? { after: refOf(above) }
+            : null;
         const lanes = [above, below].flatMap((n) => byRef.get(refOf(n))?.lane ?? []);
-        return drop ? { ref: refOf(el), side, drop } : { ref: refOf(el), side, drop, refused: [...new Set(lanes)] };
+        return drop
+          ? { ref: refOf(el), side, drop }
+          : { ref: refOf(el), side, drop, refused: [...new Set(lanes)] };
       }
     }
-    const ref = el ? refOf(el) : e.target instanceof Node && canvasRef.current?.contains(e.target) ? BACKGROUND : null;
+    const ref = el
+      ? refOf(el)
+      : e.target instanceof Node && canvasRef.current?.contains(e.target)
+        ? BACKGROUND
+        : null;
     if (ref === null) return null;
-    if (ref === FRESH) return !hasRelations(dragged) && dragged.lane !== "new" ? { ref, drop: { lane: "new" } } : null;
+    if (ref === FRESH)
+      return !hasRelations(dragged) && dragged.lane !== "new"
+        ? { ref, drop: { lane: "new" } }
+        : null;
     const over = ref === BACKGROUND ? null : byRef.get(ref);
     if (over === undefined) return null;
-    const drop = parentEdit(dragged, over) ?? (!over && dragged.lane === "new" ? { lane: "ready" as const } : null);
+    const drop =
+      parentEdit(dragged, over) ??
+      (!over && dragged.lane === "new" ? { lane: "ready" as const } : null);
     return drop && { ref, drop };
   };
   const dragProps = (card: Card) => ({
@@ -261,7 +316,11 @@ export function Figure({
     if (!dragging) return;
     const aim = aimFor(dragging, e);
     if (aim?.drop) e.preventDefault();
-    setTarget((prev) => (prev?.ref === aim?.ref && prev?.side === aim?.side && !prev?.refused === !aim?.refused ? prev : aim));
+    setTarget((prev) =>
+      prev?.ref === aim?.ref && prev?.side === aim?.side && !prev?.refused === !aim?.refused
+        ? prev
+        : aim,
+    );
   };
   const onDrop = (e: DragEvent) => {
     if (!dragging) return;
@@ -296,7 +355,8 @@ export function Figure({
   const anchorClass = (base: string, ref: string) =>
     [
       base,
-      target?.ref === ref && (target.side ? `insert-${target.side}${target.refused ? " refused" : ""}` : "drop-target"),
+      target?.ref === ref &&
+        (target.side ? `insert-${target.side}${target.refused ? " refused" : ""}` : "drop-target"),
       dragging && ticketRef(dragging) === ref && "dragging",
     ]
       .filter(Boolean)
@@ -306,7 +366,11 @@ export function Figure({
   const anchor = (card: Card, inner: Level | null, isOpen: boolean | undefined) => {
     const ref = ticketRef(card);
     return (
-      <div key={ref} className={anchorClass(inner ? "rel-frame" : "rel-node", ref)} data-ticket={ref}>
+      <div
+        key={ref}
+        className={anchorClass(inner ? "rel-frame" : "rel-node", ref)}
+        data-ticket={ref}
+      >
         <div className="rel-card" {...dragProps(card)}>
           {node(card, isOpen)}
         </div>
@@ -325,7 +389,13 @@ export function Figure({
   const freshFrame = (fresh: Card[]) => {
     const label = t("relations.fresh", { count: fresh.length });
     return (
-      <div key={FRESH} className={anchorClass(freshOpen ? "rel-frame" : "rel-node", FRESH)} data-ticket={FRESH} role="group" aria-label={label}>
+      <div
+        key={FRESH}
+        className={anchorClass(freshOpen ? "rel-frame" : "rel-node", FRESH)}
+        data-ticket={FRESH}
+        role="group"
+        aria-label={label}
+      >
         <div className="rel-card">
           <div className="card fresh">
             <div className="card-row">
@@ -334,7 +404,10 @@ export function Figure({
             </div>
           </div>
         </div>
-        {freshOpen && level([fresh.map((card) => ({ card, ref: ticketRef(card), hasChildren: false, inner: null }))])}
+        {freshOpen &&
+          level([
+            fresh.map((card) => ({ card, ref: ticketRef(card), hasChildren: false, inner: null })),
+          ])}
       </div>
     );
   };
@@ -342,7 +415,11 @@ export function Figure({
     <div className="rel-level">
       {l.map((column, i) => (
         <div className="rel-column" key={i}>
-          {column.map((n) => ("fresh" in n ? freshFrame(n.fresh) : anchor(n.card, n.inner, n.hasChildren ? n.inner !== null : undefined)))}
+          {column.map((n) =>
+            "fresh" in n
+              ? freshFrame(n.fresh)
+              : anchor(n.card, n.inner, n.hasChildren ? n.inner !== null : undefined),
+          )}
         </div>
       ))}
     </div>
@@ -356,11 +433,25 @@ export function Figure({
         onDragOver={onDragOver}
         onDrop={onDrop}
       >
-        <div ref={canvasRef} className={`relations-canvas${target?.ref === BACKGROUND ? " drop-target" : ""}`}>
-          {graph.level.length === 0 ? <p className="relations-empty">{t("relations.empty")}</p> : level(graph.level)}
+        <div
+          ref={canvasRef}
+          className={`relations-canvas${target?.ref === BACKGROUND ? " drop-target" : ""}`}
+        >
+          {graph.level.length === 0 ? (
+            <p className="relations-empty">{t("relations.empty")}</p>
+          ) : (
+            level(graph.level)
+          )}
         </div>
         <Lines edges={graph.edges} editable={editable} onEdit={onEdit} />
-        <LinkDraft contentRef={contentRef} startRef={startLinkRef} linkingRef={linkingRef} byRef={byRef} editable={editable} onEdit={onEdit} />
+        <LinkDraft
+          contentRef={contentRef}
+          startRef={startLinkRef}
+          linkingRef={linkingRef}
+          byRef={byRef}
+          editable={editable}
+          onEdit={onEdit}
+        />
       </div>
     </div>
   );
@@ -375,7 +466,15 @@ function curve(x1: number, y1: number, x2: number, y2: number): string {
 /** The arrowhead of a layer's lines (each layer colours its own). */
 const arrow = (id: string) => (
   <defs>
-    <marker id={id} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <marker
+      id={id}
+      viewBox="0 0 10 10"
+      refX="9"
+      refY="5"
+      markerWidth="7"
+      markerHeight="7"
+      orient="auto-start-reverse"
+    >
       <path d="M 0 0 L 10 5 L 0 10 z" />
     </marker>
   </defs>
@@ -387,7 +486,15 @@ const arrow = (id: string) => (
  * again in front of the cards, so it can be followed across them. Its own
  * state, so a hover re-renders only the lines.
  */
-function Lines({ edges, editable, onEdit }: { edges: GraphEdge[]; editable: boolean; onEdit: (edit: Edit) => void }) {
+function Lines({
+  edges,
+  editable,
+  onEdit,
+}: {
+  edges: GraphEdge[];
+  editable: boolean;
+  onEdit: (edit: Edit) => void;
+}) {
   const t = useT();
   const [front, setFront] = useState<string | null>(null);
   return (
@@ -433,7 +540,12 @@ function Lines({ edges, editable, onEdit }: { edges: GraphEdge[]; editable: bool
       <svg className="rel-front" aria-hidden>
         {arrow("rel-arrow-front")}
         {edges.map((e) => (
-          <g key={edgeKey(e)} className={`rel-edge${e.dashed ? " dashed" : ""}${front === edgeKey(e) ? " front" : ""}`} data-from={e.from} data-to={e.to}>
+          <g
+            key={edgeKey(e)}
+            className={`rel-edge${e.dashed ? " dashed" : ""}${front === edgeKey(e) ? " front" : ""}`}
+            data-from={e.from}
+            data-to={e.to}
+          >
             <path className="rel-edge-line" markerEnd="url(#rel-arrow-front)" />
           </g>
         ))}
@@ -530,7 +642,11 @@ function LinkDraft({
         <path d={curve(draft.x1, draft.y1, draft.x2, draft.y2)} markerEnd="url(#rel-arrow-draft)" />
       </svg>
       {draft.to && (
-        <div className="rel-draft-hint" role="status" style={{ left: draft.x2 + 14, top: draft.y2 + 14 }}>
+        <div
+          className="rel-draft-hint"
+          role="status"
+          style={{ left: draft.x2 + 14, top: draft.y2 + 14 }}
+        >
           {t("relations.waits", { blocked: ticketRef(draft.to), blocker: ticketRef(draft.from) })}
         </div>
       )}

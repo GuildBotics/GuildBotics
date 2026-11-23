@@ -23,7 +23,13 @@ export function NewWorkspaceModal({ opened, onClose }: { opened: boolean; onClos
     onSettled: () => void client.invalidateQueries({ queryKey: keys.workspaces() }),
   });
   return (
-    <Modal opened={opened} onClose={onClose} title={t("workspace.new")} closeButtonProps={{ "aria-label": t("common.close") }} centered>
+    <Modal
+      opened={opened}
+      onClose={onClose}
+      title={t("workspace.new")}
+      closeButtonProps={{ "aria-label": t("common.close") }}
+      centered
+    >
       <form
         aria-label={t("workspace.new")}
         onSubmit={(e) => {

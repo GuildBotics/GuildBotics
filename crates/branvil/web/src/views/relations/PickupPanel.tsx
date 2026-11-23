@@ -19,7 +19,10 @@ interface Moving {
 }
 
 /** The order a move shows, and what it moves. */
-const arranged = (m: Moving, cards: readonly Card[]) => (m.before === undefined ? { order: m.start, group: [] } : arrange(m.start, m.moved, m.before, cards));
+const arranged = (m: Moving, cards: readonly Card[]) =>
+  m.before === undefined
+    ? { order: m.start, group: [] }
+    : arrange(m.start, m.moved, m.before, cards);
 
 /** A row put somewhere else: what moved, in which new order, and the Ready lane before. */
 export interface Drop {
@@ -143,7 +146,8 @@ export function PickupPanel({
       cancel();
     } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
-      const here = m.before === undefined ? (m.start[m.start.indexOf(m.moved) + 1] ?? null) : m.before;
+      const here =
+        m.before === undefined ? (m.start[m.start.indexOf(m.moved) + 1] ?? null) : m.before;
       const to = stepped(m.start, m.moved, here, e.key === "ArrowUp" ? -1 : 1, cards);
       setSaid(t("pickup.position", positionOf((to !== undefined && aim(to)) || m)));
     }
@@ -166,7 +170,14 @@ export function PickupPanel({
         <Text fw={600} size="sm">
           {t("pickup.title")}
         </Text>
-        <ActionIcon variant="subtle" color="gray" size="sm" aria-label={t("pickup.close")} title={t("pickup.close")} onClick={onClose}>
+        <ActionIcon
+          variant="subtle"
+          color="gray"
+          size="sm"
+          aria-label={t("pickup.close")}
+          title={t("pickup.close")}
+          onClick={onClose}
+        >
           <X size={16} />
         </ActionIcon>
       </Group>
@@ -186,7 +197,9 @@ export function PickupPanel({
       ) : (
         <ol
           className="pickup-list"
-          aria-label={t("pickup.list", { name: assignees.find((a) => a.value === assignee)?.label ?? assignee })}
+          aria-label={t("pickup.list", {
+            name: assignees.find((a) => a.value === assignee)?.label ?? assignee,
+          })}
           onDragOver={(e) => {
             if (!movingRef.current || movingRef.current.keyboard) return;
             e.preventDefault();
@@ -235,20 +248,33 @@ export function PickupPanel({
                 onDragEnd={() => movingRef.current && cancel()}
               >
                 <span className="pickup-number">{row.n}</span>
-                {row.stuck.length > 0 && <span className="pickup-stuck">{t("pickup.stuck", { reason: reasonText(row.stuck, t) })}</span>}
+                {row.stuck.length > 0 && (
+                  <span className="pickup-stuck">
+                    {t("pickup.stuck", { reason: reasonText(row.stuck, t) })}
+                  </span>
+                )}
                 {row.stuck.length === 0 && row.waits.length > 0 && (
                   <span className="pickup-waits">
                     {t("pickup.waits", {
-                      blockers: row.waits.map((w) => t("pickup.waitFor", { ticket: w.ticket }) + (
-                        "lane" in w && w.assignee
-                          ? t("pickup.waitDetails", { assignee: w.assignee, lane: t(`lane.${w.lane}`) })
-                          : ""
-                      )).join(t("pickup.and")),
+                      blockers: row.waits
+                        .map(
+                          (w) =>
+                            t("pickup.waitFor", { ticket: w.ticket }) +
+                            ("lane" in w && w.assignee
+                              ? t("pickup.waitDetails", {
+                                  assignee: w.assignee,
+                                  lane: t(`lane.${w.lane}`),
+                                })
+                              : ""),
+                        )
+                        .join(t("pickup.and")),
                     })}
                   </span>
                 )}
                 {row === next && (
-                  <Badge size="xs" variant="light">{t("pickup.next")}</Badge>
+                  <Badge size="xs" variant="light">
+                    {t("pickup.next")}
+                  </Badge>
                 )}
                 <span className="pickup-ticket">
                   <span className="key">{row.ref}</span> {row.card.title}

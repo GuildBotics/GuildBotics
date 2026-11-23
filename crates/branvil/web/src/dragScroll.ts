@@ -13,7 +13,8 @@ const IDLE_MS = 1000;
 /** How far one axis of a box from `start` to `end` scrolls in `ms` with the pointer at `pos`: at least a pixel inside the band. */
 export function scrollStep(pos: number, start: number, end: number, ms: number): number {
   const band = Math.min(BAND, (end - start) / 4);
-  const depth = pos < start + band ? pos - (start + band) : pos > end - band ? pos - (end - band) : 0;
+  const depth =
+    pos < start + band ? pos - (start + band) : pos > end - band ? pos - (end - band) : 0;
   const step = MAX_SPEED * ms * Math.max(-1, Math.min(1, depth / band));
   return Math.sign(step) * Math.max(1, Math.round(Math.abs(step)));
 }
@@ -26,7 +27,9 @@ function scrollToward(from: Element | null, x: number, y: number, ms: number): b
     // The page itself scrolls within the viewport, whatever its overflow says.
     const page = el === el.ownerDocument.scrollingElement;
     const style = getComputedStyle(el);
-    const rect = page ? new DOMRect(0, 0, el.clientWidth, el.clientHeight) : el.getBoundingClientRect();
+    const rect = page
+      ? new DOMRect(0, 0, el.clientWidth, el.clientHeight)
+      : el.getBoundingClientRect();
     const dx = page || scrollable(style.overflowX) ? scrollStep(x, rect.left, rect.right, ms) : 0;
     const dy = page || scrollable(style.overflowY) ? scrollStep(y, rect.top, rect.bottom, ms) : 0;
     const left = el.scrollLeft;
@@ -46,11 +49,17 @@ export function installDragScroll(): void {
   const tick = (now: number) => {
     frame = 0;
     if (!pointer || now - pointer.at > IDLE_MS) return;
-    if (scrollToward(pointer.target, pointer.x, pointer.y, Math.min(Math.max(now - last, 1), 50))) frame = requestAnimationFrame(tick);
+    if (scrollToward(pointer.target, pointer.x, pointer.y, Math.min(Math.max(now - last, 1), 50)))
+      frame = requestAnimationFrame(tick);
     last = now;
   };
   const over = (e: DragEvent) => {
-    pointer = { target: e.target instanceof Element ? e.target : null, x: e.clientX, y: e.clientY, at: performance.now() };
+    pointer = {
+      target: e.target instanceof Element ? e.target : null,
+      x: e.clientX,
+      y: e.clientY,
+      at: performance.now(),
+    };
     if (frame) return;
     last = performance.now();
     frame = requestAnimationFrame(tick);

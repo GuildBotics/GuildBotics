@@ -16,18 +16,27 @@ function stale(client: QueryClient, event: Parameters<typeof predicatesFor>[0]) 
 const k = (key: readonly unknown[]) => JSON.stringify(key);
 
 describe("change events", () => {
-  it.each(["pull", "check", "repo", "upstream"] as const)("refreshes merged PR pages for a %s event in any listed repository", (kind) => {
-    const lists = new QueryClient();
-    const shown = keys.pullList(["acme/demo", "acme/web"], "closed");
-    lists.setQueryData(shown, {});
-    lists.setQueryData(keys.pullList(["beta/demo"], "all"), {});
-    expect(stale(lists, { kind, path: "ACME/WEB", id: "1" })).toEqual([k(shown)]);
-  });
+  it.each(["pull", "check", "repo", "upstream"] as const)(
+    "refreshes merged PR pages for a %s event in any listed repository",
+    (kind) => {
+      const lists = new QueryClient();
+      const shown = keys.pullList(["acme/demo", "acme/web"], "closed");
+      lists.setQueryData(shown, {});
+      lists.setQueryData(keys.pullList(["beta/demo"], "all"), {});
+      expect(stale(lists, { kind, path: "ACME/WEB", id: "1" })).toEqual([k(shown)]);
+    },
+  );
   const origin = window.location.origin;
   const client = new QueryClient();
   client.setQueryData(keys.board("acme"), { name: "acme", lanes: [] });
   client.setQueryData(keys.cards("acme", "open"), {
-    items: [{ repository: "acme/demo", key: "1", pull_requests: [{ url: `${origin}/acme/demo/-/pulls/3` }] }],
+    items: [
+      {
+        repository: "acme/demo",
+        key: "1",
+        pull_requests: [{ url: `${origin}/acme/demo/-/pulls/3` }],
+      },
+    ],
   });
   client.setQueryData(keys.cards("beta", "open"), { items: [] });
   client.setQueryData(keys.ticket("acme/demo", "1"), {});
@@ -62,7 +71,11 @@ describe("change events", () => {
     );
   });
 
-  const checkKeys = [k(keys.pullPart("acme/demo", 3, "checks")), k(keys.pullPart("acme/demo", 4, "checks")), k(keys.commitChecks("acme/demo", "ccc"))];
+  const checkKeys = [
+    k(keys.pullPart("acme/demo", 3, "checks")),
+    k(keys.pullPart("acme/demo", 4, "checks")),
+    k(keys.commitChecks("acme/demo", "ccc")),
+  ];
 
   it("maps a pull change to its page and linked cards, and refreshes queued-check ordering", () => {
     expect(stale(client, { kind: "pull", path: "acme/demo", id: "3" })).toEqual(
@@ -74,33 +87,57 @@ describe("change events", () => {
       ].sort(),
     );
     expect(stale(client, { kind: "pull", path: "acme/demo", id: "4" })).toEqual(
-      [k(keys.pull("acme/demo", 4)), ...checkKeys, k(keys.ticketPart("acme/demo", "1", "pulls"))].sort(),
+      [
+        k(keys.pull("acme/demo", 4)),
+        ...checkKeys,
+        k(keys.ticketPart("acme/demo", "1", "pulls")),
+      ].sort(),
     );
   });
 
   it("refreshes all check lists when a completion can change the queued order", () => {
-    expect(stale(client, { kind: "check", path: "acme/demo", id: "bbb" })).toEqual([...checkKeys, k(keys.pull("acme/demo", 4))].sort());
-    expect(stale(client, { kind: "pull", path: "other/repo", id: "1" })).toEqual([...checkKeys, k(keys.ticketPart("acme/demo", "1", "pulls"))].sort());
+    expect(stale(client, { kind: "check", path: "acme/demo", id: "bbb" })).toEqual(
+      [...checkKeys, k(keys.pull("acme/demo", 4))].sort(),
+    );
+    expect(stale(client, { kind: "pull", path: "other/repo", id: "1" })).toEqual(
+      [...checkKeys, k(keys.ticketPart("acme/demo", "1", "pulls"))].sort(),
+    );
   });
 
   it("maps a check change to the checks of that commit, not to the commit itself", () => {
-    expect(stale(client, { kind: "check", path: "acme/demo", id: "ccc" })).toEqual([...checkKeys].sort());
+    expect(stale(client, { kind: "check", path: "acme/demo", id: "ccc" })).toEqual(
+      [...checkKeys].sort(),
+    );
   });
 
   it("maps a check change of a commit whose checks are still loading by the sha it was asked for", () => {
     const loading = new QueryClient();
-    void loading.prefetchQuery({ queryKey: keys.commitChecks("acme/demo", "ddd"), queryFn: () => new Promise(() => {}) });
-    expect(stale(loading, { kind: "check", path: "acme/demo", id: "ddd" })).toEqual([k(keys.commitChecks("acme/demo", "ddd"))]);
-    expect(stale(loading, { kind: "check", path: "acme/demo", id: "eee" })).toEqual([k(keys.commitChecks("acme/demo", "ddd"))]);
+    void loading.prefetchQuery({
+      queryKey: keys.commitChecks("acme/demo", "ddd"),
+      queryFn: () => new Promise(() => {}),
+    });
+    expect(stale(loading, { kind: "check", path: "acme/demo", id: "ddd" })).toEqual([
+      k(keys.commitChecks("acme/demo", "ddd")),
+    ]);
+    expect(stale(loading, { kind: "check", path: "acme/demo", id: "eee" })).toEqual([
+      k(keys.commitChecks("acme/demo", "ddd")),
+    ]);
   });
 
   it("refreshes ticket-linked landing decisions across repositories and ancestors", () => {
     const c = new QueryClient();
-    c.setQueryData(keys.pull("acme/demo", 3), { tickets: [{ url: "http://localhost/acme/tickets/-/tickets/1" }] });
-    c.setQueryData(keys.pull("beta/demo", 4), { tickets: [{ url: "http://localhost/beta/tickets/-/tickets/2" }] });
+    c.setQueryData(keys.pull("acme/demo", 3), {
+      tickets: [{ url: "http://localhost/acme/tickets/-/tickets/1" }],
+    });
+    c.setQueryData(keys.pull("beta/demo", 4), {
+      tickets: [{ url: "http://localhost/beta/tickets/-/tickets/2" }],
+    });
     c.setQueryData(keys.pull("acme/demo", 5), { tickets: [] });
     // A ticket event can name an ancestor, which is not part of the PR cache.
-    expect(stale(c, { kind: "ticket", path: "acme/tickets", id: "99" })).toEqual([k(keys.pull("acme/demo",3)), k(keys.pull("beta/demo",4))]);
+    expect(stale(c, { kind: "ticket", path: "acme/tickets", id: "99" })).toEqual([
+      k(keys.pull("acme/demo", 3)),
+      k(keys.pull("beta/demo", 4)),
+    ]);
   });
 
   it("refreshes landing decisions for pulls sharing the checked head", () => {
@@ -108,14 +145,22 @@ describe("change events", () => {
     c.setQueryData(keys.pull("acme/demo", 3), { head_sha: "head" });
     c.setQueryData(keys.pull("acme/demo", 4), { head_sha: "head" });
     c.setQueryData(keys.pull("acme/demo", 5), { head_sha: "other" });
-    expect(stale(c, { kind: "check", path: "acme/demo", id: "head" })).toEqual([k(keys.pull("acme/demo", 3)), k(keys.pull("acme/demo", 4))]);
+    expect(stale(c, { kind: "check", path: "acme/demo", id: "head" })).toEqual([
+      k(keys.pull("acme/demo", 3)),
+      k(keys.pull("acme/demo", 4)),
+    ]);
   });
 
   it("refreshes a pull independently of another pull's state", () => {
     const queue = new QueryClient();
-    queue.setQueryData(keys.pull("acme/demo", 4), { head_sha: "head", landing: { next: "conditions", blockers: [] } });
+    queue.setQueryData(keys.pull("acme/demo", 4), {
+      head_sha: "head",
+      landing: { next: "conditions", blockers: [] },
+    });
     queue.setQueryData(keys.pullPart("acme/demo", 4, "checks"), { head_sha: "head", checks: [] });
-    expect(stale(queue, { kind: "pull", path: "acme/demo", id: "3" })).toEqual([k(keys.pullPart("acme/demo",4,"checks"))]);
+    expect(stale(queue, { kind: "pull", path: "acme/demo", id: "3" })).toEqual([
+      k(keys.pullPart("acme/demo", 4, "checks")),
+    ]);
   });
 
   it("maps a repository change (a push, new settings) to its pull requests, branch tips, and commits' checks but not diffs, commits, or tickets", () => {

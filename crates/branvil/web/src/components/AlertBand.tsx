@@ -29,11 +29,16 @@ export function AlertBand({ streamLost }: { streamLost: boolean }) {
   const warnings: Warning[] = [];
   if (streamLost) warnings.push({ id: "stream", text: t("alert.streamLost"), dismissible: false });
   const runner = d?.runner;
-  const showRunner = runner && (runner.state === "stopping"
-    ? !d?.hub?.operation
-    : runner.state !== "ready" && (runner.mode !== "off" || runner.state === "executor_unavailable"));
+  const showRunner =
+    runner &&
+    (runner.state === "stopping"
+      ? !d?.hub?.operation
+      : runner.state !== "ready" &&
+        (runner.mode !== "off" || runner.state === "executor_unavailable"));
   if (runner && showRunner) {
-    const detail = runner.version_mismatch ? t("ci.runnerVersionMismatch", runner.version_mismatch) : runner.detail;
+    const detail = runner.version_mismatch
+      ? t("ci.runnerVersionMismatch", runner.version_mismatch)
+      : runner.detail;
     const text =
       runner.state === "stopping"
         ? t("alert.stopping")

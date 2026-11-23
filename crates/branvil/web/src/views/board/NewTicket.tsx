@@ -13,9 +13,17 @@ import { useStored } from "../../storage";
 /** The workspace's repositories, and the one new tickets go to by default: the last one chosen in this workspace. */
 export function useTicketRepos(workspace: string) {
   const query = useRepos();
-  const repos = useMemo(() => (query.data?.items ?? []).filter((r) => r.path.startsWith(`${workspace}/`)), [query.data, workspace]);
+  const repos = useMemo(
+    () => (query.data?.items ?? []).filter((r) => r.path.startsWith(`${workspace}/`)),
+    [query.data, workspace],
+  );
   const [chosen, choose] = useStored(`branvil.repo.${workspace}`);
-  return { query, repos, repo: repos.find((r) => r.path === chosen)?.path ?? repos[0]?.path ?? "", chooseRepo: choose };
+  return {
+    query,
+    repos,
+    repo: repos.find((r) => r.path === chosen)?.path ?? repos[0]?.path ?? "",
+    chooseRepo: choose,
+  };
 }
 
 interface Draft {
@@ -29,14 +37,29 @@ function useCreate(workspace: string, onCreated: (t: Ticket) => void) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: ({ draft, lane }: { draft: Draft; lane: Lane }) =>
-      api.tickets.create(draft.repo, { title: draft.title.trim(), body: draft.body, labels: draft.labels, lane }),
+      api.tickets.create(draft.repo, {
+        title: draft.title.trim(),
+        body: draft.body,
+        labels: draft.labels,
+        lane,
+      }),
     onSuccess: onCreated,
     onSettled: () => void client.invalidateQueries({ queryKey: keys.board(workspace) }),
   });
 }
 
 /** Chooses among the workspace's repositories; shown only when there is more than one. */
-function RepoChoice({ repos, value, onChange, fixed }: { repos: Repository[]; value: string; onChange: (r: string) => void; fixed?: string }) {
+function RepoChoice({
+  repos,
+  value,
+  onChange,
+  fixed,
+}: {
+  repos: Repository[];
+  value: string;
+  onChange: (r: string) => void;
+  fixed?: string;
+}) {
   const t = useT();
   if (repos.length < 2) return null;
   return (
@@ -113,10 +136,17 @@ export function NewTicketModal({
           {note && <Text size="sm">{note}</Text>}
           <Group grow align="flex-start">
             {/* An attached image belongs to the repository it was uploaded to. */}
-            {repos.length > 1 && <RepoChoice repos={repos} value={repo} fixed={uploading || hasAttachment(current.body) ? t("attach.repoFixed") : undefined} onChange={(r) => {
-              onRepo(r);
-              setDraft({ ...current, labels: [] });
-            }} />}
+            {repos.length > 1 && (
+              <RepoChoice
+                repos={repos}
+                value={repo}
+                fixed={uploading || hasAttachment(current.body) ? t("attach.repoFixed") : undefined}
+                onChange={(r) => {
+                  onRepo(r);
+                  setDraft({ ...current, labels: [] });
+                }}
+              />
+            )}
             <Select
               label={t("ticket.lane")}
               data={lanes.map((l) => ({ value: l, label: t(`lane.${l}`) }))}
@@ -125,14 +155,31 @@ export function NewTicketModal({
               allowDeselect={false}
             />
           </Group>
-          <TextInput label={t("ticket.title")} value={current.title} onChange={(e) => setDraft({ ...current, title: e.currentTarget.value })} required data-autofocus />
-          <MarkdownField label={t("ticket.body")} value={current.body} onChange={(body) => setDraft({ ...current, body })} rows={6} attachTo={repo} onUploading={setUploading} />
+          <TextInput
+            label={t("ticket.title")}
+            value={current.title}
+            onChange={(e) => setDraft({ ...current, title: e.currentTarget.value })}
+            required
+            data-autofocus
+          />
+          <MarkdownField
+            label={t("ticket.body")}
+            value={current.body}
+            onChange={(body) => setDraft({ ...current, body })}
+            rows={6}
+            attachTo={repo}
+            onUploading={setUploading}
+          />
           {repository && repository.labels.length > 0 && (
             <Stack gap={6}>
               <Text size="sm" fw={500}>
                 {t("ticket.labels")}
               </Text>
-              <Chip.Group multiple value={current.labels} onChange={(labels) => setDraft({ ...current, labels })}>
+              <Chip.Group
+                multiple
+                value={current.labels}
+                onChange={(labels) => setDraft({ ...current, labels })}
+              >
                 <Group gap={6}>
                   {repository.labels.map((l) => (
                     <Chip key={l} value={l} size="xs">
@@ -148,7 +195,10 @@ export function NewTicketModal({
             <Button variant="default" onClick={close}>
               {t("common.cancel")}
             </Button>
-            <Button type="submit" disabled={create.isPending || uploading || !current.title.trim() || !repo}>
+            <Button
+              type="submit"
+              disabled={create.isPending || uploading || !current.title.trim() || !repo}
+            >
               {t("board.create")}
             </Button>
           </Group>

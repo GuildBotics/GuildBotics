@@ -21,18 +21,37 @@ function renderReviewers(pr = pull(), language: "en" | "ja" = "en") {
       </QueryClientProvider>
     </MantineProvider>
   );
-  return { ...render(<a href="/acme/demo/-/pulls/3"><ReviewersCell pull={pr} /></a>, { wrapper }), fake, client };
+  return {
+    ...render(
+      <a href="/acme/demo/-/pulls/3">
+        <ReviewersCell pull={pr} />
+      </a>,
+      { wrapper },
+    ),
+    fake,
+    client,
+  };
 }
 
 describe("pull request list reviewers", () => {
   it("shows the server's verdicts and requests with the detail view's marks, without reading activity", () => {
-    const { container, fake } = renderReviewers(pull({ reviewers: [], review_states: [
-      { member: "approved-agent", requested: false, verdict: "approve", outdated: false },
-      { member: "comment-agent", requested: false, verdict: "comment", outdated: true },
-      { member: "changes-agent", requested: false, verdict: "request_changes", outdated: false },
-      { member: "again-agent", requested: true, verdict: "approve", outdated: true },
-      { member: "pending-agent", requested: true, verdict: null, outdated: false },
-    ] }));
+    const { container, fake } = renderReviewers(
+      pull({
+        reviewers: [],
+        review_states: [
+          { member: "approved-agent", requested: false, verdict: "approve", outdated: false },
+          { member: "comment-agent", requested: false, verdict: "comment", outdated: true },
+          {
+            member: "changes-agent",
+            requested: false,
+            verdict: "request_changes",
+            outdated: false,
+          },
+          { member: "again-agent", requested: true, verdict: "approve", outdated: true },
+          { member: "pending-agent", requested: true, verdict: null, outdated: false },
+        ],
+      }),
+    );
     const summary = screen.getByRole("img", {
       name: "Reviewers: approved-agent (Approved), comment-agent (Commented (older revision)), changes-agent (Changes requested), again-agent (Requested again), pending-agent (Requested)",
     });
@@ -52,21 +71,52 @@ describe("pull request list reviewers", () => {
   });
 
   it("updates closed pull requests from the server's summary rather than inferring state from the head", () => {
-    const state = { member: "review-agent", requested: false, verdict: "approve" as const, outdated: false };
-    const { container, rerender } = renderReviewers(pull({ state: "closed", review_states: [state] }));
-    expect(screen.getByRole("img", { name: "Reviewers: review-agent (Approved)" })).toBeInTheDocument();
+    const state = {
+      member: "review-agent",
+      requested: false,
+      verdict: "approve" as const,
+      outdated: false,
+    };
+    const { container, rerender } = renderReviewers(
+      pull({ state: "closed", review_states: [state] }),
+    );
+    expect(
+      screen.getByRole("img", { name: "Reviewers: review-agent (Approved)" }),
+    ).toBeInTheDocument();
     expect(container.querySelector(".review-mark.approve")).not.toHaveClass("stale");
     // A head change alone does not override the server's decision.
-    rerender(<a href="/acme/demo/-/pulls/3"><ReviewersCell pull={pull({ state: "closed", head_sha: NEW_HEAD, review_states: [state] })} /></a>);
+    rerender(
+      <a href="/acme/demo/-/pulls/3">
+        <ReviewersCell
+          pull={pull({ state: "closed", head_sha: NEW_HEAD, review_states: [state] })}
+        />
+      </a>,
+    );
     expect(container.querySelector(".review-mark.approve")).not.toHaveClass("stale");
-    rerender(<a href="/acme/demo/-/pulls/3"><ReviewersCell pull={pull({ state: "closed", head_sha: NEW_HEAD, review_states: [{ ...state, outdated: true }] })} /></a>);
-    expect(screen.getByRole("img", { name: "Reviewers: review-agent (Approved (older revision))" })).toBeInTheDocument();
+    rerender(
+      <a href="/acme/demo/-/pulls/3">
+        <ReviewersCell
+          pull={pull({
+            state: "closed",
+            head_sha: NEW_HEAD,
+            review_states: [{ ...state, outdated: true }],
+          })}
+        />
+      </a>,
+    );
+    expect(
+      screen.getByRole("img", { name: "Reviewers: review-agent (Approved (older revision))" }),
+    ).toBeInTheDocument();
     expect(container.querySelector(".review-mark.approve")).toHaveClass("stale");
   });
 
   it.each(["en", "ja"] as const)("uses a reviewer-specific empty label in %s", (language) => {
     const { container } = renderReviewers(pull({ review_states: [] }), language);
-    expect(screen.getByRole("img", { name: language === "ja" ? "レビュアー: なし" : "Reviewers: no one" })).toHaveTextContent("—");
+    expect(
+      screen.getByRole("img", {
+        name: language === "ja" ? "レビュアー: なし" : "Reviewers: no one",
+      }),
+    ).toHaveTextContent("—");
     expect(container.querySelector(".review-mark-anchor")).not.toBeInTheDocument();
   });
 });

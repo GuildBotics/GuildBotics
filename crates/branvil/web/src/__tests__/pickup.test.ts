@@ -1,21 +1,46 @@
 import { describe, expect, it } from "vitest";
 import type { Card, TicketRef } from "../api/types";
-import { arrange, nextPickup, pickupOrders, placements, reordered, restoring, stepped, type PickupRow } from "../views/relations/pickup";
+import {
+  arrange,
+  nextPickup,
+  pickupOrders,
+  placements,
+  reordered,
+  restoring,
+  stepped,
+  type PickupRow,
+} from "../views/relations/pickup";
 import { card } from "./fixtures";
 
 const AGENTS = new Set(["aiko", "kenji"]);
 const isAgent = (name: string) => AGENTS.has(name);
 
-const ref = (c: Card): TicketRef => ({ url: c.url, repository: c.repository, key: c.key, title: c.title, state: c.state, state_reason: null });
+const ref = (c: Card): TicketRef => ({
+  url: c.url,
+  repository: c.repository,
+  key: c.key,
+  title: c.title,
+  state: c.state,
+  state_reason: null,
+});
 const by = (name: string) => ({ assignee: { name, assigned_at: "2026-11-01T00:00:00Z" } });
 
 /** A row in short: its key and number, and what keeps it from starting. */
-const said = (row: PickupRow) => [row.card.key, row.n, ...row.stuck.map((r) => `${r.ticket}:${r.why}`)];
-const orderOf = (cards: Card[], assignee = "aiko") => (pickupOrders(cards, isAgent).get(assignee) ?? []).map(said);
+const said = (row: PickupRow) => [
+  row.card.key,
+  row.n,
+  ...row.stuck.map((r) => `${r.ticket}:${r.why}`),
+];
+const orderOf = (cards: Card[], assignee = "aiko") =>
+  (pickupOrders(cards, isAgent).get(assignee) ?? []).map(said);
 
 describe("pickup order", () => {
   it("numbers an agent's ready tickets in board order, as the owner set them", () => {
-    const cards = [card("3", "ready", by("aiko")), card("1", "ready", by("aiko")), card("2", "ready", by("aiko"))];
+    const cards = [
+      card("3", "ready", by("aiko")),
+      card("1", "ready", by("aiko")),
+      card("2", "ready", by("aiko")),
+    ];
     expect(orderOf(cards)).toEqual([
       ["3", 1],
       ["1", 2],
@@ -106,10 +131,14 @@ describe("open waits and the next pickup", () => {
     const c = card("C", "ready", by("aiko"));
     const rows = pickupOrders([a, b, c], isAgent).get("aiko")!;
     expect(rows.map((r) => r.n)).toEqual([1, 2]);
-    expect(rows[0]?.waits).toEqual([{ ticket: "acme/demo#A", lane: "in_progress", assignee: "aiko" }]);
+    expect(rows[0]?.waits).toEqual([
+      { ticket: "acme/demo#A", lane: "in_progress", assignee: "aiko" },
+    ]);
     expect(nextPickup(rows)?.card.key).toBe("C");
     const closed: Card = { ...a, state: "closed" };
-    const after = pickupOrders([closed, { ...b, blocked_by: [ref(closed)] }, c], isAgent).get("aiko")!;
+    const after = pickupOrders([closed, { ...b, blocked_by: [ref(closed)] }, c], isAgent).get(
+      "aiko",
+    )!;
     expect(after[0]?.waits).toEqual([]);
     expect(nextPickup(after)?.card.key).toBe("B");
   });
@@ -149,7 +178,9 @@ describe("reordering the pickup order", () => {
   it("puts a ticket before another, written before it", () => {
     const moved = arrange(refs("A", "B", "C", "D"), "acme/demo#D", "acme/demo#B", cards);
     expect(moved).toEqual({ order: refs("A", "D", "B", "C"), group: refs("D") });
-    expect(placements(moved.order, moved.group, ready)).toEqual({ writes: [{ ref: "acme/demo#D", at: { before: "acme/demo#B" } }] });
+    expect(placements(moved.order, moved.group, ready)).toEqual({
+      writes: [{ ref: "acme/demo#D", at: { before: "acme/demo#B" } }],
+    });
   });
 
   it("brings what it waits for (further on too) along, in order, when that would stay behind", () => {
@@ -171,7 +202,9 @@ describe("reordering the pickup order", () => {
   it("puts a ticket last after the one before it, never naming both neighbours", () => {
     const moved = arrange(refs("A", "B", "C", "D"), "acme/demo#C", null, cards);
     expect(moved.order).toEqual(refs("A", "B", "D", "C"));
-    expect(placements(moved.order, moved.group, ready)).toEqual({ writes: [{ ref: "acme/demo#C", at: { after: "acme/demo#D" } }] });
+    expect(placements(moved.order, moved.group, ready)).toEqual({
+      writes: [{ ref: "acme/demo#C", at: { after: "acme/demo#D" } }],
+    });
     // A group put last follows itself.
     const all = [a, b, c];
     const last = arrange(refs("B", "C", "A"), "acme/demo#B", null, all);
@@ -206,8 +239,12 @@ describe("reordering the pickup order", () => {
 
   it("writes nothing and names the ticket when one moved or its neighbour left the Ready lane", () => {
     const moved = arrange(refs("A", "B", "C", "D"), "acme/demo#D", "acme/demo#B", cards);
-    expect(placements(moved.order, moved.group, new Set(refs("A", "C", "D")))).toEqual({ stale: "acme/demo#B" });
-    expect(placements(moved.order, moved.group, new Set(refs("A", "B", "C")))).toEqual({ stale: "acme/demo#D" });
+    expect(placements(moved.order, moved.group, new Set(refs("A", "C", "D")))).toEqual({
+      stale: "acme/demo#B",
+    });
+    expect(placements(moved.order, moved.group, new Set(refs("A", "B", "C")))).toEqual({
+      stale: "acme/demo#D",
+    });
   });
 
   it("undoes bottom up: each just before what followed it, a moved one put back first, or the next still in the lane, or last", () => {
@@ -223,14 +260,24 @@ describe("reordering the pickup order", () => {
       { ref: "acme/demo#B", at: { before: "acme/demo#C" } },
     ]);
     // B was started meanwhile: it stays where it is, and A goes before Y.
-    expect(restoring(lane, refs("A", "B"), new Set(refs("X", "A", "Y", "C", "Z")))).toEqual([{ ref: "acme/demo#A", at: { before: "acme/demo#Y" } }]);
+    expect(restoring(lane, refs("A", "B"), new Set(refs("X", "A", "Y", "C", "Z")))).toEqual([
+      { ref: "acme/demo#A", at: { before: "acme/demo#Y" } },
+    ]);
   });
 
   it("shows a drag before it is written: the agent's numbered tickets swap places among themselves", () => {
     const other = card("O", "ready", by("kenji"));
     const talk = card("T", "ready", { ...by("aiko"), interactive: true });
-    const shown = reordered([a, other, talk, b, c, card("W", "in_progress", by("aiko"))], "aiko", refs("C", "A"));
+    const shown = reordered(
+      [a, other, talk, b, c, card("W", "in_progress", by("aiko"))],
+      "aiko",
+      refs("C", "A"),
+    );
     expect(shown.map((x) => x.key)).toEqual(["C", "O", "T", "A", "B", "W"]);
-    expect((pickupOrders(shown, isAgent).get("aiko") ?? []).map((r) => r.card.key)).toEqual(["C", "A", "B"]);
+    expect((pickupOrders(shown, isAgent).get("aiko") ?? []).map((r) => r.card.key)).toEqual([
+      "C",
+      "A",
+      "B",
+    ]);
   });
 });

@@ -35,10 +35,17 @@ export function NotificationsSettings() {
         <Stack gap="md">
           <Group gap="xs">
             <StateBadge tone={webhook.data.set ? "success" : "neutral"}>
-              {webhook.data.set ? t("notifications.set", { host: webhook.data.host ?? "" }) : t("notifications.unset")}
+              {webhook.data.set
+                ? t("notifications.set", { host: webhook.data.host ?? "" })
+                : t("notifications.unset")}
             </StateBadge>
             {webhook.data.set && (
-              <Button size="xs" variant="default" onClick={() => remove.mutate()} disabled={remove.isPending}>
+              <Button
+                size="xs"
+                variant="default"
+                onClick={() => remove.mutate()}
+                disabled={remove.isPending}
+              >
                 {t("notifications.remove")}
               </Button>
             )}

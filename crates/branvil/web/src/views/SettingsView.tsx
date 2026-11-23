@@ -10,9 +10,23 @@ import { MembersSettings } from "./settings/MembersSettings";
 import { NotificationsSettings } from "./settings/NotificationsSettings";
 import { WorkspaceSettings } from "./settings/WorkspaceSettings";
 
-function NavItem({ to, active, icon, children }: { to: string; active: boolean; icon: ReactNode; children: ReactNode }) {
+function NavItem({
+  to,
+  active,
+  icon,
+  children,
+}: {
+  to: string;
+  active: boolean;
+  icon: ReactNode;
+  children: ReactNode;
+}) {
   return (
-    <Link to={to} className={active ? "setup-nav-item active" : "setup-nav-item"} aria-current={active ? "page" : undefined}>
+    <Link
+      to={to}
+      className={active ? "setup-nav-item active" : "setup-nav-item"}
+      aria-current={active ? "page" : undefined}
+    >
       {icon}
       {children}
     </Link>
@@ -25,15 +39,23 @@ function NavItem({ to, active, icon, children }: { to: string; active: boolean; 
  * belongs to all of Branvil (its members, and CI and notifications for the
  * owner). `repo` opens that repository's editor on its CI tab.
  */
-export function SettingsView({ section, workspace, repo }: {
+export function SettingsView({
+  section,
+  workspace,
+  repo,
+}: {
   section: string | null;
   workspace: string | null;
   repo: string | null;
 }) {
   const t = useT();
   const owner = useSession().data?.me.kind === "owner";
-  const current = (section === "ci" || section === "notifications") && owner ? section
-    : section === "members" || !workspace ? "members" : "workspace";
+  const current =
+    (section === "ci" || section === "notifications") && owner
+      ? section
+      : section === "members" || !workspace
+        ? "members"
+        : "workspace";
   return (
     <Stack gap="lg">
       <Title order={2}>{t("nav.settings")}</Title>
@@ -43,23 +65,39 @@ export function SettingsView({ section, workspace, repo }: {
             {workspace && (
               <div className="setup-nav-group">
                 <div className="nav-label">{t("settings.workspaceGroup")}</div>
-                <NavItem to={href.settings()} active={current === "workspace"} icon={<SquareKanban size={18} />}>
+                <NavItem
+                  to={href.settings()}
+                  active={current === "workspace"}
+                  icon={<SquareKanban size={18} />}
+                >
                   {workspace}
                 </NavItem>
               </div>
             )}
             <div className="setup-nav-group">
               <div className="nav-label">{t("settings.branvilGroup")}</div>
-              <NavItem to={href.settings("members")} active={current === "members"} icon={<Users size={18} />}>
+              <NavItem
+                to={href.settings("members")}
+                active={current === "members"}
+                icon={<Users size={18} />}
+              >
                 {t("settings.members")}
               </NavItem>
               {owner && (
-                <NavItem to={href.settings("ci")} active={current === "ci"} icon={<Cpu size={18} />}>
+                <NavItem
+                  to={href.settings("ci")}
+                  active={current === "ci"}
+                  icon={<Cpu size={18} />}
+                >
                   {t("ci.settings.title")}
                 </NavItem>
               )}
               {owner && (
-                <NavItem to={href.settings("notifications")} active={current === "notifications"} icon={<Bell size={18} />}>
+                <NavItem
+                  to={href.settings("notifications")}
+                  active={current === "notifications"}
+                  icon={<Bell size={18} />}
+                >
                   {t("settings.notifications")}
                 </NavItem>
               )}

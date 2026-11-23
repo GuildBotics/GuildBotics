@@ -9,15 +9,30 @@ export function ReviewersCell({ pull }: { pull: PullRequest }) {
   const kindOf = useMemberKinds();
   const states = pull.review_states;
   const label = t("people.reviewersSummary", {
-    names: states.map((state) => `${state.member} (${reviewStateText(state, t)})`).join(", ") || t("member.reviewersNobody"),
+    names:
+      states.map((state) => `${state.member} (${reviewStateText(state, t)})`).join(", ") ||
+      t("member.reviewersNobody"),
   });
   return (
     <span role="img" aria-label={label} title={label} style={{ display: "block" }}>
       {states.length ? (
-        <span aria-hidden style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingRight: 4, paddingBottom: 3 }}>
-          {states.map((state) => <ReviewAvatar key={state.member} name={state.member} kind={kindOf(state.member)} state={state} size={24} />)}
+        <span
+          aria-hidden
+          style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingRight: 4, paddingBottom: 3 }}
+        >
+          {states.map((state) => (
+            <ReviewAvatar
+              key={state.member}
+              name={state.member}
+              kind={kindOf(state.member)}
+              state={state}
+              size={24}
+            />
+          ))}
         </span>
-      ) : <span aria-hidden>—</span>}
+      ) : (
+        <span aria-hidden>—</span>
+      )}
     </span>
   );
 }

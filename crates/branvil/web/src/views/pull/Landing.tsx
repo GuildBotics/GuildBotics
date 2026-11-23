@@ -13,8 +13,11 @@ import { useT, type Translate } from "../../i18n";
 import { usePublishPreview } from "../../query/hooks";
 import { keys } from "../../query/keys";
 
-
-function refusalOf(t: Translate, err: unknown, notReady: "merge.notMergeable" | "publish.notReady"): string {
+function refusalOf(
+  t: Translate,
+  err: unknown,
+  notReady: "merge.notMergeable" | "publish.notReady",
+): string {
   if (isApiError(err, "head_moved")) return t("merge.headMoved");
   if (isApiError(err, "base_moved")) return t("merge.baseMoved");
   if (isApiError(err, "not_mergeable")) return t(notReady, { message: err.message });
@@ -42,7 +45,8 @@ export function MergeCard({ pull, repo }: { pull: PullRequest; repo: Repository 
           <Text fw={700}>{t("merge.title")}</Text>
         </Group>
         <Text size="xs" c="dimmed">
-          {t("merge.expected")} <Sha repo={pull.repository} value={pull.head_sha} /> / <Sha repo={pull.repository} value={pull.base_sha} />
+          {t("merge.expected")} <Sha repo={pull.repository} value={pull.head_sha} /> /{" "}
+          <Sha repo={pull.repository} value={pull.base_sha} />
         </Text>
         {merge.isError && <Refusal>{refusalOf(t, merge.error, "merge.notMergeable")}</Refusal>}
         {merge.isSuccess && <Notice>{t("merge.done")}</Notice>}
@@ -57,7 +61,11 @@ export function MergeCard({ pull, repo }: { pull: PullRequest; repo: Repository 
           </Text>
         )}
         <Group justify="flex-end">
-          <Button leftSection={<GitMerge size={16} />} disabled={merge.isPending || pull.draft || !pull.head_sha || !pull.base_sha || blocked} onClick={() => merge.mutate()}>
+          <Button
+            leftSection={<GitMerge size={16} />}
+            disabled={merge.isPending || pull.draft || !pull.head_sha || !pull.base_sha || blocked}
+            onClick={() => merge.mutate()}
+          >
             {merge.isPending ? t("merge.merging") : t("merge.submit")}
           </Button>
         </Group>
@@ -83,7 +91,11 @@ function PublishedState({ pull }: { pull: PullRequest }) {
             {t("publish.noPullYet")}
           </Text>
         )}
-        {x.state !== "none" && <StateBadge tone={x.state === "closed" ? "neutral" : "success"}>{t(`pull.state.${x.state}`)}</StateBadge>}
+        {x.state !== "none" && (
+          <StateBadge tone={x.state === "closed" ? "neutral" : "success"}>
+            {t(`pull.state.${x.state}`)}
+          </StateBadge>
+        )}
         <Text size="xs" c="dimmed">
           {t("publish.as", { account: x.account })}
         </Text>
@@ -108,32 +120,53 @@ function PublishedState({ pull }: { pull: PullRequest }) {
  * this says why, shows exactly what publishing posts there and as whom, and
  * publishes.
  */
-export function PublishCard({ pull, repo, upstream }: { pull: PullRequest; repo: Repository; upstream: Upstream }) {
+export function PublishCard({
+  pull,
+  repo,
+  upstream,
+}: {
+  pull: PullRequest;
+  repo: Repository;
+  upstream: Upstream;
+}) {
   const t = useT();
   const blocked = pull.landing?.next !== "owner_publish";
   const client = useQueryClient();
   const host = upstream.host;
   const [editing, setEditing] = useState(false);
   // Published to this upstream: one published to an earlier upstream is published again here.
-  const x = pull.upstream?.provider === upstream.provider && pull.upstream.repository === upstream.repository ? pull.upstream : null;
+  const x =
+    pull.upstream?.provider === upstream.provider &&
+    pull.upstream.repository === upstream.repository
+      ? pull.upstream
+      : null;
   const published = x !== null && x.number !== null && x.stopped === null;
   const preview = usePublishPreview(pull.repository, pull.number, !published);
   const publish = useMutation({
     mutationFn: () => api.pulls.publish(pull.repository, pull.number, pull.head_sha, pull.base_sha),
     onSuccess: (p) => client.setQueryData(keys.pull(pull.repository, pull.number), p),
-    onSettled: () => void client.invalidateQueries({ queryKey: keys.pull(pull.repository, pull.number) }),
+    onSettled: () =>
+      void client.invalidateQueries({ queryKey: keys.pull(pull.repository, pull.number) }),
   });
   const again = x?.stopped != null;
   const p = preview.data;
   return (
-    <Card p="lg" component="section" aria-label={t("publish.title", { host })} style={{ borderColor: "var(--color-brand-border-subtle)" }}>
+    <Card
+      p="lg"
+      component="section"
+      aria-label={t("publish.title", { host })}
+      style={{ borderColor: "var(--color-brand-border-subtle)" }}
+    >
       <Stack gap="sm">
         <Group gap="xs">
           <CloudUpload size={18} />
           <Text fw={700}>{t("publish.title", { host })}</Text>
         </Group>
         <Text size="sm" c="var(--color-text-subtle)">
-          {t(published ? "publish.mergeThere" : "publish.explain", { host, repository: upstream.repository })}
+          {t(published ? "publish.mergeThere" : "publish.explain", {
+            host,
+            repository: upstream.repository,
+          })}
         </Text>
         {x && <PublishedState pull={pull} />}
         {!published &&
@@ -174,16 +207,33 @@ export function PublishCard({ pull, repo, upstream }: { pull: PullRequest; repo:
         )}
         {!editing && (
           <Group justify="space-between">
-            <Button size="xs" variant="default" leftSection={<Pencil size={14} />} onClick={() => setEditing(true)}>
+            <Button
+              size="xs"
+              variant="default"
+              leftSection={<Pencil size={14} />}
+              onClick={() => setEditing(true)}
+            >
               {t("publish.edit")}
             </Button>
             {!published && (
               <Button
                 leftSection={<CloudUpload size={16} />}
-                disabled={publish.isPending || pull.draft || !pull.head_sha || !pull.base_sha || blocked || (p !== undefined && p.login === null)}
-                onClick={() => (!again || window.confirm(t("publish.confirmAgain", { host }))) && publish.mutate()}
+                disabled={
+                  publish.isPending ||
+                  pull.draft ||
+                  !pull.head_sha ||
+                  !pull.base_sha ||
+                  blocked ||
+                  (p !== undefined && p.login === null)
+                }
+                onClick={() =>
+                  (!again || window.confirm(t("publish.confirmAgain", { host }))) &&
+                  publish.mutate()
+                }
               >
-                {publish.isPending ? t("publish.publishing") : t(again ? "publish.again" : "publish.submit", { host })}
+                {publish.isPending
+                  ? t("publish.publishing")
+                  : t(again ? "publish.again" : "publish.submit", { host })}
               </Button>
             )}
           </Group>
@@ -198,7 +248,15 @@ export function PublishCard({ pull, repo, upstream }: { pull: PullRequest; repo:
  * as the preview shows, at publishing or at the next poll). For the rare case
  * the rewritten text still needs a person's hand.
  */
-function TitleBodyEditor({ pull, host, onDone }: { pull: PullRequest; host: string; onDone: () => void }) {
+function TitleBodyEditor({
+  pull,
+  host,
+  onDone,
+}: {
+  pull: PullRequest;
+  host: string;
+  onDone: () => void;
+}) {
   const t = useT();
   const client = useQueryClient();
   const [form, setForm] = useState({ title: pull.title, body: pull.body, revision: pull.revision });
@@ -210,7 +268,9 @@ function TitleBodyEditor({ pull, host, onDone }: { pull: PullRequest; host: stri
     },
     onSettled: () => {
       void client.invalidateQueries({ queryKey: keys.pull(pull.repository, pull.number) });
-      void client.invalidateQueries({ queryKey: keys.pullPart(pull.repository, pull.number, "publish") });
+      void client.invalidateQueries({
+        queryKey: keys.pullPart(pull.repository, pull.number, "publish"),
+      });
     },
   });
   return (
@@ -225,9 +285,24 @@ function TitleBodyEditor({ pull, host, onDone }: { pull: PullRequest; host: stri
         <Text size="xs" c="dimmed">
           {t("publish.source", { host })}
         </Text>
-        <TextInput label={t("ticket.title")} value={form.title} onChange={(e) => setForm({ ...form, title: e.currentTarget.value })} required />
-        <Textarea label={t("publish.body")} value={form.body} onChange={(e) => setForm({ ...form, body: e.currentTarget.value })} rows={8} />
-        {save.isError && (isApiError(save.error, "conflict") ? <Refusal>{t("settings.conflict")}</Refusal> : <ErrorMessage error={save.error} />)}
+        <TextInput
+          label={t("ticket.title")}
+          value={form.title}
+          onChange={(e) => setForm({ ...form, title: e.currentTarget.value })}
+          required
+        />
+        <Textarea
+          label={t("publish.body")}
+          value={form.body}
+          onChange={(e) => setForm({ ...form, body: e.currentTarget.value })}
+          rows={8}
+        />
+        {save.isError &&
+          (isApiError(save.error, "conflict") ? (
+            <Refusal>{t("settings.conflict")}</Refusal>
+          ) : (
+            <ErrorMessage error={save.error} />
+          ))}
         <Group justify="flex-end" gap="xs">
           <Button variant="default" onClick={onDone}>
             {t("common.cancel")}

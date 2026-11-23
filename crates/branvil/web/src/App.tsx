@@ -25,7 +25,15 @@ import { TicketView } from "./views/TicketView";
 import { TicketDrawer } from "./views/ticket/TicketDrawer";
 import { useCurrentWorkspace } from "./workspace";
 
-export function App({ client, language, test }: { client: QueryClient; language?: "en" | "ja"; test?: boolean }) {
+export function App({
+  client,
+  language,
+  test,
+}: {
+  client: QueryClient;
+  language?: "en" | "ja";
+  test?: boolean;
+}) {
   return (
     <MantineProvider
       theme={test ? { ...theme, respectReducedMotion: true } : theme}
@@ -48,7 +56,8 @@ function Shell() {
 function Gate({ route }: { route: Route }) {
   const session = useSession();
   if (session.isPending) return <Loading />;
-  if (session.isError) return <GuidanceView error={session.error} onRetry={() => void session.refetch()} />;
+  if (session.isError)
+    return <GuidanceView error={session.error} onRetry={() => void session.refetch()} />;
   if (!session.data) return <GuidanceView />;
   return <SignedIn route={route} />;
 }
@@ -58,14 +67,27 @@ function SignedIn({ route }: { route: Route }) {
   const streamLost = useChangeStream(client, true);
   const current = useCurrentWorkspace(route);
   return (
-    <AppShell sidebar={<Sidebar route={route} workspace={current.name} workspaces={current.names} onWorkspaceChange={current.select} />}>
+    <AppShell
+      sidebar={
+        <Sidebar
+          route={route}
+          workspace={current.name}
+          workspaces={current.names}
+          onWorkspaceChange={current.select}
+        />
+      }
+    >
       <AlertBand streamLost={streamLost} />
       <RouteView route={route} workspace={current.name} workspaces={current.names} />
     </AppShell>
   );
 }
 
-function RouteView({ route, workspace, workspaces }: {
+function RouteView({
+  route,
+  workspace,
+  workspaces,
+}: {
   route: Route;
   workspace: string | null;
   workspaces: string[] | null;
@@ -75,7 +97,9 @@ function RouteView({ route, workspace, workspaces }: {
     case "home":
       return <Home workspace={workspace} workspaces={workspaces} />;
     case "settings":
-      return <SettingsView section={route.section} workspace={workspace} repo={route.repo ?? null} />;
+      return (
+        <SettingsView section={route.section} workspace={workspace} repo={route.repo ?? null} />
+      );
     case "pulls":
       return <PullsView key={route.workspace} workspace={route.workspace} repo={null} />;
     case "workspace":
@@ -85,15 +109,31 @@ function RouteView({ route, workspace, workspaces }: {
         </TicketDrawer>
       );
     case "repo":
-      return <PullsView key={route.repo} workspace={route.repo.split("/")[0] as string} repo={route.repo} />;
+      return (
+        <PullsView
+          key={route.repo}
+          workspace={route.repo.split("/")[0] as string}
+          repo={route.repo}
+        />
+      );
     case "ticket":
-      return <TicketView key={`${route.repo}#${route.key}`} repo={route.repo} ticketKey={route.key} />;
+      return (
+        <TicketView key={`${route.repo}#${route.key}`} repo={route.repo} ticketKey={route.key} />
+      );
     case "pull":
-      return <PullView key={`${route.repo}#${route.number}`} repo={route.repo} number={route.number} />;
+      return (
+        <PullView key={`${route.repo}#${route.number}`} repo={route.repo} number={route.number} />
+      );
     case "commit":
       return <CommitView repo={route.repo} sha={route.sha} />;
     case "job":
-      return <JobView key={`${route.repo}#${route.attemptId}`} repo={route.repo} attemptId={route.attemptId} />;
+      return (
+        <JobView
+          key={`${route.repo}#${route.attemptId}`}
+          repo={route.repo}
+          attemptId={route.attemptId}
+        />
+      );
     case "not_found":
       return (
         <Stack gap="sm">
@@ -108,7 +148,13 @@ function RouteView({ route, workspace, workspaces }: {
 }
 
 /** `/` opens the shown workspace's first page; with no workspace yet, offers to create one. */
-function Home({ workspace, workspaces }: { workspace: string | null; workspaces: string[] | null }) {
+function Home({
+  workspace,
+  workspaces,
+}: {
+  workspace: string | null;
+  workspaces: string[] | null;
+}) {
   const t = useT();
   const [creating, setCreating] = useState(false);
   useEffect(() => {

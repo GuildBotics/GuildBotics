@@ -8,7 +8,15 @@ const apiTarget = process.env.GUILDBOTICS_DEV_API ?? "http://127.0.0.1:7878";
 const proxy = {
   target: apiTarget,
   changeOrigin: true,
-  configure: (server: { on: (event: "proxyReq", cb: (req: { setHeader: (k: string, v: string) => void; getHeader: (k: string) => unknown }) => void) => void }) => {
+  configure: (server: {
+    on: (
+      event: "proxyReq",
+      cb: (req: {
+        setHeader: (k: string, v: string) => void;
+        getHeader: (k: string) => unknown;
+      }) => void,
+    ) => void;
+  }) => {
     server.on("proxyReq", (req) => {
       if (req.getHeader("origin")) req.setHeader("origin", new URL(apiTarget).origin);
     });

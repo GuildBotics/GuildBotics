@@ -10,15 +10,21 @@ import { keys } from "../query/keys";
 class Channel {
   static all = new Set<Channel>();
   onmessage: ((event: { data: unknown }) => void) | null = null;
-  constructor(readonly name: string) { Channel.all.add(this); }
+  constructor(readonly name: string) {
+    Channel.all.add(this);
+  }
   postMessage(data: unknown) {
     for (const peer of Channel.all) {
       if (peer !== this && peer.name === this.name) {
-        queueMicrotask(() => { if (Channel.all.has(peer)) peer.onmessage?.({ data }); });
+        queueMicrotask(() => {
+          if (Channel.all.has(peer)) peer.onmessage?.({ data });
+        });
       }
     }
   }
-  close() { Channel.all.delete(this); }
+  close() {
+    Channel.all.delete(this);
+  }
 }
 
 // Exclusive FIFO locks; abort removes only a waiting request. An acquired lock
@@ -26,25 +32,28 @@ class Channel {
 class Locks {
   held = false;
   waiting: Array<() => void> = [];
-  request = vi.fn((_name: string, { signal }: { signal: AbortSignal }, callback: () => Promise<void>) =>
-    new Promise<void>((resolve, reject) => {
-      const abort = () => {
-        this.waiting = this.waiting.filter((entry) => entry !== acquire);
-        reject(new DOMException("Aborted", "AbortError"));
-      };
-      const acquire = () => {
-        signal.removeEventListener("abort", abort);
-        this.held = true;
-        void callback().then(resolve, reject).finally(() => {
-          this.held = false;
-          this.waiting.shift()?.();
-        });
-      };
-      signal.addEventListener("abort", abort, { once: true });
-      if (signal.aborted) abort();
-      else if (this.held) this.waiting.push(acquire);
-      else acquire();
-    }),
+  request = vi.fn(
+    (_name: string, { signal }: { signal: AbortSignal }, callback: () => Promise<void>) =>
+      new Promise<void>((resolve, reject) => {
+        const abort = () => {
+          this.waiting = this.waiting.filter((entry) => entry !== acquire);
+          reject(new DOMException("Aborted", "AbortError"));
+        };
+        const acquire = () => {
+          signal.removeEventListener("abort", abort);
+          this.held = true;
+          void callback()
+            .then(resolve, reject)
+            .finally(() => {
+              this.held = false;
+              this.waiting.shift()?.();
+            });
+        };
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) abort();
+        else if (this.held) this.waiting.push(acquire);
+        else acquire();
+      }),
   );
 }
 
@@ -55,17 +64,31 @@ class Source extends EventTarget {
   closed = false;
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
-  constructor(readonly url: string, readonly options: EventSourceInit) {
+  constructor(
+    readonly url: string,
+    readonly options: EventSourceInit,
+  ) {
     super();
     Source.all.push(this);
   }
-  open() { this.readyState = 1; this.onopen?.(); }
-  fail(state = 0) { this.readyState = state; this.onerror?.(); }
+  open() {
+    this.readyState = 1;
+    this.onopen?.();
+  }
+  fail(state = 0) {
+    this.readyState = state;
+    this.onerror?.();
+  }
   change(data = '{"kind":"ticket","path":"acme/demo","id":"1"}') {
     this.dispatchEvent(new MessageEvent("change", { data }));
   }
-  reset() { this.dispatchEvent(new Event("reset")); }
-  close() { this.closed = true; this.readyState = Source.CLOSED; }
+  reset() {
+    this.dispatchEvent(new Event("reset"));
+  }
+  close() {
+    this.closed = true;
+    this.readyState = Source.CLOSED;
+  }
 }
 
 async function flush(action: () => void = () => {}) {
@@ -78,10 +101,17 @@ async function flush(action: () => void = () => {}) {
 
 const clients: QueryClient[] = [];
 function tab(enabled = true, strict = false) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+  });
   clients.push(client);
   const shown = vi.fn(async () => ({}));
-  const observer = new QueryObserver(client, { queryKey: keys.ticket("acme/demo", "1"), queryFn: shown, initialData: {}, staleTime: Infinity });
+  const observer = new QueryObserver(client, {
+    queryKey: keys.ticket("acme/demo", "1"),
+    queryFn: shown,
+    initialData: {},
+    staleTime: Infinity,
+  });
   const stopObserving = observer.subscribe(() => {});
   client.setQueryData(keys.ticket("acme/demo", "2"), {});
   const invalidate = vi.spyOn(client, "invalidateQueries");
@@ -228,15 +258,19 @@ describe("shared change stream", () => {
 
   it("does not connect if cleanup wins the race with a queued lock grant", async () => {
     let grant: () => Promise<void> = async () => {};
-    vi.stubGlobal("navigator", { locks: {
-      request: (_name: string, _options: LockOptions, callback: () => Promise<void>) => {
-        grant = callback;
-        return Promise.resolve();
+    vi.stubGlobal("navigator", {
+      locks: {
+        request: (_name: string, _options: LockOptions, callback: () => Promise<void>) => {
+          grant = callback;
+          return Promise.resolve();
+        },
       },
-    } });
+    });
     const page = tab();
     page.unmount();
-    await act(async () => { await grant(); });
+    await act(async () => {
+      await grant();
+    });
     expect(Source.all).toHaveLength(0);
   });
 

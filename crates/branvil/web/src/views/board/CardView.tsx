@@ -6,7 +6,13 @@ import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "
 import { isApiError } from "../../api/client";
 import * as api from "../../api/endpoints";
 import { ticketRef, type Card, type Lane, type PullSummary } from "../../api/types";
-import { ErrorMessage, errorText, MemberAvatar, StateBadge, type Tone } from "../../components/common";
+import {
+  ErrorMessage,
+  errorText,
+  MemberAvatar,
+  StateBadge,
+  type Tone,
+} from "../../components/common";
 import { CheckSlot, PeopleItems, type Person } from "../../components/PeoplePicker";
 import { type Translate, useT } from "../../i18n";
 import { useChecks, useSession } from "../../query/hooks";
@@ -27,7 +33,9 @@ const COPIED_MS = 1500;
 export function ciUrlsOf(cards: Card[]): Set<string> {
   const urls: string[] = [];
   for (const c of cards)
-    for (const p of c.pull_requests) if (p.state === "open" && urls.length < CI_BUDGET && routeOfUrl(p.url)?.name === "pull") urls.push(p.url);
+    for (const p of c.pull_requests)
+      if (p.state === "open" && urls.length < CI_BUDGET && routeOfUrl(p.url)?.name === "pull")
+        urls.push(p.url);
   return new Set(urls);
 }
 
@@ -41,8 +49,12 @@ export interface Notice {
 export function moveRefusal(err: unknown, card: Card, t: Translate): Notice {
   const key = ticketRef(card);
   // A neighbour card that moved meanwhile is answered with 404: also a concurrent change.
-  if (isApiError(err, "conflict") || isApiError(err, "not_found")) return { tone: "info", text: t("board.moveConflict", { key }) };
-  return { tone: "error", text: t("board.moveFailed", { key, message: relationRefusal(err, t) ?? errorText(err, t) }) };
+  if (isApiError(err, "conflict") || isApiError(err, "not_found"))
+    return { tone: "info", text: t("board.moveConflict", { key }) };
+  return {
+    tone: "error",
+    text: t("board.moveFailed", { key, message: relationRefusal(err, t) ?? errorText(err, t) }),
+  };
 }
 
 const CI_TONE: Record<CiRollup, Tone> = {
@@ -57,12 +69,22 @@ function PullBadges({ pull, loadChecks }: { pull: PullSummary; loadChecks: boole
   const t = useT();
   const route = routeOfUrl(pull.url);
   const isPull = route?.name === "pull";
-  const checks = useChecks(isPull ? route.repo : "", isPull ? route.number : 0, isPull && loadChecks);
+  const checks = useChecks(
+    isPull ? route.repo : "",
+    isPull ? route.number : 0,
+    isPull && loadChecks,
+  );
   const state = pull.merged ? "merged" : pull.state;
   return (
     <li className="card-row">
       <ServiceLink url={pull.url}>
-        <Badge color={state === "open" ? "info" : state === "merged" ? "success" : "neutral"} variant="light" size="sm" leftSection={<GitPullRequest size={12} />} style={{ cursor: "pointer" }}>
+        <Badge
+          color={state === "open" ? "info" : state === "merged" ? "success" : "neutral"}
+          variant="light"
+          size="sm"
+          leftSection={<GitPullRequest size={12} />}
+          style={{ cursor: "pointer" }}
+        >
           {pull.label} {t(`pull.state.${state}`)}
         </Badge>
       </ServiceLink>
@@ -79,7 +101,13 @@ function PullBadges({ pull, loadChecks }: { pull: PullSummary; loadChecks: boole
  * A menu built only once its trigger is pressed: a menu in every card costs a
  * board of 1,700 cards seconds. `trigger` gets the function that opens it.
  */
-export function LazyMenu({ trigger, children }: { trigger: (open: () => void) => ReactElement; children: ReactNode }) {
+export function LazyMenu({
+  trigger,
+  children,
+}: {
+  trigger: (open: () => void) => ReactElement;
+  children: ReactNode;
+}) {
   const [opened, setOpened] = useState(false);
   const target = trigger(() => setOpened(true));
   if (!opened) return target;
@@ -92,23 +120,51 @@ export function LazyMenu({ trigger, children }: { trigger: (open: () => void) =>
 }
 
 /** Menu items choosing a lane; choosing the current one does nothing. */
-export function LaneItems({ lanes, current, onChoose }: { lanes: Lane[]; current: Lane; onChoose: (lane: Lane) => void }) {
+export function LaneItems({
+  lanes,
+  current,
+  onChoose,
+}: {
+  lanes: Lane[];
+  current: Lane;
+  onChoose: (lane: Lane) => void;
+}) {
   const t = useT();
   return lanes.map((l) => (
-    <Menu.Item key={l} leftSection={<CheckSlot on={l === current} />} onClick={() => l !== current && onChoose(l)}>
+    <Menu.Item
+      key={l}
+      leftSection={<CheckSlot on={l === current} />}
+      onClick={() => l !== current && onChoose(l)}
+    >
       {t(`lane.${l}`)}
     </Menu.Item>
   ));
 }
 
 /** A card's lane, pressed to move the card to another one. */
-export function LaneButton({ card, lanes, onLane, disabled }: { card: Card; lanes: Lane[]; onLane: (card: Card, lane: Lane) => void; disabled?: boolean }) {
+export function LaneButton({
+  card,
+  lanes,
+  onLane,
+  disabled,
+}: {
+  card: Card;
+  lanes: Lane[];
+  onLane: (card: Card, lane: Lane) => void;
+  disabled?: boolean;
+}) {
   const t = useT();
   const lane = t(`lane.${card.lane}`);
   return (
     <LazyMenu
       trigger={(open) => (
-        <button type="button" className="card-control" aria-label={t("relations.lane", { key: ticketRef(card), lane })} onClick={open} disabled={disabled}>
+        <button
+          type="button"
+          className="card-control"
+          aria-label={t("relations.lane", { key: ticketRef(card), lane })}
+          onClick={open}
+          disabled={disabled}
+        >
           {lane}
         </button>
       )}
@@ -142,7 +198,11 @@ export function CopyUrlItem({ url }: { url: string }) {
   }, [clipboard.copied]);
 
   return (
-    <Menu.Item closeMenuOnClick={false} leftSection={clipboard.copied ? <Check size={14} /> : <Copy size={14} />} onClick={() => clipboard.copy(url)}>
+    <Menu.Item
+      closeMenuOnClick={false}
+      leftSection={clipboard.copied ? <Check size={14} /> : <Copy size={14} />}
+      onClick={() => clipboard.copy(url)}
+    >
       {clipboard.copied ? t("common.copied") : t("board.copyUrl")}
     </Menu.Item>
   );
@@ -158,7 +218,8 @@ export function InteractiveItem({ card }: { card: Card }) {
   const client = useQueryClient();
   const close = useMenuContext().closeDropdownImmediately;
   const toggle = useMutation({
-    mutationFn: () => api.tickets.update(card.repository, card.key, { interactive: !card.interactive }),
+    mutationFn: () =>
+      api.tickets.update(card.repository, card.key, { interactive: !card.interactive }),
     onSuccess: close,
     // Descendants inherit it, so every card is read again.
     onSettled: () => void client.invalidateQueries({ queryKey: ["board"] }),
@@ -173,7 +234,11 @@ export function InteractiveItem({ card }: { card: Card }) {
       >
         {t("ticket.interactive")}
       </Menu.Item>
-      {toggle.isError && <Menu.Label><ErrorMessage error={toggle.error} /></Menu.Label>}
+      {toggle.isError && (
+        <Menu.Label>
+          <ErrorMessage error={toggle.error} />
+        </Menu.Label>
+      )}
     </>
   );
 }
@@ -191,16 +256,33 @@ export function DeleteCardItem({ card }: { card: Card }) {
     },
   });
   if (!owner) return null;
-  const refusal = (["delete_has_children", "delete_blocks_tickets", "delete_linked_pull", "delete_upstream_issue"] as const).find((code) => isApiError(remove.error, code));
+  const refusal = (
+    [
+      "delete_has_children",
+      "delete_blocks_tickets",
+      "delete_linked_pull",
+      "delete_upstream_issue",
+    ] as const
+  ).find((code) => isApiError(remove.error, code));
   return (
     <>
       <Menu.Divider />
-      <Menu.Item color="red" leftSection={<Trash2 size={14} />} closeMenuOnClick={false} disabled={remove.isPending} onClick={() => {
-        if (window.confirm(t("ticket.confirmDelete", { key: ticketRef(card) }))) remove.mutate();
-      }}>
+      <Menu.Item
+        color="red"
+        leftSection={<Trash2 size={14} />}
+        closeMenuOnClick={false}
+        disabled={remove.isPending}
+        onClick={() => {
+          if (window.confirm(t("ticket.confirmDelete", { key: ticketRef(card) }))) remove.mutate();
+        }}
+      >
         {t("ticket.delete")}
       </Menu.Item>
-      {remove.isError && <Menu.Label><ErrorMessage error={refusal ? new Error(t(`ticket.${refusal}`)) : remove.error} /></Menu.Label>}
+      {remove.isError && (
+        <Menu.Label>
+          <ErrorMessage error={refusal ? new Error(t(`ticket.${refusal}`)) : remove.error} />
+        </Menu.Label>
+      )}
     </>
   );
 }
@@ -211,7 +293,13 @@ export function ChildrenToggle({ open, onToggle }: { open: boolean; onToggle: ()
   const label = t(open ? "relations.closeChildren" : "relations.openChildren");
   return (
     <Tooltip label={label}>
-      <button type="button" className="card-control" aria-label={label} aria-expanded={open} onClick={onToggle}>
+      <button
+        type="button"
+        className="card-control"
+        aria-label={label}
+        aria-expanded={open}
+        onClick={onToggle}
+      >
         {open ? "▼" : "▶"}
       </button>
     </Tooltip>
@@ -248,14 +336,21 @@ export function CardView({
   const client = useQueryClient();
   const ref = ticketRef(card);
   const assign = useMutation({
-    mutationFn: (name: string | null) => (name ? api.tickets.assign(card.repository, card.key, name) : api.tickets.unassign(card.repository, card.key)),
+    mutationFn: (name: string | null) =>
+      name
+        ? api.tickets.assign(card.repository, card.key, name)
+        : api.tickets.unassign(card.repository, card.key),
     onSettled: () => void client.invalidateQueries({ queryKey: ["board"] }),
   });
   const assignee = card.assignee?.name ?? null;
   const kind = people.find((p) => p.name === assignee)?.kind;
 
   return (
-    <article className={["card", busy && "busy", className].filter(Boolean).join(" ")} aria-busy={busy} aria-label={`${ref} ${card.title}`}>
+    <article
+      className={["card", busy && "busy", className].filter(Boolean).join(" ")}
+      aria-busy={busy}
+      aria-label={`${ref} ${card.title}`}
+    >
       <div className="card-row card-head">
         {lead}
         <TicketLink repo={card.repository} ticketKey={card.key} className="key">
@@ -264,10 +359,14 @@ export function CardView({
         {lane}
         {card.repair && <StateBadge tone="warning">{t("ticket.repair")}</StateBadge>}
         {card.state === "closed" && <StateBadge>{t("ticket.closed")}</StateBadge>}
-        {card.state === "open" && card.blocked_by.some((b) => b.state === "open") && <StateBadge tone="warning">{t("board.blocked")}</StateBadge>}
+        {card.state === "open" && card.blocked_by.some((b) => b.state === "open") && (
+          <StateBadge tone="warning">{t("board.blocked")}</StateBadge>
+        )}
         {(card.interactive || card.interactive_ancestor) && (
           <StateBadge tone="info">
-            {card.interactive_ancestor ? t("board.interactiveInherited", { ticket: ticketRef(card.interactive_ancestor) }) : t("board.interactive")}
+            {card.interactive_ancestor
+              ? t("board.interactiveInherited", { ticket: ticketRef(card.interactive_ancestor) })
+              : t("board.interactive")}
           </StateBadge>
         )}
         {busy && (
@@ -283,7 +382,11 @@ export function CardView({
       </p>
       <div className="card-row">
         {card.labels.length > 0 && (
-          <ul className="card-row" aria-label={t("ticket.labels")} style={{ listStyle: "none", margin: 0, padding: 0 }}>
+          <ul
+            className="card-row"
+            aria-label={t("ticket.labels")}
+            style={{ listStyle: "none", margin: 0, padding: 0 }}
+          >
             {card.labels.map((l) => (
               <li key={l}>
                 <Badge variant="outline" size="sm">
@@ -298,7 +401,10 @@ export function CardView({
             <button
               type="button"
               className="card-control card-who"
-              aria-label={t("board.assignee", { key: ref, name: assignee ?? t("board.unassigned") })}
+              aria-label={t("board.assignee", {
+                key: ref,
+                name: assignee ?? t("board.unassigned"),
+              })}
               onClick={open}
               disabled={busy}
             >
@@ -313,11 +419,19 @@ export function CardView({
             </button>
           )}
         >
-          <PeopleItems current={assignee} people={people} onChoose={(name) => name !== assignee && assign.mutate(name)} />
+          <PeopleItems
+            current={assignee}
+            people={people}
+            onChoose={(name) => name !== assignee && assign.mutate(name)}
+          />
         </LazyMenu>
       </div>
       {card.pull_requests.length > 0 && (
-        <ul className="card-row" aria-label={t("ticket.linkedPulls")} style={{ listStyle: "none", margin: 0, padding: 0 }}>
+        <ul
+          className="card-row"
+          aria-label={t("ticket.linkedPulls")}
+          style={{ listStyle: "none", margin: 0, padding: 0 }}
+        >
           {card.pull_requests.map((p) => (
             <PullBadges key={p.url} pull={p} loadChecks={loadChecks.has(p.url)} />
           ))}

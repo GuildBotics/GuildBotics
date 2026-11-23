@@ -21,65 +21,119 @@ const REPO = {
   clone_url: "http://127.0.0.1:7878/git/acme/demo.git",
   url: "",
   protected_branches: ["main"],
-  post_merge_jobs: [], required_checks: [],
+  post_merge_jobs: [],
+  required_checks: [],
   required_approvals: 1,
   auto_land: false,
   hold_while_failing: false,
-  ci_network: false, responder: { member: "aiko", chosen: false, automatic: "aiko" },
+  ci_network: false,
+  responder: { member: "aiko", chosen: false, automatic: "aiko" },
   labels: ["bug"],
   upstream: null,
   revision: 4,
 };
 
 /** Adds `values` to the pill input labelled `label`, one Enter each. */
-async function addPills(user: ReturnType<typeof userEvent.setup>, label: string | RegExp, values: string[]) {
+async function addPills(
+  user: ReturnType<typeof userEvent.setup>,
+  label: string | RegExp,
+  values: string[],
+) {
   const input = screen.getByLabelText(label, { selector: "input:not([type=hidden])" });
   for (const v of values) await user.type(input, `${v}{Enter}`);
 }
 
 describe("settings", () => {
-  it.each([false, true])("selects only agents and preserves the automatic candidate after saving (chosen=%s)", async (chosen) => {
-    let current = { ...REPO, responder: { member: chosen ? "ken" : "aiko", chosen, automatic: "aiko" } };
-    const fake = fakeApi({
-      ...SHELL,
-      "GET /api/v1/repos": () => page([current]),
-      "GET /api/v1/members": page([ME, { name: "aiko", kind: "agent", accounts: [], reviewers: [] }, { name: "ken", kind: "agent", accounts: [], reviewers: [] }, { name: "runner", kind: "runner", accounts: [], reviewers: [] }]),
-      "PATCH /api/v1/repos/acme/demo": (req) => {
-        const body = req.body as { responder: string | null; revision: number };
-        current = { ...current, responder: { member: body.responder ?? "aiko", chosen: body.responder !== null, automatic: "aiko" }, revision: body.revision + 1 };
-        return json(200, current);
-      },
-    });
-    const user = userEvent.setup();
-    renderApp("/-/settings/repos/acme/demo");
-    const selector = await screen.findByRole("combobox", { name: "Default responder" }, { timeout: 5000 });
-    await waitFor(() => expect(selector).toHaveValue(chosen ? "ken" : "Automatic"));
-    await user.click(screen.getByRole("combobox", { name: "Default responder" }));
-    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Automatic", "aiko", "ken"]);
-    await user.click(screen.getByRole("option", { name: /^ken$/ }));
-    await user.click(screen.getAllByRole("button", { name: "Save" })[0]!);
-    await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")).toHaveLength(1));
-    expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({ revision: 4, responder: "ken" });
-    await waitFor(() => expect(screen.getByRole("combobox", { name: "Default responder" })).toHaveValue("ken"));
-    await choose(user, "Default responder", "Automatic");
-    await user.click(screen.getAllByRole("button", { name: "Save" })[0]!);
-    await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")).toHaveLength(2));
-    expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[1]?.body).toMatchObject({ revision: 5, responder: null });
-  });
-  it.each(["/-/settings", "/-/settings/display"])("shows the workspace settings at %s", async (path) => {
-    fakeApi({
-      ...SHELL,
-      "GET /api/v1/repos": page([REPO, { ...REPO, path: "beta/x" }]),
-    });
-    renderApp(path);
-    const sections = await screen.findByRole("navigation", { name: "Settings sections" });
-    expect(await within(sections).findByRole("link", { name: "acme" })).toHaveAttribute("aria-current", "page");
-    expect(within(sections).getByRole("link", { name: "Members" })).toHaveAttribute("href", "/-/settings/members");
-    expect(within(sections).queryByRole("link", { name: "Display" })).not.toBeInTheDocument();
-    // Only this workspace's repositories.
-    const list = await screen.findByRole("list", { name: "Repositories" });
-    expect(within(list).getAllByRole("listitem").map((li) => within(li).getByText(/\//, { selector: "strong" }).textContent)).toEqual(["acme/demo"]);
-  });
+  it.each([false, true])(
+    "selects only agents and preserves the automatic candidate after saving (chosen=%s)",
+    async (chosen) => {
+      let current = {
+        ...REPO,
+        responder: { member: chosen ? "ken" : "aiko", chosen, automatic: "aiko" },
+      };
+      const fake = fakeApi({
+        ...SHELL,
+        "GET /api/v1/repos": () => page([current]),
+        "GET /api/v1/members": page([
+          ME,
+          { name: "aiko", kind: "agent", accounts: [], reviewers: [] },
+          { name: "ken", kind: "agent", accounts: [], reviewers: [] },
+          { name: "runner", kind: "runner", accounts: [], reviewers: [] },
+        ]),
+        "PATCH /api/v1/repos/acme/demo": (req) => {
+          const body = req.body as { responder: string | null; revision: number };
+          current = {
+            ...current,
+            responder: {
+              member: body.responder ?? "aiko",
+              chosen: body.responder !== null,
+              automatic: "aiko",
+            },
+            revision: body.revision + 1,
+          };
+          return json(200, current);
+        },
+      });
+      const user = userEvent.setup();
+      renderApp("/-/settings/repos/acme/demo");
+      const selector = await screen.findByRole(
+        "combobox",
+        { name: "Default responder" },
+        { timeout: 5000 },
+      );
+      await waitFor(() => expect(selector).toHaveValue(chosen ? "ken" : "Automatic"));
+      await user.click(screen.getByRole("combobox", { name: "Default responder" }));
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+        "Automatic",
+        "aiko",
+        "ken",
+      ]);
+      await user.click(screen.getByRole("option", { name: /^ken$/ }));
+      await user.click(screen.getAllByRole("button", { name: "Save" })[0]!);
+      await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")).toHaveLength(1));
+      expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({
+        revision: 4,
+        responder: "ken",
+      });
+      await waitFor(() =>
+        expect(screen.getByRole("combobox", { name: "Default responder" })).toHaveValue("ken"),
+      );
+      await choose(user, "Default responder", "Automatic");
+      await user.click(screen.getAllByRole("button", { name: "Save" })[0]!);
+      await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")).toHaveLength(2));
+      expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[1]?.body).toMatchObject({
+        revision: 5,
+        responder: null,
+      });
+    },
+  );
+  it.each(["/-/settings", "/-/settings/display"])(
+    "shows the workspace settings at %s",
+    async (path) => {
+      fakeApi({
+        ...SHELL,
+        "GET /api/v1/repos": page([REPO, { ...REPO, path: "beta/x" }]),
+      });
+      renderApp(path);
+      const sections = await screen.findByRole("navigation", { name: "Settings sections" });
+      expect(await within(sections).findByRole("link", { name: "acme" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      );
+      expect(within(sections).getByRole("link", { name: "Members" })).toHaveAttribute(
+        "href",
+        "/-/settings/members",
+      );
+      expect(within(sections).queryByRole("link", { name: "Display" })).not.toBeInTheDocument();
+      // Only this workspace's repositories.
+      const list = await screen.findByRole("list", { name: "Repositories" });
+      expect(
+        within(list)
+          .getAllByRole("listitem")
+          .map((li) => within(li).getByText(/\//, { selector: "strong" }).textContent),
+      ).toEqual(["acme/demo"]);
+    },
+  );
 
   it("lists the owner, agents, and runners and creates agents or runners", async () => {
     const aiko = { name: "aiko", display_name: "Aiko", kind: "agent", accounts: [], reviewers: [] };
@@ -92,20 +146,28 @@ describe("settings", () => {
     renderApp("/-/settings/members");
 
     const list = await screen.findByRole("list", { name: "Members" });
-    expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
-      expect.stringContaining("Owner (owner)"),
-      expect.stringContaining("Aiko (aiko)"),
-    ]);
+    expect(
+      within(list)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual([expect.stringContaining("Owner (owner)"), expect.stringContaining("Aiko (aiko)")]);
     await user.click(screen.getByRole("button", { name: "Create member" }));
     const form = await screen.findByRole("form", { name: "Create member" });
     await user.type(within(form).getByRole("textbox", { name: "Name" }), "rin");
     // Only agents and runners can be created: there is one owner.
     await user.click(within(form).getByRole("combobox", { name: "Kind" }));
-    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual(["agent", "runner"]);
+    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual([
+      "agent",
+      "runner",
+    ]);
     await user.click(screen.getByRole("option", { name: "runner" }));
     await user.click(within(form).getByRole("button", { name: "Add" }));
     await waitFor(() => expect(fake.calls("POST", "/api/v1/members")).toHaveLength(1));
-    expect(fake.calls("POST", "/api/v1/members")[0]?.body).toEqual({ name: "rin", display_name: "", kind: "runner" });
+    expect(fake.calls("POST", "/api/v1/members")[0]?.body).toEqual({
+      name: "rin",
+      display_name: "",
+      kind: "runner",
+    });
   });
 
   it("creates a workspace from the sidebar's switcher and shows its task flow", async () => {
@@ -141,14 +203,20 @@ describe("settings", () => {
     await addPills(user, "Ticket labels", ["bug", "ui"]);
     await user.click(within(form).getByRole("button", { name: "Add" }));
     await waitFor(() => expect(fake.calls("POST", "/api/v1/repos")).toHaveLength(1));
-    expect(fake.calls("POST", "/api/v1/repos")[0]?.body).toEqual({ path: "acme/demo", default_branch: "main", labels: ["bug", "ui"] });
+    expect(fake.calls("POST", "/api/v1/repos")[0]?.body).toEqual({
+      path: "acme/demo",
+      default_branch: "main",
+      labels: ["bug", "ui"],
+    });
   });
 
   it("shows the server's reason when post-merge jobs overlap required checks", async () => {
     fakeApi({
       ...SHELL,
       "GET /api/v1/repos": page([REPO]),
-      "PATCH /api/v1/repos/acme/demo": json(400, { error: { code: "invalid", message: "slow cannot be both required and post-merge only." } }),
+      "PATCH /api/v1/repos/acme/demo": json(400, {
+        error: { code: "invalid", message: "slow cannot be both required and post-merge only." },
+      }),
     });
     const user = userEvent.setup();
     renderApp("/-/settings");
@@ -156,14 +224,22 @@ describe("settings", () => {
     await user.click(screen.getByRole("tab", { name: "CI" }));
     await addPills(user, "Post-merge only jobs", ["slow"]);
     await user.click(screen.getAllByRole("button", { name: "Save" })[0] as HTMLElement);
-    expect((await screen.findAllByText("slow cannot be both required and post-merge only.")).length).toBeGreaterThan(0);
+    expect(
+      (await screen.findAllByText("slow cannot be both required and post-merge only.")).length,
+    ).toBeGreaterThan(0);
   });
 
   it("saves a repository's branches, CI and approvals, and labels with the revision the form was filled from", async () => {
     const fake = fakeApi({
       ...SHELL,
       "GET /api/v1/repos": page([REPO]),
-      "PATCH /api/v1/repos/acme/demo": json(200, { ...REPO, post_merge_jobs: [], required_checks: ["test", "lint"], ci_network: true, revision: 5 }),
+      "PATCH /api/v1/repos/acme/demo": json(200, {
+        ...REPO,
+        post_merge_jobs: [],
+        required_checks: ["test", "lint"],
+        ci_network: true,
+        revision: 5,
+      }),
     });
     const user = userEvent.setup();
     renderApp("/-/settings");
@@ -171,18 +247,28 @@ describe("settings", () => {
     expect(screen.getByText("http://127.0.0.1:7878/git/acme/demo.git")).toBeInTheDocument();
     // Required checks and approvals live on the CI tab, with the network for jobs.
     const basics = screen.getByRole("tabpanel", { name: "Basics" });
-    expect(within(basics).getByLabelText("Protected branches", { selector: "input:not([type=hidden])" })).toBeInTheDocument();
-    expect(within(basics).queryByLabelText("Required checks", { selector: "input:not([type=hidden])" })).not.toBeInTheDocument();
+    expect(
+      within(basics).getByLabelText("Protected branches", { selector: "input:not([type=hidden])" }),
+    ).toBeInTheDocument();
+    expect(
+      within(basics).queryByLabelText("Required checks", { selector: "input:not([type=hidden])" }),
+    ).not.toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "CI" }));
     const network = screen.getByRole("switch", { name: /^Network for jobs/ });
     expect(network).not.toBeChecked();
-    expect(screen.getByText(/public destinations only, never the Branvil machine or private networks/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/public destinations only, never the Branvil machine or private networks/),
+    ).toBeInTheDocument();
     await user.click(network);
     await addPills(user, "Required checks", ["test", "lint"]);
     await addPills(user, "Post-merge only jobs", ["slow"]);
     const approvals = screen.getByRole("textbox", { name: "Required approvals" });
     expect(approvals).toHaveValue("1");
-    expect(screen.getByText(/must have approved the current head before a merge \(a later comment keeps an approval\); 0 needs none/)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /must have approved the current head before a merge \(a later comment keeps an approval\); 0 needs none/,
+      ),
+    ).toBeInTheDocument();
     await user.clear(approvals);
     await user.type(approvals, "2");
     await user.click(screen.getByRole("tab", { name: "Labels" }));
@@ -193,67 +279,141 @@ describe("settings", () => {
       revision: 4,
       default_branch: "main",
       protected_branches: ["main"],
-      post_merge_jobs: ["slow"], required_checks: ["test", "lint"],
+      post_merge_jobs: ["slow"],
+      required_checks: ["test", "lint"],
       required_approvals: 2,
       auto_land: false,
       hold_while_failing: false,
-      ci_network: true, responder: null,
+      ci_network: true,
+      responder: null,
       labels: ["bug", "ui"],
     });
   });
 
   it.each([
-    { lang: "en", upstream: false, help: "PRs without a repair ticket are not merged until main verification passes. Both owner merges and automatic merges are held." },
-    { lang: "ja", upstream: false, help: "修復チケットにつながっていない PR は、main の確認が通るまでマージしません。オーナーのマージも自動のマージも保留します。" },
-    { lang: "en", upstream: true, help: "PRs without a repair ticket stay unpublished to GitHub until main verification passes. Branvil cannot stop merges on GitHub for PRs already published to GitHub. Those PRs are shown as held." },
-    { lang: "ja", upstream: true, help: "修復チケットにつながっていない PR は、main の確認が通るまで GitHub に出しません。すでに GitHub に出ている PR は、GitHub でのマージを Branvil は止められません。その PR は保留中と表示します。" },
-  ] as const)("explains hold behavior ($lang, upstream=$upstream)", async ({ lang, upstream, help }) => {
-    const words = lang === "ja" ? ja : en;
-    const repo = { ...REPO, upstream: upstream ? { provider: "github", host: "GitHub", repository: "octo/demo", url: "", reader: { member: "aiko", chosen: false }, following: {} } : null };
-    const fake = fakeApi({ ...SHELL, "GET /api/v1/repos": page([repo]), "GET /api/v1/members": page([]), "PATCH /api/v1/repos/acme/demo": json(200, { ...repo, hold_while_failing: true, revision: 5 }) });
-    const user = userEvent.setup();
-    renderApp("/-/settings", lang);
-    await user.click(await screen.findByRole("button", { name: words["common.edit"] }));
-    await user.click(screen.getByRole("tab", { name: "CI" }));
-    const ci = screen.getByRole("tabpanel", { name: "CI" });
-    expect(within(ci).getByText(help)).toBeInTheDocument();
-    const hold = within(ci).getByRole("switch", { name: name => name.startsWith(words["settings.holdWhileFailing"]) });
-    expect(hold).not.toBeChecked();
-    await user.click(hold);
-    await user.click(within(ci).getByRole("button", { name: words["common.save"] }));
-    await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({ revision: 4, hold_while_failing: true }));
-  });
+    {
+      lang: "en",
+      upstream: false,
+      help: "PRs without a repair ticket are not merged until main verification passes. Both owner merges and automatic merges are held.",
+    },
+    {
+      lang: "ja",
+      upstream: false,
+      help: "修復チケットにつながっていない PR は、main の確認が通るまでマージしません。オーナーのマージも自動のマージも保留します。",
+    },
+    {
+      lang: "en",
+      upstream: true,
+      help: "PRs without a repair ticket stay unpublished to GitHub until main verification passes. Branvil cannot stop merges on GitHub for PRs already published to GitHub. Those PRs are shown as held.",
+    },
+    {
+      lang: "ja",
+      upstream: true,
+      help: "修復チケットにつながっていない PR は、main の確認が通るまで GitHub に出しません。すでに GitHub に出ている PR は、GitHub でのマージを Branvil は止められません。その PR は保留中と表示します。",
+    },
+  ] as const)(
+    "explains hold behavior ($lang, upstream=$upstream)",
+    async ({ lang, upstream, help }) => {
+      const words = lang === "ja" ? ja : en;
+      const repo = {
+        ...REPO,
+        upstream: upstream
+          ? {
+              provider: "github",
+              host: "GitHub",
+              repository: "octo/demo",
+              url: "",
+              reader: { member: "aiko", chosen: false },
+              following: {},
+            }
+          : null,
+      };
+      const fake = fakeApi({
+        ...SHELL,
+        "GET /api/v1/repos": page([repo]),
+        "GET /api/v1/members": page([]),
+        "PATCH /api/v1/repos/acme/demo": json(200, {
+          ...repo,
+          hold_while_failing: true,
+          revision: 5,
+        }),
+      });
+      const user = userEvent.setup();
+      renderApp("/-/settings", lang);
+      await user.click(await screen.findByRole("button", { name: words["common.edit"] }));
+      await user.click(screen.getByRole("tab", { name: "CI" }));
+      const ci = screen.getByRole("tabpanel", { name: "CI" });
+      expect(within(ci).getByText(help)).toBeInTheDocument();
+      const hold = within(ci).getByRole("switch", {
+        name: (name) => name.startsWith(words["settings.holdWhileFailing"]),
+      });
+      expect(hold).not.toBeChecked();
+      await user.click(hold);
+      await user.click(within(ci).getByRole("button", { name: words["common.save"] }));
+      await waitFor(() =>
+        expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({
+          revision: 4,
+          hold_while_failing: true,
+        }),
+      );
+    },
+  );
 
   it.each([
     { upstream: null, says: /Branvil merges automatically/ },
-    { upstream: { provider: "github", host: "GitHub", repository: "octo/demo", url: "", reader: { member: "aiko", chosen: false }, following: {} }, says: /Branvil publishes to GitHub automatically as the author/ },
-  ])("turns automatic landing on from the CI tab and says what it does ($says)", async ({ upstream, says }) => {
-    const repo = { ...REPO, upstream };
-    const fake = fakeApi({
-      ...SHELL,
-      "GET /api/v1/repos": page([repo]),
-      "GET /api/v1/members": page([]),
-      "PATCH /api/v1/repos/acme/demo": json(200, { ...repo, auto_land: true, revision: 5 }),
-    });
-    const user = userEvent.setup();
-    renderApp("/-/settings");
-    await user.click(await screen.findByRole("button", { name: "Edit" }));
-    await user.click(screen.getByRole("tab", { name: "CI" }));
-    const ci = screen.getByRole("tabpanel", { name: "CI" });
-    const auto = within(ci).getByRole("switch", { name: /^Land automatically/ });
-    expect(auto).not.toBeChecked();
-    expect(within(ci).getByText(says)).toBeInTheDocument();
-    expect(within(ci).getByText(/keep it a draft to hold it/i)).toBeInTheDocument();
-    await user.click(auto);
-    await user.click(within(ci).getByRole("switch", { name: /^Publish only repair PRs while main verification is failing/ }));
-    await user.click(within(ci).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")).toHaveLength(1));
-    expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({ revision: 4, auto_land: true, hold_while_failing: true });
-  });
+    {
+      upstream: {
+        provider: "github",
+        host: "GitHub",
+        repository: "octo/demo",
+        url: "",
+        reader: { member: "aiko", chosen: false },
+        following: {},
+      },
+      says: /Branvil publishes to GitHub automatically as the author/,
+    },
+  ])(
+    "turns automatic landing on from the CI tab and says what it does ($says)",
+    async ({ upstream, says }) => {
+      const repo = { ...REPO, upstream };
+      const fake = fakeApi({
+        ...SHELL,
+        "GET /api/v1/repos": page([repo]),
+        "GET /api/v1/members": page([]),
+        "PATCH /api/v1/repos/acme/demo": json(200, { ...repo, auto_land: true, revision: 5 }),
+      });
+      const user = userEvent.setup();
+      renderApp("/-/settings");
+      await user.click(await screen.findByRole("button", { name: "Edit" }));
+      await user.click(screen.getByRole("tab", { name: "CI" }));
+      const ci = screen.getByRole("tabpanel", { name: "CI" });
+      const auto = within(ci).getByRole("switch", { name: /^Land automatically/ });
+      expect(auto).not.toBeChecked();
+      expect(within(ci).getByText(says)).toBeInTheDocument();
+      expect(within(ci).getByText(/keep it a draft to hold it/i)).toBeInTheDocument();
+      await user.click(auto);
+      await user.click(
+        within(ci).getByRole("switch", {
+          name: /^Publish only repair PRs while main verification is failing/,
+        }),
+      );
+      await user.click(within(ci).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")).toHaveLength(1));
+      expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({
+        revision: 4,
+        auto_land: true,
+        hold_while_failing: true,
+      });
+    },
+  );
 
   it("sets the notification webhook, shows only its host, and removes it", async () => {
     const secret = "https://hooks.example.test/services/T0/hook-71c2";
-    const set = { set: true, host: "hooks.example.test", problem: "the webhook answered 500 Internal Server Error" };
+    const set = {
+      set: true,
+      host: "hooks.example.test",
+      problem: "the webhook answered 500 Internal Server Error",
+    };
     const fake = fakeApi({
       ...SHELL,
       "GET /api/v1/members": page([]),
@@ -272,10 +432,15 @@ describe("settings", () => {
     await waitFor(() => expect(fake.calls("PUT", "/api/v1/admin/webhook")).toHaveLength(1));
     expect(fake.calls("PUT", "/api/v1/admin/webhook")[0]?.body).toEqual({ url: secret });
     expect(await screen.findByText("Set (hooks.example.test)")).toBeInTheDocument();
-    expect(screen.getByText("The last send failed: the webhook answered 500 Internal Server Error")).toBeInTheDocument();
+    expect(
+      screen.getByText("The last send failed: the webhook answered 500 Internal Server Error"),
+    ).toBeInTheDocument();
     // The URL is gone from the page once saved; the field shows that one is saved.
     expect(within(form).getByLabelText("Webhook URL")).toHaveValue("");
-    expect(within(form).getByLabelText("Webhook URL")).toHaveAttribute("placeholder", "••••••••••••");
+    expect(within(form).getByLabelText("Webhook URL")).toHaveAttribute(
+      "placeholder",
+      "••••••••••••",
+    );
     expect(document.body.innerHTML).not.toContain("hook-71c2");
     await user.click(screen.getByRole("button", { name: "Remove" }));
     expect(await screen.findByText("Not set")).toBeInTheDocument();
@@ -305,12 +470,19 @@ describe("settings", () => {
     expect(save).toBeEnabled();
     await user.click(save);
     await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")).toHaveLength(1));
-    expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({ required_approvals: 0 });
+    expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({
+      required_approvals: 0,
+    });
   });
 
   it("sets an agent's code host account with a token that is sent once and never shown", async () => {
     const aiko = { name: "aiko", display_name: "Aiko", kind: "agent", accounts: [], reviewers: [] };
-    const withAccount = { ...aiko, accounts: [{ provider: "github", login: "aiko-bot", kind: "token", set_at: "2026-10-16T00:00:00Z" }] };
+    const withAccount = {
+      ...aiko,
+      accounts: [
+        { provider: "github", login: "aiko-bot", kind: "token", set_at: "2026-10-16T00:00:00Z" },
+      ],
+    };
     const fake = fakeApi({
       ...SHELL,
       "GET /api/v1/members": [page([ME, aiko]), page([ME, withAccount])],
@@ -324,14 +496,27 @@ describe("settings", () => {
     await user.click(within(row).getByRole("tab", { name: "Accounts on code hosts" }));
     await user.type(within(row).getByLabelText("GitHub token"), "gh-secret");
     await user.click(within(row).getByRole("button", { name: "Save account" }));
-    await waitFor(() => expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")).toHaveLength(1));
-    expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")[0]?.body).toEqual({ token: "gh-secret" });
-    expect((await within(row).findAllByText("aiko-bot", { exact: false })).length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")).toHaveLength(1),
+    );
+    expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")[0]?.body).toEqual({
+      token: "gh-secret",
+    });
+    expect((await within(row).findAllByText("aiko-bot", { exact: false })).length).toBeGreaterThan(
+      0,
+    );
     expect(screen.queryByDisplayValue("gh-secret")).not.toBeInTheDocument();
   });
 
   it("sets a member's picture from a file, shows it wherever the member appears, and removes it", async () => {
-    const aiko = { name: "aiko", display_name: "Aiko", kind: "agent", accounts: [], reviewers: [], avatar_url: null };
+    const aiko = {
+      name: "aiko",
+      display_name: "Aiko",
+      kind: "agent",
+      accounts: [],
+      reviewers: [],
+      avatar_url: null,
+    };
     const pictured = { ...aiko, avatar_url: "/api/v1/members/aiko/avatar?v=1234" };
     const fake = fakeApi({
       ...SHELL,
@@ -345,18 +530,30 @@ describe("settings", () => {
     const row = (await screen.findByText("Aiko (aiko)")).closest("[role=listitem]") as HTMLElement;
     expect(within(row).queryByRole("img")).not.toBeInTheDocument();
     await user.click(within(row).getByRole("button", { name: "Edit" }));
-    expect(within(row).queryByRole("button", { name: "Remove the picture" })).not.toBeInTheDocument();
-    const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "aiko.png", { type: "image/png" });
+    expect(
+      within(row).queryByRole("button", { name: "Remove the picture" }),
+    ).not.toBeInTheDocument();
+    const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "aiko.png", {
+      type: "image/png",
+    });
     await user.upload(row.querySelector("input[type=file]") as HTMLInputElement, file);
     await waitFor(() => expect(fake.calls("PUT", "/api/v1/members/aiko/avatar")).toHaveLength(1));
     const sent = fake.calls("PUT", "/api/v1/members/aiko/avatar")[0];
     expect(sent?.body).toBe(file);
     expect(sent?.headers["Content-Type"]).toBe("image/png");
     // Every avatar of the member (the row's and the editor's) shows the picture.
-    await waitFor(() => expect(within(row).getAllByRole("img").map((i) => i.getAttribute("src"))).toEqual([pictured.avatar_url, pictured.avatar_url]));
+    await waitFor(() =>
+      expect(
+        within(row)
+          .getAllByRole("img")
+          .map((i) => i.getAttribute("src")),
+      ).toEqual([pictured.avatar_url, pictured.avatar_url]),
+    );
 
     await user.click(within(row).getByRole("button", { name: "Remove the picture" }));
-    await waitFor(() => expect(fake.calls("DELETE", "/api/v1/members/aiko/avatar")).toHaveLength(1));
+    await waitFor(() =>
+      expect(fake.calls("DELETE", "/api/v1/members/aiko/avatar")).toHaveLength(1),
+    );
     await waitFor(() => expect(within(row).queryByRole("img")).not.toBeInTheDocument());
   });
 
@@ -367,7 +564,11 @@ describe("settings", () => {
     const asked = { ...aiko, reviewers: ["ken"] };
     const fake = fakeApi({
       ...SHELL,
-      "GET /api/v1/members": [page([ME, aiko, ken, ci]), page([ME, asked, ken, ci]), page([ME, aiko, ken, ci])],
+      "GET /api/v1/members": [
+        page([ME, aiko, ken, ci]),
+        page([ME, asked, ken, ci]),
+        page([ME, aiko, ken, ci]),
+      ],
       "PUT /api/v1/members/aiko/reviewers/ken": json(200, asked),
       "DELETE /api/v1/members/aiko/reviewers/ken": json(200, aiko),
       "GET /api/v1/members/aiko/tokens": page([]),
@@ -379,19 +580,39 @@ describe("settings", () => {
     await user.click(within(row).getByRole("button", { name: "Edit" }));
     await user.click(within(row).getByRole("tab", { name: "Reviewers" }));
     expect(within(row).getByText("No one is asked yet.")).toBeInTheDocument();
-    await user.click(within(row).getByRole("button", { name: "Reviewers of aiko's pull requests: no one — click to change" }));
+    await user.click(
+      within(row).getByRole("button", {
+        name: "Reviewers of aiko's pull requests: no one — click to change",
+      }),
+    );
     // The member itself and runners are not offered.
-    expect(await screen.findByRole("menuitem", { name: /^owner/ })).toHaveAttribute("aria-checked", "false");
+    expect(await screen.findByRole("menuitem", { name: /^owner/ })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
     expect(screen.queryByRole("menuitem", { name: /^aiko/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /^ci/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("menuitem", { name: /^ken/ }));
-    await waitFor(() => expect(fake.calls("PUT", "/api/v1/members/aiko/reviewers/ken")).toHaveLength(1));
-    expect(fake.calls("PUT", "/api/v1/members/aiko/reviewers/ken")[0]?.headers["X-GuildBotics-CSRF"]).toBe("csrf-123");
-    expect(await within(row).findByRole("button", { name: "Reviewers of aiko's pull requests: ken — click to change" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(fake.calls("PUT", "/api/v1/members/aiko/reviewers/ken")).toHaveLength(1),
+    );
+    expect(
+      fake.calls("PUT", "/api/v1/members/aiko/reviewers/ken")[0]?.headers["X-GuildBotics-CSRF"],
+    ).toBe("csrf-123");
+    expect(
+      await within(row).findByRole("button", {
+        name: "Reviewers of aiko's pull requests: ken — click to change",
+      }),
+    ).toBeInTheDocument();
     expect(within(row).getByText("ken", { selector: "p" })).toBeInTheDocument();
-    expect(await screen.findByRole("menuitem", { name: /^ken/ })).toHaveAttribute("aria-checked", "true");
+    expect(await screen.findByRole("menuitem", { name: /^ken/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
     await user.click(screen.getByRole("menuitem", { name: /^ken/ }));
-    await waitFor(() => expect(fake.calls("DELETE", "/api/v1/members/aiko/reviewers/ken")).toHaveLength(1));
+    await waitFor(() =>
+      expect(fake.calls("DELETE", "/api/v1/members/aiko/reviewers/ken")).toHaveLength(1),
+    );
     expect(await within(row).findByText("No one is asked yet.")).toBeInTheDocument();
 
     // A runner opens no pull requests: it has no reviewers.
@@ -401,8 +622,21 @@ describe("settings", () => {
   });
 
   it("switches an account between a token and a GitHub App and sends each form's credential", async () => {
-    const aiko = { name: "aiko", display_name: "Aiko", kind: "agent", accounts: [{ provider: "github", login: "aiko-bot", kind: "token", set_at: "2026-10-16T00:00:00Z" }], reviewers: [] };
-    const asApp = { ...aiko, accounts: [{ provider: "github", login: "octo-app[bot]", kind: "app", set_at: "2026-10-16T01:00:00Z" }] };
+    const aiko = {
+      name: "aiko",
+      display_name: "Aiko",
+      kind: "agent",
+      accounts: [
+        { provider: "github", login: "aiko-bot", kind: "token", set_at: "2026-10-16T00:00:00Z" },
+      ],
+      reviewers: [],
+    };
+    const asApp = {
+      ...aiko,
+      accounts: [
+        { provider: "github", login: "octo-app[bot]", kind: "app", set_at: "2026-10-16T01:00:00Z" },
+      ],
+    };
     const fake = fakeApi({
       ...SHELL,
       "GET /api/v1/members": [page([ME, aiko]), page([ME, asApp])],
@@ -418,7 +652,10 @@ describe("settings", () => {
     expect(within(row).getAllByText("Token").length).toBeGreaterThan(0);
     expect(within(row).getByRole("radio", { name: "Token" })).toBeChecked();
     // The saved token is never shown; its field says one is saved.
-    expect(within(row).getByLabelText("Replace the GitHub token")).toHaveAttribute("placeholder", "••••••••••••");
+    expect(within(row).getByLabelText("Replace the GitHub token")).toHaveAttribute(
+      "placeholder",
+      "••••••••••••",
+    );
 
     // The app form: nothing is sent until every field is filled.
     await user.click(within(row).getByRole("radio", { name: "GitHub App" }));
@@ -430,26 +667,40 @@ describe("settings", () => {
     expect(save).toBeDisabled();
     // The key comes from a chosen file (or is pasted).
     const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n";
-    await user.upload(within(row).getByLabelText("Choose the key file"), new File([pem], "app.pem"));
+    await user.upload(
+      within(row).getByLabelText("Choose the key file"),
+      new File([pem], "app.pem"),
+    );
     await waitFor(() => expect(within(row).getByLabelText("Private key (PEM)")).toHaveValue(pem));
     await user.click(save);
-    await waitFor(() => expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")).toHaveLength(1));
+    await waitFor(() =>
+      expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")).toHaveLength(1),
+    );
     expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")[0]?.body).toEqual({
       app: { app_id: "4242", installation_id: "777", private_key: pem },
     });
     // Saved: the login is the app's bot, and the key is gone from the page.
     expect((await within(row).findAllByText("octo-app[bot]")).length).toBeGreaterThan(0);
     expect(within(row).getByLabelText("Private key (PEM)")).toHaveValue("");
-    expect(within(row).getByLabelText("Private key (PEM)")).toHaveAttribute("placeholder", "••••••••••••");
+    expect(within(row).getByLabelText("Private key (PEM)")).toHaveAttribute(
+      "placeholder",
+      "••••••••••••",
+    );
     expect(screen.queryByDisplayValue(pem)).not.toBeInTheDocument();
 
     // Back to a token: no token is saved now, and the token form sends only the token.
     await user.click(within(row).getByRole("radio", { name: "Token" }));
-    expect(within(row).getByLabelText("Replace the GitHub token")).not.toHaveAttribute("placeholder");
+    expect(within(row).getByLabelText("Replace the GitHub token")).not.toHaveAttribute(
+      "placeholder",
+    );
     await user.type(within(row).getByLabelText("Replace the GitHub token"), "gh-new");
     await user.click(within(row).getByRole("button", { name: "Save account" }));
-    await waitFor(() => expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")).toHaveLength(2));
-    expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")[1]?.body).toEqual({ token: "gh-new" });
+    await waitFor(() =>
+      expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")).toHaveLength(2),
+    );
+    expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")[1]?.body).toEqual({
+      token: "gh-new",
+    });
   });
 
   it("sets a repository's upstream, shows what following found and who reads it, and says when nobody can read it", async () => {
@@ -462,12 +713,22 @@ describe("settings", () => {
         repository: "octo/demo",
         url: "https://github.com/octo/demo",
         reader: { member: "aiko", chosen: false },
-        following: { tip: "a".repeat(40), checked_at: "2026-10-16T00:00:00Z", followed_at: null, error: null, stopped: null },
+        following: {
+          tip: "a".repeat(40),
+          checked_at: "2026-10-16T00:00:00Z",
+          followed_at: null,
+          error: null,
+          stopped: null,
+        },
       },
       revision: 5,
     };
     const account = { provider: "github", login: "x", set_at: "2026-10-16T00:00:00Z" };
-    const kenReads = { ...following, upstream: { ...following.upstream, reader: { member: "ken", chosen: true } }, revision: 6 };
+    const kenReads = {
+      ...following,
+      upstream: { ...following.upstream, reader: { member: "ken", chosen: true } },
+      revision: 6,
+    };
     const fake = fakeApi({
       ...SHELL,
       "GET /api/v1/repos": [page([repo]), page([following]), page([following]), page([kenReads])],
@@ -477,7 +738,10 @@ describe("settings", () => {
         { name: "mia", display_name: "Mia", kind: "agent", accounts: [], reviewers: [] },
       ]),
       "PUT /api/v1/repos/acme/demo/upstream": [
-        { status: 409, body: { error: { code: "no_account", message: "No member has an account." } } },
+        {
+          status: 409,
+          body: { error: { code: "no_account", message: "No member has an account." } },
+        },
         json(200, following),
         json(200, kenReads),
       ],
@@ -491,14 +755,27 @@ describe("settings", () => {
     await user.type(within(form).getByRole("textbox", { name: "Repository there" }), "octo/demo");
     await user.click(within(form).getByRole("button", { name: "Set upstream" }));
     expect(
-      await screen.findByText("Set a member's GitHub account under Members first (an agent's bot account is enough): it reads the upstream."),
+      await screen.findByText(
+        "Set a member's GitHub account under Members first (an agent's bot account is enough): it reads the upstream.",
+      ),
     ).toBeInTheDocument();
     await user.click(within(form).getByRole("button", { name: "Set upstream" }));
-    await waitFor(() => expect(fake.calls("PUT", "/api/v1/repos/acme/demo/upstream")).toHaveLength(2));
-    expect(fake.calls("PUT", "/api/v1/repos/acme/demo/upstream")[1]?.body).toEqual({ provider: "github", repository: "octo/demo" });
-    expect(await screen.findByRole("link", { name: "GitHub octo/demo" })).toHaveAttribute("href", "https://github.com/octo/demo");
+    await waitFor(() =>
+      expect(fake.calls("PUT", "/api/v1/repos/acme/demo/upstream")).toHaveLength(2),
+    );
+    expect(fake.calls("PUT", "/api/v1/repos/acme/demo/upstream")[1]?.body).toEqual({
+      provider: "github",
+      repository: "octo/demo",
+    });
+    expect(await screen.findByRole("link", { name: "GitHub octo/demo" })).toHaveAttribute(
+      "href",
+      "https://github.com/octo/demo",
+    );
     expect(screen.getByText("main follows")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "a".repeat(10) })).toHaveAttribute("href", `/acme/demo/-/commits/${following.upstream.following.tip}`);
+    expect(screen.getByRole("link", { name: "a".repeat(10) })).toHaveAttribute(
+      "href",
+      `/acme/demo/-/commits/${following.upstream.following.tip}`,
+    );
     await user.click(screen.getByRole("tab", { name: "Basics" }));
     expect(screen.getByRole("textbox", { name: "Default branch" })).toHaveAttribute("readonly");
     await user.click(screen.getByRole("tab", { name: "Upstream" }));
@@ -508,10 +785,16 @@ describe("settings", () => {
     expect(screen.getByText("(picked)")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Change" })).toBeDisabled();
     await user.click(screen.getByRole("combobox", { name: "Change the reading account" }));
-    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual(["aiko (x)", "ken (x)", "Pick again"]);
+    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual([
+      "aiko (x)",
+      "ken (x)",
+      "Pick again",
+    ]);
     await user.click(screen.getByRole("option", { name: "ken (x)" }));
     await user.click(screen.getByRole("button", { name: "Change" }));
-    await waitFor(() => expect(fake.calls("PUT", "/api/v1/repos/acme/demo/upstream")).toHaveLength(3));
+    await waitFor(() =>
+      expect(fake.calls("PUT", "/api/v1/repos/acme/demo/upstream")).toHaveLength(3),
+    );
     expect(fake.calls("PUT", "/api/v1/repos/acme/demo/upstream")[2]?.body).toEqual({
       provider: "github",
       repository: "octo/demo",
@@ -524,7 +807,11 @@ describe("settings", () => {
 it("explains repair-ticket creation notices in both languages", () => {
   expect(en["notifications.help"]).toContain("Creating a repair ticket");
   expect(ja["notifications.help"]).toContain("修復チケットを作ると");
-  expect(en["notifications.help"].indexOf("Creating a repair ticket")).toBeLessThan(en["notifications.help"].indexOf("The webhook URL"));
-  expect(ja["notifications.help"].indexOf("修復チケットを作ると")).toBeLessThan(ja["notifications.help"].indexOf("webhookのURLは"));
+  expect(en["notifications.help"].indexOf("Creating a repair ticket")).toBeLessThan(
+    en["notifications.help"].indexOf("The webhook URL"),
+  );
+  expect(ja["notifications.help"].indexOf("修復チケットを作ると")).toBeLessThan(
+    ja["notifications.help"].indexOf("webhookのURLは"),
+  );
   expect(ja["notifications.help"]).not.toContain("。 ");
 });

@@ -3,10 +3,26 @@ import { href, inAppPath, parseRoute } from "../router/routes";
 
 describe("routes", () => {
   it("parses the permanent web URLs of the API", () => {
-    expect(parseRoute("/acme/demo/-/tickets/3")).toEqual({ name: "ticket", repo: "acme/demo", key: "3" });
-    expect(parseRoute("/acme/demo/-/pulls/3")).toEqual({ name: "pull", repo: "acme/demo", number: 3 });
-    expect(parseRoute("/acme/demo/-/commits/abc123")).toEqual({ name: "commit", repo: "acme/demo", sha: "abc123" });
-    expect(parseRoute("/acme/demo/-/jobs/att_01")).toEqual({ name: "job", repo: "acme/demo", attemptId: "att_01" });
+    expect(parseRoute("/acme/demo/-/tickets/3")).toEqual({
+      name: "ticket",
+      repo: "acme/demo",
+      key: "3",
+    });
+    expect(parseRoute("/acme/demo/-/pulls/3")).toEqual({
+      name: "pull",
+      repo: "acme/demo",
+      number: 3,
+    });
+    expect(parseRoute("/acme/demo/-/commits/abc123")).toEqual({
+      name: "commit",
+      repo: "acme/demo",
+      sha: "abc123",
+    });
+    expect(parseRoute("/acme/demo/-/jobs/att_01")).toEqual({
+      name: "job",
+      repo: "acme/demo",
+      attemptId: "att_01",
+    });
     expect(parseRoute("/acme/demo")).toEqual({ name: "repo", repo: "acme/demo" });
     // A workspace's page is its task flow; its pull requests have a page of their own.
     expect(parseRoute("/acme")).toEqual({ name: "workspace", workspace: "acme" });
@@ -19,7 +35,11 @@ describe("routes", () => {
     expect(parseRoute("/-/settings")).toEqual({ name: "settings", section: null });
     expect(parseRoute("/-/settings/members")).toEqual({ name: "settings", section: "members" });
     // A repository's editor in its workspace's settings.
-    expect(parseRoute(href.repoSettings("acme/demo"))).toEqual({ name: "settings", section: null, repo: "acme/demo" });
+    expect(parseRoute(href.repoSettings("acme/demo"))).toEqual({
+      name: "settings",
+      section: null,
+      repo: "acme/demo",
+    });
   });
 
   it("rejects malformed paths", () => {
@@ -51,8 +71,12 @@ describe("routes", () => {
 
   it("keeps foreign URLs out of the app", () => {
     const origin = "http://localhost:7878";
-    expect(inAppPath("http://127.0.0.1:7878/acme/demo/-/pulls/3", origin)).toBe("/acme/demo/-/pulls/3");
-    expect(inAppPath("http://localhost:7878/acme/demo/-/tickets/1#cmt_1", origin)).toBe("/acme/demo/-/tickets/1#cmt_1");
+    expect(inAppPath("http://127.0.0.1:7878/acme/demo/-/pulls/3", origin)).toBe(
+      "/acme/demo/-/pulls/3",
+    );
+    expect(inAppPath("http://localhost:7878/acme/demo/-/tickets/1#cmt_1", origin)).toBe(
+      "/acme/demo/-/tickets/1#cmt_1",
+    );
     expect(inAppPath("https://github.com/acme/demo/issues/1", origin)).toBeNull();
     expect(inAppPath("http://127.0.0.1:9999/acme/demo/-/pulls/3", origin)).toBeNull();
     expect(inAppPath("javascript:alert(1)", origin)).toBeNull();

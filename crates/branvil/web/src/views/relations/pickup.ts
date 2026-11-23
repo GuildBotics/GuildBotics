@@ -31,7 +31,8 @@ export interface PickupRow {
 export type Place = { before: string } | { after: string };
 
 /** A ticket's direct open blockers, including those not loaded on the board. */
-const openBlockers = (card: Card) => card.blocked_by.filter((b) => b.state === "open").map(ticketRef);
+const openBlockers = (card: Card) =>
+  card.blocked_by.filter((b) => b.state === "open").map(ticketRef);
 
 /** The open tickets a ticket waits for, following what those wait for in turn. */
 function waitedFor(start: string, byRef: ReadonlyMap<string, Card>): string[] {
@@ -60,14 +61,21 @@ function stuckOf(card: Card): Stuck["why"] | null {
 
 /** An agent's tickets in its pickup order: open, ready, and not left to a person (interactive). */
 const ordered = (card: Card, assignee: string) =>
-  card.state === "open" && card.lane === "ready" && card.assignee?.name === assignee && !card.interactive && !card.interactive_ancestor;
+  card.state === "open" &&
+  card.lane === "ready" &&
+  card.assignee?.name === assignee &&
+  !card.interactive &&
+  !card.interactive_ancestor;
 
 /**
  * The pickup order of each agent: its open ready tickets that are not
  * interactive, in board order, numbered from 1. `cards` are the board's,
  * before any filter, in board order.
  */
-export function pickupOrders(cards: readonly Card[], isAgent: (name: string) => boolean): Map<string, PickupRow[]> {
+export function pickupOrders(
+  cards: readonly Card[],
+  isAgent: (name: string) => boolean,
+): Map<string, PickupRow[]> {
   const byRef = new Map(cards.map((c) => [ticketRef(c), c]));
   const orders = new Map<string, PickupRow[]>();
   for (const card of cards) {
@@ -83,7 +91,9 @@ export function pickupOrders(cards: readonly Card[], isAgent: (name: string) => 
     });
     const waits = openBlockers(card).map((ticket) => {
       const blocker = byRef.get(ticket);
-      return blocker ? { ticket, lane: blocker.lane, assignee: blocker.assignee?.name ?? null } : { ticket };
+      return blocker
+        ? { ticket, lane: blocker.lane, assignee: blocker.assignee?.name ?? null }
+        : { ticket };
     });
     rows.push({ ref, card, n: rows.length + 1, stuck, waits });
   }
@@ -133,7 +143,11 @@ export function stepped(
 ): string | null | undefined {
   const rest = start.filter((r) => r !== moved);
   const shown = arrange(start, moved, before, cards).order;
-  for (let at = (before === null ? rest.length : rest.indexOf(before)) + step; at >= 0 && at <= rest.length; at += step) {
+  for (
+    let at = (before === null ? rest.length : rest.indexOf(before)) + step;
+    at >= 0 && at <= rest.length;
+    at += step
+  ) {
     const target = rest[at] ?? null;
     if (arrange(start, moved, target, cards).order.some((r, i) => r !== shown[i])) return target;
   }
@@ -161,8 +175,14 @@ export function placements(
   if (stale) return { stale };
   if (next) return { writes: group.map((ref) => ({ ref, at: { before: next } })) };
   // The group is the whole order: its first ticket stays, the others follow it.
-  if (!previous) return { writes: group.slice(1).map((ref, i) => ({ ref, at: { after: group[i] as string } })) };
-  return { writes: group.map((ref, i) => ({ ref, at: { after: i === 0 ? previous : (group[i - 1] as string) } })) };
+  if (!previous)
+    return { writes: group.slice(1).map((ref, i) => ({ ref, at: { after: group[i] as string } })) };
+  return {
+    writes: group.map((ref, i) => ({
+      ref,
+      at: { after: i === 0 ? previous : (group[i - 1] as string) },
+    })),
+  };
 }
 
 /**
@@ -174,8 +194,14 @@ export function placements(
  * above it is put before it. One that has left the lane since stays where it
  * is: putting it back would undo its start.
  */
-export function restoring(lane: readonly string[], moved: readonly string[], ready: ReadonlySet<string>): { ref: string; at?: Place }[] {
-  const back = moved.filter((r) => ready.has(r)).toSorted((a, b) => lane.indexOf(b) - lane.indexOf(a));
+export function restoring(
+  lane: readonly string[],
+  moved: readonly string[],
+  ready: ReadonlySet<string>,
+): { ref: string; at?: Place }[] {
+  const back = moved
+    .filter((r) => ready.has(r))
+    .toSorted((a, b) => lane.indexOf(b) - lane.indexOf(a));
   return back.map((ref) => {
     const next = lane.slice(lane.indexOf(ref) + 1).find((r) => ready.has(r));
     return next ? { ref, at: { before: next } } : { ref };
@@ -187,7 +213,11 @@ export function restoring(lane: readonly string[], moved: readonly string[], rea
  * before it is written): its tickets swap places among themselves, every other
  * card stays. Tickets `order` does not name keep their order after it.
  */
-export function reordered(cards: readonly Card[], assignee: string, order: readonly string[]): Card[] {
+export function reordered(
+  cards: readonly Card[],
+  assignee: string,
+  order: readonly string[],
+): Card[] {
   const mine = (c: Card) => ordered(c, assignee);
   const own = cards.filter(mine);
   const byRef = new Map(own.map((c) => [ticketRef(c), c]));

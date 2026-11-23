@@ -1,4 +1,18 @@
-import { Badge, Button, Card, Group, Modal, NumberInput, Select, Stack, Switch, Tabs, TagsInput, Text, TextInput } from "@mantine/core";
+import {
+  Badge,
+  Button,
+  Card,
+  Group,
+  Modal,
+  NumberInput,
+  Select,
+  Stack,
+  Switch,
+  Tabs,
+  TagsInput,
+  Text,
+  TextInput,
+} from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FolderGit2, Plus } from "lucide-react";
 import { useState } from "react";
@@ -13,7 +27,13 @@ import { keys } from "../../query/keys";
 import { UpstreamTab } from "./UpstreamTab";
 
 /** The shown workspace: its board's repositories, each with its editor; `open` names one whose editor starts open on its CI tab. */
-export function WorkspaceSettings({ workspace, open = null }: { workspace: string; open?: string | null }) {
+export function WorkspaceSettings({
+  workspace,
+  open = null,
+}: {
+  workspace: string;
+  open?: string | null;
+}) {
   const t = useT();
   const repos = useRepos();
   const [adding, setAdding] = useState(false);
@@ -33,7 +53,12 @@ export function WorkspaceSettings({ workspace, open = null }: { workspace: strin
           </Group>
         }
         action={
-          <Button size="xs" variant="default" leftSection={<Plus size={14} />} onClick={() => setAdding(true)}>
+          <Button
+            size="xs"
+            variant="default"
+            leftSection={<Plus size={14} />}
+            onClick={() => setAdding(true)}
+          >
             {t("repo.create")}
           </Button>
         }
@@ -52,8 +77,15 @@ export function WorkspaceSettings({ workspace, open = null }: { workspace: strin
             <div key={r.path} role="listitem">
               <div className="setting-row">
                 <FolderGit2 size={18} color="var(--color-text-subtle)" />
-                <strong className="setting-row-name" style={{ overflowWrap: "anywhere" }}>{r.path}</strong>
-                <Button size="xs" variant="default" onClick={() => setEditing(editing === r.path ? null : r.path)} aria-expanded={editing === r.path}>
+                <strong className="setting-row-name" style={{ overflowWrap: "anywhere" }}>
+                  {r.path}
+                </strong>
+                <Button
+                  size="xs"
+                  variant="default"
+                  onClick={() => setEditing(editing === r.path ? null : r.path)}
+                  aria-expanded={editing === r.path}
+                >
                   {t("common.edit")}
                 </Button>
               </div>
@@ -67,12 +99,25 @@ export function WorkspaceSettings({ workspace, open = null }: { workspace: strin
   );
 }
 
-function NewRepoModal({ workspace, opened, onClose }: { workspace: string; opened: boolean; onClose: () => void }) {
+function NewRepoModal({
+  workspace,
+  opened,
+  onClose,
+}: {
+  workspace: string;
+  opened: boolean;
+  onClose: () => void;
+}) {
   const t = useT();
   const client = useQueryClient();
   const [form, setForm] = useState({ name: "", branch: "main", labels: [] as string[] });
   const create = useMutation({
-    mutationFn: () => api.repos.create({ path: `${workspace}/${form.name.trim()}`, default_branch: form.branch.trim(), labels: form.labels }),
+    mutationFn: () =>
+      api.repos.create({
+        path: `${workspace}/${form.name.trim()}`,
+        default_branch: form.branch.trim(),
+        labels: form.labels,
+      }),
     onSuccess: () => close(),
     onSettled: () => void client.invalidateQueries({ queryKey: keys.repos() }),
   });
@@ -82,7 +127,13 @@ function NewRepoModal({ workspace, opened, onClose }: { workspace: string; opene
     onClose();
   }
   return (
-    <Modal opened={opened} onClose={close} title={t("repo.create")} closeButtonProps={{ "aria-label": t("common.close") }} centered>
+    <Modal
+      opened={opened}
+      onClose={close}
+      title={t("repo.create")}
+      closeButtonProps={{ "aria-label": t("common.close") }}
+      centered
+    >
       <form
         aria-label={t("repo.create")}
         onSubmit={(e) => {
@@ -101,14 +152,28 @@ function NewRepoModal({ workspace, opened, onClose }: { workspace: string; opene
             required
             data-autofocus
           />
-          <TextInput label={t("repo.defaultBranch")} value={form.branch} onChange={(e) => setForm({ ...form, branch: e.currentTarget.value })} required />
-          <TagsInput label={t("repo.labels")} description={t("settings.tagsHelp")} value={form.labels} onChange={(labels) => setForm({ ...form, labels })} clearable />
+          <TextInput
+            label={t("repo.defaultBranch")}
+            value={form.branch}
+            onChange={(e) => setForm({ ...form, branch: e.currentTarget.value })}
+            required
+          />
+          <TagsInput
+            label={t("repo.labels")}
+            description={t("settings.tagsHelp")}
+            value={form.labels}
+            onChange={(labels) => setForm({ ...form, labels })}
+            clearable
+          />
           {create.isError && <ErrorMessage error={create.error} />}
           <Group justify="flex-end">
             <Button variant="default" onClick={close}>
               {t("common.cancel")}
             </Button>
-            <Button type="submit" disabled={create.isPending || !form.name.trim() || !form.branch.trim()}>
+            <Button
+              type="submit"
+              disabled={create.isPending || !form.name.trim() || !form.branch.trim()}
+            >
               {t("repo.createSubmit")}
             </Button>
           </Group>
@@ -156,7 +221,11 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
   const [form, setForm] = useState<RepoForm>(() => seed(repo));
   const save = useMutation({
     mutationFn: () =>
-      api.repos.update(repo.path, { ...form, default_branch: form.default_branch.trim(), required_approvals: Number(form.required_approvals) }),
+      api.repos.update(repo.path, {
+        ...form,
+        default_branch: form.default_branch.trim(),
+        required_approvals: Number(form.required_approvals),
+      }),
     onSuccess: (r) => setForm(seed(r)),
     onSettled: () => {
       void client.invalidateQueries({ queryKey: keys.repos() });
@@ -167,7 +236,12 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
   const stale = form.revision !== repo.revision;
   const footer = (
     <Stack gap="xs" mt="md">
-      {save.isError && (isApiError(save.error, "conflict") ? <Refusal>{t("settings.conflict")}</Refusal> : <ErrorMessage error={save.error} />)}
+      {save.isError &&
+        (isApiError(save.error, "conflict") ? (
+          <Refusal>{t("settings.conflict")}</Refusal>
+        ) : (
+          <ErrorMessage error={save.error} />
+        ))}
       {stale && (
         <Group gap="xs">
           <Text size="sm">{t("settings.changedElsewhere")}</Text>
@@ -178,7 +252,10 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
       )}
       {save.isSuccess && !stale && <Notice>{t("settings.saved")}</Notice>}
       <Group>
-        <Button onClick={() => save.mutate()} disabled={save.isPending || form.required_approvals === ""}>
+        <Button
+          onClick={() => save.mutate()}
+          disabled={save.isPending || form.required_approvals === ""}
+        >
           {t("common.save")}
         </Button>
       </Group>
@@ -230,7 +307,12 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
             <Select
               label={t("settings.responder")}
               description={t("settings.responderHelp")}
-              data={[{ value: "", label: t("settings.responderAuto") }, ...(members.data?.items ?? []).filter((m) => m.kind === "agent").map((m) => ({ value: m.name, label: m.name }))]}
+              data={[
+                { value: "", label: t("settings.responderAuto") },
+                ...(members.data?.items ?? [])
+                  .filter((m) => m.kind === "agent")
+                  .map((m) => ({ value: m.name, label: m.name })),
+              ]}
               value={form.responder ?? ""}
               onChange={(value) => setForm({ ...form, responder: value || null })}
               allowDeselect={false}
@@ -243,7 +325,9 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
             />
             <TagsInput
               label={t("repo.requiredChecks")}
-              description={t(repo.upstream ? "settings.requiredHelpUpstream" : "settings.requiredHelp")}
+              description={t(
+                repo.upstream ? "settings.requiredHelpUpstream" : "settings.requiredHelp",
+              )}
               value={form.required_checks}
               onChange={(v) => setForm({ ...form, required_checks: v })}
               placeholder={t("settings.addCheck")}
@@ -259,7 +343,9 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
             />
             <NumberInput
               label={t("repo.requiredApprovals")}
-              description={t(repo.upstream ? "settings.approvalsHelpUpstream" : "settings.approvalsHelp")}
+              description={t(
+                repo.upstream ? "settings.approvalsHelpUpstream" : "settings.approvalsHelp",
+              )}
               value={form.required_approvals}
               onChange={(v) => setForm({ ...form, required_approvals: v })}
               min={0}
@@ -268,13 +354,21 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
             />
             <Switch
               label={t("settings.autoLand")}
-              description={repo.upstream ? t("settings.autoLandHelpUpstream", { host: repo.upstream.host }) : t("settings.autoLandHelp")}
+              description={
+                repo.upstream
+                  ? t("settings.autoLandHelpUpstream", { host: repo.upstream.host })
+                  : t("settings.autoLandHelp")
+              }
               checked={form.auto_land}
               onChange={(e) => setForm({ ...form, auto_land: e.currentTarget.checked })}
             />
             <Switch
               label={t("settings.holdWhileFailing")}
-              description={repo.upstream ? t("settings.holdWhileFailingHelpUpstream", { host: repo.upstream.host }) : t("settings.holdWhileFailingHelp")}
+              description={
+                repo.upstream
+                  ? t("settings.holdWhileFailingHelpUpstream", { host: repo.upstream.host })
+                  : t("settings.holdWhileFailingHelp")
+              }
               checked={form.hold_while_failing}
               onChange={(e) => setForm({ ...form, hold_while_failing: e.currentTarget.checked })}
             />

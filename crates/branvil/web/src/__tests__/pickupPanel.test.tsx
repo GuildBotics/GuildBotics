@@ -8,9 +8,23 @@ import { card } from "./fixtures";
 const WORKSPACE = { name: "acme", lanes: ["new", "ready", "in_progress", "done"] };
 const AIKO = { name: "aiko", display_name: "Aiko", kind: "agent", accounts: [], reviewers: [] };
 const KENJI = { ...AIKO, name: "kenji", display_name: "Kenji" };
-const MEMBERS = { items: [{ name: "owner", display_name: "Owner", kind: "owner", accounts: [], reviewers: [] }, AIKO, KENJI], next_cursor: null };
+const MEMBERS = {
+  items: [
+    { name: "owner", display_name: "Owner", kind: "owner", accounts: [], reviewers: [] },
+    AIKO,
+    KENJI,
+  ],
+  next_cursor: null,
+};
 
-const ref = (c: Card): TicketRef => ({ url: c.url, repository: c.repository, key: c.key, title: c.title, state: c.state, state_reason: null });
+const ref = (c: Card): TicketRef => ({
+  url: c.url,
+  repository: c.repository,
+  key: c.key,
+  title: c.title,
+  state: c.state,
+  state_reason: null,
+});
 const aiko = { assignee: { name: "aiko", assigned_at: "2026-11-01T00:00:00Z" } };
 
 /**
@@ -49,17 +63,27 @@ function routes(extra: Routes = {}, session = SESSION): Routes {
   };
 }
 
-const article = (key: string) => screen.getByRole("article", { name: new RegExp(`^acme/demo#${key} `) });
-const tagOf = (key: string) => within(article(key)).queryByRole("button", { name: /click to open the pickup order$/ });
+const article = (key: string) =>
+  screen.getByRole("article", { name: new RegExp(`^acme/demo#${key} `) });
+const tagOf = (key: string) =>
+  within(article(key)).queryByRole("button", { name: /click to open the pickup order$/ });
 const panel = () => screen.queryByRole("complementary", { name: "Pickup order" });
-const rowOf = (key: string) => within(screen.getByRole("list", { name: "Pickup order of aiko" })).getByText(`acme/demo#${key}`).closest("li") as HTMLElement;
-const rowKeys = () => within(screen.getByRole("list", { name: "Pickup order of aiko" })).getAllByRole("listitem").map((li) => li.querySelector(".key")?.textContent);
+const rowOf = (key: string) =>
+  within(screen.getByRole("list", { name: "Pickup order of aiko" }))
+    .getByText(`acme/demo#${key}`)
+    .closest("li") as HTMLElement;
+const rowKeys = () =>
+  within(screen.getByRole("list", { name: "Pickup order of aiko" }))
+    .getAllByRole("listitem")
+    .map((li) => li.querySelector(".key")?.textContent);
 const dataTransfer = () => ({ setData: () => {}, getData: () => "", effectAllowed: "" });
 /** A drag event at a height (jsdom's events built by fireEvent.dragOver carry no coordinates). */
-const dragAt = (type: "dragover" | "drop", el: HTMLElement, clientY: number) => fireEvent(el, new MouseEvent(type, { bubbles: true, cancelable: true, clientY }));
+const dragAt = (type: "dragover" | "drop", el: HTMLElement, clientY: number) =>
+  fireEvent(el, new MouseEvent(type, { bubbles: true, cancelable: true, clientY }));
 /** Drags a row onto the top half of another (rows are 40px high). */
 function dragRow(from: string, onto: string) {
-  for (const key of [from, onto]) rowOf(key).getBoundingClientRect = () => new DOMRect(0, 0, 300, 40);
+  for (const key of [from, onto])
+    rowOf(key).getBoundingClientRect = () => new DOMRect(0, 0, 300, 40);
   fireEvent.dragStart(rowOf(from), { dataTransfer: dataTransfer() });
   dragAt("dragover", rowOf(onto), 5);
   dragAt("drop", rowOf(onto), 5);
@@ -83,7 +107,9 @@ describe("pickup order", () => {
   it("numbers each agent's ready cards in the order the owner set, marking one that will not start", async () => {
     await shown();
     expect(tagOf("1")).toHaveTextContent(/^1$/);
-    expect(tagOf("1")).toHaveAccessibleName("Number 1 in aiko's pickup order — click to open the pickup order");
+    expect(tagOf("1")).toHaveAccessibleName(
+      "Number 1 in aiko's pickup order — click to open the pickup order",
+    );
     // Joined to the card's lane: the number is its place among that lane's tickets.
     const lane = within(article("1")).getByRole("button", { name: /^Lane of acme\/demo#1/ });
     expect(lane.nextElementSibling).toBe(tagOf("1"));
@@ -91,7 +117,9 @@ describe("pickup order", () => {
     // Waiting for #4, still open, #3 keeps its place: when it starts is the system's.
     expect(tagOf("3")).toHaveTextContent(/^3$/);
     expect(tagOf("3")?.querySelector(".pickup-wait")).not.toBeNull();
-    expect(tagOf("3")).toHaveAccessibleName(/all of these tickets are closed: acme\/demo#4; ready tickets further down can start first/);
+    expect(tagOf("3")).toHaveAccessibleName(
+      /all of these tickets are closed: acme\/demo#4; ready tickets further down can start first/,
+    );
     expect(tagOf("3")).toHaveAttribute("title", tagOf("3")?.getAttribute("aria-label"));
     expect(tagOf("1")?.querySelector(".pickup-wait")).toBeNull();
     expect(tagOf("6")?.querySelector(".pickup-wait")).toBeNull();
@@ -111,11 +139,18 @@ describe("pickup order", () => {
   it("shows every direct wait's assignee and lane, with stuck taking precedence", async () => {
     const working = card("W", "in_progress", aiko);
     const other = card("K", "ready", { assignee: { name: "kenji", assigned_at: "" } });
-    const cards = CARDS.map((c) => c.key === "1" ? { ...c, blocked_by: [ref(working), ref(other)] } : c);
+    const cards = CARDS.map((c) =>
+      c.key === "1" ? { ...c, blocked_by: [ref(working), ref(other)] } : c,
+    );
     await opened(userEvent.setup(), "1", {
-      "GET /api/v1/workspaces/acme/board/cards": json(200, { items: [...cards, working, other], next_cursor: null }),
+      "GET /api/v1/workspaces/acme/board/cards": json(200, {
+        items: [...cards, working, other],
+        next_cursor: null,
+      }),
     });
-    expect(rowOf("1")).toHaveTextContent("Waiting: until acme/demo#W closes (aiko · In progress); until acme/demo#K closes (kenji · Ready)");
+    expect(rowOf("1")).toHaveTextContent(
+      "Waiting: until acme/demo#W closes (aiko · In progress); until acme/demo#K closes (kenji · Ready)",
+    );
     expect(tagOf("1")).toHaveAccessibleName(/acme\/demo#W; acme\/demo#K/);
     expect(within(rowOf("2")).getByText("Starts next")).toBeInTheDocument();
     expect(rowOf("6")).not.toHaveTextContent("Waiting:");
@@ -123,11 +158,15 @@ describe("pickup order", () => {
 
   it("keeps unloaded blockers waiting without inventing an assignee or lane", async () => {
     const missing = card("M", "in_progress", { repository: "other/repo" });
-    const cards = CARDS.map((c) => c.key === "1" ? { ...c, blocked_by: [ref(missing), ref(C4)] } : c);
+    const cards = CARDS.map((c) =>
+      c.key === "1" ? { ...c, blocked_by: [ref(missing), ref(C4)] } : c,
+    );
     await opened(userEvent.setup(), "1", {
       "GET /api/v1/workspaces/acme/board/cards": json(200, { items: cards, next_cursor: null }),
     });
-    expect(rowOf("1").querySelector(".pickup-waits")).toHaveTextContent(/^Waiting: until other\/repo#M closes; until acme\/demo#4 closes \(aiko · Ready\)$/);
+    expect(rowOf("1").querySelector(".pickup-waits")).toHaveTextContent(
+      /^Waiting: until other\/repo#M closes; until acme\/demo#4 closes \(aiko · Ready\)$/,
+    );
     expect(tagOf("1")?.querySelector(".pickup-wait")).not.toBeNull();
     expect(within(rowOf("1")).queryByText("Starts next")).not.toBeInTheDocument();
     expect(within(rowOf("2")).getByText("Starts next")).toBeInTheDocument();
@@ -135,9 +174,12 @@ describe("pickup order", () => {
 
   it("keeps a loaded unassigned blocker stuck rather than showing a wait", async () => {
     const nobody = card("U", "in_progress");
-    const cards = CARDS.map((c) => c.key === "1" ? { ...c, blocked_by: [ref(nobody)] } : c);
+    const cards = CARDS.map((c) => (c.key === "1" ? { ...c, blocked_by: [ref(nobody)] } : c));
     await opened(userEvent.setup(), "1", {
-      "GET /api/v1/workspaces/acme/board/cards": json(200, { items: [...cards, nobody], next_cursor: null }),
+      "GET /api/v1/workspaces/acme/board/cards": json(200, {
+        items: [...cards, nobody],
+        next_cursor: null,
+      }),
     });
     expect(rowOf("1")).toHaveTextContent("Won't start: acme/demo#U has no assignee");
     expect(rowOf("1").querySelector(".pickup-waits")).toBeNull();
@@ -161,7 +203,13 @@ describe("pickup order", () => {
     const aside = await screen.findByRole("complementary", { name: "Pickup order" });
     expect(tagOf("4")).toHaveAttribute("aria-expanded", "true");
     expect(rowOf("4")).toHaveAttribute("aria-current", "true");
-    expect(rowKeys()).toEqual(["acme/demo#1", "acme/demo#2", "acme/demo#3", "acme/demo#4", "acme/demo#6"]);
+    expect(rowKeys()).toEqual([
+      "acme/demo#1",
+      "acme/demo#2",
+      "acme/demo#3",
+      "acme/demo#4",
+      "acme/demo#6",
+    ]);
     expect(within(aside).getByRole("combobox", { name: "Assignee" })).toHaveValue("aiko");
     // A row: its number, why it will not start (if so), the ticket, and its parent; nothing of work in progress.
     expect(rowOf("3")).toHaveTextContent("Waiting: until acme/demo#4 closes (aiko · Ready)");
@@ -169,7 +217,9 @@ describe("pickup order", () => {
     expect(rowOf("2")).toHaveTextContent("Parent: acme/demo#7");
     expect(aside).not.toHaveTextContent(/pull request|reply/i);
     // The figure stays usable beside it.
-    expect(within(article("1")).getByRole("button", { name: /^Lane of acme\/demo#1/ })).toBeEnabled();
+    expect(
+      within(article("1")).getByRole("button", { name: /^Lane of acme\/demo#1/ }),
+    ).toBeEnabled();
 
     await user.click(tagOf("4") as HTMLElement);
     expect(panel()).not.toBeInTheDocument();
@@ -185,9 +235,15 @@ describe("pickup order", () => {
     const user = userEvent.setup();
     await opened(user);
     const select = within(panel() as HTMLElement).getByRole("combobox", { name: "Assignee" });
-    expect(within(select).getAllByRole("option").map((o) => o.textContent)).toEqual(["aiko", "kenji"]);
+    expect(
+      within(select)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["aiko", "kenji"]);
     await user.selectOptions(select, "kenji");
-    const rows = within(screen.getByRole("list", { name: "Pickup order of kenji" })).getAllByRole("listitem");
+    const rows = within(screen.getByRole("list", { name: "Pickup order of kenji" })).getAllByRole(
+      "listitem",
+    );
     expect(rows.map((li) => li.textContent)).toEqual(["1Starts nextacme/demo#8 Title of 8"]);
   });
 
@@ -205,7 +261,9 @@ describe("pickup order", () => {
     fireEvent.blur(rowOf("2"));
 
     await user.type(screen.getByRole("textbox", { name: "Text" }), "Title of 4");
-    await waitFor(() => expect(screen.queryByRole("article", { name: /^acme\/demo#1 / })).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("article", { name: /^acme\/demo#1 / })).not.toBeInTheDocument(),
+    );
     expect(rowOf("1")).toHaveTextContent("Hidden by the filters");
     expect(rowOf("4")).not.toHaveTextContent("Hidden by the filters");
     // Numbered before the filters: #4 is still fourth.
@@ -220,8 +278,11 @@ describe("pickup order", () => {
     });
     expect(within(rowOf("1")).getByText("Starts next")).toBeInTheDocument();
     dragRow("3", "1");
-    await screen.findByText("Changed the pickup order: acme/demo#3, with acme/demo#4 it waits for moved before it.");
-    const puts = () => fake.requests.filter((r) => r.method === "PUT").map((r) => [r.path.split("/")[7], r.body]);
+    await screen.findByText(
+      "Changed the pickup order: acme/demo#3, with acme/demo#4 it waits for moved before it.",
+    );
+    const puts = () =>
+      fake.requests.filter((r) => r.method === "PUT").map((r) => [r.path.split("/")[7], r.body]);
     expect(puts()).toEqual([
       ["4", { lane: "ready", before: "acme/demo#1" }],
       ["3", { lane: "ready", before: "acme/demo#1" }],
@@ -240,7 +301,9 @@ describe("pickup order", () => {
     const user = userEvent.setup();
     // Once written, #5 (what followed #4) and #3 (moved) are started before Undo is clicked.
     let written = false;
-    const started = CARDS.map((c) => (c.key === "5" || c.key === "3" ? { ...c, lane: "in_progress" as const } : c));
+    const started = CARDS.map((c) =>
+      c.key === "5" || c.key === "3" ? { ...c, lane: "in_progress" as const } : c,
+    );
     const put = () => {
       written = true;
       return json(200, {});
@@ -250,17 +313,29 @@ describe("pickup order", () => {
       "PUT /api/v1/repos/acme/demo/tickets/3/board": put,
       "GET /api/v1/workspaces/acme/board/cards": (req) => {
         const board = written ? started : CARDS;
-        return json(200, { items: req.search.includes("lane=ready") ? board.filter((c) => c.lane === "ready").map((c) => ({ ...c, comments: [] })) : board, next_cursor: null });
+        return json(200, {
+          items: req.search.includes("lane=ready")
+            ? board.filter((c) => c.lane === "ready").map((c) => ({ ...c, comments: [] }))
+            : board,
+          next_cursor: null,
+        });
       },
     });
     dragRow("3", "1");
-    await screen.findByText("Changed the pickup order: acme/demo#3, with acme/demo#4 it waits for moved before it.");
+    await screen.findByText(
+      "Changed the pickup order: acme/demo#3, with acme/demo#4 it waits for moved before it.",
+    );
     await waitFor(() => expect(tagOf("3")).not.toBeInTheDocument());
 
     await user.click(screen.getByRole("button", { name: "Undo" }));
     await screen.findByText("Undone.");
     // #4 goes before #6, the next still in Ready; #3, started, stays in progress.
-    expect(fake.requests.filter((r) => r.method === "PUT").slice(2).map((r) => [r.path.split("/")[7], r.body])).toEqual([["4", { lane: "ready", before: "acme/demo#6" }]]);
+    expect(
+      fake.requests
+        .filter((r) => r.method === "PUT")
+        .slice(2)
+        .map((r) => [r.path.split("/")[7], r.body]),
+    ).toEqual([["4", { lane: "ready", before: "acme/demo#6" }]]);
   });
 
   it("says there is nothing to put back when every moved ticket has left Ready", async () => {
@@ -274,35 +349,56 @@ describe("pickup order", () => {
       },
       "GET /api/v1/workspaces/acme/board/cards": (req) => {
         const board = written ? started : CARDS;
-        return json(200, { items: req.search.includes("lane=ready") ? board.filter((c) => c.lane === "ready").map((c) => ({ ...c, comments: [] })) : board, next_cursor: null });
+        return json(200, {
+          items: req.search.includes("lane=ready")
+            ? board.filter((c) => c.lane === "ready").map((c) => ({ ...c, comments: [] }))
+            : board,
+          next_cursor: null,
+        });
       },
     });
-    for (const key of ["1", "6"]) rowOf(key).getBoundingClientRect = () => new DOMRect(0, 0, 300, 40);
+    for (const key of ["1", "6"])
+      rowOf(key).getBoundingClientRect = () => new DOMRect(0, 0, 300, 40);
     fireEvent.dragStart(rowOf("1"), { dataTransfer: dataTransfer() });
     dragAt("dragover", rowOf("6"), 35);
     dragAt("drop", rowOf("6"), 35);
     await screen.findByText("Changed the pickup order: acme/demo#1.");
     await waitFor(() => expect(tagOf("1")).not.toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Undo" }));
-    expect(await screen.findByText("The moved tickets have all left the Ready lane meanwhile: there is nothing to put back.")).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "The moved tickets have all left the Ready lane meanwhile: there is nothing to put back.",
+      ),
+    ).toBeInTheDocument();
     expect(fake.requests.filter((r) => r.method === "PUT")).toHaveLength(1);
   });
 
   it("puts a row dropped below the last after the last row only", async () => {
     const user = userEvent.setup();
-    const fake = await opened(user, "1", { "PUT /api/v1/repos/acme/demo/tickets/1/board": json(200, {}) });
-    for (const key of ["1", "6"]) rowOf(key).getBoundingClientRect = () => new DOMRect(0, 0, 300, 40);
+    const fake = await opened(user, "1", {
+      "PUT /api/v1/repos/acme/demo/tickets/1/board": json(200, {}),
+    });
+    for (const key of ["1", "6"])
+      rowOf(key).getBoundingClientRect = () => new DOMRect(0, 0, 300, 40);
     fireEvent.dragStart(rowOf("1"), { dataTransfer: dataTransfer() });
     dragAt("dragover", rowOf("6"), 35);
     // Shown before it is written: both the numbers and the next pickup follow.
     expect(within(rowOf("2")).getByText("Starts next")).toBeInTheDocument();
     expect(within(rowOf("1")).queryByText("Starts next")).not.toBeInTheDocument();
-    expect(rowKeys()).toEqual(["acme/demo#2", "acme/demo#3", "acme/demo#4", "acme/demo#6", "acme/demo#1"]);
+    expect(rowKeys()).toEqual([
+      "acme/demo#2",
+      "acme/demo#3",
+      "acme/demo#4",
+      "acme/demo#6",
+      "acme/demo#1",
+    ]);
     expect(tagOf("4")).toHaveTextContent(/^3$/);
     expect(tagOf("1")).toHaveTextContent(/^5$/);
     dragAt("drop", rowOf("6"), 35);
     await screen.findByText("Changed the pickup order: acme/demo#1.");
-    expect(fake.calls("PUT", "/api/v1/repos/acme/demo/tickets/1/board").map((r) => r.body)).toEqual([{ lane: "ready", after: "acme/demo#6" }]);
+    expect(fake.calls("PUT", "/api/v1/repos/acme/demo/tickets/1/board").map((r) => r.body)).toEqual(
+      [{ lane: "ready", after: "acme/demo#6" }],
+    );
   });
 
   it("stops at a refusal, says it, and leaves what was written undoable", async () => {
@@ -316,7 +412,10 @@ describe("pickup order", () => {
     expect(fake.requests.filter((r) => r.method === "PUT")).toHaveLength(2);
     await user.click(screen.getByRole("button", { name: "Undo" }));
     await screen.findByText("Undone.");
-    expect(fake.requests.filter((r) => r.method === "PUT").at(-1)?.body).toEqual({ lane: "ready", before: "acme/demo#5" });
+    expect(fake.requests.filter((r) => r.method === "PUT").at(-1)?.body).toEqual({
+      lane: "ready",
+      before: "acme/demo#5",
+    });
   });
 
   it("ends a move shown before it is written when the panel closes", async () => {
@@ -331,7 +430,13 @@ describe("pickup order", () => {
     expect(tagOf("4")).toHaveTextContent(/^4$/);
     // Reopened, it starts from the order as it is.
     await user.click(tagOf("1") as HTMLElement);
-    expect(rowKeys()).toEqual(["acme/demo#1", "acme/demo#2", "acme/demo#3", "acme/demo#4", "acme/demo#6"]);
+    expect(rowKeys()).toEqual([
+      "acme/demo#1",
+      "acme/demo#2",
+      "acme/demo#3",
+      "acme/demo#4",
+      "acme/demo#6",
+    ]);
   });
 
   it("moves nothing until a row is moved, and keeps a drag still over a row it pulls along or between rows", async () => {
@@ -340,12 +445,19 @@ describe("pickup order", () => {
     // #3 waits for #4, below it: lifted and put down, nothing moved or written.
     rowOf("3").focus();
     await user.keyboard(" ");
-    expect(rowKeys()).toEqual(["acme/demo#1", "acme/demo#2", "acme/demo#3", "acme/demo#4", "acme/demo#6"]);
+    expect(rowKeys()).toEqual([
+      "acme/demo#1",
+      "acme/demo#2",
+      "acme/demo#3",
+      "acme/demo#4",
+      "acme/demo#6",
+    ]);
     await user.keyboard(" ");
     expect(fake.requests.filter((r) => r.method === "PUT")).toEqual([]);
     expect(screen.queryByText(/Changed the pickup order/)).not.toBeInTheDocument();
 
-    for (const key of ["1", "3", "4"]) rowOf(key).getBoundingClientRect = () => new DOMRect(0, 0, 300, 40);
+    for (const key of ["1", "3", "4"])
+      rowOf(key).getBoundingClientRect = () => new DOMRect(0, 0, 300, 40);
     fireEvent.dragStart(rowOf("3"), { dataTransfer: dataTransfer() });
     dragAt("dragover", rowOf("1"), 5);
     const pulled = ["acme/demo#4", "acme/demo#3", "acme/demo#1", "acme/demo#2", "acme/demo#6"];
@@ -355,19 +467,43 @@ describe("pickup order", () => {
     expect(rowKeys()).toEqual(pulled);
     // Between rows (the list itself, above its last row's bottom), too.
     const list = screen.getByRole("list", { name: "Pickup order of aiko" });
-    (list.lastElementChild as HTMLElement).getBoundingClientRect = () => new DOMRect(0, 160, 300, 40);
+    (list.lastElementChild as HTMLElement).getBoundingClientRect = () =>
+      new DOMRect(0, 160, 300, 40);
     dragAt("dragover", list, 100);
     expect(rowKeys()).toEqual(pulled);
     dragAt("dragover", list, 230);
-    expect(rowKeys()).toEqual(["acme/demo#1", "acme/demo#2", "acme/demo#4", "acme/demo#6", "acme/demo#3"]);
+    expect(rowKeys()).toEqual([
+      "acme/demo#1",
+      "acme/demo#2",
+      "acme/demo#4",
+      "acme/demo#6",
+      "acme/demo#3",
+    ]);
     fireEvent.dragEnd(rowOf("3"));
-    expect(rowKeys()).toEqual(["acme/demo#1", "acme/demo#2", "acme/demo#3", "acme/demo#4", "acme/demo#6"]);
+    expect(rowKeys()).toEqual([
+      "acme/demo#1",
+      "acme/demo#2",
+      "acme/demo#3",
+      "acme/demo#4",
+      "acme/demo#6",
+    ]);
   });
 
   it("stays open on an Escape that belongs to a field or a drawer", async () => {
     const user = userEvent.setup();
     await opened(user, "1", {
-      "GET /api/v1/repos/acme/demo": json(200, { path: "acme/demo", default_branch: "main", clone_url: "", url: "", protected_branches: [], post_merge_jobs: [], required_checks: [], labels: [], upstream: null, revision: 1 }),
+      "GET /api/v1/repos/acme/demo": json(200, {
+        path: "acme/demo",
+        default_branch: "main",
+        clone_url: "",
+        url: "",
+        protected_branches: [],
+        post_merge_jobs: [],
+        required_checks: [],
+        labels: [],
+        upstream: null,
+        revision: 1,
+      }),
       "GET /api/v1/repos/acme/demo/tickets/1": json(200, CARDS[1]),
       "GET /api/v1/repos/acme/demo/tickets/1/comments": json(200, { items: [], next_cursor: null }),
       "GET /api/v1/repos/acme/demo/tickets/1/pulls": json(200, { items: [], next_cursor: null }),
@@ -378,7 +514,9 @@ describe("pickup order", () => {
     await user.click(within(article("1")).getByRole("link", { name: "Title of 1" }));
     await screen.findByRole("dialog", { name: "Ticket" });
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Ticket" })).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Ticket" })).not.toBeInTheDocument(),
+    );
     expect(panel()).toBeInTheDocument();
   });
 
@@ -391,13 +529,21 @@ describe("pickup order", () => {
 
   it("is reordered with the keyboard, and says so", async () => {
     const user = userEvent.setup();
-    const fake = await opened(user, "1", { "PUT /api/v1/repos/acme/demo/tickets/4/board": json(200, {}) });
+    const fake = await opened(user, "1", {
+      "PUT /api/v1/repos/acme/demo/tickets/4/board": json(200, {}),
+    });
     rowOf("4").focus();
     await user.keyboard(" ");
     expect(screen.getByText(/^acme\/demo#4 lifted, number 4 of 5\./)).toBeInTheDocument();
     await user.keyboard("{ArrowUp}{ArrowUp}");
     expect(screen.getByText("acme/demo#4: number 2 of 5.")).toBeInTheDocument();
-    expect(rowKeys()).toEqual(["acme/demo#1", "acme/demo#4", "acme/demo#2", "acme/demo#3", "acme/demo#6"]);
+    expect(rowKeys()).toEqual([
+      "acme/demo#1",
+      "acme/demo#4",
+      "acme/demo#2",
+      "acme/demo#3",
+      "acme/demo#6",
+    ]);
     // Escape cancels the move, not the panel.
     await user.keyboard("{Escape}");
     expect(screen.getByText("Moving acme/demo#4 was cancelled.")).toBeInTheDocument();
@@ -408,6 +554,8 @@ describe("pickup order", () => {
     await user.keyboard(" {ArrowUp} ");
     expect(screen.getByText("acme/demo#4 dropped at number 3 of 5.")).toBeInTheDocument();
     await screen.findByText("Changed the pickup order: acme/demo#4.");
-    expect(fake.calls("PUT", "/api/v1/repos/acme/demo/tickets/4/board").map((r) => r.body)).toEqual([{ lane: "ready", before: "acme/demo#3" }]);
+    expect(fake.calls("PUT", "/api/v1/repos/acme/demo/tickets/4/board").map((r) => r.body)).toEqual(
+      [{ lane: "ready", before: "acme/demo#3" }],
+    );
   });
 });

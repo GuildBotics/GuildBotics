@@ -35,21 +35,31 @@ export function fakeApi(routes: Record<string, Reply | Reply[]>) {
   const counters = new Map<string, number>();
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
-    const headers = Object.fromEntries(Object.entries((init?.headers ?? {}) as Record<string, string>));
+    const headers = Object.fromEntries(
+      Object.entries((init?.headers ?? {}) as Record<string, string>),
+    );
     const rec: Recorded = {
       method: init?.method ?? "GET",
       path: decodeURIComponent(url.pathname),
       search: url.search,
       headers,
       // A file (a member's picture) is kept as it was sent.
-      body: init?.body instanceof Blob ? init.body : init?.body ? JSON.parse(String(init.body)) : undefined,
+      body:
+        init?.body instanceof Blob
+          ? init.body
+          : init?.body
+            ? JSON.parse(String(init.body))
+            : undefined,
       credentials: init?.credentials,
     };
     requests.push(rec);
     const key = `${rec.method} ${rec.path}`;
     const route = routes[key];
     if (route === undefined) {
-      return new Response(JSON.stringify({ error: { code: "not_found", message: `no route ${key}` } }), { status: 404 });
+      return new Response(
+        JSON.stringify({ error: { code: "not_found", message: `no route ${key}` } }),
+        { status: 404 },
+      );
     }
     const n = counters.get(key) ?? 0;
     counters.set(key, n + 1);
@@ -64,11 +74,18 @@ export function fakeApi(routes: Record<string, Reply | Reply[]>) {
   vi.stubGlobal("fetch", fetchMock);
   return {
     requests,
-    calls: (method: string, path: string) => requests.filter((r) => r.method === method && r.path === path),
+    calls: (method: string, path: string) =>
+      requests.filter((r) => r.method === method && r.path === path),
   };
 }
 
-export const ME = { name: "owner", display_name: "Owner", kind: "owner", accounts: [], reviewers: [] };
+export const ME = {
+  name: "owner",
+  display_name: "Owner",
+  kind: "owner",
+  accounts: [],
+  reviewers: [],
+};
 export const SESSION = { me: ME, csrf: "csrf-123" };
 
 export function renderApp(path: string, language: "en" | "ja" = "en") {

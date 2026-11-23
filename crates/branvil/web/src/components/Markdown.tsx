@@ -13,10 +13,16 @@ export function renderMarkdown(source: string, t?: Translate): string {
   if (!t) return clean;
   const element = document.createElement("div");
   element.innerHTML = clean;
-  for (const a of element.querySelectorAll<HTMLAnchorElement>("a[data-branvil-kind][data-branvil-state]")) {
+  for (const a of element.querySelectorAll<HTMLAnchorElement>(
+    "a[data-branvil-kind][data-branvil-state]",
+  )) {
     const kind = a.dataset.branvilKind;
     const state = a.dataset.branvilState;
-    if ((kind !== "ticket" && kind !== "pull") || (state !== "open" && state !== "closed" && state !== "merged")) continue;
+    if (
+      (kind !== "ticket" && kind !== "pull") ||
+      (state !== "open" && state !== "closed" && state !== "merged")
+    )
+      continue;
     const description = `${t(`markdown.${kind}`)}, ${t(`pull.state.${state}`)}`;
     a.title = `${description}: ${a.title}`;
     a.setAttribute("aria-label", `${a.textContent}, ${a.title}`);
@@ -24,7 +30,15 @@ export function renderMarkdown(source: string, t?: Translate): string {
   return element.innerHTML;
 }
 
-export function Markdown({ repo, source, className }: { repo: string; source: string; className?: string }) {
+export function Markdown({
+  repo,
+  source,
+  className,
+}: {
+  repo: string;
+  source: string;
+  className?: string;
+}) {
   const t = useT();
   const resolved = useMarkdown(repo, source);
   // Show the source while resolving (and if the request fails); no content

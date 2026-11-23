@@ -74,26 +74,39 @@ const transport = createApiClient({
       const data = (await response.json()) as { error?: { code?: string; message?: string } };
       code = data.error?.code || code;
       message = data.error?.message || message;
-    } catch { /* Keep the status line for a non-JSON response. */ }
+    } catch {
+      /* Keep the status line for a non-JSON response. */
+    }
     return new ApiError(response.status, code, message);
   },
-  networkError: (err) => new ApiError(0, "network", err instanceof Error ? err.message : String(err)),
+  networkError: (err) =>
+    new ApiError(0, "network", err instanceof Error ? err.message : String(err)),
   recoveryError: (err) => {
     if (isApiError(err, "csrf_mismatch", 403) || isApiError(err, undefined, 401)) {
       setCsrfToken(null);
-      return new ApiError(err.status, "session_changed", "The session could not be refreshed. Reload the page and try again.");
+      return new ApiError(
+        err.status,
+        "session_changed",
+        "The session could not be refreshed. Reload the page and try again.",
+      );
     }
     return err;
   },
 });
 
-export async function request<T>(method: string, path: string, opts: RequestOptions = {}): Promise<T> {
+export async function request<T>(
+  method: string,
+  path: string,
+  opts: RequestOptions = {},
+): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   const file = opts.body instanceof Blob ? opts.body : null;
-  if (opts.body !== undefined) headers["Content-Type"] = file ? file.type || "application/octet-stream" : "application/json";
+  if (opts.body !== undefined)
+    headers["Content-Type"] = file ? file.type || "application/octet-stream" : "application/json";
   if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
   const response = await transport.send(buildUrl(path, opts.query).slice(API_PREFIX.length), {
-    method, headers,
+    method,
+    headers,
     body: file ?? (opts.body === undefined ? undefined : JSON.stringify(opts.body)),
     signal: opts.signal,
   });

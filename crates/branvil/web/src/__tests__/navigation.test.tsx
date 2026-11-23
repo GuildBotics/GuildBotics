@@ -28,32 +28,44 @@ function setup(empty = false) {
 async function expectStart(name: string) {
   await waitFor(() => expect(window.location.pathname).toBe(`/${name}`));
   const nav = await screen.findByRole("navigation", { name: "Main" });
-  expect(await within(nav).findByRole("link", { name: "Task flow" })).toHaveAttribute("aria-current", "page");
+  expect(await within(nav).findByRole("link", { name: "Task flow" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
 }
 
 describe("workspace navigation", () => {
-  it.each(["home", "switch", "create from sidebar", "create from home"] as const)("opens the task flow for %s", async (entry) => {
-    const fake = setup(entry === "create from home");
-    window.localStorage.setItem("branvil.workspace", "beta");
-    const user = userEvent.setup();
-    const historyLength = window.history.length;
-    renderApp(entry === "home" || entry === "create from home" ? "/" : entry === "switch" ? "/acme" : "/-/settings/members");
+  it.each(["home", "switch", "create from sidebar", "create from home"] as const)(
+    "opens the task flow for %s",
+    async (entry) => {
+      const fake = setup(entry === "create from home");
+      window.localStorage.setItem("branvil.workspace", "beta");
+      const user = userEvent.setup();
+      const historyLength = window.history.length;
+      renderApp(
+        entry === "home" || entry === "create from home"
+          ? "/"
+          : entry === "switch"
+            ? "/acme"
+            : "/-/settings/members",
+      );
 
-    if (entry === "switch") {
-      await choose(user, "Workspace", "beta");
-    } else if (entry.startsWith("create")) {
-      if (entry === "create from sidebar") await choose(user, "Workspace", "+ New workspace…");
-      else await user.click(await screen.findByRole("button", { name: "New workspace" }));
-      const dialog = await screen.findByRole("dialog", { name: "New workspace" });
-      await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "gamma");
-      await user.click(within(dialog).getByRole("button", { name: "Create" }));
-      await waitFor(() => expect(fake.calls("POST", "/api/v1/workspaces")).toHaveLength(1));
-    }
-    const target = entry.startsWith("create") ? "gamma" : "beta";
-    await expectStart(target);
-    expect(window.localStorage.getItem("branvil.workspace")).toBe(target);
-    if (entry === "home") expect(window.history.length).toBe(historyLength);
-  });
+      if (entry === "switch") {
+        await choose(user, "Workspace", "beta");
+      } else if (entry.startsWith("create")) {
+        if (entry === "create from sidebar") await choose(user, "Workspace", "+ New workspace…");
+        else await user.click(await screen.findByRole("button", { name: "New workspace" }));
+        const dialog = await screen.findByRole("dialog", { name: "New workspace" });
+        await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "gamma");
+        await user.click(within(dialog).getByRole("button", { name: "Create" }));
+        await waitFor(() => expect(fake.calls("POST", "/api/v1/workspaces")).toHaveLength(1));
+      }
+      const target = entry.startsWith("create") ? "gamma" : "beta";
+      await expectStart(target);
+      expect(window.localStorage.getItem("branvil.workspace")).toBe(target);
+      if (entry === "home") expect(window.history.length).toBe(historyLength);
+    },
+  );
 
   it.each([
     ["task flow", "/acme", "/beta", "Task flow", "Task flow"],
@@ -65,19 +77,29 @@ describe("workspace navigation", () => {
     ["pull request", "/acme/demo/-/pulls/1", "/beta", "Task flow", "Pull requests"],
     ["commit", "/acme/demo/-/commits/abc123", "/beta", "Task flow", "Pull requests"],
     ["job", "/acme/demo/-/jobs/att_1", "/beta", "Task flow", "Pull requests"],
-  ])("shows the current location and switches from %s to the expected page", async (_, from, to, active, current) => {
-    setup();
-    // Global settings use the remembered workspace.
-    window.localStorage.setItem("branvil.workspace", "acme");
-    renderApp(from);
-    const before = await screen.findByRole("navigation", { name: "Main" });
-    expect(within(before).queryAllByRole("link", { current: "page" }).map((link) => link.textContent)).toEqual(current ? [current] : []);
-    await choose(userEvent.setup(), "Workspace", "beta");
-    await waitFor(() => expect(window.location.pathname).toBe(to));
-    const nav = screen.getByRole("navigation", { name: "Main" });
-    expect(within(nav).getByRole("link", { name: active })).toHaveAttribute("aria-current", "page");
-    expect(window.localStorage.getItem("branvil.workspace")).toBe("beta");
-  });
+  ])(
+    "shows the current location and switches from %s to the expected page",
+    async (_, from, to, active, current) => {
+      setup();
+      // Global settings use the remembered workspace.
+      window.localStorage.setItem("branvil.workspace", "acme");
+      renderApp(from);
+      const before = await screen.findByRole("navigation", { name: "Main" });
+      expect(
+        within(before)
+          .queryAllByRole("link", { current: "page" })
+          .map((link) => link.textContent),
+      ).toEqual(current ? [current] : []);
+      await choose(userEvent.setup(), "Workspace", "beta");
+      await waitFor(() => expect(window.location.pathname).toBe(to));
+      const nav = screen.getByRole("navigation", { name: "Main" });
+      expect(within(nav).getByRole("link", { name: active })).toHaveAttribute(
+        "aria-current",
+        "page",
+      );
+      expect(window.localStorage.getItem("branvil.workspace")).toBe("beta");
+    },
+  );
 
   it("links to the task flow, pull requests, and settings", async () => {
     setup();
@@ -87,13 +109,19 @@ describe("workspace navigation", () => {
     expect(flow).toHaveAttribute("href", "/acme");
     expect(flow).toHaveAttribute("aria-current", "page");
     expect(await screen.findByText("No tickets to show.")).toBeInTheDocument();
-    expect(within(nav).getAllByRole("link").map((link) => link.textContent)).toEqual(["Task flow", "Pull requests", "Settings"]);
+    expect(
+      within(nav)
+        .getAllByRole("link")
+        .map((link) => link.textContent),
+    ).toEqual(["Task flow", "Pull requests", "Settings"]);
   });
 });
 
 it("switches workspaces within settings even when storage cannot save the selection", async () => {
   setup();
-  const save = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Storage disabled"); });
+  const save = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new Error("Storage disabled");
+  });
   try {
     renderApp("/-/settings/members");
     await choose(userEvent.setup(), "Workspace", "beta");
@@ -104,25 +132,35 @@ it("switches workspaces within settings even when storage cannot save the select
   }
 });
 
-it.each(["/acme/-/relations", "/acme/-/board"])("shows the removed URL %s as not found without redirecting", async (path) => {
-  const fake = setup();
-  renderApp(path);
-  expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();
-  expect(window.location.pathname).toBe(path);
-  expect(fake.calls("GET", "/api/v1/workspaces/acme/board/cards")).toHaveLength(0);
-});
+it.each(["/acme/-/relations", "/acme/-/board"])(
+  "shows the removed URL %s as not found without redirecting",
+  async (path) => {
+    const fake = setup();
+    renderApp(path);
+    expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();
+    expect(window.location.pathname).toBe(path);
+    expect(fake.calls("GET", "/api/v1/workspaces/acme/board/cards")).toHaveLength(0);
+  },
+);
 
 describe("embedding host navigation", () => {
-  it.each([null, { label: "Host screen", url: "/host/" }])("uses only the server supplied destination %j", async (navigation) => {
-    fakeApi({
-      "GET /api/v1/session": json(200, { ...SESSION, host_navigation: navigation }),
-      "GET /api/v1/workspaces": page([]),
-    });
-    renderApp("/");
-    const nav = await screen.findByRole("navigation", { name: "Main" });
-    if (navigation) expect(within(nav).getByRole("link", { name: navigation.label })).toHaveAttribute("href", navigation.url);
-    else expect(within(nav).getAllByRole("link")).toHaveLength(1);
-  });
+  it.each([null, { label: "Host screen", url: "/host/" }])(
+    "uses only the server supplied destination %j",
+    async (navigation) => {
+      fakeApi({
+        "GET /api/v1/session": json(200, { ...SESSION, host_navigation: navigation }),
+        "GET /api/v1/workspaces": page([]),
+      });
+      renderApp("/");
+      const nav = await screen.findByRole("navigation", { name: "Main" });
+      if (navigation)
+        expect(within(nav).getByRole("link", { name: navigation.label })).toHaveAttribute(
+          "href",
+          navigation.url,
+        );
+      else expect(within(nav).getAllByRole("link")).toHaveLength(1);
+    },
+  );
 
   it("persists the sidebar language in the shared preference", async () => {
     setup(true);

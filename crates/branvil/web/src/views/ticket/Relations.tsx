@@ -25,7 +25,11 @@ interface Named {
 export function ticketNamed(text: string, ticket: Ticket): Named | null {
   const s = text.trim();
   const base = ticket.url.slice(0, ticket.url.lastIndexOf(`/${ticket.repository}/-/tickets/`));
-  const named = (repo: string, key: string) => ({ repo, key, url: `${base}/${repo}/-/tickets/${key}` });
+  const named = (repo: string, key: string) => ({
+    repo,
+    key,
+    url: `${base}/${repo}/-/tickets/${key}`,
+  });
   if (/^https?:\/\//.test(s)) {
     // The browser's address, or the URL the service gives (another origin behind a dev proxy).
     const route = routeOfUrl(s) ?? routeOfUrl(s, base);
@@ -80,12 +84,21 @@ export function Relations({ ticket }: { ticket: Ticket }) {
           refs={ticket.parent ? [ticket.parent] : []}
           ticket={ticket}
           pending={relate.isPending}
-          onAdd={ticket.parent ? undefined : (n) => change({ ticket: self, patch: { parent: n.url } })}
+          onAdd={
+            ticket.parent ? undefined : (n) => change({ ticket: self, patch: { parent: n.url } })
+          }
           onRemove={() => change({ ticket: self, patch: { parent: null } })}
         />
         <RelationList
           label={t("ticket.children")}
-          note={ticket.children.length > 0 ? t("ticket.childrenClosed", { closed: closedChildren, total: ticket.children.length }) : undefined}
+          note={
+            ticket.children.length > 0
+              ? t("ticket.childrenClosed", {
+                  closed: closedChildren,
+                  total: ticket.children.length,
+                })
+              : undefined
+          }
           refs={ticket.children}
           ticket={ticket}
           pending={relate.isPending}
@@ -116,7 +129,8 @@ export function Relations({ ticket }: { ticket: Ticket }) {
 }
 
 /** How a related ticket is named next to `ticket`: `#12` in the same repository. */
-export const labelOf = (r: TicketRef, ticket: Ticket) => (r.repository === ticket.repository ? `#${r.key}` : `${r.repository}#${r.key}`);
+export const labelOf = (r: TicketRef, ticket: Ticket) =>
+  r.repository === ticket.repository ? `#${r.key}` : `${r.repository}#${r.key}`;
 
 /** One relation's tickets, each with its state and a button that takes it off, and a form that adds one. */
 function RelationList({
@@ -152,7 +166,13 @@ function RelationList({
           {label}
         </Text>
         {onAdd && adding === null && (
-          <ActionIcon variant="subtle" color="gray" size="sm" aria-label={t("ticket.addRelation", { relation: label })} onClick={() => setAdding("")}>
+          <ActionIcon
+            variant="subtle"
+            color="gray"
+            size="sm"
+            aria-label={t("ticket.addRelation", { relation: label })}
+            onClick={() => setAdding("")}
+          >
             <Plus size={14} />
           </ActionIcon>
         )}
@@ -169,10 +189,18 @@ function RelationList({
       )}
       {refs.map((r) => (
         <Group key={r.url} gap={6} wrap="nowrap" align="flex-start">
-          <Anchor component={TicketLink} repo={r.repository} ticketKey={r.key} size="sm" style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
+          <Anchor
+            component={TicketLink}
+            repo={r.repository}
+            ticketKey={r.key}
+            size="sm"
+            style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}
+          >
             {labelOf(r, ticket)} {r.title}
           </Anchor>
-          <StateBadge tone={r.state === "open" ? "success" : "neutral"}>{t(r.state === "open" ? "ticket.open" : "ticket.closed")}</StateBadge>
+          <StateBadge tone={r.state === "open" ? "success" : "neutral"}>
+            {t(r.state === "open" ? "ticket.open" : "ticket.closed")}
+          </StateBadge>
           <ActionIcon
             variant="subtle"
             color="gray"

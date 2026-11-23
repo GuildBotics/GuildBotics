@@ -15,7 +15,8 @@ export interface Person {
 }
 
 /** A menu item's check: the current choice is ticked, the others keep its room. */
-export const CheckSlot = ({ on }: { on: boolean }) => (on ? <Check size={14} /> : <span style={{ width: 14, display: "inline-block" }} />);
+export const CheckSlot = ({ on }: { on: boolean }) =>
+  on ? <Check size={14} /> : <span style={{ width: 14, display: "inline-block" }} />;
 
 function NoOne({ size }: { size: number }) {
   return (
@@ -43,7 +44,12 @@ export function AssigneePicker({
   return (
     <Menu position="bottom-end" withinPortal>
       <Menu.Target>
-        <UnstyledButton className="people-trigger" aria-label={label} title={label} disabled={disabled}>
+        <UnstyledButton
+          className="people-trigger"
+          aria-label={label}
+          title={label}
+          disabled={disabled}
+        >
           {who ? <MemberAvatar name={who.name} kind={who.kind} size={28} /> : <NoOne size={28} />}
         </UnstyledButton>
       </Menu.Target>
@@ -70,14 +76,22 @@ export function PeopleItems({
       {people.map((p) => (
         <Menu.Item
           key={p.name}
-          leftSection={<Lead on={p.name === current} avatar={<MemberAvatar name={p.name} kind={p.kind} size={20} />} />}
+          leftSection={
+            <Lead
+              on={p.name === current}
+              avatar={<MemberAvatar name={p.name} kind={p.kind} size={20} />}
+            />
+          }
           onClick={() => onChoose(p.name)}
         >
           {p.name}
         </Menu.Item>
       ))}
       <Menu.Divider />
-      <Menu.Item leftSection={<Lead on={current === null} avatar={<NoOne size={20} />} />} onClick={() => onChoose(null)}>
+      <Menu.Item
+        leftSection={<Lead on={current === null} avatar={<NoOne size={20} />} />}
+        onClick={() => onChoose(null)}
+      >
         {t("people.nobody")}
       </Menu.Item>
     </>
@@ -92,7 +106,12 @@ const Lead = ({ on, avatar }: { on: boolean; avatar: ReactNode }) => (
 );
 
 /** The same avatar and state mark in the picker and the pull request list. */
-export function ReviewAvatar({ name, kind, state, size = 28 }: Person & { state?: ReviewState; size?: number }) {
+export function ReviewAvatar({
+  name,
+  kind,
+  state,
+  size = 28,
+}: Person & { state?: ReviewState; size?: number }) {
   return (
     <span className="review-mark-anchor">
       <MemberAvatar name={name} kind={kind} size={size} />
@@ -104,17 +123,31 @@ export function ReviewAvatar({ name, kind, state, size = 28 }: Person & { state?
 function Mark({ state }: { state: ReviewState }) {
   if (state.requested) return <span className="review-mark pending" />;
   if (!state.verdict) return null;
-  const icon = state.verdict === "approve" ? <Check size={9} strokeWidth={3.5} /> : state.verdict === "request_changes" ? <X size={9} strokeWidth={3.5} /> : <MessageSquare size={8} strokeWidth={3.5} />;
-  return <span className={`review-mark ${state.verdict}${state.outdated ? " stale" : ""}`}>{icon}</span>;
+  const icon =
+    state.verdict === "approve" ? (
+      <Check size={9} strokeWidth={3.5} />
+    ) : state.verdict === "request_changes" ? (
+      <X size={9} strokeWidth={3.5} />
+    ) : (
+      <MessageSquare size={8} strokeWidth={3.5} />
+    );
+  return (
+    <span className={`review-mark ${state.verdict}${state.outdated ? " stale" : ""}`}>{icon}</span>
+  );
 }
 
-function stateKey(state: ReviewState): "requested" | "requestedAgain" | "approve" | "request_changes" | "comment" {
+function stateKey(
+  state: ReviewState,
+): "requested" | "requestedAgain" | "approve" | "request_changes" | "comment" {
   if (state.requested) return state.verdict ? "requestedAgain" : "requested";
   return state.verdict ?? "requested";
 }
 
 export function reviewStateText(state: ReviewState, t: Translate): string {
-  return t(`people.review.${stateKey(state)}`) + (state.outdated && !state.requested ? t("people.review.stale") : "");
+  return (
+    t(`people.review.${stateKey(state)}`) +
+    (state.outdated && !state.requested ? t("people.review.stale") : "")
+  );
 }
 
 /**
@@ -155,7 +188,12 @@ export function PeopleToggle({
   return (
     <Menu position={position} withinPortal closeOnItemClick={false}>
       <Menu.Target>
-        <UnstyledButton className="people-trigger" aria-label={label} title={label} disabled={disabled}>
+        <UnstyledButton
+          className="people-trigger"
+          aria-label={label}
+          title={label}
+          disabled={disabled}
+        >
           {shown.map((name) => avatar(name, 28))}
           <NoOne size={28} />
         </UnstyledButton>
@@ -224,7 +262,8 @@ export function ReviewersPicker({
         return s ? text(s) : null;
       }}
       label={t("people.reviewersTrigger", {
-        names: states.map((s) => `${s.member} (${text(s)})`).join(", ") || t("member.reviewersNobody"),
+        names:
+          states.map((s) => `${s.member} (${text(s)})`).join(", ") || t("member.reviewersNobody"),
       })}
       help={t("people.reviewersHelp", { author })}
       onToggle={onToggle}

@@ -14,17 +14,29 @@ import { CheckDrawer, CommitChecksCard, drawerTarget } from "./pull/Checks";
  * not a code browser, so there is no tree or diff here. A CI attempt of a
  * commit no open pull request has opens its drawer here.
  */
-export function CommitView({ repo, sha, openJob }: { repo: string; sha: string; openJob?: string }) {
+export function CommitView({
+  repo,
+  sha,
+  openJob,
+}: {
+  repo: string;
+  sha: string;
+  openJob?: string;
+}) {
   const t = useT();
   const commit = useCommit(repo, sha);
-  const [job, setJob] = useState<{ attemptId: string; hosted: Check | null } | null>(openJob ? { attemptId: openJob, hosted: null } : null);
+  const [job, setJob] = useState<{ attemptId: string; hosted: Check | null } | null>(
+    openJob ? { attemptId: openJob, hosted: null } : null,
+  );
   const [subject, ...rest] = (commit.data?.message ?? "").split("\n");
   const workspace = repo.split("/")[0] as string;
   return (
     <Stack gap="lg">
       <PageHeader
         back={<Link to={href.pulls(workspace)}>{t("nav.pulls")}</Link>}
-        title={<Title order={2}>{commit.data ? subject || t("commit.title") : t("commit.title")}</Title>}
+        title={
+          <Title order={2}>{commit.data ? subject || t("commit.title") : t("commit.title")}</Title>
+        }
         meta={
           <>
             <span>{repo}</span>
@@ -40,7 +52,9 @@ export function CommitView({ repo, sha, openJob }: { repo: string; sha: string; 
       ) : (
         <Card p="lg">
           <Stack gap="md">
-            {rest.join("\n").trim() && <pre className="commit-message">{rest.join("\n").trim()}</pre>}
+            {rest.join("\n").trim() && (
+              <pre className="commit-message">{rest.join("\n").trim()}</pre>
+            )}
             <dl>
               <dt>{t("commit.author")}</dt>
               <dd>{commit.data.author}</dd>
@@ -66,7 +80,14 @@ export function CommitView({ repo, sha, openJob }: { repo: string; sha: string; 
           </Stack>
         </Card>
       )}
-      {commit.isSuccess && <CommitChecksCard repo={repo} sha={commit.data.sha} title={t("pull.checks")} onOpen={(c) => setJob(drawerTarget(c))} />}
+      {commit.isSuccess && (
+        <CommitChecksCard
+          repo={repo}
+          sha={commit.data.sha}
+          title={t("pull.checks")}
+          onOpen={(c) => setJob(drawerTarget(c))}
+        />
+      )}
       <CheckDrawer
         repo={repo}
         check={job}
