@@ -302,8 +302,6 @@ write_plist() {
         printf '%s\n' '<key>EnvironmentVariables</key><dict>'
         entry PATH "$agent_path"
         entry GUILDBOTICS_CODE_HOST_DATA_DIR "$GUILDBOTICS_CODE_HOST_DATA_DIR"
-        # The build before the rename reads this name if an update returns to it.
-        entry BRANVIL_DATA_DIR "$GUILDBOTICS_CODE_HOST_DATA_DIR"
         entry GUILDBOTICS_HOME "$GUILDBOTICS_HOME"
         if [ -n "${GUILDBOTICS_IDENTITY_ROOT:-}" ]; then entry GUILDBOTICS_IDENTITY_ROOT "$GUILDBOTICS_IDENTITY_ROOT"; fi
         if [ -n "${GUILDBOTICS_HUB_STORAGE:-}" ]; then entry GUILDBOTICS_HUB_STORAGE "$GUILDBOTICS_HUB_STORAGE"; fi
@@ -343,9 +341,7 @@ read_plist() {
     GUILDBOTICS_SERVER_PORT=$(setting EnvironmentVariables.GUILDBOTICS_SERVER_PORT || true)
     GUILDBOTICS_IDENTITY_ROOT=$(setting EnvironmentVariables.GUILDBOTICS_IDENTITY_ROOT || true)
     GUILDBOTICS_HUB_STORAGE=$(setting EnvironmentVariables.GUILDBOTICS_HUB_STORAGE || true)
-    # The running build may be the one before the rename.
-    BRANVIL_DATA_DIR=$GUILDBOTICS_CODE_HOST_DATA_DIR
-    export BRANVIL_DATA_DIR GUILDBOTICS_CODE_HOST_DATA_DIR GUILDBOTICS_HOME GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT
+    export GUILDBOTICS_CODE_HOST_DATA_DIR GUILDBOTICS_HOME GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT
     use_storage
 }
 # Guidance runs with this Hub's settings, whatever the shell it is pasted into
