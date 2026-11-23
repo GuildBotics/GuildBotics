@@ -1,7 +1,7 @@
 //! Frozen shared patrol decisions; GitHub GraphQL parsing/query tests belong to its adapter.
-use branvil::agent::CodeAgent;
 use branvil::agent::port::*;
 use branvil::agent::pr_patrol::*;
+use branvil::agent::{CodeAgent, TicketAgent};
 use branvil::test_support::{Fixture, input};
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -11,6 +11,101 @@ const OTHER: &str = "other";
 const FEEDBACK: Option<&str> = Some("pull_request_feedback");
 const REVIEW: Option<&str> = Some("pull_request_review");
 const LIMIT: Option<&str> = Some("pull_request_review_limit");
+
+#[tokio::test(flavor = "multi_thread")]
+async fn patrol_can_start_the_next_ticket_after_a_child_merge() {
+    const REPO: &str = "acme/repo";
+    let fixture = Fixture::new("owner").await;
+    fixture.workspace("acme").await;
+    fixture.repository(REPO).await;
+    let actor = fixture.member(ME).await;
+    let patrol = TicketAgent::new(fixture.data(), "acme".into(), ME.into(), "Aiko".into());
+    let parent = fixture
+        .ticket(REPO, json!({"title":"Parent"}), None, "new")
+        .await;
+    let child = fixture
+        .ticket(
+            REPO,
+            json!({"title":"First child","parent":parent}),
+            Some(ME),
+            "in_progress",
+        )
+        .await;
+    let waiting = fixture
+        .ticket(
+            REPO,
+            json!({"title":"Next child","parent":parent,"blocked_by":[child]}),
+            Some(ME),
+            "ready",
+        )
+        .await;
+    let candidates = patrol.candidates().await.unwrap();
+    assert!(
+        !candidates
+            .iter()
+            .any(|task| task.url.as_deref() == Some(waiting.as_str()))
+    );
+
+    let base = fixture.commit(REPO, "main", None, "main.txt", "main");
+    let collecting = fixture.commit(REPO, "ticket/1", Some(&base), "parent.txt", "parent");
+    let head = fixture.commit(REPO, "ticket/2", Some(&collecting), "child.txt", "child");
+    let pull = actor
+        .pulls_create(
+            REPO,
+            input(json!({
+                "head":"ticket/2","base":"ticket/1","title":"First child",
+                "tickets":[{"url":child,"closes":true}]
+            })),
+        )
+        .await
+        .unwrap()
+        .pull;
+    fixture
+        .owner
+        .pulls_review(
+            REPO,
+            pull.number,
+            input(json!({"verdict":"approve","commit":head})),
+        )
+        .await
+        .unwrap();
+    crate::ci::eventually("child branch is mergeable", || async {
+        fixture
+            .owner
+            .pulls_get(REPO, pull.number)
+            .await
+            .unwrap()
+            .landing
+            .is_some_and(|landing| landing.blockers.is_empty())
+    })
+    .await;
+    fixture
+        .owner
+        .pulls_merge(
+            REPO,
+            pull.number,
+            input(json!({"expected_head":head,"expected_base":collecting})),
+        )
+        .await
+        .unwrap();
+
+    let next = patrol
+        .candidates()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|task| task.url.as_deref() == Some(waiting.as_str()))
+        .expect("patrol should select the dependent ticket after the merge");
+    assert_eq!(next.trigger_reason.as_deref(), Some("ready_lane"));
+    assert!(
+        patrol
+            .move_ticket(&next, MoveLane::InProgress)
+            .await
+            .unwrap()
+    );
+    fixture.stop().await;
+}
+
 fn now() -> DateTime<Utc> {
     "2026-11-05T00:00:00Z".parse().unwrap()
 }

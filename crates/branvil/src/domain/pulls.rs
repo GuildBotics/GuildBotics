@@ -2287,7 +2287,7 @@ pub fn mark_merged(
     let mut left: Vec<_> = p
         .tickets
         .iter()
-        .filter(|l| l.closes && p.base == repo.default_branch)
+        .filter(|l| l.closes)
         .filter_map(|l| l.local.clone())
         .collect();
     loop {
