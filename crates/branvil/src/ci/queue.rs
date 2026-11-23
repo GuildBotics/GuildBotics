@@ -2615,6 +2615,18 @@ mod tests {
         registration
     }
 
+    fn published_cache_groups(registration: &Registration, repo_path: &str) -> BTreeSet<String> {
+        let PipelineState::Jobs { jobs } = &registration.pipeline else {
+            unreachable!();
+        };
+        jobs.iter()
+            .filter_map(|job| {
+                let cache = job.cache.as_ref()?;
+                Some(CacheOwner::for_job(repo_path, job, cache).fingerprint())
+            })
+            .collect()
+    }
+
     #[test]
     fn ram_memory_admission_uses_the_runner_startup_thresholds() {
         use gb_runner::ci::api::CommitMemory;
@@ -2724,6 +2736,7 @@ mod tests {
             "stale",
             "unknown",
             "cache-miss",
+            "cache-other-repo",
             "guest-unsupported",
             "image",
             "cpu",
@@ -2733,6 +2746,8 @@ mod tests {
             let (_dir, store) = store();
             store
                 .write_sync(|w| {
+                    let registration =
+                        ram_registration("head", "feature", &["rust-test", "rust-clippy"]);
                     let mut peer = runner("linux", 8192);
                     match case {
                         "busy" => {
@@ -2744,6 +2759,10 @@ mod tests {
                         "stale" => peer.ram_fresh = false,
                         "unknown" => peer.machine = None,
                         "cache-miss" => peer.cache_groups = Some(BTreeSet::new()),
+                        "cache-other-repo" => {
+                            peer.cache_groups =
+                                Some(published_cache_groups(&registration, "acme/other"));
+                        }
                         "guest-unsupported" => {
                             peer.ram_unsupported_images.insert(held_image().digest);
                         }
@@ -2754,12 +2773,7 @@ mod tests {
                         }
                         _ => {}
                     }
-                    register(
-                        w,
-                        ram_registration("head", "feature", &["rust-test", "rust-clippy"]),
-                        10,
-                        T0,
-                    )?;
+                    register(w, registration, 10, T0)?;
                     if case.starts_with("retry") {
                         let mut a = scheduled(w, false)?.remove(0).0;
                         let selection = if case == "retry-selected" {
@@ -2817,14 +2831,19 @@ mod tests {
             ("feature", "hub", ["rust-test", "rust-clippy"]),
             ("main", "linux", ["rust-clippy", "rust-test"]),
         ] {
-            let run = |prefer_ram| {
+            let run = |prefer_ram, cache_reported: bool| {
                 let (_dir, store) = store();
                 store
                     .write_sync(|w| {
-                        register(w, ram_registration("head", branch, &names), 10, T0)?;
+                        let registration = ram_registration("head", branch, &names);
+                        let cache_groups = cache_reported.then(|| {
+                            published_cache_groups(&registration, &registration.repo_path)
+                        });
+                        register(w, registration, 10, T0)?;
                         let runners = [("hub", 6144), ("linux", 8192)].map(|(name, vm)| {
                             let mut report = runner(name, vm);
                             report.ram_fresh = prefer_ram;
+                            report.cache_groups = cache_groups.clone();
                             report
                         });
                         let first = usize::from(first_poller == "linux");
@@ -2877,13 +2896,15 @@ mod tests {
                     })
                     .unwrap()
             };
-            let before = run(false);
-            let after = run(true);
-            println!(
-                "{branch}: (RAM jobs, max job wait s, check group duration s) {before:?} -> {after:?}"
-            );
-            assert_eq!(before, (0, 0, 90));
-            assert_eq!(after, (1, 0, 90));
+            for cache_reported in [false, true] {
+                let before = run(false, cache_reported);
+                let after = run(true, cache_reported);
+                println!(
+                    "{branch}, cache reported {cache_reported}: (RAM jobs, max job wait s, check group duration s) {before:?} -> {after:?}"
+                );
+                assert_eq!(before, (0, 0, 90));
+                assert_eq!(after, (1, 0, 90));
+            }
         }
     }
 
