@@ -156,6 +156,13 @@ fn has_open_children(r: &impl Rd, id: &TicketId) -> AppResult<bool> {
     any_open(r, &referrers(r, id, "parent")?)
 }
 
+pub(crate) fn has_children(r: &impl Rd, id: &TicketId) -> AppResult<bool> {
+    let prefix = Ticket::refs_prefix(id, "parent");
+    Ok(!r
+        .prefix_raw(store::IX_TICKET_REFS, &prefix, None, 1)?
+        .is_empty())
+}
+
 /// Refuses to complete `t` while one of its children is open.
 fn check_children_closed(r: &impl Rd, t: &Ticket) -> AppResult<()> {
     if has_open_children(r, &id_of(t))? {

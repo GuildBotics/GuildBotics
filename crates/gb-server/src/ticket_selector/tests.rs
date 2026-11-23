@@ -488,7 +488,8 @@ impl Fixture {
         }
     }
     async fn task(&self) -> Task {
-        self.ticket
+        let created = self
+            .ticket
             .create_ticket(CreateTicket {
                 tracker: "acme/repo".into(),
                 title: "Fix login".into(),
@@ -502,7 +503,13 @@ impl Fixture {
             })
             .await
             .unwrap();
-        self.ticket.candidates().await.unwrap().remove(0)
+        self.ticket
+            .candidates()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|task| task.url.as_deref() == Some(created.view.url.as_str()))
+            .unwrap()
     }
     fn trace(&self, source: &str) -> Trace {
         Trace::open(&self.diagnostics, source).person("aiko")
@@ -1371,7 +1378,9 @@ async fn resumed_checks_restore_work_summary_and_settle_only_when_not_awaited_ag
 #[tokio::test]
 async fn review_limit_conversion_elects_one_notice_in_its_own_trace_without_an_agent_run() {
     let f = Fixture::new().await;
-    let mut pull = f.pull().await;
+    let ticket = f.task().await;
+    let key = ticket.url.as_deref().unwrap().rsplit('/').next().unwrap();
+    let mut pull = f.pull_branch(&format!("ticket/{key}"), false).await;
     pull.trigger_reason = Some(REVIEW_LIMIT.into());
     let selector = f.selector("routine");
     selector.hand_over(&pull).await;
@@ -1380,6 +1389,9 @@ async fn review_limit_conversion_elects_one_notice_in_its_own_trace_without_an_a
     assert_eq!(stored["draft"], true);
     assert_eq!(stored["comments"].as_array().unwrap().len(), 2);
     assert_eq!(stored["comments"][1]["meta"]["reason"], "review_limit");
+    let quota = PullRequestQuota::new(1);
+    assert!(quota.observe(&f.code).await);
+    assert_eq!(quota.snapshot().unwrap().count, 1);
     assert!(f.runner.calls.lock().unwrap().is_empty());
     let stops = f.runner.stops.lock().unwrap();
     assert_eq!(stops.len(), 1);
@@ -1629,6 +1641,78 @@ async fn unreadable_author_links_keep_pr_work_selectable() {
         assert_eq!(selected.work.unwrap().identity, url);
         assert!(faults.calls().contains(&(operation, subject)));
     }
+}
+
+#[tokio::test]
+async fn collecting_draft_leaves_room_to_start_ready_work_until_marked_ready() {
+    let f = Fixture::new().await;
+    let parent = f.task().await;
+    let parent_url = parent.url.as_ref().unwrap();
+    let key = parent_url.rsplit('/').next().unwrap();
+    f.ticket
+        .create_ticket(CreateTicket {
+            tracker: "acme/repo".into(),
+            title: "Child".into(),
+            body: String::new(),
+            labels: vec![],
+            interactive: false,
+            assignee: None,
+            lane: Some(CreateLane::Ready),
+            parent: Some(parent_url.clone()),
+            blocked_by: vec![],
+        })
+        .await
+        .unwrap();
+    let ready = f.task().await;
+    f.pull_branch("feature", false).await;
+    let branch = format!("ticket/{key}");
+    f.embedded.commit(
+        "acme/repo",
+        &branch,
+        Some(&f.base()),
+        "parent.txt",
+        "parent",
+    );
+    let collection = f
+        .code
+        .create_pull_request(CreatePullRequest {
+            repository: "acme/repo".into(),
+            head: branch,
+            base: "main".into(),
+            title: "Collect children".into(),
+            body: String::new(),
+            draft: true,
+            tickets: vec![],
+        })
+        .await
+        .unwrap()
+        .written
+        .view;
+    let quota = PullRequestQuota::new(2);
+    let mut selector = f.selector("routine");
+    selector.quota = Some(&quota);
+    let invocation = selector.refresh(&ready).await.unwrap().unwrap();
+    selector
+        .run(&ready, invocation, &f.trace("routine"), 5)
+        .await
+        .unwrap();
+    assert_eq!(f.runner.calls.lock().unwrap().len(), 1);
+    let load = quota.snapshot().unwrap();
+    assert_eq!((load.count, load.limit, load.deferred), (1, 2, false));
+
+    f.embedded
+        .owner
+        .pulls_update(
+            "acme/repo",
+            collection.number,
+            branvil::test_support::input(json!({"draft":false})),
+        )
+        .await
+        .unwrap();
+    let next = f.task().await;
+    assert!(selector.refresh(&next).await.unwrap().is_none());
+    let load = quota.snapshot().unwrap();
+    assert_eq!((load.count, load.limit, load.deferred), (2, 2, true));
 }
 
 #[tokio::test]
