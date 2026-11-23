@@ -504,8 +504,7 @@ CI設定の `[ci.microsandbox]` で旧ストアを指定していた場合は、
    msb_path = '/absolute/path/to/current-msb'
    ```
 
-2. **ほかのリポジトリにも新しい設定ファイルを置きます。** この Hub で CI を使うリポジトリごとに、`.guildbotics-ci.toml` を Hub の更新より前に、既定のブランチと保護しているブランチへ入れます。内容は `.branvil/ci.toml` と同じにし、コマンドやスクリプトが読む `BRANVIL_` のジョブの変数は `GB_CI_*` に変えます。古いファイルは、そのリポジトリの CI が新しい Hub で動くことを確かめてから消します。
-3. **Hub を更新します。** 自動更新を止め、LaunchAgent に新しい名前を足してから更新します。前のビルドへ戻る場合に備えて、古い名前もこの版の間は残ります。
+2. **Hub を更新します。** 自動更新を止め、LaunchAgent に新しい名前を足してから更新します。前のビルドへ戻る場合に備えて、古い名前もこの版の間は残ります。
 
    ```sh
    scripts/hub-server.sh auto-uninstall
@@ -518,6 +517,7 @@ CI設定の `[ci.microsandbox]` で旧ストアを指定していた場合は、
    scripts/hub-server.sh auto-install
    ```
 
-4. **シェルの設定を直します。** `~/.zshrc` などで `BRANVIL_DATA_DIR` を設定している場合は、`GUILDBOTICS_CODE_HOST_DATA_DIR` に置き換えます。
-5. **ランナーを確かめます。** CI の設定画面で、各ランナーが新しい版で Hub に接続し、ジョブを取得することを確かめます。
+3. **シェルの設定を直します。** `~/.zshrc` などで `BRANVIL_DATA_DIR` を設定している場合は、`GUILDBOTICS_CODE_HOST_DATA_DIR` に置き換えます。
+4. **ランナーを確かめます。** CI の設定画面で、各ランナーが新しい版で Hub に接続し、ジョブを取得することを確かめます。
+5. **ほかのリポジトリを切り替えます。** この Hub で CI を使うほかのリポジトリは、Hub の更新のあとに 1 つのコミットで、`.branvil/ci.toml` を `.guildbotics-ci.toml` へ改名し、コマンドとスクリプトが読むジョブの変数を `GB_CI_*`（`BRANVIL_CI` は `CI`）に変えます。このコミットが入るまでそのリポジトリの CI は動かないので、main へマージしません。更新前に受け付けたジョブは古いコマンドのまま新しい変数を受け取るので、再実行せず、このコミットで流し直します。
 6. **開いている PR に main を取り込みます。** 新しい Hub は `.guildbotics-ci.toml` だけを読むので、このファイルを含まない head の必須チェックは失敗します。
