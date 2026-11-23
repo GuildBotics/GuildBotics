@@ -27,13 +27,12 @@ test("keeps the screen under a notice while the server is unreachable, then reco
   test.setTimeout(150_000);
 
   const ctx = readStackContext("down");
-  await page.goto("/");
-  await expect(page.getByRole("navigation")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("heading", { name: "First setup" })).toBeVisible();
 
   await control(ctx, "stop-backend");
   // The next request the screen makes finds nobody: opening another screen
   // makes one at once.
-  await page.evaluate(() => (window.location.hash = "#/diagnostics"));
+  await page.getByRole("link", { name: "Diagnostics", exact: true }).click();
   const unreachable = page.getByRole("dialog", { name: "Cannot reach GuildBotics" });
   await expect(unreachable).toBeVisible({ timeout: 30_000 });
   // What was on the screen stays under the notice.

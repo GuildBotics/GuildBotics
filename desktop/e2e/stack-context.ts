@@ -68,8 +68,8 @@ export async function enter(page: Page, ctx: StackContext): Promise<void> {
   }
   const { url } = (await response.json()) as { url: string };
   await page.goto(url);
-  // The entry page replaces itself with the App once the session is taken up.
-  await page.waitForURL((address) => address.pathname !== "/enter");
+  // The entry page opens the App, then the index redirects to the workspace's landing screen.
+  await page.waitForURL((address) => address.pathname !== "/enter" && address.pathname !== "/");
 }
 
 /**

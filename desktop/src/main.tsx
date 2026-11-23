@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useLayoutEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { MantineProvider } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
@@ -18,11 +18,7 @@ import { theme } from "./ui/theme";
 import "./i18n";
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
-import "./ui/styles.css";
-import "./ui/components.css";
-import "./ui/markdown.css";
-import desktopStyles from "./styles.css?inline";
-import repositoryStyles from "./repository/styles.css?inline";
+import "./styles.css";
 
 const queryClient = createQueryClient();
 installDragScroll();
@@ -31,19 +27,20 @@ function Screen() {
   const pathname = usePathname();
   const repository = pathname !== "/" && parseRoute(pathname).name !== "not_found";
   const workspace = workspaceFromPath(pathname);
+  useLayoutEffect(() => {
+    // Set the screen on the document so the scoped layouts include Mantine portals.
+    document.documentElement.dataset.screen = repository ? "repository" : "desktop";
+  }, [repository]);
   return (
-    <>
-      <style>{repository ? repositoryStyles : desktopStyles}</style>
-      <EntryPage>
-        {repository ? (
-          <RepositoryApp />
-        ) : (
-          <BrowserRouter basename={workspace ? workspacePath(workspace) : undefined}>
-            <App scoped={Boolean(workspace)} />
-          </BrowserRouter>
-        )}
-      </EntryPage>
-    </>
+    <EntryPage>
+      {repository ? (
+        <RepositoryApp />
+      ) : (
+        <BrowserRouter basename={workspace ? workspacePath(workspace) : undefined}>
+          <App scoped={Boolean(workspace)} />
+        </BrowserRouter>
+      )}
+    </EntryPage>
   );
 }
 

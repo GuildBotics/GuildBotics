@@ -4,7 +4,9 @@
 import { Select, Stack, Text } from "@mantine/core";
 import { ArrowLeftRight, GitPullRequest, Settings, Workflow } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { useI18n, type Language } from "../i18n";
+import { useTranslation } from "react-i18next";
+import { setAppLanguage } from "../../i18n";
+import { useT } from "../i18n";
 import { Link, navigate } from "../router/Router";
 import { useSession } from "../query/hooks";
 import { href, workspacePath, type Route } from "../router/routes";
@@ -66,7 +68,8 @@ export function Sidebar({
   workspaces: string[] | null;
   onWorkspaceChange: (name: string) => void;
 }) {
-  const { t, lang, setLang } = useI18n();
+  const t = useT();
+  const { i18n } = useTranslation();
   const navigation = useSession().data?.host_navigation;
   const [creating, setCreating] = useState(false);
   const page = pageOf(route);
@@ -140,17 +143,19 @@ export function Sidebar({
       </nav>
       <Stack gap={6} className="sidebar-language">
         <Text component="label" htmlFor="language-switch" className="sidebar-field-label">
-          {t("nav.language")}
+          {t("app.language.label")}
         </Text>
         <Select
           id="language-switch"
           classNames={{ input: "sidebar-input" }}
-          value={lang}
+          value={i18n.language}
           data={[
             { value: "ja", label: "日本語" },
             { value: "en", label: "English" },
           ]}
-          onChange={(v) => v && setLang(v as Language)}
+          onChange={(v) => {
+            if (v === "en" || v === "ja") void setAppLanguage(v);
+          }}
           allowDeselect={false}
         />
       </Stack>

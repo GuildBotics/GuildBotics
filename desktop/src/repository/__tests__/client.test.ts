@@ -1,9 +1,49 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, enc, getAll, getCsrfToken, request, setCsrfToken } from "../api/client";
+import {
+  ApiError,
+  enc,
+  enterSession,
+  request as requestHub,
+  getAll,
+  getCsrfToken,
+  repositoryRequest as request,
+  setCsrfToken,
+} from "../../api/client";
 import * as api from "../api/endpoints";
 import { apiError, fakeApi, json } from "../test/fakeApi";
 
 describe("API client", () => {
+  it("uses the same session for Hub and repository writes after a repository refresh", async () => {
+    const fake = fakeApi({
+      "POST /-/guildbotics/api/session": json(200, { csrf: "initial" }),
+      "PATCH /api/v1/x": [
+        apiError(403, "csrf_mismatch", "Old session."),
+        json(200, { saved: true }),
+      ],
+      "GET /api/v1/session": json(200, { csrf: "fresh" }),
+      "POST /-/guildbotics/api/x": json(200, { saved: true }),
+    });
+
+    await enterSession("test-entry");
+    await request("PATCH", "/x", { body: { message: "one" } });
+    await requestHub("/x", { method: "POST", body: { message: "two" } });
+
+    const [first, retry] = fake.calls("PATCH", "/api/v1/x");
+    expect(first?.headers["X-GuildBotics-CSRF"]).toBe("initial");
+    const hubWrite = fake.calls("POST", "/-/guildbotics/api/x")[0];
+    expect(hubWrite?.headers["X-GuildBotics-CSRF"]).toBe("fresh");
+    expect(retry?.headers["X-GuildBotics-CSRF"]).toBe("fresh");
+  });
+
+  it.each(["GET", "HEAD"])("never refreshes or replays a %s refusal", async (method) => {
+    const fake = fakeApi({
+      [`${method} /api/v1/x`]: apiError(403, "csrf_mismatch", "Refused."),
+    });
+
+    await expect(request(method, "/x")).rejects.toMatchObject({ code: "csrf_mismatch" });
+    expect(fake.requests).toHaveLength(1);
+  });
+
   it("requests server readiness order with the page cursor", async () => {
     const fake = fakeApi({
       "GET /api/v1/repos/acme/demo/pulls": json(200, { items: [], next_cursor: null }),

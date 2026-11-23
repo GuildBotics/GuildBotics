@@ -15,7 +15,7 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Pencil } from "lucide-react";
 import { useCallback, useContext, useEffect, useState } from "react";
-import { isApiError } from "../api/client";
+import { isApiError } from "../../api/client";
 import * as api from "../api/endpoints";
 import { LANES, type Lane, type Reaction, type Ticket, type TicketRef } from "../api/types";
 import {
@@ -30,7 +30,7 @@ import {
 } from "../components/common";
 import { BodyEditor, EditableTitle, EditPencil } from "../components/Editable";
 import { Markdown } from "../components/Markdown";
-import { PageHeader } from "../components/PageHeader";
+import { Header } from "../../ui/Header";
 import { AssigneePicker } from "../components/PeoplePicker";
 import { useT } from "../i18n";
 import {
@@ -134,7 +134,7 @@ export function TicketView({
 
   return (
     <Stack gap="lg">
-      <PageHeader
+      <Header
         title={
           <Group gap={4} wrap="nowrap" align="center">
             <EditableTitle
@@ -160,7 +160,7 @@ export function TicketView({
             <span>{tk.repository}</span>
           </>
         }
-        right={
+        action={
           <AssigneePicker
             current={tk.assignee?.name ?? null}
             people={people}
@@ -507,7 +507,7 @@ function issueLabel(url: string): string {
 /** Why a ticket is interactive through its `ancestor`: the message, naming the ancestor with a link to it. */
 function InheritedInteractive({ ancestor, ticket }: { ancestor: TicketRef; ticket: Ticket }) {
   const t = useT();
-  const [before, after] = t("ticket.interactiveInherited").split("{ticket}");
+  const [before, after] = t("ticket.interactiveInherited").split("{{ticket}}");
   return (
     <>
       {before}

@@ -5,7 +5,7 @@ import { Anchor, Button, Card, Group, Stack, Text, Textarea, TextInput } from "@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CloudUpload, GitMerge, Pencil, Users } from "lucide-react";
 import { useState } from "react";
-import { isApiError } from "../../api/client";
+import { isApiError } from "../../../api/client";
 import * as api from "../../api/endpoints";
 import type { PullRequest, Repository, Upstream } from "../../api/types";
 import { ErrorMessage, errorText, Notice, Refusal, Sha, StateBadge } from "../../components/common";

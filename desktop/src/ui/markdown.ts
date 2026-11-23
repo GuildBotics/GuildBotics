@@ -31,7 +31,10 @@ purify.addHook("afterSanitizeAttributes", (node) => {
 });
 
 /** Markdown → sanitized HTML string. Exported for tests. */
-export function renderMarkdown(source: string): string {
+export function renderMarkdown(
+  source: string,
+  decorateLink?: (link: HTMLAnchorElement) => void,
+): string {
   const html = marked.parse(source) as string;
   const clean = purify.sanitize(html, {
     USE_PROFILES: { html: true },
@@ -50,5 +53,9 @@ export function renderMarkdown(source: string): string {
     ],
     FORBID_ATTR: ["style", "class", "id"],
   });
-  return clean;
+  if (!decorateLink) return clean;
+  const element = document.createElement("div");
+  element.innerHTML = clean;
+  element.querySelectorAll<HTMLAnchorElement>("a").forEach(decorateLink);
+  return element.innerHTML;
 }

@@ -1,5 +1,7 @@
 import { Modal, useComputedColorScheme } from "@mantine/core";
-import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { renderMarkdown } from "./markdown";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export type MarkdownTranslate = (
   key:
@@ -10,16 +12,18 @@ export type MarkdownTranslate = (
     | "common.close",
 ) => string;
 
-/** Display sanitized HTML produced by renderMarkdown, including lazy diagrams. */
+/** Render sanitized Markdown, including lazy diagrams. */
 export function MarkdownView({
-  html,
-  t,
+  source,
+  decorateLink,
   className,
 }: {
-  html: string;
-  t: MarkdownTranslate;
+  source: string;
+  decorateLink?: (link: HTMLAnchorElement) => void;
   className?: string;
 }) {
+  const { t } = useTranslation("shared");
+  const html = useMemo(() => renderMarkdown(source, decorateLink), [source, decorateLink]);
   const ref = useRef<HTMLDivElement>(null);
   // Diagrams take the tokens' colors, which change with the color scheme.
   const scheme = useComputedColorScheme("light");

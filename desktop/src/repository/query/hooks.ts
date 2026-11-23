@@ -3,7 +3,7 @@
 
 import { QueryCache, QueryClient, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { ApiError, isApiError, setCsrfToken } from "../api/client";
+import { ApiError, isApiError, setCsrfToken } from "../../api/client";
 import * as api from "../api/endpoints";
 import type { MemberKind, Session } from "../api/types";
 import { keys } from "./keys";

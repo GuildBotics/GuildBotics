@@ -1,3 +1,4 @@
+import { Header } from "../ui/Header";
 import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
 import { DecisionSettings } from "./DecisionSettings";
 import { MASKED_SECRET_PLACEHOLDER } from "./secretInput";
@@ -5165,22 +5166,14 @@ function PanelHeader({
   save?: SectionSave;
 }) {
   return (
-    <Group justify="space-between" align="flex-start" wrap="nowrap">
-      <Box flex={1} miw={0}>
-        <Group gap="xs">
-          <Title order={3}>{title}</Title>
-          {badge ? <Badge>{badge}</Badge> : null}
-        </Group>
-        <Text size="sm" c="dimmed">
-          {subtitle}
-        </Text>
-      </Box>
-      {save ? (
-        <Box style={{ flexShrink: 0 }}>
-          <SectionSaveControl {...save} />
-        </Box>
-      ) : null}
-    </Group>
+    <Header
+      order={3}
+      grow
+      title={title}
+      description={subtitle}
+      badge={badge ? <Badge>{badge}</Badge> : undefined}
+      action={save ? <SectionSaveControl {...save} /> : undefined}
+    />
   );
 }
 

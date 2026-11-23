@@ -1,7 +1,7 @@
 import { Anchor, Button, Group, Select, Stack, Text, TextInput } from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { isApiError } from "../../api/client";
+import { isApiError } from "../../../api/client";
 import * as api from "../../api/endpoints";
 import { PROVIDERS, type Repository } from "../../api/types";
 import { ErrorMessage, Refusal, Sha, StateBadge, Time, type Tone } from "../../components/common";

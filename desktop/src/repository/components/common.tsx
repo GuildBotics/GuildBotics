@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 // Small shared presentational components, built from Mantine as GuildBotics
 // Desktop's are.
 
@@ -16,7 +17,7 @@ import {
 } from "@mantine/core";
 import { Anvil, Check, Copy, SmilePlus } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { ApiError, isApiError } from "../api/client";
+import { ApiError, isApiError } from "../../api/client";
 import {
   REACTIONS,
   type Comment,
@@ -24,7 +25,7 @@ import {
   type Reaction,
   type ReactionEntry,
 } from "../api/types";
-import { useI18n, useT, type Translate } from "../i18n";
+import { useT, type Translate } from "../i18n";
 import { useMemberAvatar, useSession } from "../query/hooks";
 import { Link, useFragmentTarget } from "../router/Router";
 import { href } from "../router/routes";
@@ -94,7 +95,8 @@ export function Notice({ children }: { children: ReactNode }) {
 
 /** A moment in the reader's language; `date` shows only its day. */
 export function Time({ value, date }: { value: string | null | undefined; date?: boolean }) {
-  const { lang } = useI18n();
+  const { i18n } = useTranslation();
+  const lang = i18n.language;
   if (!value) return null;
   const d = new Date(value);
   const shown = date

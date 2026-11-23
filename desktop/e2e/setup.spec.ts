@@ -208,7 +208,7 @@ test("one entry opens both screens, APIs and the consent page", async ({ page, c
   expect(new URL(link.url).pathname).toBe("/enter");
   await context.clearCookies();
   await page.goto(link.url);
-  await page.waitForURL((address) => address.pathname !== "/enter");
+  await expect(page).toHaveURL(/\/(?:activity|setup)$/);
   await page.goto("/workspaces/shared-session/task-flow");
   await expect(page.getByRole("heading", { name: /^(Task flow|タスクフロー)$/ })).toBeVisible();
   const query = new URLSearchParams({

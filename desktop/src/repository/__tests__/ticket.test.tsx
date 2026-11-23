@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { dictionaries } from "../i18n";
+import { dictionaries } from "../test/words";
 import { navigate } from "../router/Router";
 import { apiError, fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 import { choose, pickFromMenu } from "../test/mantine";
@@ -401,7 +401,7 @@ describe("ticket view", () => {
       await user.click(screen.getByRole("option", { name: "acme/other" }));
       const en = dictionaries.en;
       expect(confirm).toHaveBeenCalledWith(
-        `${en["ticket.moveConfirm"].replace("{key}", "#1").replaceAll("{repository}", "acme/other")}\n\n${en["ticket.moveDropsLabels"].replace("{repository}", "acme/other").replace("{labels}", "docs")}`,
+        `${en["ticket.moveConfirm"].replace("{{key}}", "#1").replaceAll("{{repository}}", "acme/other")}\n\n${en["ticket.moveDropsLabels"].replace("{{repository}}", "acme/other").replace("{{labels}}", "docs")}`,
       );
       // Declined, it stays.
       expect(fake.calls("PUT", `${TICKET}/repository`)).toEqual([]);
@@ -610,7 +610,7 @@ describe("ticket view", () => {
       expect(screen.queryByText(words["ticket.interactiveHelp"])).not.toBeInTheDocument();
       const link = screen.getByRole("link", { name: "#9 The epic" });
       expect(link).toHaveAttribute("href", "/workspaces/acme/repos/demo/tickets/9");
-      const [before, after] = words["ticket.interactiveInherited"].split("{ticket}");
+      const [before, after] = words["ticket.interactiveInherited"].split("{{ticket}}");
       expect(link.parentElement).toHaveTextContent(`${before}#9 The epic${after}`);
     },
   );

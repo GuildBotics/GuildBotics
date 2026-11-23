@@ -7,7 +7,7 @@ import { AlertBand } from "./components/AlertBand";
 import { Loading } from "./components/common";
 import { NewWorkspaceModal } from "./components/NewWorkspace";
 import { Sidebar } from "./components/Sidebar";
-import { I18nProvider, useT } from "./i18n";
+import { useT } from "./i18n";
 import { useChangeStream } from "./query/events";
 import { useSession } from "./query/hooks";
 import { Link, navigate, usePathname } from "./router/Router";
@@ -24,15 +24,7 @@ import { TicketView } from "./views/TicketView";
 import { TicketDrawer } from "./views/ticket/TicketDrawer";
 import { useCurrentWorkspace } from "./workspace";
 
-export function RepositoryApp({ language }: { language?: "en" | "ja" }) {
-  return (
-    <I18nProvider initial={language}>
-      <Shell />
-    </I18nProvider>
-  );
-}
-
-function Shell() {
+export function RepositoryApp() {
   return <Gate route={parseRoute(usePathname())} />;
 }
 

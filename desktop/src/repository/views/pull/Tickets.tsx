@@ -2,7 +2,7 @@ import { ActionIcon, Button, Checkbox, Group, Select, Stack, Text } from "@manti
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useState } from "react";
-import { isApiError } from "../../api/client";
+import { isApiError } from "../../../api/client";
 import * as api from "../../api/endpoints";
 import { ticketRef, type PullRequest } from "../../api/types";
 import { ErrorMessage, Loading, Refusal } from "../../components/common";

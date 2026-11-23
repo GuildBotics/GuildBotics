@@ -149,7 +149,7 @@ describe("a page the server serves", () => {
     const notice = await screen.findByRole("dialog", { name: t("session.unreachable.title") });
 
     session = NO_SESSION;
-    await user.click(within(notice).getByRole("button", { name: t("session.retry") }));
+    await user.click(within(notice).getByRole("button", { name: t("common.retry") }));
 
     expect(await screen.findByText(t("session.guide.title"))).toBeInTheDocument();
     expect(screen.queryByText(/Screen read/)).not.toBeInTheDocument();
@@ -195,13 +195,13 @@ describe("a page the server serves", () => {
     const sessionReads = () =>
       calls.filter((call) => call.url === "/-/guildbotics/api/session").length;
     const before = sessionReads();
-    await user.click(within(notice).getByRole("button", { name: t("session.retry") }));
+    await user.click(within(notice).getByRole("button", { name: t("common.retry") }));
     await waitFor(() => expect(sessionReads()).toBeGreaterThan(before));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
     config = ok({ cwd: "/ws2" });
     session = SESSION;
-    await user.click(within(notice).getByRole("button", { name: t("session.retry") }));
+    await user.click(within(notice).getByRole("button", { name: t("common.retry") }));
 
     expect(await screen.findByText("Screen read /ws2")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -279,7 +279,7 @@ describe("the entry page", () => {
 
     expect(await screen.findByText(t("session.guide.expired"))).toBeInTheDocument();
     expect(screen.getByText("guildbotics open")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: t("session.retry") })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: t("common.retry") })).not.toBeInTheDocument();
     expect(replacePage).not.toHaveBeenCalled();
   });
 
@@ -292,7 +292,7 @@ describe("the entry page", () => {
 
     expect(await screen.findByText("Failed to fetch")).toBeInTheDocument();
     answer = SESSION;
-    await user.click(screen.getByRole("button", { name: t("session.retry") }));
+    await user.click(screen.getByRole("button", { name: t("common.retry") }));
     await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/"));
     expect(calls).toHaveLength(2);
   });

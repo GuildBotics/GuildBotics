@@ -33,7 +33,7 @@ import {
   StateBadge,
   Time,
 } from "../../components/common";
-import { PanelHeader } from "../../components/PanelHeader";
+import { Header } from "../../../ui/Header";
 import { PeopleToggle, type Person } from "../../components/PeoplePicker";
 import { useT } from "../../i18n";
 import { useMemberTokens, useMembers, usePeople } from "../../query/hooks";
@@ -50,7 +50,8 @@ export function MembersSettings() {
   const people = usePeople();
   return (
     <Card p="lg">
-      <PanelHeader
+      <Header
+        order={3}
         title={t("settings.members")}
         description={t("settings.membersHelp")}
         action={

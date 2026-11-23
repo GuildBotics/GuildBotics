@@ -5,10 +5,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "../api/endpoints";
 import { ticketRef, type Card, type Lane, type Ticket } from "../api/types";
 import { ErrorMessage, Loading, Refusal } from "../components/common";
-import { PageHeader } from "../components/PageHeader";
+import { Header } from "../../ui/Header";
 import { type Translate, useT } from "../i18n";
 import { useBoard, useCards, useMembers, usePeople, useSession } from "../query/hooks";
-import { useStored } from "../storage";
+import { useStored } from "../../ui/storage";
 import { CardFilters } from "./board/CardFilters";
 import { ciUrlsOf, moveRefusal, type Notice } from "./board/CardView";
 import { NewTicketModal, useTicketRepos } from "./board/NewTicket";
@@ -393,7 +393,7 @@ export function RelationsView({ workspace }: { workspace: string }) {
 
   return (
     <div className="workspace-fill">
-      <PageHeader
+      <Header
         title={t("relations.title")}
         meta={
           <Text size="sm" c="dimmed">
@@ -403,7 +403,7 @@ export function RelationsView({ workspace }: { workspace: string }) {
             })}
           </Text>
         }
-        right={
+        action={
           <Button
             variant="default"
             leftSection={<Plus size={16} />}

@@ -1,8 +1,9 @@
+import { MemberMenu, MemberMenuItem } from "../../ui/MemberMenu";
 // Choosing people with an avatar menu, as GuildBotics' MemberSelector does:
 // a ticket's one assignee, a pull request's reviewers with their state, and
 // the reviewers a member's pull requests ask.
 
-import { Avatar, Menu, Text, UnstyledButton } from "@mantine/core";
+import { Avatar, Menu } from "@mantine/core";
 import { Check, MessageSquare, UserPlus, X } from "lucide-react";
 import type { ReactNode } from "react";
 import type { MemberKind, ReviewState } from "../api/types";
@@ -42,21 +43,18 @@ export function AssigneePicker({
   const who = people.find((p) => p.name === current) ?? (current ? { name: current } : null);
   const label = t("people.assigneeTrigger", { name: who?.name ?? t("people.nobody") });
   return (
-    <Menu position="bottom-end" withinPortal>
-      <Menu.Target>
-        <UnstyledButton
-          className="people-trigger"
-          aria-label={label}
-          title={label}
-          disabled={disabled}
-        >
-          {who ? <MemberAvatar name={who.name} kind={who.kind} size={28} /> : <NoOne size={28} />}
-        </UnstyledButton>
-      </Menu.Target>
-      <Menu.Dropdown>
-        <PeopleItems current={current} people={people} onChoose={onChoose} />
-      </Menu.Dropdown>
-    </Menu>
+    <MemberMenu
+      className="people-trigger"
+      label={label}
+      title={label}
+      disabled={disabled}
+      position="bottom-end"
+      avatar={
+        who ? <MemberAvatar name={who.name} kind={who.kind} size={28} /> : <NoOne size={28} />
+      }
+    >
+      <PeopleItems current={current} people={people} onChoose={onChoose} />
+    </MemberMenu>
   );
 }
 
@@ -74,26 +72,24 @@ export function PeopleItems({
   return (
     <>
       {people.map((p) => (
-        <Menu.Item
+        <MemberMenuItem
           key={p.name}
-          leftSection={
+          avatar={
             <Lead
               on={p.name === current}
               avatar={<MemberAvatar name={p.name} kind={p.kind} size={20} />}
             />
           }
-          onClick={() => onChoose(p.name)}
-        >
-          {p.name}
-        </Menu.Item>
+          onChoose={() => onChoose(p.name)}
+          name={p.name}
+        />
       ))}
       <Menu.Divider />
-      <Menu.Item
-        leftSection={<Lead on={current === null} avatar={<NoOne size={20} />} />}
-        onClick={() => onChoose(null)}
-      >
-        {t("people.nobody")}
-      </Menu.Item>
+      <MemberMenuItem
+        avatar={<Lead on={current === null} avatar={<NoOne size={20} />} />}
+        onChoose={() => onChoose(null)}
+        name={t("people.nobody")}
+      />
     </>
   );
 }
@@ -186,46 +182,39 @@ export function PeopleToggle({
     <ReviewAvatar key={name} name={name} kind={kindOf(name)} size={size} state={state?.(name)} />
   );
   return (
-    <Menu position={position} withinPortal closeOnItemClick={false}>
-      <Menu.Target>
-        <UnstyledButton
-          className="people-trigger"
-          aria-label={label}
-          title={label}
-          disabled={disabled}
-        >
+    <MemberMenu
+      className="people-trigger"
+      label={label}
+      title={label}
+      disabled={disabled}
+      position={position}
+      closeOnItemClick={false}
+      avatar={
+        <>
           {shown.map((name) => avatar(name, 28))}
           <NoOne size={28} />
-        </UnstyledButton>
-      </Menu.Target>
-      <Menu.Dropdown>
-        {people
-          .filter((p) => p.name !== except)
-          .map((p) => {
-            const checked = on(p.name);
-            const text = note?.(p.name);
-            return (
-              <Menu.Item
-                key={p.name}
-                aria-checked={checked}
-                leftSection={<Lead on={checked} avatar={avatar(p.name, 20)} />}
-                rightSection={
-                  text ? (
-                    <Text size="xs" c="dimmed" ml="md">
-                      {text}
-                    </Text>
-                  ) : null
-                }
-                onClick={() => onToggle(p.name, !checked)}
-              >
-                {p.name}
-              </Menu.Item>
-            );
-          })}
-        <Menu.Divider />
-        <Menu.Label>{help}</Menu.Label>
-      </Menu.Dropdown>
-    </Menu>
+        </>
+      }
+    >
+      {people
+        .filter((p) => p.name !== except)
+        .map((p) => {
+          const checked = on(p.name);
+          const text = note?.(p.name);
+          return (
+            <MemberMenuItem
+              key={p.name}
+              checked={checked}
+              avatar={<Lead on={checked} avatar={avatar(p.name, 20)} />}
+              note={text}
+              onChoose={() => onToggle(p.name, !checked)}
+              name={p.name}
+            />
+          );
+        })}
+      <Menu.Divider />
+      <Menu.Label>{help}</Menu.Label>
+    </MemberMenu>
   );
 }
 

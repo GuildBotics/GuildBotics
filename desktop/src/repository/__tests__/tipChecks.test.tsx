@@ -1,9 +1,9 @@
+import i18n from "../../i18n";
 import { TestMantineProvider } from "../../test/TestMantineProvider";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { I18nProvider } from "../i18n";
 import { applyChange } from "../query/events";
 import { createQueryClient } from "../query/hooks";
 import { apiError, fakeApi, json } from "../test/fakeApi";
@@ -34,12 +34,11 @@ const state = (name: VerificationState = "verified"): Verification => ({
 function show(paths: string[], repo: string | null = null, language: "en" | "ja" = "en") {
   const client = createQueryClient();
   client.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } });
+  void i18n.changeLanguage(language);
   render(
     <TestMantineProvider theme={theme}>
       <QueryClientProvider client={client}>
-        <I18nProvider initial={language}>
-          <TipChecks workspace="acme" paths={paths} repo={repo} />
-        </I18nProvider>
+        <TipChecks workspace="acme" paths={paths} repo={repo} />
       </QueryClientProvider>
     </TestMantineProvider>,
   );

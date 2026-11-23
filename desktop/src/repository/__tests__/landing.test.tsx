@@ -1,3 +1,4 @@
+import i18n from "../../i18n";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createQueryClient } from "../query/hooks";
 import { keys } from "../query/keys";
@@ -6,7 +7,7 @@ import { theme } from "../../ui/theme";
 import { TestMantineProvider } from "../../test/TestMantineProvider";
 import { describe, expect, it } from "vitest";
 import type { Check, Landing, LandingNext, Repository } from "../api/types";
-import { dictionaries, I18nProvider } from "../i18n";
+import { dictionaries } from "../test/words";
 import { JourneyBadge, LandingJourney, whereabouts } from "../views/pull/LandingStatus";
 import { fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 import { BASE, HEAD, landing, pull } from "./fixtures";
@@ -106,16 +107,15 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
       head_sha: HEAD,
       checks,
     });
+    void i18n.changeLanguage(lang);
     return render(
       <QueryClientProvider client={client}>
         <TestMantineProvider theme={theme}>
-          <I18nProvider initial={lang}>
-            {journey ? (
-              <LandingJourney pull={p} repo={repo} />
-            ) : (
-              <JourneyBadge pull={p} repo={repo} load={false} />
-            )}
-          </I18nProvider>
+          {journey ? (
+            <LandingJourney pull={p} repo={repo} />
+          ) : (
+            <JourneyBadge pull={p} repo={repo} load={false} />
+          )}
         </TestMantineProvider>
       </QueryClientProvider>,
     );
@@ -143,13 +143,12 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
           host_url: published ? "https://host.test/pr/1" : null,
         }),
       });
+      void i18n.changeLanguage(lang);
       render(
         <QueryClientProvider client={createQueryClient()}>
           <TestMantineProvider theme={theme}>
-            <I18nProvider initial={lang}>
-              <LandingJourney pull={p} repo={REPO} />
-              <JourneyBadge pull={p} repo={REPO} load={false} />
-            </I18nProvider>
+            <LandingJourney pull={p} repo={REPO} />
+            <JourneyBadge pull={p} repo={REPO} load={false} />
           </TestMantineProvider>
         </QueryClientProvider>,
       );
@@ -158,24 +157,20 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
           name: lang === "ja" ? "修復チケット #42 を開く" : "Open repair ticket #42",
         }),
       ).toHaveAttribute("href", "/workspaces/acme/repos/demo/tickets/42");
-      expect(
-        screen.getByText(
-          (assignee
-            ? words["landing.held"].replace("{name}", assignee)
-            : lang === "ja"
-              ? "保留中：main の確認が失敗しています（修復 #{number}、担当なし）。main の確認が通ると、保留が解けます。"
-              : "Held: main verification is failing (repair #{number}, unassigned). The hold lifts when main verification passes."
-          ).replace("{number}", "42"),
-        ),
-      ).toBeInTheDocument();
       const detail = words[assignee ? "landing.held" : "landing.heldUnassigned"]
-        .replace("{number}", "42")
-        .replace("{name}", assignee ?? "");
+        .replace("{{number}}", "42")
+        .replace("{{name}}", assignee ?? "");
+      const notice = assignee
+        ? detail
+        : lang === "ja"
+          ? "保留中：main の確認が失敗しています（修復 #42、担当なし）。main の確認が通ると、保留が解けます。"
+          : "Held: main verification is failing (repair #42, unassigned). The hold lifts when main verification passes.";
+      expect(screen.getByText(notice)).toBeInTheDocument();
       expect(
         screen.getAllByText(words["landing.blocker.held"])[1]!.closest(".mantine-Badge-root"),
       ).toHaveAttribute("title", detail);
       expect(screen.queryByText(blockers[0]!.message)).not.toBeInTheDocument();
-      const caution = words["landing.heldPublished"].replace("{host}", "GitHub");
+      const caution = words["landing.heldPublished"].replace("{{host}}", "GitHub");
       expect(screen.queryByText(caution) !== null).toBe(published);
       expect(
         screen.getAllByText(words["landing.blocker.held"])[1]!.closest(".mantine-Badge-root"),
@@ -247,8 +242,8 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
       `missing · ${words["landing.check.missing"]}`,
       lang === "ja" ? "承認：0 / 1" : "Approvals: 0 / 1",
       words["landing.unanswered"],
-      words["landing.detail.conflict"].replace("{files}", "README.md"),
-      words["landing.detail.host_failed"].replace("{jobs}", "build"),
+      words["landing.detail.conflict"].replace("{{files}}", "README.md"),
+      words["landing.detail.host_failed"].replace("{{jobs}}", "build"),
       ...["draft", "already_in_base", "publish_requirements", "checking"].map(
         (code) => words[`landing.detail.${code}` as keyof typeof words],
       ),
@@ -257,7 +252,7 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
     for (const text of expected) expect(screen.getByText(text)).toBeInTheDocument();
     expect(
       screen.getByRole("link", {
-        name: words["landing.statement.comment"].replace("{author}", "reviewer"),
+        name: words["landing.statement.comment"].replace("{{author}}", "reviewer"),
       }),
     ).toHaveAttribute("href", "#question");
     expect(journey.container.textContent).not.toContain(HEAD);
@@ -327,8 +322,8 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
   ] as const)("gives %s its badge and %s color", (next, color) => {
     component(next);
     const text = words[`landing.badge.${next}`]
-      .replaceAll("{host}", "GitHub")
-      .replaceAll("{base}", "main");
+      .replaceAll("{{host}}", "GitHub")
+      .replaceAll("{{base}}", "main");
     expect(screen.getByText(text).closest(".mantine-Badge-root")).toHaveStyle({
       "--badge-color":
         color === "neutral" ? "var(--color-text-subtle)" : `var(--color-${color}-text)`,
@@ -367,7 +362,7 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
       .closest(".mantine-Badge-root");
     expect(badge).toHaveAttribute(
       "title",
-      `${lang === "ja" ? "承認：0 / 1" : "Approvals: 0 / 1"} / ${words["landing.detail.conflict"].replace("{files}", "")}`,
+      `${lang === "ja" ? "承認：0 / 1" : "Approvals: 0 / 1"} / ${words["landing.detail.conflict"].replace("{{files}}", "")}`,
     );
     expect(badge).toHaveStyle({ "--badge-color": "var(--color-danger-text)" });
   });
@@ -418,7 +413,7 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
     renderApp("/workspaces/acme/repos/demo", lang);
     expect(
       await screen.findAllByText(
-        words["landing.badge.owner_merge_host"].replace("{host}", "GitHub"),
+        words["landing.badge.owner_merge_host"].replace("{{host}}", "GitHub"),
       ),
     ).toHaveLength(3);
   });
@@ -439,13 +434,15 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
       fakeApi(routes(landing({ next })));
       renderApp("/workspaces/acme/repos/demo/pulls/3", lang);
       const journey = await screen.findByRole("region", {
-        name: words["landing.journey"].replace("{base}", "main"),
+        name: words["landing.journey"].replace("{{base}}", "main"),
       });
       expect(journey.querySelector('[data-stop="queue"]')).toBeNull();
       expect(journey.querySelector('[data-stop="gate"]')).toBeNull();
       expect(
         within(journey).getByText(
-          words[`landing.next.${next}`].replaceAll("{host}", "GitHub").replaceAll("{base}", "main"),
+          words[`landing.next.${next}`]
+            .replaceAll("{{host}}", "GitHub")
+            .replaceAll("{{base}}", "main"),
         ),
       ).toBeInTheDocument();
     },
@@ -468,7 +465,7 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
     );
     renderApp("/workspaces/acme/repos/demo/pulls/3", lang);
     expect(
-      await screen.findByText(words["landing.detail.conflict"].replace("{files}", "README.md")),
+      await screen.findByText(words["landing.detail.conflict"].replace("{{files}}", "README.md")),
     ).toBeInTheDocument();
     expect(
       screen.queryByText("Merge main into topic and resolve README.md"),
@@ -497,7 +494,7 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
     fakeApi(routes(l, { [`GET ${P}`]: json(200, p) }));
     renderApp("/workspaces/acme/repos/demo/pulls/3", lang);
     const button = await screen.findByRole("button", {
-      name: words["publish.again"].replaceAll("{host}", "GitHub"),
+      name: words["publish.again"].replaceAll("{{host}}", "GitHub"),
     });
     expect(button).toBeEnabled();
     for (const alert of screen.getAllByRole("alert"))

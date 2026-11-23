@@ -3,7 +3,7 @@ import { createElement, forwardRef } from "react";
 import { afterEach, vi } from "vitest";
 import { cleanup, configure } from "@testing-library/react";
 import type { TextareaProps } from "@mantine/core";
-import { setCsrfToken } from "../repository/api/client";
+import { setCsrfToken } from "../api/client";
 
 // A findBy* wait, which defaults to 1 s: a render takes longer than that when
 // CI runs the suite beside other jobs on the same CPUs.

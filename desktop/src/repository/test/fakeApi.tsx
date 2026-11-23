@@ -1,3 +1,4 @@
+import i18n from "../../i18n";
 // Test helpers: a routed fetch double that records requests, and a renderer.
 
 import { render } from "@testing-library/react";
@@ -92,6 +93,7 @@ export const ME = {
 export const SESSION = { me: ME, csrf: "csrf-123" };
 
 export function renderApp(path: string, language: "en" | "ja" = "en") {
+  void i18n.changeLanguage(language);
   window.history.replaceState(null, "", path);
   const client = createQueryClient();
   // Exercise the real retry policy without waiting for its 1s/2s backoff.
@@ -100,7 +102,7 @@ export function renderApp(path: string, language: "en" | "ja" = "en") {
   const utils = render(
     <TestMantineProvider theme={theme}>
       <QueryClientProvider client={client}>
-        <RepositoryApp language={language} />
+        <RepositoryApp />
       </QueryClientProvider>
     </TestMantineProvider>,
   );

@@ -3,7 +3,7 @@ import { useClipboard } from "@mantine/hooks";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, GitPullRequest, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
-import { isApiError } from "../../api/client";
+import { isApiError } from "../../../api/client";
 import * as api from "../../api/endpoints";
 import { ticketRef, type Card, type Lane, type PullSummary } from "../../api/types";
 import {

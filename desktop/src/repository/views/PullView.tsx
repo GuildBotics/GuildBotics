@@ -6,7 +6,7 @@ import * as api from "../api/endpoints";
 import type { Check } from "../api/types";
 import { ErrorMessage, Loading, Post, PostHead, StateBadge } from "../components/common";
 import { Markdown } from "../components/Markdown";
-import { PageHeader } from "../components/PageHeader";
+import { Header } from "../../ui/Header";
 import { ReviewersPicker } from "../components/PeoplePicker";
 import { useT } from "../i18n";
 import {
@@ -83,7 +83,7 @@ export function PullView({
 
   return (
     <Stack gap="lg">
-      <PageHeader
+      <Header
         back={<Link to={href.pulls(workspace)}>{t("nav.pulls")}</Link>}
         title={
           <Title order={2}>
@@ -130,7 +130,7 @@ export function PullView({
             </Anchor>
           </>
         }
-        right={
+        action={
           <ReviewersPicker
             people={people}
             states={pr.review_states}

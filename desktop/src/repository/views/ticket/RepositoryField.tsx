@@ -1,6 +1,6 @@
 import { Select, Stack } from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { isApiError } from "../../api/client";
+import { isApiError } from "../../../api/client";
 import * as api from "../../api/endpoints";
 import type { Ticket } from "../../api/types";
 import { ErrorMessage, Refusal } from "../../components/common";

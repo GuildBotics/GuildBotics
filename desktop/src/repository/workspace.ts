@@ -5,7 +5,7 @@
 import { useEffect, useMemo } from "react";
 import { useWorkspaces } from "./query/hooks";
 import type { Route } from "./router/routes";
-import { useStored } from "./storage";
+import { useStored } from "../ui/storage";
 
 const REMEMBERED = "branvil.workspace";
 

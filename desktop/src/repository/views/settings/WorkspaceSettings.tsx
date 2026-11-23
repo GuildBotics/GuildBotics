@@ -16,11 +16,11 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FolderGit2, Plus } from "lucide-react";
 import { useState } from "react";
-import { isApiError } from "../../api/client";
+import { isApiError } from "../../../api/client";
 import * as api from "../../api/endpoints";
 import type { Repository } from "../../api/types";
 import { CopyButton, ErrorMessage, Loading, Notice, Refusal } from "../../components/common";
-import { PanelHeader } from "../../components/PanelHeader";
+import { Header } from "../../../ui/Header";
 import { useT } from "../../i18n";
 import { useMembers, useRepos } from "../../query/hooks";
 import { keys } from "../../query/keys";
@@ -41,8 +41,8 @@ export function WorkspaceSettings({
   const items = (repos.data?.items ?? []).filter((r) => r.path.startsWith(`${workspace}/`));
   return (
     <Card p="lg">
-      <PanelHeader title={workspace} description={t("settings.workspaceHelp")} />
-      <PanelHeader
+      <Header order={3} title={workspace} description={t("settings.workspaceHelp")} />
+      <Header
         order={4}
         title={
           <Group gap="xs">

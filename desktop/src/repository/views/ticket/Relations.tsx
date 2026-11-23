@@ -2,7 +2,7 @@ import { ActionIcon, Anchor, Button, Card, Group, Stack, Text, TextInput } from 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, X } from "lucide-react";
 import { useState } from "react";
-import { isApiError } from "../../api/client";
+import { isApiError } from "../../../api/client";
 import * as api from "../../api/endpoints";
 import type { Ticket, TicketRef } from "../../api/types";
 import { ErrorMessage, Refusal, StateBadge } from "../../components/common";

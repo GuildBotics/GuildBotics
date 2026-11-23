@@ -18,7 +18,7 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, FolderGit2, Plus, TriangleAlert } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { isApiError } from "../../api/client";
+import { isApiError } from "../../../api/client";
 import * as api from "../../api/endpoints";
 import type {
   CachedImage,
@@ -37,7 +37,7 @@ import {
   Time,
   type Tone,
 } from "../../components/common";
-import { PanelHeader } from "../../components/PanelHeader";
+import { Header } from "../../../ui/Header";
 import { useT, type MessageKey } from "../../i18n";
 import { resourceShortfallText } from "../../i18n/resourceShortfall";
 import { useCiSettings } from "../../query/hooks";
@@ -83,7 +83,7 @@ export function CiSettings() {
   const runner = runners.find((r) => r.name === selected) ?? runners[0];
   return (
     <Card p="lg">
-      <PanelHeader title={t("ci.settings.title")} description={t("ci.settings.help")} />
+      <Header order={3} title={t("ci.settings.title")} description={t("ci.settings.help")} />
       {ci.isPending ? (
         <Loading />
       ) : ci.isError ? (
@@ -178,7 +178,7 @@ function Section({
 }) {
   return (
     <Card p="md" withBorder component="section" aria-label={title}>
-      <PanelHeader order={4} title={title} description={description} action={action} />
+      <Header order={4} title={title} description={description} action={action} />
       {children}
     </Card>
   );

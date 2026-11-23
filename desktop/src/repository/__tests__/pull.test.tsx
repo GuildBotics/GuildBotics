@@ -1,9 +1,10 @@
+import i18n from "../../i18n";
 import { href } from "../router/routes";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Check, Checks } from "../api/types";
-import { dictionaries, format } from "../i18n";
+import { dictionaries } from "../test/words";
 import { applyChange } from "../query/events";
 import { apiError, fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 import { BASE, HEAD, NEW_HEAD, card, landing, pull } from "./fixtures";
@@ -65,7 +66,10 @@ describe.each(["en", "ja"] as const)("base branch guidance (%s)", (language) => 
       );
       // Wait for the checks response before asserting absence; historical CI remains visible.
       expect(await checks.findByText("test")).toBeInTheDocument();
-      const message = format(dictionaries[language]["pull.behindBy"], { base, count: behind });
+      const message = i18n.getFixedT(language, "repository")("pull.behindBy", {
+        base,
+        count: behind,
+      });
       if (visible) expect(checks.getByText(message)).toBeInTheDocument();
       else expect(checks.queryByText(message)).not.toBeInTheDocument();
     },
@@ -112,7 +116,7 @@ describe("related ticket editor", () => {
       ).toBeInTheDocument();
       await user.click(
         within(form).getByRole("button", {
-          name: words["pull.removeTicket"].replace("{ticket}", "acme/demo#1"),
+          name: words["pull.removeTicket"].replace("{{ticket}}", "acme/demo#1"),
         }),
       );
       for (const c of [local, other]) {
@@ -700,10 +704,10 @@ describe("pull request review", () => {
       const region = await screen.findByRole("region", { name: words["pull.checks"] });
       expect(await within(region).findByText(took)).toBeInTheDocument();
       expect(
-        within(region).getByRole("button", { name: words["ci.open"].replace("{name}", "test") }),
+        within(region).getByRole("button", { name: words["ci.open"].replace("{{name}}", "test") }),
       ).toHaveTextContent(`${words["ci.runner"]}: linux-runner`);
       expect(
-        within(region).getByRole("button", { name: words["ci.open"].replace("{name}", "lint") }),
+        within(region).getByRole("button", { name: words["ci.open"].replace("{{name}}", "lint") }),
       ).toHaveTextContent(`${words["ci.runner"]}: windows-runner`);
       // Past its estimate, a running check says what the job took before.
       expect(within(region).getByText(past)).toBeInTheDocument();
@@ -715,13 +719,13 @@ describe("pull request review", () => {
       expect(lint).toHaveTextContent(later);
       // A queued one has no time yet.
       const queued = within(region).getByRole("button", {
-        name: words["ci.open"].replace("{name}", "fmt"),
+        name: words["ci.open"].replace("{{name}}", "fmt"),
       });
       expect(queued).not.toHaveTextContent(/\d+(s|秒)/);
       expect(queued).not.toHaveTextContent(words["ci.runner"]);
       // The job's drawer says how long it took.
       await user.click(
-        within(region).getByRole("button", { name: words["ci.open"].replace("{name}", "test") }),
+        within(region).getByRole("button", { name: words["ci.open"].replace("{{name}}", "test") }),
       );
       const drawer = await screen.findByRole("dialog", { name: /test/ });
       expect(within(drawer).getByText(words["ci.duration"])).toBeInTheDocument();
@@ -860,7 +864,9 @@ describe("pull request review", () => {
         screen.getByRole("button", { name: dictionaries[language]["verdict.approve"] }),
       );
 
-      const message = dictionaries[language]["pull.headMoved"].replace("{sha}", HEAD.slice(0, 10));
+      const message = i18n.getFixedT(language, "repository")("pull.headMoved", {
+        sha: HEAD.slice(0, 10),
+      });
       const refusal = await screen.findByRole("alert");
       expect(refusal).toHaveTextContent(message);
       expect(within(refusal).getByRole("link", { name: HEAD.slice(0, 10) })).toHaveAttribute(
@@ -1090,7 +1096,7 @@ describe("pull request review", () => {
           await screen.findByText(`${dictionaries[language]["ci.reason"]}: exit code 101`),
         ).toBeInTheDocument();
         const label = dictionaries[language][upstream ? "publish.submit" : "merge.submit"].replace(
-          "{host}",
+          "{{host}}",
           "GitHub",
         );
         expect(screen.getByRole("button", { name: label })).toBeEnabled();
@@ -1534,13 +1540,15 @@ describe.each(["en", "ja"] as const)("conflict guidance (%s)", (language) => {
         await screen.findByRole("region", { name: dictionaries[language]["pull.checks"] }),
       );
       await checks.findByText("test");
-      const label = dictionaries[language]["pull.conflicts"].split("{files}")[0]!;
+      const label = dictionaries[language]["pull.conflicts"].split("{{files}}")[0]!;
       if (conflicts?.length)
         expect(
           checks.getByText(
             (_, node) =>
               node?.textContent ===
-              format(dictionaries[language]["pull.conflicts"], { files: conflicts.join(", ") }),
+              i18n.getFixedT(language, "repository")("pull.conflicts", {
+                files: conflicts.join(", "),
+              }),
           ),
         ).toBeInTheDocument();
       else expect(checks.queryByText(new RegExp(label))).not.toBeInTheDocument();

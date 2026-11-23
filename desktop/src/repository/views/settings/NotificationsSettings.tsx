@@ -4,7 +4,7 @@ import { useState } from "react";
 import * as api from "../../api/endpoints";
 import type { Webhook } from "../../api/types";
 import { ErrorMessage, Loading, MASKED_SECRET, StateBadge } from "../../components/common";
-import { PanelHeader } from "../../components/PanelHeader";
+import { Header } from "../../../ui/Header";
 import { useT } from "../../i18n";
 import { useWebhook } from "../../query/hooks";
 import { keys } from "../../query/keys";
@@ -26,7 +26,7 @@ export function NotificationsSettings() {
   const remove = useMutation({ mutationFn: () => api.admin.deleteWebhook(), onSuccess: shown });
   return (
     <Card p="lg">
-      <PanelHeader title={t("settings.notifications")} description={t("notifications.help")} />
+      <Header order={3} title={t("settings.notifications")} description={t("notifications.help")} />
       {webhook.isPending ? (
         <Loading />
       ) : webhook.isError ? (

@@ -2,7 +2,7 @@ import { Card, Stack, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import type { Check } from "../api/types";
 import { CopyButton, ErrorMessage, Loading, Sha, Time } from "../components/common";
-import { PageHeader } from "../components/PageHeader";
+import { Header } from "../../ui/Header";
 import { useT } from "../i18n";
 import { useCommit } from "../query/hooks";
 import { Link, navigate } from "../router/Router";
@@ -32,7 +32,7 @@ export function CommitView({
   const workspace = repo.split("/")[0] as string;
   return (
     <Stack gap="lg">
-      <PageHeader
+      <Header
         back={<Link to={href.pulls(workspace)}>{t("nav.pulls")}</Link>}
         title={
           <Title order={2}>{commit.data ? subject || t("commit.title") : t("commit.title")}</Title>

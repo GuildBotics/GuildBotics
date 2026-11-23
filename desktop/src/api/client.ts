@@ -1,4 +1,5 @@
-import { createApiClient } from "../ui/api";
+import type { Page } from "../repository/api/types";
+
 // Every request goes to the server that served this page, under `/-/guildbotics/api`. The
 // HttpOnly session cookie authenticates it; the session's CSRF value is kept
 // only in this module's memory (never in storage) and goes with every write.
@@ -9,19 +10,17 @@ export function workspaceFromPath(path: string): string | undefined {
 
 const API_PREFIX = "/-/guildbotics/api";
 
-const transport = createApiClient({
-  prefix: API_PREFIX,
-  csrfHeader: "X-GuildBotics-CSRF",
-  headers: () => {
-    const workspace = workspaceFromPath(window.location.pathname);
-    return {
-      "X-GuildBotics-Language": apiLanguage,
-      ...(workspace && { "X-GuildBotics-Workspace": workspace }),
-    };
-  },
-  readError: async (response) => new ApiRequestError(await readError(response)),
-  onConnectionLost: (loss) => lossListeners.forEach((listener) => listener(loss)),
-});
+const REPOSITORY_PREFIX = "/api/v1";
+let csrf: string | null = null;
+
+export function setCsrfToken(value: string | null): void {
+  csrf = value;
+}
+
+export function getCsrfToken(): string | null {
+  return csrf;
+}
+
 let apiLanguage = "en";
 
 /** Why the screens can no longer talk to the server. */
@@ -45,7 +44,7 @@ export function onConnectionLost(listener: (loss: ConnectionLoss) => void): () =
 
 /** Start this browser's session with an entry link's single-use code. */
 export async function enterSession(code: string): Promise<void> {
-  transport.setCsrf(
+  setCsrfToken(
     (await request<{ csrf: string }>("/session", { method: "POST", body: { code } })).csrf,
   );
 }
@@ -53,7 +52,7 @@ export async function enterSession(code: string): Promise<void> {
 /** Take up this browser's session, if it has one. */
 export async function resumeSession(): Promise<boolean> {
   try {
-    transport.setCsrf((await request<{ csrf: string }>("/session")).csrf);
+    setCsrfToken((await request<{ csrf: string }>("/session")).csrf);
     return true;
   } catch (error) {
     if (error instanceof ApiRequestError && error.code === "unauthorized") {
@@ -1629,10 +1628,71 @@ export async function request<T>(
   return response.json();
 }
 
-type Outgoing = { method: string; headers?: Record<string, string>; body?: BodyInit };
+type Outgoing = RequestInit & { method: string; headers?: Record<string, string> };
 
-function send(path: string, outgoing: Outgoing): Promise<Response> {
-  return transport.send(path, outgoing);
+async function attempt(prefix: string, path: string, outgoing: Outgoing): Promise<Response> {
+  const repository = prefix === REPOSITORY_PREFIX;
+  const workspace = workspaceFromPath(window.location.pathname);
+  const writing = outgoing.method !== "GET" && outgoing.method !== "HEAD";
+  let response: Response;
+  try {
+    response = await fetch(prefix + path, {
+      ...outgoing,
+      credentials: "same-origin",
+      headers: {
+        ...(!repository && {
+          "X-GuildBotics-Language": apiLanguage,
+          ...(workspace && { "X-GuildBotics-Workspace": workspace }),
+        }),
+        ...outgoing.headers,
+        ...(writing && csrf && { "X-GuildBotics-CSRF": csrf }),
+      },
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    if (repository) {
+      throw new ApiError(0, "network", error instanceof Error ? error.message : String(error));
+    }
+    lossListeners.forEach((listener) => listener("unreachable"));
+    throw error;
+  }
+  if (response.ok) return response;
+  if (repository) throw await readRepositoryError(response);
+  if (response.status === 401) lossListeners.forEach((listener) => listener("signed_out"));
+  throw Object.assign(new ApiRequestError(await readError(response)), { status: response.status });
+}
+
+async function send(path: string, outgoing: Outgoing, prefix = API_PREFIX): Promise<Response> {
+  try {
+    return await attempt(prefix, path, outgoing);
+  } catch (error) {
+    // A CSRF refusal happens before a write runs. Retry it only once.
+    if (
+      outgoing.method === "GET" ||
+      outgoing.method === "HEAD" ||
+      !(error instanceof ApiRequestError || error instanceof ApiError) ||
+      error.code !== "csrf_mismatch" ||
+      !("status" in error) ||
+      error.status !== 403
+    ) {
+      throw error;
+    }
+  }
+  try {
+    const response = await attempt(prefix, "/session", { method: "GET", signal: outgoing.signal });
+    setCsrfToken(((await response.json()) as { csrf: string }).csrf);
+    return await attempt(prefix, path, outgoing);
+  } catch (error) {
+    if (isApiError(error, "csrf_mismatch", 403) || isApiError(error, undefined, 401)) {
+      setCsrfToken(null);
+      throw new ApiError(
+        error.status,
+        "session_changed",
+        "The session could not be refreshed. Reload the page and try again.",
+      );
+    }
+    throw error;
+  }
 }
 
 async function readError(response: Response): Promise<ApiErrorPayload> {
@@ -1653,6 +1713,124 @@ async function readError(response: Response): Promise<ApiErrorPayload> {
     message: `HTTP ${response.status}`,
     context: {},
   };
+}
+
+/** An error answered by the service, or a network failure (status 0). */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export function isApiError(err: unknown, code?: string, status?: number): err is ApiError {
+  if (!(err instanceof ApiError)) return false;
+  if (code !== undefined && err.code !== code) return false;
+  if (status !== undefined && err.status !== status) return false;
+  return true;
+}
+
+/** Encodes a path parameter (repository, workspace, branch) as one segment. */
+export function enc(segment: string | number): string {
+  return encodeURIComponent(String(segment));
+}
+
+export type Query = Record<string, string | number | boolean | undefined | null>;
+
+export interface RepositoryRequestOptions {
+  body?: unknown;
+  query?: Query;
+  signal?: AbortSignal;
+  idempotencyKey?: string;
+}
+
+function buildUrl(path: string, query?: Query): string {
+  let url = path;
+  if (query) {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined && v !== null && v !== "") params.set(k, String(v));
+    }
+    const qs = params.toString();
+    if (qs) url += (url.includes("?") ? "&" : "?") + qs;
+  }
+  return url;
+}
+
+async function readRepositoryError(response: Response): Promise<ApiError> {
+  let code = "http_error";
+  let message = `${response.status} ${response.statusText}`.trim();
+  try {
+    const data = (await response.json()) as { error?: { code?: string; message?: string } };
+    code = data.error?.code || code;
+    message = data.error?.message || message;
+  } catch {
+    /* Keep the status line for a non-JSON response. */
+  }
+  return new ApiError(response.status, code, message);
+}
+
+export async function repositoryRequest<T>(
+  method: string,
+  path: string,
+  opts: RepositoryRequestOptions = {},
+): Promise<T> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  const file = opts.body instanceof Blob ? opts.body : null;
+  if (opts.body !== undefined)
+    headers["Content-Type"] = file ? file.type || "application/octet-stream" : "application/json";
+  if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
+  const response = await send(
+    buildUrl(path, opts.query),
+    {
+      method,
+      headers,
+      body: file ?? (opts.body === undefined ? undefined : JSON.stringify(opts.body)),
+      signal: opts.signal,
+    },
+    REPOSITORY_PREFIX,
+  );
+  if (response.status === 204) return undefined as T;
+  const text = await response.text();
+  return (text ? JSON.parse(text) : undefined) as T;
+}
+
+export const repositoryGet = <T>(path: string, query?: Query, signal?: AbortSignal) =>
+  repositoryRequest<T>("GET", path, { query, signal });
+
+/**
+ * Follows `next_cursor` until the collection ends or `maxItems` is reached.
+ * Returns the items and whether the collection was cut short.
+ */
+export async function getAll<T>(
+  path: string,
+  query: Query = {},
+  opts: { maxItems?: number; signal?: AbortSignal } = {},
+): Promise<{ items: T[]; complete: boolean }> {
+  const items: T[] = [];
+  let cursor: string | null = null;
+  const max = opts.maxItems ?? Infinity;
+  for (;;) {
+    const page: Page<T> = await repositoryGet<Page<T>>(
+      path,
+      { ...query, limit: 100, cursor },
+      opts.signal,
+    );
+    items.push(...page.items);
+    cursor = page.next_cursor;
+    if (!cursor) return { items, complete: true };
+    if (items.length >= max) return { items, complete: false };
+  }
+}
+
+/** A fresh key for one user-initiated create, so a retried request is not applied twice. */
+export function newIdempotencyKey(): string {
+  return crypto.randomUUID();
 }
 
 /** The name of the machine the server runs on, which "this machine" means. */
@@ -1683,7 +1861,7 @@ export function loginCliAgent(
   const decoder = new TextDecoder();
   let finished = false;
   socket.onopen = () => {
-    if (!finished) socket.send(JSON.stringify({ csrf: transport.getCsrf() }));
+    if (!finished) socket.send(JSON.stringify({ csrf: getCsrfToken() }));
   };
   socket.onmessage = (event) => {
     if (finished) return;

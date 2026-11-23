@@ -8,7 +8,7 @@ import { hasAttachment, MarkdownField } from "../../components/MarkdownField";
 import { useT } from "../../i18n";
 import { useRepos } from "../../query/hooks";
 import { keys } from "../../query/keys";
-import { useStored } from "../../storage";
+import { useStored } from "../../../ui/storage";
 
 /** The workspace's repositories, and the one new tickets go to by default: the last one chosen in this workspace. */
 export function useTicketRepos(workspace: string) {

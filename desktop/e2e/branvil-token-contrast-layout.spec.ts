@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 
-const css = readFileSync(new URL("../src/ui/styles.css", import.meta.url), "utf8");
+const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 const tones = [...css.matchAll(/--color-([\w]+)-text:/g)].map((match) => match[1]);
 
 for (const scheme of ["light", "dark"] as const) {

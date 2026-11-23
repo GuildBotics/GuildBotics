@@ -1,11 +1,13 @@
+import i18n from "../../i18n";
 import { TestMantineProvider } from "../../test/TestMantineProvider";
 import DOMPurify from "dompurify";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import { Markdown, renderMarkdown } from "../components/Markdown";
-import { I18nProvider, dictionaries } from "../i18n";
+import { Markdown } from "../components/Markdown";
+import { renderMarkdown } from "../../ui/markdown";
+import { dictionaries } from "../test/words";
 import { href } from "../router/routes";
 import { keys } from "../query/keys";
 import { applyChange } from "../query/events";
@@ -22,12 +24,11 @@ function markdownView(
   source: string,
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
 ) {
+  void i18n.changeLanguage("ja");
   const view = (text: string) => (
     <TestMantineProvider>
       <QueryClientProvider client={client}>
-        <I18nProvider initial="ja">
-          <Markdown repo="acme/demo" source={text} />
-        </I18nProvider>
+        <Markdown repo="acme/demo" source={text} />
       </QueryClientProvider>
     </TestMantineProvider>
   );
@@ -263,9 +264,7 @@ describe("Mermaid diagrams", () => {
     const view = (scheme: "light" | "dark") => (
       <TestMantineProvider forceColorScheme={scheme}>
         <QueryClientProvider client={client}>
-          <I18nProvider initial="ja">
-            <Markdown repo="acme/demo" source={diagram} />
-          </I18nProvider>
+          <Markdown repo="acme/demo" source={diagram} />
         </QueryClientProvider>
       </TestMantineProvider>
     );

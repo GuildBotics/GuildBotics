@@ -1,6 +1,12 @@
 // Typed calls of the Branvil HTTP API v1 used by the GUI (docs/api.md).
 
-import { enc, get, getAll, newIdempotencyKey, request } from "./client";
+import {
+  enc,
+  repositoryGet as get,
+  getAll,
+  newIdempotencyKey,
+  repositoryRequest as request,
+} from "../../api/client";
 import type { RunnerSelection } from "./types";
 import type {
   Verification,

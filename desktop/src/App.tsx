@@ -192,8 +192,8 @@ export function App({ scoped }: { scoped?: boolean } = {}) {
           <Select
             className="sidebar-language"
             classNames={{
-              input: "sidebar-language-input",
-              label: "sidebar-language-label",
+              input: "sidebar-input",
+              label: "sidebar-field-label",
             }}
             label={t("app.language.label")}
             data={[

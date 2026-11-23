@@ -1,9 +1,11 @@
+import i18n from "../../i18n";
 import { TestMantineProvider } from "../../test/TestMantineProvider";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { request } from "../api/client";
+import { repositoryRequest as request } from "../../api/client";
 import { ErrorMessage, errorText } from "../components/common";
-import { dictionaries, I18nProvider, type Translate } from "../i18n";
+import { type Translate } from "../i18n";
+import { dictionaries } from "../test/words";
 import { apiError, fakeApi, json } from "../test/fakeApi";
 import { theme } from "../../ui/theme";
 import { moveRefusal } from "../views/board/CardView";
@@ -18,17 +20,16 @@ describe("CSRF recovery guidance", () => {
         "GET /api/v1/session": json(200, { csrf: "fresh" }),
       });
       const error: unknown = await request("POST", "/x").catch((err: unknown) => err);
+      void i18n.changeLanguage(lang);
       render(
         <TestMantineProvider theme={theme}>
-          <I18nProvider initial={lang}>
-            <ErrorMessage error={error} />
-          </I18nProvider>
+          <ErrorMessage error={error} />
         </TestMantineProvider>,
       );
       const guidance = dictionaries[lang]["common.sessionChanged"];
       expect(screen.getByRole("alert")).toHaveTextContent(guidance);
       expect(screen.queryByText(/CSRF|permission|権限/)).not.toBeInTheDocument();
-      const t: Translate = (key) => dictionaries[lang][key];
+      const t: Translate = i18n.getFixedT(lang, "repository");
       expect(errorText(error, t)).toBe(guidance);
       // Card moves embed the same localized guidance in their failure notice.
       expect(

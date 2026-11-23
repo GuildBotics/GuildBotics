@@ -1,3 +1,4 @@
+import { useStored } from "../ui/storage";
 import { Alert, Badge, Button, Drawer, Group, Switch, Text } from "@mantine/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
@@ -44,9 +45,8 @@ export function TroubleshootingDrawer({
   const [personId, setPersonId] = useState<string | null>(null);
   const [pinnedFocus, setPinnedFocus] = useState<TroubleshootingFocus>(focus);
   const [pinnedLabel, setPinnedLabel] = useState(focusLabel);
-  const [privacyAcknowledged, setPrivacyAcknowledged] = useState(
-    () => globalThis.localStorage?.getItem(PRIVACY_STORAGE_KEY) === "1",
-  );
+  const [privacyChoice, setPrivacyChoice] = useStored(PRIVACY_STORAGE_KEY);
+  const privacyAcknowledged = privacyChoice === "1";
 
   const activeFocus = followTarget ? focus : pinnedFocus;
   const activeLabel = followTarget ? focusLabel : pinnedLabel;
@@ -102,10 +102,7 @@ export function TroubleshootingDrawer({
 
   const progress = useTurnProgress(mutation.isPending);
 
-  const acknowledgePrivacy = () => {
-    globalThis.localStorage?.setItem(PRIVACY_STORAGE_KEY, "1");
-    setPrivacyAcknowledged(true);
-  };
+  const acknowledgePrivacy = () => setPrivacyChoice("1");
 
   const header = (
     <>

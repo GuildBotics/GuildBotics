@@ -10,7 +10,7 @@ import {
   Time,
   type Tone,
 } from "../components/common";
-import { PageHeader } from "../components/PageHeader";
+import { Header } from "../../ui/Header";
 import { useT } from "../i18n";
 import { useChecks, useMemberKinds, useRepos } from "../query/hooks";
 import { usePullList } from "../query/pullList";
@@ -81,14 +81,14 @@ export function PullsView({ workspace, repo }: { workspace: string; repo: string
 
   return (
     <Stack gap="lg">
-      <PageHeader
+      <Header
         title={t("pulls.title")}
         meta={
           <Text size="sm" c="dimmed">
             {repo ?? t("pulls.ofWorkspace", { workspace })}
           </Text>
         }
-        right={
+        action={
           <TipChecks key={repo ?? ALL_REPOS} workspace={workspace} paths={paths} repo={repo} />
         }
       />

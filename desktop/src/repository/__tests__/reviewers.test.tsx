@@ -1,9 +1,9 @@
+import i18n from "../../i18n";
 import { TestMantineProvider } from "../../test/TestMantineProvider";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
-import { I18nProvider } from "../i18n";
 import { createQueryClient } from "../query/hooks";
 import { fakeApi, json } from "../test/fakeApi";
 import { ReviewersCell } from "../views/pulls/ReviewersCell";
@@ -14,11 +14,10 @@ function renderReviewers(pr = pull(), language: "en" | "ja" = "en") {
     "GET /api/v1/members": json(200, { items: [], next_cursor: null }),
   });
   const client = createQueryClient();
+  void i18n.changeLanguage(language);
   const wrapper = ({ children }: { children: ReactNode }) => (
     <TestMantineProvider>
-      <QueryClientProvider client={client}>
-        <I18nProvider initial={language}>{children}</I18nProvider>
-      </QueryClientProvider>
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
     </TestMantineProvider>
   );
   return {

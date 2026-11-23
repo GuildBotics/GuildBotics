@@ -6,7 +6,7 @@ import { Anchor, Badge, Button, Card, Group, Text } from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, GitCommitHorizontal, MessageSquare } from "lucide-react";
 import { useState } from "react";
-import { isApiError } from "../../api/client";
+import { isApiError } from "../../../api/client";
 import * as api from "../../api/endpoints";
 import type {
   Activity,
@@ -296,7 +296,7 @@ export function Conversation({
       ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
     : [];
   const open = pull.state === "open";
-  const [beforeHead, afterHead] = t("pull.headMoved").split("{sha}");
+  const [beforeHead, afterHead] = t("pull.headMoved").split("{{sha}}");
 
   return (
     <Card p="lg" component="section" aria-label={t("pull.conversation")}>

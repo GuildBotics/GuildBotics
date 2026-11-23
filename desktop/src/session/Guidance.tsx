@@ -61,7 +61,7 @@ export function NoSessionGuide({
       {onRetry ? (
         <Group>
           <Button variant="light" onClick={onRetry}>
-            {t("session.retry")}
+            {t("common.retry")}
           </Button>
         </Group>
       ) : null}
@@ -96,7 +96,7 @@ export function UnreachableNotice({
         <Text size="sm">{t("session.unreachable.body")}</Text>
         <Group justify="flex-end">
           <Button loading={retrying} onClick={onRetry}>
-            {t("session.retry")}
+            {t("common.retry")}
           </Button>
         </Group>
       </Stack>
