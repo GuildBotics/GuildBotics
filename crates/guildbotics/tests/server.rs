@@ -288,9 +288,11 @@ async fn command_and_diagnostics_screens_match_the_python_golden() {
         )
         .unwrap()
     };
-    // Host topology was added after the Python fixture; every server has the code host.
+    // The Python fixture predates the embedded host and execution workspace names.
+    // This server has a code host, but the fixture's workspace is unregistered.
     let mut expected_status = expected["status"].clone();
     expected_status["branvil_available"] = json!(true);
+    expected_status["workspace_name"] = Value::Null;
     let mut urls = vec![
         (
             "/-/guildbotics/api/config/status".to_owned(),
@@ -1116,7 +1118,7 @@ async fn open_commands_share_the_entry_and_browser_session() {
     let server = Server::start(dir.path());
     for (args, next) in [
         (vec!["open", "--print"], None),
-        (vec!["open", "--branvil", "--print"], Some("/")),
+        (vec!["open", "--branvil", "--print"], Some("/workspaces")),
     ] {
         let opened = Command::new(BIN)
             .args(args)
