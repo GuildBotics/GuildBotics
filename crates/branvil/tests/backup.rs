@@ -281,13 +281,21 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     );
     assert!(text(&out).contains(&serves), "{}", text(&out));
 
-    // A backup of the previous schema version: what version 41 wrote.
+    // A backup of the previous schema version with the old local ticket URL.
     let previous = out_dir.path().join("previous");
     copy_backup(&backup, &previous, &manifest);
     let db = previous.join("branvil.redb");
-    as_schema_41(&db);
+    as_schema_42(&db);
+    edit_records(&db, "pulls", |pull| {
+        if let Some(ticket) = pull["tickets"]
+            .as_array_mut()
+            .and_then(|links| links.first_mut())
+        {
+            ticket["url"] = json!(format!("{}/{REPO}/-/tickets/1", s.url));
+        }
+    });
     let mut old = manifest.clone();
-    old["schema_version"] = json!(41);
+    old["schema_version"] = json!(42);
     // Refresh the checksum of the database rewritten by the fixture.
     for f in old["files"].as_array_mut().unwrap() {
         if f["path"] == "branvil.redb" {
@@ -323,12 +331,12 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("from schema version 41 to 42"),
+        text(&out).contains("from schema version 42 to 43"),
         "{}",
         text(&out)
     );
     assert!(
-        text(&out).contains("set disk workspaces for"),
+        text(&out).contains("updated local links in 1 pull requests"),
         "{}",
         text(&out)
     );
