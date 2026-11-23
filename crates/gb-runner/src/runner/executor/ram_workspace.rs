@@ -254,6 +254,8 @@ with tarfile.open(RETURN / "artifacts.tar") as tar:
         let published = root.join("seed/cache.raw");
         let tree = super::super::super::workspace::Tree::from_index(b"").unwrap();
         let mut cache_data = None;
+        let mut disk_identity = None;
+        let mut ram_identity = None;
         let limits = JobLimits::from(&ExecutorConfig::default());
         let verify_and_write = r#"
             set -eu
@@ -293,11 +295,14 @@ with tarfile.open(RETURN / "artifacts.tar") as tar:
         ] {
             let seed = case == "seed";
             let active = matches!(case, "success" | "failure" | "timeout" | "cancel");
-            let commands = if active && case != "success" {
-                vec![verify_and_write.to_string(), command.to_string()]
-            } else {
-                vec![command.to_string()]
-            };
+            let mut commands = vec![
+                r#"printf 'fixture identity HOME=%s USER=%s LOGNAME=%s\n' "${HOME-<unset>}" "${USER-<unset>}" "${LOGNAME-<unset>}""#
+                    .to_string(),
+            ];
+            if active && case != "success" {
+                commands.push(verify_and_write.to_string());
+            }
+            commands.push(command.to_string());
             let attempt = root.join(case);
             let (io, work, logs) = (
                 attempt.join("io"),
@@ -395,6 +400,18 @@ with tarfile.open(RETURN / "artifacts.tar") as tar:
                 active,
                 "{case}: {log}"
             );
+            if matches!(case, "seed" | "success") {
+                let identity = log
+                    .lines()
+                    .find_map(|line| line.strip_prefix("fixture identity "))
+                    .unwrap_or_else(|| panic!("missing job identity in {case}: {log}"))
+                    .to_owned();
+                if seed {
+                    disk_identity = Some(identity);
+                } else {
+                    ram_identity = Some(identity);
+                }
+            }
             if seed {
                 cache_data = Some(kept.expect(&log));
             } else if active && case != "cancel" {
@@ -419,5 +436,9 @@ with tarfile.open(RETURN / "artifacts.tar") as tar:
                 );
             }
         }
+        assert_eq!(
+            disk_identity, ram_identity,
+            "job identity changed with RAM workspace"
+        );
     }
 }
