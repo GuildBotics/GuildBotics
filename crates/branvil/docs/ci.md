@@ -297,8 +297,12 @@ and `unshare` tools. The guest kernel must support OverlayFS, tmpfs, and a PID
 namespace for the job processes. RAM can be used with an exact hit or a
 restored compatible older cache. Jobs with no restored cache use disk, which
 allows clean builds to remove and recreate the entire work directories. A job
-that needs to save a cache also needs guest loop-device support. Its cache volume is
-created only after the commands succeed. The runner copies the declared paths
+that needs to save a cache uses the preparation VM to create a temporary ext4 image
+with `mkfs.ext4` and verify that `mount -t ext4 -o loop` and `umount` work with the
+guest kernel. `mount` sets up the loop device itself. If the probe fails, the runner
+logs an ext4 loop-mount probe failure and runs the job on disk. Jobs that skip
+saving a cache also skip the loop-mount probe. The cache volume is created only
+after the commands succeed. The runner copies the declared paths
 from the merged workspace directly to that volume while the VM still holds
 the RAM changes. Files pass through memory on their way to the volume.
 Collection can finish after the command deadline. The published cache is
@@ -330,7 +334,12 @@ GUILDBOTICS_REAL_EXECUTOR=1 GUILDBOTICS_REAL_EXECUTOR_DATA=/absolute/test-data \
 ```
 
 Set `GUILDBOTICS_RAM_TEST_EXECUTOR=cli` to exercise the remote CLI path against
-the same fixture.
+the same fixture. To cover customized guests, set
+`GUILDBOTICS_RAM_TEST_IMAGE_NO_LOSETUP` to a loaded image with `losetup` removed
+and `GUILDBOTICS_RAM_TEST_IMAGE_NO_LOOP` to a loaded image where `mount -o loop`
+fails. Both images must still provide the other preparation tools. The fixture
+checks that the first image saves a cache from RAM and that the second saves
+it through the disk collector.
 
 ## Trust: where the pipeline comes from
 

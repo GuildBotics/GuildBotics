@@ -1382,6 +1382,7 @@ impl Executor for Microsandbox {
         // over an entry would write through it, so this run neither uses
         // nor keeps one.
         let linked = job.tree.link_on(cached_paths.iter().copied());
+        let save_cache = job.save_cache && linked.is_none() && !cached_paths.is_empty();
         if let Some(p) = linked {
             say(format!("the cached path {p} goes through a symbolic link of the commit, which unpacking the checkout over the cache entry would write through; the job runs without the cache")).await;
         }
@@ -1459,7 +1460,7 @@ impl Executor for Microsandbox {
         let preparing = Instant::now();
         let mut prep_script = prepare_script("/work", IO_MOUNT, restore.as_ref());
         if job.job.ram_workspace.is_some() && restore.is_some() {
-            ram_workspace::probe(&mut prep_script);
+            ram_workspace::probe(&mut prep_script, save_cache && !job.exact_cache);
         }
         let mut prepared = self
             .helper(
@@ -1526,7 +1527,6 @@ impl Executor for Microsandbox {
         let restored = restore.is_some() && !dropped && prepared.is_ok();
         let used_exact_cache = job.exact_cache && restored;
         let cache_name = self.cache_volume(job.attempt_id);
-        let save_cache = job.save_cache && linked.is_none() && !cached_paths.is_empty();
         let make_cache = || async {
             match self.create_disk(&cache_name, disk_mib).await {
                 Ok(path) => Some(JobDisk {
@@ -3442,7 +3442,9 @@ esac
         for (ram, case) in [false, true]
             .into_iter()
             .flat_map(|ram| ["file", "empty", "link", "missing", "timeout"].map(|case| (ram, case)))
+            .chain([(true, "loop-unavailable")])
         {
+            let loop_unavailable = case == "loop-unavailable";
             let _ = std::fs::remove_file(state.join("archive-links"));
             let expected = if case == "timeout" {
                 std::fs::remove_file(state.join("done")).unwrap();
@@ -3452,7 +3454,7 @@ esac
                 Outcome::Exited(0)
             };
             match case {
-                "file" => std::fs::write(&returned, &full_archive).unwrap(),
+                "file" | "loop-unavailable" => std::fs::write(&returned, &full_archive).unwrap(),
                 "empty" => std::fs::write(
                     &returned,
                     tar::Builder::new(Vec::new()).into_inner().unwrap(),
@@ -3472,6 +3474,8 @@ esac
             let (log, mut logs) = mpsc::channel(64);
             let (_stop, cancel) = watch::channel(false);
             let cache_base = at.join("cache-base.raw");
+            let cache_disk = at.join("cache-disk.raw");
+            let mut kept_data = None;
             let mut runner = Microsandbox::new(Msb::Found(msb.clone()), home.clone(), "t");
             if ram {
                 std::fs::write(state.join("ram-probe"), "").unwrap();
@@ -3492,6 +3496,10 @@ esac
                     max_mib: 64,
                 });
             }
+            if loop_unavailable {
+                ext4_image(&state.join("cache-image"), 128, b"collected");
+                std::fs::write(state.join("returned").join(CACHE_KEPT), "1\n").unwrap();
+            }
             let _ = std::fs::remove_file(state.join("args-bv-collect-a1"));
             let outcome = runner
                 .run(
@@ -3511,11 +3519,11 @@ esac
                         timeout_secs: if case == "timeout" { 1 } else { 60 },
                         io: &io,
                         cache_base: ram.then_some(cache_base.as_path()),
-                        cache_disk: &at.join("cache-disk.raw"),
+                        cache_disk: &cache_disk,
                         tree: &Default::default(),
                         cache_data: ram.then_some(1024),
-                        exact_cache: ram,
-                        kept_data: &mut None,
+                        exact_cache: ram && !loop_unavailable,
+                        kept_data: &mut kept_data,
                         save_cache: true,
                         work: &work,
                         log_dir: &log_dir,
@@ -3527,10 +3535,26 @@ esac
                 )
                 .await;
             assert_eq!(outcome, expected, "{ram} {case}");
-            assert_eq!(state.join("args-bv-collect-a1").exists(), !ram, "{case}");
+            assert_eq!(
+                state.join("args-bv-collect-a1").exists(),
+                !ram || loop_unavailable,
+                "{case}"
+            );
             let mut text = String::new();
             while let Ok(bytes) = logs.try_recv() {
                 text.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            if ram {
+                let prep = std::fs::read_to_string(state.join("args-bv-prep-a1")).unwrap();
+                assert_eq!(prep.contains("--probe-cache"), loop_unavailable, "{case}");
+            }
+            if loop_unavailable {
+                assert!(text.contains("ext4 loop-mount probe failed"), "{text}");
+                assert!(text.contains("; using disk"), "{text}");
+                let args = std::fs::read_to_string(state.join("args-bv-job-a1")).unwrap();
+                assert!(!args.contains(ram_workspace::RETURN_MOUNT), "{args}");
+                assert_eq!(kept_data, Some(1024));
+                assert_eq!(&head(&cache_disk)[..9], b"collected");
             }
             let line = format!("[branvil] packing {ARTIFACTS} failed\n");
             assert_eq!(
@@ -3544,7 +3568,7 @@ esac
                 "{ram} {case}: {text}",
             );
             let report = work.join("out/report.txt");
-            if case == "file" {
+            if matches!(case, "file" | "loop-unavailable") {
                 assert_eq!(std::fs::read_to_string(report).unwrap(), "ok");
             } else {
                 assert!(!report.exists());

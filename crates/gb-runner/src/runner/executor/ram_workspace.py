@@ -190,6 +190,20 @@ def use_disk(error, args, *, detach=False):
     os.execvp(args[0], args)
 
 
+def mount_cache(image, target):
+    run("mount", "-t", "ext4", "-o", "loop", image, target)
+
+
+def probe_cache():
+    with tempfile.TemporaryDirectory(prefix=".branvil-cache-probe-") as directory:
+        root = Path(directory)
+        image, target = root / "probe.raw", root / "mount"
+        target.mkdir()
+        run("mkfs.ext4", "-q", "-F", image, "8M")
+        mount_cache(image, target)
+        run("umount", target)
+
+
 def save_cache(command):
     (RETURN / "cache.requested").touch()
     image = RETURN / "cache.raw"
@@ -205,7 +219,7 @@ def save_cache(command):
     result = RETURN / "cache-result"
     result.mkdir(mode=0o700)
     CACHE.mkdir(mode=0o700)
-    run("mount", "-t", "ext4", "-o", "loop", image, CACHE)
+    mount_cache(image, CACHE)
     try:
         subprocess.run(
             ["/bin/sh", "-e", "-c", command],
@@ -289,5 +303,8 @@ def main(mib, paths, artifacts, uid, keep_cache, command):
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--probe-cache"]:
+        probe_cache()
+        sys.exit(0)
     mib, paths, artifacts, uid, keep_cache = json.loads(sys.argv[1])
     sys.exit(main(mib, paths, artifacts, uid, keep_cache, sys.argv[2]))
