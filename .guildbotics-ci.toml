@@ -130,6 +130,7 @@ cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.loc
 [[jobs]]
 name = "rust-test"
 tmpfs_mib = 2048
+ram_workspace = { paths = ["target"], max_mib = 4608 }
 paths = [
   ".github/workflows/ci.yml",
   "crates/*/src/**",
@@ -168,6 +169,7 @@ cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.loc
 [[jobs]]
 name = "rust-test-branvil"
 tmpfs_mib = 2048
+ram_workspace = { paths = ["target"], max_mib = 4608 }
 paths = [
   "crates/branvil/**", "crates/gb-runner/**", "crates/gb-vm/**",
   "crates/loopback-auth/**",
