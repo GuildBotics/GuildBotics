@@ -353,7 +353,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # access token has expired whenever it first needs it; listing the
         # models needs it, and makes no turn.
         provision=CliAgentProvision(
-            package="@openai/codex@0.169.0",
+            package="@openai/codex@0.171.0",
             state_root=".codex",
             user_skills=".agents/skills",
             state_root_env="CODEX_HOME",
@@ -431,7 +431,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         # ANTHROPIC_BASE_URL, while `/usage` and the refresh talk to the
         # account endpoints directly and so run where the login is.
         provision=CliAgentProvision(
-            package="@anthropic-ai/claude-code@2.1.325",
+            package="@anthropic-ai/claude-code@2.1.330",
             state_root=".claude",
             user_skills=".claude/skills",
             state_root_env="CLAUDE_CONFIG_DIR",
@@ -485,7 +485,7 @@ CLI_AGENTS: tuple[CliAgentInfo, ...] = (
         provision=CliAgentProvision(
             install=(
                 "curl -fsSL https://x.ai/cli/install.sh"
-                " | GROK_BIN_DIR=/usr/local/bin bash -s 1.0.77\n"
+                " | GROK_BIN_DIR=/usr/local/bin bash -s 1.0.92\n"
                 "cp -L /usr/local/bin/grok /usr/local/bin/grok.bin\n"
                 "mv -f /usr/local/bin/grok.bin /usr/local/bin/grok\n"
                 "rm -f /usr/local/bin/agent\n"

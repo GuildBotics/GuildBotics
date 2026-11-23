@@ -25,11 +25,11 @@
     },
     {
       "label": "npm",
-      "script": "npm install -g @openai/codex@0.169.0 @anthropic-ai/claude-code@2.1.325\nnpm cache clean --force"
+      "script": "npm install -g @openai/codex@0.171.0 @anthropic-ai/claude-code@2.1.330\nnpm cache clean --force"
     },
     {
       "label": "grok",
-      "script": "curl -fsSL https://x.ai/cli/install.sh | GROK_BIN_DIR=/usr/local/bin bash -s 1.0.77\ncp -L /usr/local/bin/grok /usr/local/bin/grok.bin\nmv -f /usr/local/bin/grok.bin /usr/local/bin/grok\nrm -f /usr/local/bin/agent\nrm -rf \"$HOME/.grok\"\ngrok --version"
+      "script": "curl -fsSL https://x.ai/cli/install.sh | GROK_BIN_DIR=/usr/local/bin bash -s 1.0.92\ncp -L /usr/local/bin/grok /usr/local/bin/grok.bin\nmv -f /usr/local/bin/grok.bin /usr/local/bin/grok\nrm -f /usr/local/bin/agent\nrm -rf \"$HOME/.grok\"\ngrok --version"
     },
     {
       "label": "git",
@@ -39,15 +39,15 @@
   "names": [
     {
       "held": null,
-      "expected": "guildbotics-68339beff8e09a4a"
+      "expected": "guildbotics-1e88ce4381bbb015"
     },
     {
       "held": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "guildbotics-27e9bf0ac7f0cd57"
+      "expected": "guildbotics-748396317199e9f2"
     },
     {
       "held": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "expected": "guildbotics-8f651a25d7cd1c5e"
+      "expected": "guildbotics-9df3a86459c38851"
     }
   ]
 }
