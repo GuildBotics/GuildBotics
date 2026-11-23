@@ -278,7 +278,8 @@ pub async fn code_contract(service: &CodeAgent, repository: &str, head_branch: &
         assert_eq!(r.id, *id);
         assert_eq!(r.reaction, SemanticReaction::Agree);
     }
-    let elsewhere = format!("outside/{repository}");
+    let (workspace, name) = repository.split_once('/').unwrap();
+    let elsewhere = format!("outside/{name}");
     assert!(matches!(
         service.check_push(&elsewhere),
         Err(ServiceError::OutOfScope)
@@ -289,7 +290,11 @@ pub async fn code_contract(service: &CodeAgent, repository: &str, head_branch: &
         service.create_pull_request(out).await,
         Err(ServiceError::OutOfScope)
     ));
-    let outside_url = url.replace(repository, &elsewhere);
+    let outside_url = url.replacen(
+        &format!("/workspaces/{workspace}/"),
+        "/workspaces/outside/",
+        1,
+    );
     assert!(matches!(
         service.convert_pull_request_to_draft(&outside_url).await,
         Err(ServiceError::OutOfScope)
