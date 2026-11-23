@@ -13,12 +13,11 @@ use serde_json::{Value, json};
 
 const IMAGE: &str = "docker.io/library/alpine:3.22";
 
-/// Lands `.branvil/ci.toml` on main through a merged pull request.
+/// Lands `.guildbotics-ci.toml` on main through a merged pull request.
 async fn land_pipeline(w: &World) {
-    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
     let pipeline =
         format!("[[jobs]]\nname = \"test\"\nimage = \"{IMAGE}\"\ncommands = [\"true\"]\n");
-    let head = w.push_change("ci", ".branvil/ci.toml", &pipeline);
+    let head = w.push_change("ci", ".guildbotics-ci.toml", &pipeline);
     let p = w.open_pull("ci", json!([])).await;
     let (st, v) = w
         .server
@@ -40,7 +39,7 @@ async fn settings(w: &World) -> Value {
 }
 
 /// Restarts the service with a home of its own: the supervised runner and
-/// the image cache stay out of the user's `~/.branvil`, and no msb is found.
+/// the image cache stay out of the user's machine root, and no msb is found.
 fn isolate(w: &mut World) {
     let home = w.dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -48,7 +47,11 @@ fn isolate(w: &mut World) {
     // (a killed service would leave the runner holding its work directory).
     #[cfg(unix)]
     w.server.terminate(std::time::Duration::from_secs(10));
-    w.restart(&[("HOME", home.to_str().unwrap())]);
+    let root = home.join(".guildbotics");
+    w.restart(&[
+        ("HOME", home.to_str().unwrap()),
+        ("GUILDBOTICS_HOME", root.to_str().unwrap()),
+    ]);
 }
 
 #[tokio::test]

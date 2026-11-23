@@ -16,12 +16,12 @@ use std::{
 /// The server agent's settings that every command of this loop runs with.
 const SETTINGS: [&str; 4] = [
     "GUILDBOTICS_HOME",
-    "BRANVIL_DATA_DIR",
+    "GUILDBOTICS_CODE_HOST_DATA_DIR",
     "GUILDBOTICS_SERVER_PORT",
     "GUILDBOTICS_IDENTITY_ROOT",
 ];
 /// Settings the server agent always records.
-const REQUIRED: [&str; 2] = ["GUILDBOTICS_HOME", "BRANVIL_DATA_DIR"];
+const REQUIRED: [&str; 2] = ["GUILDBOTICS_HOME", "GUILDBOTICS_CODE_HOST_DATA_DIR"];
 
 struct Hub {
     checkout: PathBuf,

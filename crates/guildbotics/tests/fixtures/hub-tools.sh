@@ -127,8 +127,9 @@ case "$name" in
         build=$(sed -n 's/^# build: //p' "$0")
         # The settings this program runs with, as pasted guidance gives them.
         printf 'home=%s code-host=%s identity=%s port=%s\n' "${GUILDBOTICS_HOME-unset}" \
-            "${BRANVIL_DATA_DIR-unset}" "${GUILDBOTICS_IDENTITY_ROOT-unset}" "${GUILDBOTICS_SERVER_PORT-unset}" \
+            "${GUILDBOTICS_CODE_HOST_DATA_DIR-unset}" "${GUILDBOTICS_IDENTITY_ROOT-unset}" "${GUILDBOTICS_SERVER_PORT-unset}" \
             >"$FAKE_ROOT/settings"
+        printf '%s' "${BRANVIL_DATA_DIR-unset}" >"$FAKE_ROOT/previous-code-host"
         printf '%s' "$build" >>"$FAKE_ROOT/actions"
         for arg do printf '|%s' "$arg" >>"$FAKE_ROOT/actions"; done
         printf '\n' >>"$FAKE_ROOT/actions"

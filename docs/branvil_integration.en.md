@@ -66,7 +66,7 @@ An unavailable scheduled occurrence stays due and is retried on a later schedule
 
 Follow the [GuildBotics installation steps](../README.md#installation) on the Hub:
 
-1. Start the server. Its first start creates the code host's data (in `BRANVIL_DATA_DIR`,
+1. Start the server. Its first start creates the code host's data (in `GUILDBOTICS_CODE_HOST_DATA_DIR`,
    by default `~/.guildbotics/data/code-host`) and the owner, the human member who uses
    the screens and merges pull requests. Set up SSH forwarding on the other machines as
    described below.

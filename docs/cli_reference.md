@@ -358,7 +358,7 @@ Usage: guildbotics server <COMMAND>
 
 Commands:
   hub-data  Back up, restore, check, upgrade, or reindex the Hub's records
-  start     Run the server in the foreground until SIGINT or SIGTERM (a first SIGINT waits for the commands running, SIGTERM or a second SIGINT cancels them): GuildBotics on GUILDBOTICS_SERVER_PORT (default 7878) with its records under GUILDBOTICS_HOME (default ~/.guildbotics), and the code host on the same listener, with its data in BRANVIL_DATA_DIR (default GUILDBOTICS_HOME/data/code-host, created at the first start)
+  start     Run the server in the foreground until SIGINT or SIGTERM (a first SIGINT waits for the commands running, SIGTERM or a second SIGINT cancels them): GuildBotics on GUILDBOTICS_SERVER_PORT (default 7878) with its records under GUILDBOTICS_HOME (default ~/.guildbotics), and the code host on the same listener, with its data in GUILDBOTICS_CODE_HOST_DATA_DIR (default GUILDBOTICS_HOME/data/code-host, created at the first start)
   stop      Stop the server and wait for its work to end
   help      Print this message or the help of the given subcommand(s)
 
@@ -468,7 +468,7 @@ Options:
 ## guildbotics server start
 
 ```text
-Run the server in the foreground until SIGINT or SIGTERM (a first SIGINT waits for the commands running, SIGTERM or a second SIGINT cancels them): GuildBotics on GUILDBOTICS_SERVER_PORT (default 7878) with its records under GUILDBOTICS_HOME (default ~/.guildbotics), and the code host on the same listener, with its data in BRANVIL_DATA_DIR (default GUILDBOTICS_HOME/data/code-host, created at the first start)
+Run the server in the foreground until SIGINT or SIGTERM (a first SIGINT waits for the commands running, SIGTERM or a second SIGINT cancels them): GuildBotics on GUILDBOTICS_SERVER_PORT (default 7878) with its records under GUILDBOTICS_HOME (default ~/.guildbotics), and the code host on the same listener, with its data in GUILDBOTICS_CODE_HOST_DATA_DIR (default GUILDBOTICS_HOME/data/code-host, created at the first start)
 
 Usage: guildbotics server start [OPTIONS]
 
@@ -1840,22 +1840,22 @@ Commands:
   register     Create a runner member and print its token once (needs the owner's token)
   pull         Pull an image into the runner's image cache (jobs never pull)
   doctor       Show which msb is used and whether the executor is ready
-  install-msb  Copy an msb binary (and the libkrunfw next to it) into ~/.branvil/msb
+  install-msb  Copy an msb binary (and the libkrunfw next to it) into <machine root>/runner/msb
   help         Print this message or the help of the given subcommand(s)
 
 Options:
       --work-dir <WORK_DIR>
-          Per-job work directories and the dependency cache [default: ci.executor.work_dir of the configuration, else ~/.branvil/runner]
+          Per-job work directories and the dependency cache [default: ci.executor.work_dir of the configuration, else <machine root>/runner/work]
 
       --url <URL>
           Base URL of the server [default: the server on this machine]
 
-          [env: BRANVIL_URL]
+          [env: GUILDBOTICS_RUNNER_URL]
 
       --token <TOKEN>
           The runner's token
 
-          [env: BRANVIL_TOKEN]
+          [env: GUILDBOTICS_RUNNER_TOKEN]
 
       --config <CONFIG>
           Configuration file for this machine [default: the one of the data directory]
@@ -1863,7 +1863,7 @@ Options:
       --data-dir <DATA_DIR>
           Data directory of the configuration [default: the server's]
 
-          [env: BRANVIL_DATA_DIR]
+          [env: GUILDBOTICS_CODE_HOST_DATA_DIR]
 
   -h, --help
           Print help
@@ -1928,7 +1928,7 @@ Options:
 ## guildbotics runner install-msb
 
 ```text
-Copy an msb binary (and the libkrunfw next to it) into ~/.branvil/msb
+Copy an msb binary (and the libkrunfw next to it) into <machine root>/runner/msb
 
 Usage: guildbotics runner install-msb --from <FROM>
 

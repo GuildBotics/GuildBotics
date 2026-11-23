@@ -67,7 +67,7 @@ impl Default for CiConfig {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields, default)]
 pub struct ExecutorConfig {
-    /// Per-job work directories and the dependency cache [default: ~/.branvil/runner].
+    /// Per-job work directories and the dependency cache [default: <machine root>/runner/work].
     pub work_dir: Option<PathBuf>,
     /// The CPUs and memory of every job's microVM.
     pub max_cpus: u32,
@@ -147,6 +147,6 @@ impl From<&ExecutorConfig> for JobLimits {
 pub struct MicrosandboxConfig {
     /// An `msb` binary to use (it must report the pinned version).
     pub msb_path: Option<PathBuf>,
-    /// Branvil's own `MSB_HOME` [default: ~/.branvil/msb-home].
+    /// Branvil's own `MSB_HOME` [default: <machine root>/runner/msb-home].
     pub home: Option<PathBuf>,
 }

@@ -156,7 +156,7 @@ StartLimitIntervalSec=0
 Type=exec
 Environment="GUILDBOTICS_SERVER_PORT={port}"
 Environment="GUILDBOTICS_HOME={machine_root}"
-UnsetEnvironment=BRANVIL_TOKEN
+UnsetEnvironment=GUILDBOTICS_RUNNER_TOKEN
 ExecStart=/usr/bin/env -- "{executable}" runner
 Restart=always
 RestartSec=15
@@ -309,7 +309,7 @@ mod tests {
                     "--nocapture",
                 ])
                 .env("RUNNER_TOKEN_TEST_CHILD", "1")
-                .env("BRANVIL_TOKEN", "fixture")
+                .env("GUILDBOTICS_RUNNER_TOKEN", "fixture")
                 .output()
                 .unwrap();
             assert!(
@@ -376,7 +376,7 @@ mod tests {
             assert!(unit.contains(setting), "{setting}");
         }
         assert!(!unit.contains("--token"));
-        assert!(!unit.contains("BRANVIL_TOKEN="));
+        assert!(!unit.contains("GUILDBOTICS_RUNNER_TOKEN="));
         assert!(service_unit(Path::new("/tmp/bad\npath"), 7878, Path::new("/tmp")).is_none());
     }
 
@@ -402,7 +402,7 @@ mod tests {
             assert!(script.contains(required));
         }
         assert!(!script.contains("--token"));
-        assert!(!script.contains("BRANVIL_TOKEN"));
+        assert!(!script.contains("GUILDBOTICS_RUNNER_TOKEN"));
         use base64::Engine;
         let encoded = script
             .lines()

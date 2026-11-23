@@ -11,7 +11,7 @@ one process -- until Ctrl-C, on data of its own, and open both screens once it
 is ready.
   --data-dir PATH  Data directory (default: ~/.gbb/dev): GuildBotics' machine
                    root in its home/ (GUILDBOTICS_HOME), the code host's data
-                   in its branvil/ (BRANVIL_DATA_DIR, created at the first
+                   in its branvil/ (GUILDBOTICS_CODE_HOST_DATA_DIR, created at the first
                    start), and the server's log of the latest start in its
                    server.log.
   --no-open        Start the server without opening a browser.
@@ -50,7 +50,7 @@ if [[ -n "$workspace" && "$workspace" != /* ]]; then
   export GUILDBOTICS_WORKSPACE_ROOT="$PWD/$workspace"
 fi
 export GUILDBOTICS_HOME="$data_dir/home"
-export BRANVIL_DATA_DIR="$data_dir/branvil"
+export GUILDBOTICS_CODE_HOST_DATA_DIR="$data_dir/branvil"
 export GUILDBOTICS_SERVER_PORT="${GUILDBOTICS_SERVER_PORT:-8866}"
 # The identities are the data's own too; the workspace is the one named.
 unset GUILDBOTICS_IDENTITY_ROOT GUILDBOTICS_CONFIG_DIR

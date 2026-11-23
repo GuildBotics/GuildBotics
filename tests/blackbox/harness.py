@@ -201,7 +201,7 @@ def _environment(root: Path, workspace: Path, home: Path, port: int) -> dict[str
         GIT_ALLOW_PROTOCOL="file:http",
         GUILDBOTICS_BROWSER_TEST_BRANVIL="1",
         GUILDBOTICS_BLACKBOX_CONTROL="1",
-        BRANVIL_DATA_DIR=str(home / "branvil"),
+        GUILDBOTICS_CODE_HOST_DATA_DIR=str(home / "branvil"),
         HTTP_PROXY="http://127.0.0.1:1",
         HTTPS_PROXY="http://127.0.0.1:1",
         ALL_PROXY="http://127.0.0.1:1",

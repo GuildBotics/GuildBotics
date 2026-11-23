@@ -61,7 +61,7 @@ GuildBotics のサーバーは、このサービスを同じプロセスの中�
 
 Hubで[GuildBoticsのインストール手順](../README.ja.md#インストール)に従って、次を行います。
 
-1. サーバーを起動します。初回の起動で、コードホストのデータ（`BRANVIL_DATA_DIR`、
+1. サーバーを起動します。初回の起動で、コードホストのデータ（`GUILDBOTICS_CODE_HOST_DATA_DIR`、
    既定は `~/.guildbotics/data/code-host`）と、画面を使ってマージを行う人のアカウントを作ります。
    ほかのマシンでは下記のSSH転送を設定します。
 2. メンバーが作業するリポジトリ（`acme/demo`。チケットに付けられるラベルも設定する）を

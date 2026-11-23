@@ -109,7 +109,10 @@ impl Hub {
             .env("PATH", &self.path)
             .env("FAKE_ROOT", self.root())
             .env("GUILDBOTICS_TEST_BINARY", env!("CARGO_BIN_EXE_guildbotics"))
-            .env("BRANVIL_DATA_DIR", self.root().join("branvil"))
+            .env(
+                "GUILDBOTICS_CODE_HOST_DATA_DIR",
+                self.root().join("branvil"),
+            )
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_AUTHOR_NAME", "Fixture")
@@ -247,7 +250,7 @@ impl Hub {
         self.command("sh")
             .args(["-c", command])
             .env("GUILDBOTICS_HOME", "/other/home")
-            .env("BRANVIL_DATA_DIR", "/other/branvil")
+            .env("GUILDBOTICS_CODE_HOST_DATA_DIR", "/other/branvil")
             .env("GUILDBOTICS_IDENTITY_ROOT", "/other/identity")
             .env("GUILDBOTICS_SERVER_PORT", "1")
             .env("GUILDBOTICS_HUB_INSTANCE", "other")
@@ -386,7 +389,7 @@ fn install_leaves_an_unspecified_port_to_the_server() {
     hub.install();
     let plist = fs::read_to_string(hub.plist()).unwrap();
     assert!(!plist.contains("GUILDBOTICS_SERVER_PORT"));
-    assert!(plist.contains("<key>BRANVIL_DATA_DIR</key>"));
+    assert!(plist.contains("<key>GUILDBOTICS_CODE_HOST_DATA_DIR</key>"));
 }
 
 #[test]
@@ -554,41 +557,6 @@ fn update_builds_and_rehearses_before_stopping_the_old_server() {
     assert!(plist.contains(&format!("<key>PATH</key><string>{}</string>", hub.path)));
     assert_ne!(hub.installed_build(), old);
     assert!(!hub.builds().join("update-from").exists());
-}
-
-/// When the running build cannot take the backup (a renamed command), the
-/// owner takes it by hand and the update rehearses on it.
-#[test]
-fn an_update_rehearses_on_a_backup_taken_by_hand() {
-    let hub = Hub::new();
-    hub.install();
-    hub.commit("new");
-    let manual = hub.root().join("by-hand");
-    fs::create_dir_all(&manual).unwrap();
-    let path = manual.to_str().unwrap();
-    // An incomplete backup stops the update before the server stops.
-    hub.run_with("update", &[("GUILDBOTICS_HUB_MANUAL_BACKUP", path)], false);
-    assert!(!hub.lines("calls").contains("current|server|stop"));
-    fs::create_dir_all(manual.join("code-host")).unwrap();
-    for file in ["manifest.json", "code-host/manifest.json"] {
-        fs::write(manual.join(file), "").unwrap();
-    }
-    let out = hub.run_with("update", &[("GUILDBOTICS_HUB_MANUAL_BACKUP", path)], true);
-    assert!(text(&out).contains(&format!("Backup taken by hand: {path}")));
-    assert!(
-        !hub.lines("calls")
-            .contains("current|server|hub-data|backup")
-    );
-    in_order(
-        &hub.lines("calls"),
-        &[
-            &format!("guildbotics-bin|server|hub-data|restore|--from|{path}|"),
-            "guildbotics-bin|server|hub-data|upgrade|--data-dir|",
-            "current|server|stop",
-            "guildbotics-bin|server|hub-data|upgrade\n",
-        ],
-    );
-    assert!(manual.join("manifest.json").exists());
 }
 
 #[test]
@@ -870,7 +838,7 @@ fn update_needs_the_identity_recorded_by_install() {
         hub.settings(&hub.home.join(".guildbotics"))
     );
     assert!(fs::read_to_string(hub.plist()).unwrap().contains(&format!(
-        "<key>BRANVIL_DATA_DIR</key><string>{}</string>",
+        "<key>GUILDBOTICS_CODE_HOST_DATA_DIR</key><string>{}</string>",
         hub.root().join("branvil").display()
     )));
 }
@@ -1024,6 +992,42 @@ fn a_rollback_restores_the_copy_that_ran_whatever_happened_to_its_build() {
             .unwrap()
             .contains("# team: FIXTURE123\n")
     );
+}
+
+#[test]
+fn a_rollback_gives_the_build_before_the_rename_its_data_directory() {
+    let hub = Hub::new();
+    hub.install();
+    hub.commit("new");
+    hub.fail_start("new");
+    let out = hub.run("update", None, false);
+    assert!(text(&out).contains("The previous build is running again"));
+    hub.assert_runs_signed("old");
+    let data = hub.root().join("branvil").display().to_string();
+    assert_eq!(hub.lines("previous-code-host"), data);
+    assert!(fs::read_to_string(hub.plist()).unwrap().contains(&format!(
+        "<key>BRANVIL_DATA_DIR</key><string>{data}</string>"
+    )));
+}
+
+#[test]
+fn update_stops_before_any_change_without_the_renamed_setting() {
+    let hub = Hub::new();
+    hub.install();
+    let old = hub.installed_build();
+    let plist = fs::read_to_string(hub.plist()).unwrap();
+    let kept: String = plist
+        .lines()
+        .filter(|line| !line.starts_with("<key>GUILDBOTICS_CODE_HOST_DATA_DIR</key>"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    fs::write(hub.plist(), kept).unwrap();
+    hub.commit("new");
+    let out = hub.run("update", None, false);
+    assert!(text(&out).contains("The LaunchAgent has no GUILDBOTICS_CODE_HOST_DATA_DIR"));
+    assert_eq!(hub.installed_build(), old);
+    // Only the failure report's read of the active revision ran.
+    assert_eq!(hub.lines("actions"), "old|server|hub-probe|--source\n");
 }
 
 #[test]

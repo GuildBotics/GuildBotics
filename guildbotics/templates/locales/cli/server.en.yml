@@ -22,5 +22,5 @@ en:
   runner_join_required: "Run guildbotics runner join first."
   runner_version_changed: "The Hub version changed. Restarting the runner after draining its attempts."
   runner_runtime_invalid: "Runner runtime integrity or version verification failed."
-  runner_join_unsupported: "Runner join supports Windows x86_64 and Linux x86_64 with glibc. On other platforms, run guildbotics runner with an explicit --token or BRANVIL_TOKEN."
+  runner_join_unsupported: "Runner join supports Windows x86_64 and Linux x86_64 with glibc. On other platforms, run guildbotics runner with an explicit --token or GUILDBOTICS_RUNNER_TOKEN."
   runner_kvm_unavailable: "Runner join needs read and write access to /dev/kvm: %{reason}. Enable KVM and grant your desktop user access, then sign in again."

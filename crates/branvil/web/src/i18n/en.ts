@@ -696,7 +696,7 @@ export const en = {
   "ci.settings.images": "Images",
   "ci.settings.addImage": "Add image",
   "ci.settings.emptyTitle": "Add an image for jobs to run in",
-  "ci.settings.emptyHelp": "Write the added image's reference as image in .branvil/ci.toml.",
+  "ci.settings.emptyHelp": "Write the added image's reference as image in .guildbotics-ci.toml.",
   "ci.settings.cached": "In the cache",
   "ci.settings.usedBy": "Used by: {repositories}",
   "ci.settings.copyReference": "Copy reference",

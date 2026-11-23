@@ -4,9 +4,9 @@
 // It cannot reproduce the historical 1,695-card benchmark in crates/branvil/docs/performance.md.
 // The harness accepts neither a seeded data directory nor a workspace override;
 // use these timings only to investigate this fixture, never as large-board results.
-// Not part of the smoke run: it runs only with BRANVIL_E2E_PERF=1.
+// Not part of the smoke run: it runs only with GUILDBOTICS_E2E_PERF=1.
 //
-// Run from desktop with BRANVIL_E2E_PERF=1 npm run e2e -- --project=branvil.
+// Run from desktop with GUILDBOTICS_E2E_PERF=1 npm run e2e -- --project=branvil.
 // The stack uses a disposable workspace and the host's shared browser session.
 // Disable tracing when measuring: its DOM snapshots distort board timings.
 //
@@ -22,10 +22,10 @@ import { enter, entryEnv } from "./branvil-enter";
 
 const env = {
   workspace: "acme",
-  runs: Number(process.env.BRANVIL_E2E_PERF_RUNS ?? "3"),
+  runs: Number(process.env.GUILDBOTICS_E2E_PERF_RUNS ?? "3"),
 };
 
-test.skip(process.env.BRANVIL_E2E_PERF !== "1", "BRANVIL_E2E_PERF=1 runs the board timing");
+test.skip(process.env.GUILDBOTICS_E2E_PERF !== "1", "GUILDBOTICS_E2E_PERF=1 runs the board timing");
 test.setTimeout(300_000);
 
 declare global {

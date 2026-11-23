@@ -1,4 +1,4 @@
-//! The pipeline definition, `.branvil/ci.toml`, read from the commit that runs
+//! The pipeline definition, `.guildbotics-ci.toml`, read from the commit that runs
 //! it (see `docs/ci.md`). The schema is small and validated strictly: anything
 //! unknown or out of range makes the whole pipeline invalid, which shows as a
 //! failing `pipeline` check, never as success.
@@ -14,7 +14,7 @@ use crate::git::Git;
 use crate::util::valid_name;
 
 /// Where the pipeline lives in a commit.
-pub const PIPELINE_PATH: &str = ".branvil/ci.toml";
+pub const PIPELINE_PATH: &str = ".guildbotics-ci.toml";
 /// Largest pipeline file read.
 pub const MAX_PIPELINE_BYTES: usize = 64 << 10;
 

@@ -59,7 +59,9 @@ name = "schema-raise"
 image = "guildbotics/agent-environment:dev"
 verified_sha = true
 paths = ["crates/branvil/src/store.rs", "crates/branvil/src/upgrade.rs", "scripts/check-schema-raise.py"]
-commands = ["python3 scripts/check-schema-raise.py"]
+# The Hub that still reads this file gives the verified commit by its old name;
+# a retry of this recorded job on the updated Hub gives it by the new one.
+commands = ['GB_CI_VERIFIED_SHA="${BRANVIL_VERIFIED_SHA-${GB_CI_VERIFIED_SHA-}}" python3 scripts/check-schema-raise.py']
 timeout_secs = 300
 
 [[jobs]]

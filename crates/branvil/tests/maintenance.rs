@@ -22,7 +22,7 @@ async fn maintenance_refuses_a_running_service_and_the_runner_needs_its_own_toke
     let out = branvil_command()
         .args(["runner", "--url", &w.server.url, "--work-dir"])
         .arg(dir.join("runner-work"))
-        .env_remove("BRANVIL_TOKEN")
+        .env_remove("GUILDBOTICS_RUNNER_TOKEN")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -65,7 +65,7 @@ async fn an_upgraded_database_serves_only_after_a_successful_check() {
         serve
             .args(["serve", "--listen", "127.0.0.1:0", "--data-dir"])
             .arg(data)
-            .env("BRANVIL_TEST_VAULT", data.with_file_name("vault"))
+            .env("GUILDBOTICS_TEST_VAULT", data.with_file_name("vault"))
             .kill_on_drop(true);
         let out = tokio::time::timeout(std::time::Duration::from_secs(20), serve.output())
             .await

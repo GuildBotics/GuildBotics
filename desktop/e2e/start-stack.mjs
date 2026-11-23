@@ -212,7 +212,7 @@ backendEnv = Object.fromEntries(
 );
 if (stackName === "setup" || stackName === "branvil" || shouldSeed) {
   backendEnv.GUILDBOTICS_BROWSER_TEST_BRANVIL = "1";
-  backendEnv.BRANVIL_DATA_DIR = join(homeDir, "branvil");
+  backendEnv.GUILDBOTICS_CODE_HOST_DATA_DIR = join(homeDir, "branvil");
 }
 backendEnv.GUILDBOTICS_HOME = join(homeDir, ".guildbotics");
 backendEnv.HTTP_PROXY = backendEnv.HTTPS_PROXY = backendEnv.ALL_PROXY = "http://127.0.0.1:1";

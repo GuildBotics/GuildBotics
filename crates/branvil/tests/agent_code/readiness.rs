@@ -65,7 +65,7 @@ async fn fixture(
     let remote = code.clone_url(&repo).await.unwrap();
     git.push(&remote, &main, "main", "owner", owner_token);
     let pipeline = jobs.iter().map(|job| format!("[[jobs]]\nname = \"{job}\"\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\nartifacts = [{{name = \"report\", paths = [\"report.txt\"]}}]\n")).collect::<String>();
-    let head = git.commit(&main, ".branvil/ci.toml", &pipeline);
+    let head = git.commit(&main, ".guildbotics-ci.toml", &pipeline);
     let credential = code.git_credential().await.unwrap().unwrap();
     git.push(
         &remote,
@@ -367,7 +367,7 @@ pub(super) async fn retry_main_verification(
         .await
         .unwrap();
     let git = Git::new(&root.join("retry-main"));
-    let head = git.commit("", ".branvil/ci.toml", PIPELINE);
+    let head = git.commit("", ".guildbotics-ci.toml", PIPELINE);
     git.push(
         &code.clone_url(&repo).await.unwrap(),
         &head,

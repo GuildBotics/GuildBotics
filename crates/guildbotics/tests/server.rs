@@ -35,7 +35,7 @@ fn server_command(dir: &Path, port: u16) -> Command {
         .args(["server", "start"])
         .env("GUILDBOTICS_HOME", dir.join("home"))
         .env("GUILDBOTICS_SERVER_PORT", port.to_string())
-        .env("BRANVIL_DATA_DIR", dir.join("branvil"))
+        .env("GUILDBOTICS_CODE_HOST_DATA_DIR", dir.join("branvil"))
         .env("NO_COLOR", "1")
         .env_remove("GUILDBOTICS_WORKSPACE_ROOT")
         .env_remove("GUILDBOTICS_CONFIG_DIR")
@@ -972,12 +972,15 @@ fn an_empty_branvil_data_dir_is_refused_rather_than_the_current_directory() {
     std::fs::create_dir(&work).unwrap();
     let started = server_command(dir.path(), free_port())
         .current_dir(&work)
-        .env("BRANVIL_DATA_DIR", "")
+        .env("GUILDBOTICS_CODE_HOST_DATA_DIR", "")
         .output()
         .unwrap();
 
     assert!(!started.status.success());
-    assert!(String::from_utf8_lossy(&started.stderr).contains("BRANVIL_DATA_DIR is empty"));
+    assert!(
+        String::from_utf8_lossy(&started.stderr)
+            .contains("GUILDBOTICS_CODE_HOST_DATA_DIR is empty")
+    );
     assert_eq!(std::fs::read_dir(&work).unwrap().count(), 0);
 }
 
@@ -1241,7 +1244,7 @@ fn a_refused_server_never_starts_branvil() {
     let other = tempfile::tempdir().unwrap();
     let data = other.path().join("branvil");
     let refused = server_command(dir.path(), free_port())
-        .env("BRANVIL_DATA_DIR", &data)
+        .env("GUILDBOTICS_CODE_HOST_DATA_DIR", &data)
         .output()
         .unwrap();
     assert!(!refused.status.success());
@@ -1950,17 +1953,17 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
         let owner = member_token(&server, "owner").await;
         let work = dir.path().join("work");
         let home = dir.path().join("git-home");
-        std::fs::create_dir_all(work.join(".branvil")).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
         std::fs::create_dir(&home).unwrap();
         std::fs::write(
-        work.join(".branvil/ci.toml"),
+        work.join(".guildbotics-ci.toml"),
         "[[jobs]]\nname = 'fixture'\nimage = 'docker.io/library/alpine:3.22'\ncommands = ['echo fixture']\n[[jobs]]\nname = 'queued'\nimage = 'docker.io/library/alpine:3.22'\ncommands = ['echo queued']\n",
     )
     .unwrap();
         let remote = format!("{url}/git/acme/demo.git");
         for args in [
             &["init", "-q", "-b", "main"][..],
-            &["add", ".branvil/ci.toml"],
+            &["add", ".guildbotics-ci.toml"],
             &["commit", "-qm", "seed CI"],
             &["push", "-q", &remote, "main"],
         ] {

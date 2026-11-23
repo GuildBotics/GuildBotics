@@ -3,7 +3,7 @@ import { defineConfig } from "vitest/config";
 
 // The dev server proxies the API to a running `guildbotics server start`. The service
 // checks Host and Origin, so the proxy presents itself as the service origin.
-const apiTarget = process.env.BRANVIL_DEV_API ?? "http://127.0.0.1:7878";
+const apiTarget = process.env.GUILDBOTICS_DEV_API ?? "http://127.0.0.1:7878";
 
 const proxy = {
   target: apiTarget,

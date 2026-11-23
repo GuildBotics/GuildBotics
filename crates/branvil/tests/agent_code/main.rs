@@ -366,7 +366,7 @@ impl Context {
         }
     }
     async fn git(&self) -> (Git, String, String) {
-        self.repository(".branvil/ci.toml", PIPELINE).await
+        self.repository(".guildbotics-ci.toml", PIPELINE).await
     }
     async fn repository(&self, file: &str, body: &str) -> (Git, String, String) {
         let git = Git::new(self.temp.path());

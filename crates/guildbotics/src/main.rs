@@ -213,7 +213,7 @@ enum ServerCommand {
     /// cancels them): GuildBotics
     /// on GUILDBOTICS_SERVER_PORT (default 7878) with its records under
     /// GUILDBOTICS_HOME (default ~/.guildbotics), and the code host on the
-    /// same listener, with its data in BRANVIL_DATA_DIR (default
+    /// same listener, with its data in GUILDBOTICS_CODE_HOST_DATA_DIR (default
     /// GUILDBOTICS_HOME/data/code-host, created at the first start)
     Start {
         /// Start services even when automatic startup is disabled

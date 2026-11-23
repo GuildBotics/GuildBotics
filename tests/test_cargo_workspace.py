@@ -16,7 +16,9 @@ def _load(path: str) -> dict:
 
 def test_the_blackbox_ci_selects_every_ordinary_journey() -> None:
     job = next(
-        j for j in _load(".branvil/ci.toml")["jobs"] if j["name"] == "rust-cli-blackbox"
+        j
+        for j in _load(".guildbotics-ci.toml")["jobs"]
+        if j["name"] == "rust-cli-blackbox"
     )
     selected = {word for command in job["commands"] for word in shlex.split(command)}
     # These journeys require an attending owner or an offline production copy.
@@ -45,7 +47,7 @@ def test_the_ci_builds_without_the_images_sccache() -> None:
     dockerfile = (ROOT / "docker/agent-environment/Dockerfile").read_text("utf-8")
     assert re.search(r"^ENV RUSTC_WRAPPER=sccache\b", dockerfile, re.MULTILINE)
     building = 0
-    for job in _load(".branvil/ci.toml")["jobs"]:
+    for job in _load(".guildbotics-ci.toml")["jobs"]:
         for command in job["commands"]:
             words = shlex.split(command)
             if "cargo" in words or any(w.startswith("CARGO_HOME=") for w in words):
@@ -93,7 +95,7 @@ def test_the_ci_caches_under_the_checkout_are_no_part_of_the_workspace() -> None
     workspace = _load("Cargo.toml")["workspace"]
     cached = {
         PurePosixPath(path).parts[0]
-        for job in _load(".branvil/ci.toml")["jobs"]
+        for job in _load(".guildbotics-ci.toml")["jobs"]
         for path in job.get("cache", {}).get("paths", [])
     }
 
@@ -303,7 +305,7 @@ def _tested_crates(job: dict) -> set[str]:
 
 
 def _rust_test_jobs() -> dict[str, dict]:
-    jobs = {job["name"]: job for job in _load(".branvil/ci.toml")["jobs"]}
+    jobs = {job["name"]: job for job in _load(".guildbotics-ci.toml")["jobs"]}
     return {name: job for name, job in jobs.items() if _tested_crates(job)}
 
 
@@ -355,7 +357,7 @@ def test_rust_test_jobs_run_on_changes_to_what_their_tests_build_from() -> None:
 
 
 def test_branvil_contracts_only_run_in_the_workspace_rust_test_job() -> None:
-    jobs = _load(".branvil/ci.toml")["jobs"]
+    jobs = _load(".guildbotics-ci.toml")["jobs"]
     assert all(job["name"] != "branvil-integration" for job in jobs)
     assert not (ROOT / "scripts/branvil-integration.sh").exists()
     commands = next(job["commands"] for job in jobs if job["name"] == "rust-test")
