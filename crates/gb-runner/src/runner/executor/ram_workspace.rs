@@ -1,11 +1,10 @@
 use super::*;
-use crate::ci::{api::Machine, config::JobLimits, pipeline};
+use crate::ci::{api::Machine, pipeline};
 
 pub(super) const RETURN_MOUNT: &str = "/.branvil-ram-return";
 const PROBED: &str = "ram-workspace.probed";
 const CACHE_PROBED: &str = "ram-cache.probed";
 pub(super) const CACHE_IMAGE: &str = "cache.raw";
-const COMMAND_HEADROOM_MIB: u64 = 1024;
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
@@ -60,30 +59,15 @@ pub(super) fn probe(script: &mut String, save_cache: bool) {
     script.push_str("fi\nsync\n");
 }
 
-fn memory_allows(
-    ram: &pipeline::RamWorkspace,
-    tmp_mib: Option<u32>,
-    vm_mib: u64,
-    limits: JobLimits,
-    machine: &Machine,
-) -> bool {
-    let guest = u64::from(ram.max_mib) + u64::from(tmp_mib.unwrap_or_default());
-    let reserve = limits.memory_reserve_mib(machine.total_memory_mib);
-    guest + COMMAND_HEADROOM_MIB <= vm_mib
-        && vm_mib.saturating_mul(u64::from(limits.max_jobs))
-            <= machine.total_memory_mib.saturating_sub(reserve)
-        && vm_mib <= machine.available_memory_mib.saturating_sub(reserve)
-        && machine
-            .commit
-            .as_ref()
-            .is_none_or(|commit| vm_mib <= commit.available_mib.saturating_sub(reserve))
-}
-
 pub(super) struct RamWorkspace<'a> {
     config: &'a pipeline::RamWorkspace,
     pub(super) returned: PathBuf,
     pub(super) quota_mib: u64,
     cache: bool,
+}
+
+pub(super) fn take_probe(job: &JobRun<'_>) -> bool {
+    std::fs::remove_file(job.io.join(PROBED)).is_ok()
 }
 
 impl<'a> RamWorkspace<'a> {
@@ -92,10 +76,11 @@ impl<'a> RamWorkspace<'a> {
         job: &JobRun<'_>,
         quota_mib: u64,
         cache: bool,
+        tools: bool,
         machine: impl FnOnce() -> Option<Machine>,
     ) -> Result<Self, String> {
         config.validate()?;
-        if std::fs::remove_file(job.io.join(PROBED)).is_err() {
+        if !tools {
             return Err("the guest image or kernel lacks the RAM workspace tools".into());
         }
         let loop_supported = std::fs::remove_file(job.io.join(CACHE_PROBED)).is_ok();
@@ -108,7 +93,7 @@ impl<'a> RamWorkspace<'a> {
         let (Some(limits), Some(machine)) = (job.ram_limits, machine()) else {
             return Err("runner memory is unknown".into());
         };
-        if !memory_allows(config, job.job.tmpfs_mib, job.memory_mib, limits, &machine) {
+        if !config.memory_allows(job.job.tmpfs_mib, job.memory_mib, limits, &machine) {
             return Err(format!(
                 "insufficient memory (VM {} MiB, available {} MiB, {} slots, {}% reserve)",
                 job.memory_mib,
@@ -241,7 +226,10 @@ impl<'a> RamWorkspace<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ci::{api::CommitMemory, config::ExecutorConfig};
+    use crate::ci::{
+        api::CommitMemory,
+        config::{ExecutorConfig, JobLimits},
+    };
 
     #[tokio::test]
     async fn cache_volume_is_requested_only_after_the_guest_asks_for_it() {
@@ -316,8 +304,10 @@ mod tests {
         let mut limits = JobLimits::from(&ExecutorConfig::default());
         limits.max_jobs = 2;
         let allows =
-            |machine: &Machine, limits, vm| memory_allows(&ram, Some(2048), vm, limits, machine);
+            |machine: &Machine, limits, vm| ram.memory_allows(Some(2048), vm, limits, machine);
         assert!(allows(&machine, limits, 8192));
+        assert!(allows(&machine, limits, 7680));
+        assert!(!allows(&machine, limits, 7679));
         assert!(!allows(&machine, limits, 6144));
         limits.max_jobs = 3;
         assert!(!allows(&machine, limits, 8192));

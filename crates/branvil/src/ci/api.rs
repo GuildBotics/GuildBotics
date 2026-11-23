@@ -526,6 +526,8 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
         report.accept && report.can_run() && report.running_jobs < limits.max_jobs as usize;
     let held = accept.then(|| report.images.clone());
     let machine = report.machine.clone();
+    let cache_groups = report.cache_groups.clone();
+    let ram_unsupported_images = report.ram_unsupported_images.clone();
     let reported_at = app.ci.report_runner(c.name(), report);
     let Some(held) = held else {
         return Ok(StatusCode::NO_CONTENT.into_response());
@@ -553,6 +555,9 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
                     images,
                     limits,
                     machine,
+                    ram_fresh: reported_at.elapsed() <= super::RAM_REPORT_MAX_AGE,
+                    cache_groups,
+                    ram_unsupported_images,
                 },
                 lease_secs,
                 &at,
