@@ -323,7 +323,7 @@ impl AwaitedFixture {
             .await
             .unwrap();
         let actor = fixture.member(ME).await;
-        let base = fixture.commit("acme/repo", "main", None, "a.txt", "base");
+        let base = fixture.commit_check_pipeline("acme/repo", "main", None);
         let head = fixture.commit("acme/repo", "feature", Some(&base), "a.txt", "feature");
         let code: Arc<CodeAgent> = Arc::new(branvil::agent::CodeAgent::new(
             fixture.data(),

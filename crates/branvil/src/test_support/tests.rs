@@ -6,7 +6,7 @@ async fn preparing_one_heads_result_keeps_other_heads_pending() {
     f.workspace("fixture").await;
     f.repository("fixture/repo").await;
     let agent = f.member("agent").await;
-    let base = f.commit("fixture/repo", "main", None, "README.md", "base");
+    let base = f.commit_check_pipeline("fixture/repo", "main", None);
     for (branch, conclusion) in [("pending", None), ("success", Some("success"))] {
         let head = f.commit("fixture/repo", branch, Some(&base), branch, branch);
         f.pull(
@@ -41,7 +41,7 @@ async fn checks_and_merge_use_real_heads_and_queue_states() {
                 "ready",
             )
             .await;
-        let base = f.commit("fixture/repo", "main", None, "README.md", "base");
+        let base = f.commit_check_pipeline("fixture/repo", "main", None);
         let head = f.commit(
             "fixture/repo",
             "feature",
@@ -161,7 +161,7 @@ async fn target_results_ignore_other_heads_priority_class() {
             f.workspace("fixture").await;
             f.repository("fixture/repo").await;
             let agent = f.member("agent").await;
-            let base = f.commit("fixture/repo", "main", None, "README.md", "base");
+            let base = f.commit_check_pipeline("fixture/repo", "main", None);
             f.check("fixture/repo", "main", &base, None).await;
             let head = f.commit(
                 "fixture/repo",
@@ -180,6 +180,8 @@ async fn target_results_ignore_other_heads_priority_class() {
             }
             f.check("fixture/repo", "feature", &head, Some(conclusion))
                 .await;
+            let app = &f.running.data.app;
+            app.ci.reconcile(app).await.unwrap();
             let attempts = f
                 .data()
                 .app
@@ -210,7 +212,7 @@ async fn a_failed_check_can_be_retried_on_the_same_head() {
     f.workspace("fixture").await;
     f.repository("fixture/repo").await;
     let agent = f.member("agent").await;
-    let base = f.commit("fixture/repo", "main", None, "README.md", "base");
+    let base = f.commit_check_pipeline("fixture/repo", "main", None);
     let head = f.commit(
         "fixture/repo",
         "feature",

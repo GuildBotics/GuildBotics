@@ -6,6 +6,7 @@ pub use service::{
 };
 
 use crate::api::{DataApi, MemberApi};
+use crate::ci::pipeline::{self, PIPELINE_PATH};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc};
@@ -124,6 +125,13 @@ pub async fn token_member(data: &DataApi, token: &str) -> Option<String> {
     let me: Value = response.error_for_status().unwrap().json().await.unwrap();
     Some(me["name"].as_str().unwrap().into())
 }
+
+const CHECK_PIPELINE: &str = r#"
+[[jobs]]
+name = "test"
+image = "docker.io/library/alpine:3.22"
+commands = ["true"]
+"#;
 
 pub fn input<T: DeserializeOwned>(value: Value) -> T {
     serde_json::from_value(value).expect("fixture input")
@@ -269,6 +277,11 @@ impl Fixture {
         sha
     }
 
+    /// Commit the single-job pipeline used by tests that drive checks.
+    pub fn commit_check_pipeline(&self, repo: &str, branch: &str, parent: Option<&str>) -> String {
+        self.commit(repo, branch, parent, PIPELINE_PATH, CHECK_PIPELINE)
+    }
+
     pub fn git(&self, repo: &str, args: &[&str]) -> String {
         fixture_git(self.root(), repo, args)
     }
@@ -297,7 +310,7 @@ impl Fixture {
     }
 }
 
-/// Drive checks on an already embedded service without starting a runner.
+/// Drive the commit's single CI job on an embedded service without starting a runner.
 pub async fn check(
     data: &DataApi,
     root: &Path,
@@ -316,6 +329,13 @@ pub async fn check(
         })
         .await
         .unwrap();
+    let pipeline = pipeline::read(&app.git, &app.git.repo_dir(repo), sha)
+        .await
+        .unwrap();
+    assert!(
+        matches!(&pipeline, PipelineState::Jobs { jobs } if jobs.len() == 1),
+        "fixture commit {sha} must define one job in {PIPELINE_PATH}: {pipeline:?}"
+    );
     let registration = Registration {
         order: vec![],
         selection: None,
@@ -331,19 +351,7 @@ pub async fn check(
         protected: branch == "main",
         network: false,
         inputs: Default::default(),
-        pipeline: PipelineState::Jobs {
-            jobs: vec![crate::ci::pipeline::JobDef {
-                verified_sha: false,
-                name: "test".into(),
-                image: "docker.io/library/alpine:3.22".into(),
-                commands: vec!["true".into()],
-                paths: vec![],
-                timeout_secs: None,
-                tmpfs_mib: None,
-                artifacts: vec![],
-                cache: None,
-            }],
-        },
+        pipeline,
     };
     let conclusion = conclusion.map(str::to_owned);
     let queue_max = app.ci.config().queue_max;

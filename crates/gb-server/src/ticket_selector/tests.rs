@@ -526,17 +526,21 @@ impl Fixture {
     }
 
     async fn pull(&self) -> Task {
-        self.pull_branch("feature").await
+        self.pull_branch("feature", false).await
     }
-    async fn pull_branch(&self, branch: &str) -> Task {
+    async fn pull_branch(&self, branch: &str, with_check: bool) -> Task {
         let base = self.base();
-        self.embedded.commit(
+        let head = self.embedded.commit(
             "acme/repo",
             branch,
             Some(&base),
             &format!("{branch}.txt"),
             branch,
         );
+        if with_check {
+            self.embedded
+                .commit_check_pipeline("acme/repo", branch, Some(&head));
+        }
         let pull = self
             .code
             .create_pull_request(CreatePullRequest {
@@ -1640,8 +1644,8 @@ async fn open_pr_limit_is_rechecked_before_moving_ready_work_and_does_not_stop_o
         let candidates = selector.candidates().await.unwrap();
         assert_eq!(quota.snapshot().unwrap().count, 0);
         assert!(candidates.iter().any(|t| t.url == third.url));
-        f.pull_branch("one").await;
-        f.pull_branch("two").await;
+        f.pull_branch("one", false).await;
+        f.pull_branch("two", false).await;
         assert_eq!(
             selector.refresh(&third).await.unwrap().is_none(),
             source != "manual"
@@ -1867,7 +1871,7 @@ async fn check_yields(triggers: &[&str], resume_values: &[bool]) {
                     case += 1;
                     let branch = format!("case-{case}");
                     let mut task = if trigger == "pull_request_feedback" {
-                        f.pull_branch(&branch).await
+                        f.pull_branch(&branch, result == Ok(1)).await
                     } else {
                         original.clone()
                     };
