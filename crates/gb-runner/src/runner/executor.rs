@@ -1020,6 +1020,29 @@ fn keep_script(disk: &str, io: &str, cached: &[&str]) -> String {
     )
 }
 
+/// Retain a new cache image only after the guest completed and flushed it.
+async fn keep_cache_disk(disk: PathBuf, returned: &Path, output: &Path) -> Result<u64, String> {
+    let marker = returned.join(CACHE_KEPT);
+    let bytes = crate::runner::workspace::open_returned(&marker, 64)
+        .ok()
+        .flatten()
+        .and_then(|mut file| {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut file, &mut text).ok()?;
+            text.trim().parse::<u64>().ok()?.checked_mul(1024)
+        });
+    let _ = std::fs::remove_file(marker);
+    let bytes = bytes.ok_or("copying the cached paths in the VM failed")?;
+    let output = output.to_path_buf();
+    super::blocking(move || {
+        super::disk::flush(&disk)?;
+        std::fs::hard_link(disk, output)
+    })
+    .await
+    .map_err(|e| format!("keeping the cache image failed: {e}"))?;
+    Ok(bytes)
+}
+
 /// Selects paths relative to the working directory without following links.
 fn pick_paths(paths: &[&str]) -> String {
     let pick = each_path(
@@ -1435,7 +1458,7 @@ impl Executor for Microsandbox {
         let image_lock = std::mem::take(&mut job.image_lock);
         let preparing = Instant::now();
         let mut prep_script = prepare_script("/work", IO_MOUNT, restore.as_ref());
-        if job.job.ram_workspace.is_some() && job.exact_cache && restore.is_some() {
+        if job.job.ram_workspace.is_some() && restore.is_some() {
             ram_workspace::probe(&mut prep_script);
         }
         let mut prepared = self
@@ -1500,7 +1523,26 @@ impl Executor for Microsandbox {
             let fs = restore.as_ref().map_or(0, |r| r.fs_mib);
             say(format!("the image has no resize2fs: /work keeps the cache entry's file system, {fs} MiB rather than {disk_mib} MiB")).await;
         }
-        let used_exact_cache = job.exact_cache && restore.is_some() && !dropped && prepared.is_ok();
+        let restored = restore.is_some() && !dropped && prepared.is_ok();
+        let used_exact_cache = job.exact_cache && restored;
+        let cache_name = self.cache_volume(job.attempt_id);
+        let save_cache = job.save_cache && linked.is_none() && !cached_paths.is_empty();
+        let make_cache = || async {
+            match self.create_disk(&cache_name, disk_mib).await {
+                Ok(path) => Some(JobDisk {
+                    name: cache_name.clone(),
+                    mib: disk_mib,
+                    path,
+                }),
+                Err(e) => {
+                    say(format!(
+                        "cache save skipped: creating the cache volume failed: {e}"
+                    ))
+                    .await;
+                    None
+                }
+            }
+        };
         let mut ram = None;
         let mut outcome = match prepared {
             Err(e) => {
@@ -1516,12 +1558,14 @@ impl Executor for Microsandbox {
                     preparing.elapsed().as_millis()
                 ))
                 .await;
-                if let Some(config) = &job.job.ram_workspace {
+                if let Some(config) = &job.job.ram_workspace
+                    && restored
+                {
                     match ram_workspace::RamWorkspace::select(
                         config,
                         &job,
-                        used_exact_cache,
                         collect_mib,
+                        save_cache && !used_exact_cache,
                         || self.machine(),
                     ) {
                         Ok(selected) => ram = Some(selected),
@@ -1529,32 +1573,50 @@ impl Executor for Microsandbox {
                             say(format!("RAM workspace disabled: {reason}; using disk")).await
                         }
                     }
+                } else if job.job.ram_workspace.is_some() {
+                    say("RAM workspace disabled: no cache was restored; using disk".into()).await;
                 }
-                match output {
-                    Some(output) => {
-                        self.run_job(
-                            &mut job,
-                            (disk, &log_dir, ram.as_ref()),
-                            output,
-                            image_lock,
-                            &log,
-                            &mut cancel,
-                        )
-                        .await
+                // Both executors have large futures in debug builds. Keep
+                // the job future out of the cache provisioning state machine.
+                let running = Box::pin(async {
+                    match output {
+                        Some(output) => {
+                            self.run_job(
+                                &mut job,
+                                (disk, &log_dir, ram.as_ref()),
+                                output,
+                                image_lock,
+                                &log,
+                                &mut cancel,
+                            )
+                            .await
+                        }
+                        #[cfg(feature = "host")]
+                        None => {
+                            self.sdk_job(
+                                &mut job,
+                                (disk, ram.as_ref()),
+                                image_lock,
+                                &log,
+                                &mut cancel,
+                            )
+                            .await
+                        }
+                        #[cfg(not(feature = "host"))]
+                        None => unreachable!("the client always uses the CLI executor"),
                     }
-                    #[cfg(feature = "host")]
-                    None => {
-                        self.sdk_job(
-                            &mut job,
-                            (disk, ram.as_ref()),
-                            image_lock,
-                            &log,
-                            &mut cancel,
-                        )
-                        .await
+                });
+                if let Some(ram) = ram.as_ref().filter(|ram| ram.saving_cache()) {
+                    let (outcome, provisioned) = ram.run_with_cache(running, make_cache()).await;
+                    if let Err(error) = provisioned {
+                        say(format!(
+                            "cache save skipped: preparing the cache image failed: {error}"
+                        ))
+                        .await;
                     }
-                    #[cfg(not(feature = "host"))]
-                    None => unreachable!("the client always uses the CLI executor"),
+                    outcome
+                } else {
+                    running.await
                 }
             }
         };
@@ -1586,31 +1648,12 @@ impl Executor for Microsandbox {
             .as_ref()
             .filter(|ram| !ram.used_disk())
             .map(|ram| ram.returned.join(ARTIFACTS));
-        let cache_name = self.cache_volume(job.attempt_id);
-        let cache = if outcome == Outcome::Exited(0)
-            && job.save_cache
-            && linked.is_none()
-            && !cached_paths.is_empty()
-        {
-            if used_exact_cache {
-                say("cache save skipped: /work used the exact key".into()).await;
-                None
-            } else {
-                match self.create_disk(&cache_name, disk_mib).await {
-                    Ok(path) => Some(JobDisk {
-                        name: cache_name.clone(),
-                        mib: disk_mib,
-                        path,
-                    }),
-                    Err(e) => {
-                        say(format!(
-                            "cache save skipped: creating the cache volume failed: {e}"
-                        ))
-                        .await;
-                        None
-                    }
-                }
-            }
+        let saving = outcome == Outcome::Exited(0) && save_cache && !used_exact_cache;
+        if outcome == Outcome::Exited(0) && save_cache && used_exact_cache {
+            say("cache save skipped: /work used the exact key".into()).await;
+        }
+        let cache = if saving && ram_archive.is_none() {
+            make_cache().await
         } else {
             None
         };
@@ -1662,35 +1705,6 @@ impl Executor for Microsandbox {
                         collecting.elapsed().as_millis()
                     ))
                     .await;
-                    // Keep the new cache disk by its link after the
-                    // collecting VM has ended.
-                    // The mark, read as what a VM returned: a regular file,
-                    // a few bytes.
-                    let kept =
-                        crate::runner::workspace::open_returned(&job.io.join(CACHE_KEPT), 64)
-                            .ok()
-                            .flatten()
-                            .and_then(|mut f| {
-                                let mut text = String::new();
-                                std::io::Read::read_to_string(&mut f, &mut text).ok()?;
-                                text.trim().parse::<u64>().ok()
-                            });
-                    let _ = std::fs::remove_file(job.io.join(CACHE_KEPT));
-                    match (cache, kept) {
-                        (Some(disk), Some(kib)) => {
-                            let to = job.cache_disk.to_path_buf();
-                            let linked = super::blocking(move || {
-                                super::disk::flush(&disk.path)?;
-                                std::fs::hard_link(&disk.path, &to)
-                            }).await;
-                            match linked {
-                                Ok(()) => *job.kept_data = Some(kib << 10),
-                                Err(e) => say(format!("cache save skipped: keeping the cache image failed: {e}")).await,
-                            }
-                        }
-                        (Some(_), None) => say("cache save skipped: copying the cached paths in the collecting VM failed".into()).await,
-                        (None, _) => {}
-                    }
                     true
                 }
                 Err(e) => {
@@ -1713,6 +1727,24 @@ impl Executor for Microsandbox {
         } else {
             ram_archive.is_some()
         };
+        let kept = if ram_archive.is_some() && saving && !*cancel.borrow() {
+            ram.as_ref()
+                .filter(|ram| ram.saving_cache())
+                .and_then(|ram| {
+                    let disk = ram.returned.join(ram_workspace::CACHE_IMAGE);
+                    disk.is_file().then_some((disk, ram.returned.as_path()))
+                })
+        } else {
+            cache.map(|disk| (disk.path, job.io))
+        };
+        if let Some((disk, returned)) = kept
+            && check_archive
+        {
+            match keep_cache_disk(disk, returned, job.cache_disk).await {
+                Ok(bytes) => *job.kept_data = Some(bytes),
+                Err(e) => say(format!("cache save skipped: {e}")).await,
+            }
+        }
         // By label and from the list: one that never came to be is not an
         // error.
         let label = format!("branvil.job={}", job.attempt_id);
@@ -1852,7 +1884,10 @@ impl Microsandbox {
             ])
             .args(["--workdir", "/work"])
             // Backstop: the VM itself ends shortly after the job's timeout.
-            .args(["--max-duration", &format!("{}s", job.timeout_secs + 60)]);
+            .args([
+                "--max-duration",
+                &format!("{}s", ram_workspace::vm_timeout_secs(job.timeout_secs, ram)),
+            ]);
         if job.network {
             // Admin-approved: public destinations only (never the host or
             // private networks). Hostname rules are best effort.
@@ -1904,6 +1939,7 @@ impl Microsandbox {
         let mut out_open = true;
         let mut err_open = true;
         let mut stop: Option<Outcome> = None;
+        let has_artifacts = !j.artifacts.is_empty();
         while out_open || err_open {
             tokio::select! {
                 _ = tail.tick() => {
@@ -1944,7 +1980,7 @@ impl Microsandbox {
                 }
                 _ = cancel.changed() => {
                     if *cancel.borrow() {
-                        stop = Some(Outcome::Cancelled);
+                        stop = Some(ram_workspace::cancelled_outcome(ram, has_artifacts));
                         break;
                     }
                 }
@@ -1960,10 +1996,11 @@ impl Microsandbox {
         let mut unflushed = false;
         let outcome = match stop {
             Some(o) => {
-                let o = if o == Outcome::TimedOut && !j.artifacts.is_empty() {
-                    // Its artifacts are collected: flush what it wrote,
-                    // which the kill would lose (the job's own flush runs
-                    // only when its script exits). A stop does not wait.
+                let o = if o == Outcome::TimedOut
+                    && let Some(timeout) = ram_workspace::timeout_flush(ram, has_artifacts)
+                {
+                    // The kill would lose what the guest still needs to return.
+                    // A cancellation does not wait for the guest to flush.
                     let mut flush = vec!["exec"];
                     let flush_script = ram.map(|_| ram_workspace::RamWorkspace::flush_script());
                     if let Some(script) = &flush_script {
@@ -1972,7 +2009,7 @@ impl Microsandbox {
                         flush.extend([&name, "--", "sync"]);
                     }
                     let flushed = tokio::select! {
-                        out = self.output_within(&flush, TIMEOUT_FLUSH) => {
+                        out = self.output_within(&flush, timeout) => {
                             Some(out.is_ok_and(|out| out.status.success()))
                         }
                         Ok(_) = cancel.wait_for(|stop| *stop) => None,
@@ -1982,7 +2019,7 @@ impl Microsandbox {
                             unflushed = !ok;
                             o
                         }
-                        None => Outcome::Cancelled,
+                        None => ram_workspace::cancelled_outcome(ram, has_artifacts),
                     }
                 } else {
                     o
@@ -2016,7 +2053,7 @@ impl Microsandbox {
         job_log.read_from(&mut output).await;
         job_log.flush().await;
         if unflushed {
-            let note = "[branvil] flushing the job at its timeout failed: its artifacts may miss what it wrote last\n";
+            let note = "[branvil] flushing the job at its timeout failed: returned files may be incomplete\n";
             let _ = log.send(note.into()).await;
         }
         err_reader.abort();

@@ -15,7 +15,7 @@ pub struct JobDef {
     /// The maximum size of the job's /tmp in MiB. None uses a disk.
     #[serde(deserialize_with = "Deserialize::deserialize")]
     pub tmpfs_mib: Option<u32>,
-    /// Selected work directories with a shared RAM limit on an exact cache hit.
+    /// Selected work directories with a shared RAM limit after cache restore.
     #[serde(deserialize_with = "Deserialize::deserialize")]
     pub ram_workspace: Option<RamWorkspace>,
     pub artifacts: Vec<ArtifactDef>,

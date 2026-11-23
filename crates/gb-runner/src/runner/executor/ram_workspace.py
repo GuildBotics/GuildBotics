@@ -10,10 +10,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 
 WORK = Path("/work")
 RETURN = Path("/.branvil-ram-return")
+CACHE = Path("/.branvil-cache")
 stop = False
 
 
@@ -66,9 +68,7 @@ def mount_workspace(paths, mib):
             target = WORK / relative
             mode = plain(target)
             if mode is None or not stat.S_ISDIR(mode):
-                raise ValueError(
-                    f"{relative!r} is missing or is not a directory without symlinks"
-                )
+                raise ValueError(f"{relative!r} is missing or is not a directory without symlinks")
             layer = base / str(index)
             layer.mkdir()
             lower, upper, scratch = (
@@ -167,6 +167,16 @@ def collect(paths, layers, before):
         )
 
 
+def protect(path):
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0:
+        raise ValueError(f"{path} is not a root-owned directory")
+    if info.st_mode & 0o077:
+        path.chmod(0o700)
+        if path.lstat().st_mode & 0o077:
+            raise ValueError(f"{path} is accessible to the job user")
+
+
 def use_disk(error, args, *, detach=False):
     (RETURN / "disk").touch()
     if detach:
@@ -180,7 +190,35 @@ def use_disk(error, args, *, detach=False):
     os.execvp(args[0], args)
 
 
-def main(mib, paths, artifacts, uid, command):
+def save_cache(command):
+    (RETURN / "cache.requested").touch()
+    image = RETURN / "cache.raw"
+    deadline = time.monotonic() + 60
+    while not image.is_file():
+        if stop or (RETURN / "cache.unavailable").is_file():
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError("the runner did not provide a cache image")
+        time.sleep(0.05)
+    if stop:
+        return
+    result = RETURN / "cache-result"
+    result.mkdir(mode=0o700)
+    CACHE.mkdir(mode=0o700)
+    run("mount", "-t", "ext4", "-o", "loop", image, CACHE)
+    try:
+        subprocess.run(
+            ["/bin/sh", "-e", "-c", command],
+            cwd=WORK,
+            check=True,
+            stdin=subprocess.DEVNULL,
+        )
+    finally:
+        run("umount", CACHE)
+    (result / "cache.kept").rename(RETURN / "cache.kept")
+
+
+def main(mib, paths, artifacts, uid, keep_cache, command):
     drop = [
         "setpriv",
         "--no-new-privs",
@@ -192,11 +230,7 @@ def main(mib, paths, artifacts, uid, command):
     shell = ["/bin/sh", "-c", command]
     signal.signal(signal.SIGUSR1, stop_job)
     try:
-        if RETURN.stat().st_mode & 0o077:
-            RETURN.chmod(0o700)
-        info = RETURN.stat()
-        if info.st_uid != 0 or info.st_mode & 0o077:
-            raise ValueError("the artifact return mount is accessible to the job user")
+        protect(RETURN)
     except (OSError, ValueError) as error:
         use_disk(error, drop + shell, detach=True)
 
@@ -242,10 +276,18 @@ def main(mib, paths, artifacts, uid, command):
         (RETURN / "exit.part").write_text(str(code), encoding="ascii")
         (RETURN / "exit.part").rename(RETURN / "exit")
     collect(artifacts, layers, before)
+    if not stop and code == 0 and keep_cache:
+        try:
+            save_cache(keep_cache)
+        except (OSError, subprocess.CalledProcessError) as error:
+            print(
+                f"[branvil] saving the RAM workspace cache failed: {error}",
+                file=sys.stderr,
+            )
     (RETURN / "finished").touch()
     return code
 
 
 if __name__ == "__main__":
-    mib, paths, artifacts, uid = json.loads(sys.argv[1])
-    sys.exit(main(mib, paths, artifacts, uid, sys.argv[2]))
+    mib, paths, artifacts, uid, keep_cache = json.loads(sys.argv[1])
+    sys.exit(main(mib, paths, artifacts, uid, keep_cache, sys.argv[2]))
