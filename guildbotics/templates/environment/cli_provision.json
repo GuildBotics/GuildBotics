@@ -2,10 +2,10 @@
   {
     "name": "codex",
     "label": "Codex",
-    "package": "@openai/codex@0.169.0",
+    "package": "@openai/codex@0.171.0",
     "install": "",
     "provision": {
-      "package": "@openai/codex@0.169.0",
+      "package": "@openai/codex@0.171.0",
       "install": "",
       "state_root": ".codex",
       "state_root_env": "CODEX_HOME",
@@ -106,10 +106,10 @@
   {
     "name": "claude",
     "label": "Claude Code",
-    "package": "@anthropic-ai/claude-code@2.1.325",
+    "package": "@anthropic-ai/claude-code@2.1.330",
     "install": "",
     "provision": {
-      "package": "@anthropic-ai/claude-code@2.1.325",
+      "package": "@anthropic-ai/claude-code@2.1.330",
       "install": "",
       "state_root": ".claude",
       "state_root_env": "CLAUDE_CONFIG_DIR",
@@ -197,10 +197,10 @@
     "name": "grok",
     "label": "Grok Build",
     "package": "",
-    "install": "curl -fsSL https://x.ai/cli/install.sh | GROK_BIN_DIR=/usr/local/bin bash -s 1.0.77\ncp -L /usr/local/bin/grok /usr/local/bin/grok.bin\nmv -f /usr/local/bin/grok.bin /usr/local/bin/grok\nrm -f /usr/local/bin/agent\nrm -rf \"$HOME/.grok\"\ngrok --version",
+    "install": "curl -fsSL https://x.ai/cli/install.sh | GROK_BIN_DIR=/usr/local/bin bash -s 1.0.92\ncp -L /usr/local/bin/grok /usr/local/bin/grok.bin\nmv -f /usr/local/bin/grok.bin /usr/local/bin/grok\nrm -f /usr/local/bin/agent\nrm -rf \"$HOME/.grok\"\ngrok --version",
     "provision": {
       "package": "",
-      "install": "curl -fsSL https://x.ai/cli/install.sh | GROK_BIN_DIR=/usr/local/bin bash -s 1.0.77\ncp -L /usr/local/bin/grok /usr/local/bin/grok.bin\nmv -f /usr/local/bin/grok.bin /usr/local/bin/grok\nrm -f /usr/local/bin/agent\nrm -rf \"$HOME/.grok\"\ngrok --version",
+      "install": "curl -fsSL https://x.ai/cli/install.sh | GROK_BIN_DIR=/usr/local/bin bash -s 1.0.92\ncp -L /usr/local/bin/grok /usr/local/bin/grok.bin\nmv -f /usr/local/bin/grok.bin /usr/local/bin/grok\nrm -f /usr/local/bin/agent\nrm -rf \"$HOME/.grok\"\ngrok --version",
       "state_root": ".grok",
       "state_root_env": "GROK_HOME",
       "user_skills": ".grok/skills",
