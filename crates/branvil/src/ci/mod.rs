@@ -464,7 +464,7 @@ impl Ci {
     /// Reads the pipeline of commit `sha` (`pipeline::read`).
     async fn read_pipeline(&self, repo: &Repo, sha: &str) -> AppResult<PipelineState> {
         let dir = self.inner.git.repo_dir(&repo.path);
-        pipeline::read(&self.inner.git, &dir, sha, &repo.post_merge_jobs).await
+        pipeline::read(&self.inner.git, &dir, sha).await
     }
 
     /// Registers CI of `sha` for `branch` when the branch wants CI: it is the
@@ -2259,7 +2259,31 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn required_in_a_pipeline_is_checked_while_the_repository_setting_decides() {
+    async fn a_post_merge_round_trip_on_a_required_job_keeps_the_head_s_other_attempts() {
+        async fn latest(ci: &Ci, repo: &str, sha: &str, job: &str) -> Attempt {
+            let (repo, sha, job) = (repo.to_string(), sha.to_string(), job.to_string());
+            ci.inner
+                .store
+                .read(move |r| {
+                    Ok(queue::attempts_of(r, &repo, &sha)?
+                        .into_iter()
+                        .rfind(|a| a.job.name == job)
+                        .unwrap())
+                })
+                .await
+                .unwrap()
+        }
+        async fn set_post_merge(ci: &Ci, repo: &mut Repo, jobs: &[&str]) {
+            repo.post_merge_jobs = jobs.iter().map(|job| job.to_string()).collect();
+            let saved = repo.clone();
+            ci.inner
+                .store
+                .write(move |w| w.put(store::REPOS, &Repo::key(&saved.id), &saved))
+                .await
+                .unwrap();
+            ci.reconcile_locked(repo).await.unwrap();
+        }
+
         let (temp, ci, mut repo) = setup();
         let app = app(&temp, &ci);
         let dir = app.git.repo_dir(&repo.path);
@@ -2275,7 +2299,8 @@ mod tests {
              [[jobs]]\nname='lint'\nimage='alpine'\ncommands=['true']\nrequired=true\n",
         )
         .unwrap();
-        let sha = commit_all(&app.git, &work, "pipeline").await;
+        let base = commit_all(&app.git, &work, "base").await;
+        let head = commit_all(&app.git, &work, "head").await;
         app.git
             .run_ok(
                 None,
@@ -2285,34 +2310,45 @@ mod tests {
                     "push",
                     "-q",
                     dir.to_str().unwrap(),
-                    "HEAD:refs/heads/main",
+                    &format!("{base}:refs/heads/main"),
+                    &format!("{head}:refs/heads/fix"),
                 ],
             )
             .await
             .unwrap();
-
-        let names: Vec<_> = ci
-            .head_checks(&repo, &sha)
+        let saved = repo.clone();
+        app.store
+            .write(move |w| {
+                w.put(store::REPOS, &Repo::key(&saved.id), &saved)?;
+                let pull = open_pull(&saved.id, 1, "fix", "main");
+                crate::model::put_indexed(
+                    w,
+                    store::PULLS,
+                    &crate::model::Pull::key(&saved.id, 1),
+                    None,
+                    &pull,
+                    crate::model::pull_index(&pull),
+                )
+            })
             .await
-            .unwrap()
-            .checks
-            .into_iter()
-            .map(|c| c.name)
-            .collect();
-        assert_eq!(names, ["test"], "the file does not add a required check");
+            .unwrap();
+        ci.on_pull_opened(&app, &repo, "fix").await;
+        let test = latest(&ci, &repo.id, &head, "test").await;
+        assert_eq!(test.status, "queued");
 
-        repo.post_merge_jobs = vec!["test".into()];
-        assert!(matches!(
-            ci.read_pipeline(&repo, &sha).await.unwrap(),
-            PipelineState::Jobs { jobs } if jobs.len() == 2
-        ));
-        repo.post_merge_jobs = vec!["lint".into()];
-        assert_eq!(
-            ci.read_pipeline(&repo, &sha).await.unwrap(),
-            PipelineState::Invalid {
-                message: "Job lint: cannot be both required and post-merge only.".into()
-            }
-        );
+        set_post_merge(&app.ci, &mut repo, &["lint"]).await;
+        let during = latest(&ci, &repo.id, &head, "test").await;
+        assert_eq!((&during.id, during.status.as_str()), (&test.id, "queued"));
+        let lint = latest(&ci, &repo.id, &head, "lint").await;
+        assert_eq!(lint.conclusion.as_deref(), Some("skipped"));
+        assert_eq!(lint.path_skip.unwrap().reason, queue::SkipReason::PostMerge);
+
+        set_post_merge(&app.ci, &mut repo, &[]).await;
+        let after = latest(&ci, &repo.id, &head, "test").await;
+        assert_eq!((&after.id, after.status.as_str()), (&test.id, "queued"));
+        let lint = latest(&ci, &repo.id, &head, "lint").await;
+        assert_eq!(lint.status, "queued");
+        assert!(lint.path_skip.is_none());
     }
 
     #[tokio::test]

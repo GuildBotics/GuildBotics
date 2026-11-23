@@ -394,8 +394,7 @@ them before merge too, regardless of paths.
 Manual retries also execute them and their skips cannot supply reusable results.
 
 The owner controls this in repository settings rather than `.guildbotics-ci.toml` so a
-PR cannot exempt its own jobs. Required checks and post-merge jobs cannot overlap:
-a pipeline that marks a post-merge job `required` is invalid.
+PR cannot exempt its own jobs. Required checks and post-merge jobs cannot overlap.
 Selection records include the setting; reconciliation reselects open heads when
 it changes. Newly excluded queued jobs complete as `skipped`, not `cancelled`;
 running jobs finish and manual retries remain executable. Removing a name restores

@@ -329,14 +329,9 @@ pub async fn check(
         })
         .await
         .unwrap();
-    let pipeline = pipeline::read(
-        &app.git,
-        &app.git.repo_dir(repo),
-        sha,
-        &repository.post_merge_jobs,
-    )
-    .await
-    .unwrap();
+    let pipeline = pipeline::read(&app.git, &app.git.repo_dir(repo), sha)
+        .await
+        .unwrap();
     assert!(
         matches!(&pipeline, PipelineState::Jobs { jobs } if jobs.len() == 1),
         "fixture commit {sha} must define one job in {PIPELINE_PATH}: {pipeline:?}"
