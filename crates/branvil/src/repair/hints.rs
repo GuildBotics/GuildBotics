@@ -70,7 +70,7 @@ pub fn hint(w: &Wtx, repo: &str, failed_sha: &str, job: &str, narrowing: Hint) -
         return Ok(());
     }
     let repository = crate::domain::repo_by_id(w, repo)?;
-    let root = format!("/{}/-", repository.path);
+    let root = crate::util::repository_page(&repository.path);
     let job = super::tickets::text(job);
     let short = super::tickets::short;
     let body = match narrowing {

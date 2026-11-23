@@ -848,8 +848,12 @@ async fn waits_record_each_success_and_retain_all_work_status_fields() {
         );
     }
     // The notice on a pull request that no longer exists fails after the first.
+    let (workspace, repository) = support::REPO.split_once('/').unwrap();
     let gone = readiness_of(
-        &format!("{}/workspaces/acme/repos/demo/pulls/999", p.base()),
+        &format!(
+            "{}/workspaces/{workspace}/repos/{repository}/pulls/999",
+            p.base()
+        ),
         "running",
     );
     let r = Repository {

@@ -101,7 +101,7 @@ pub async fn render(app: &App, caller: &Caller, path: &str, source: String) -> A
                     Item::Ticket(t) => ("ticket", t.state.as_str(), t.title.as_str(), "tickets"),
                     Item::Pull(p) => ("pull", if p.merged { "merged" } else { p.state.as_str() }, p.title.as_str(), "pulls"),
                 };
-                let url = format!("{base}/{}/-/{route}/{}", repo.path, item.number());
+                let url = crate::util::item_url(&base, &repo.path, route, item.number());
                 markdown.push_str(&format!(
                     "<a href=\"{}\" data-branvil-kind=\"{kind}\" data-branvil-state=\"{state}\" title=\"{}\">{}</a>",
                     escape(&url), escape(title), escape(label),

@@ -89,6 +89,7 @@ pub(crate) fn registry_error(error: anyhow::Error, language: &str) -> anyhow::Er
     ))
 }
 
+#[cfg(feature = "server")]
 pub(crate) fn execution_name(
     data: Option<&branvil::api::DataApi>,
     root: &Path,
@@ -99,6 +100,7 @@ pub(crate) fn execution_name(
     Ok(data.workspace_for_execution(root)?.map(|ws| ws.name))
 }
 
+#[cfg(feature = "server")]
 pub(crate) async fn register_execution(
     data: Option<&branvil::api::DataApi>,
     root: &Path,
@@ -121,8 +123,10 @@ pub(crate) async fn register_execution(
     Ok(())
 }
 
+#[cfg(feature = "server")]
 pub(crate) const WORKSPACE_HEADER: &str = "x-guildbotics-workspace";
 
+#[cfg(feature = "server")]
 fn default_name(root: &Path) -> String {
     let name = root
         .file_name()
@@ -134,18 +138,21 @@ fn default_name(root: &Path) -> String {
     unscoped_name(root)
 }
 
+#[cfg(feature = "server")]
 fn unscoped_name(root: &Path) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(root.as_os_str().as_encoded_bytes());
     format!("workspace-{}", loopback_auth::hex(&digest[..8]))
 }
 
+#[cfg(feature = "server")]
 pub(crate) struct Migration {
     pub(crate) roots: std::collections::BTreeMap<String, PathBuf>,
     projects: Vec<(PathBuf, serde_json::Value)>,
     run_roots: Vec<PathBuf>,
 }
 
+#[cfg(feature = "server")]
 impl Migration {
     /// Read only the selected data roots. For an archive, names are taken from the manifest
     /// and configuration is opened from the numbered copies.
@@ -252,6 +259,7 @@ impl Migration {
     }
 }
 
+#[cfg(feature = "server")]
 /// A browser may view another workspace without changing what the Hub runs.
 pub(crate) async fn for_request(
     api: &crate::api::Api,
@@ -281,6 +289,7 @@ pub(crate) async fn for_request(
         .map_err(|error| crate::config_api::failure(error.into(), headers))
 }
 
+#[cfg(feature = "server")]
 fn migrate_run_urls(record: &mut serde_json::Value) -> bool {
     let mut changed = false;
     let mut rewrite = |value: Option<&mut serde_json::Value>| {
@@ -315,7 +324,7 @@ fn migrate_run_urls(record: &mut serde_json::Value) -> bool {
     changed
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod tests {
     use super::*;
     use serde_json::json;

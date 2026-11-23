@@ -338,11 +338,12 @@ async fn checks_retry_returns_url_and_preserves_service_errors() {
         .unwrap()
         .report
         .checks;
-    let job = format!(
-        "{}/workspaces/acme/repos/demo/jobs/{}",
-        services.base(),
-        checks[0].attempt_id.as_deref().unwrap()
+    let (workspace, repository) = support::REPO.split_once('/').unwrap();
+    let jobs = format!(
+        "{}/workspaces/{workspace}/repos/{repository}/jobs/",
+        services.base()
     );
+    let job = format!("{jobs}{}", checks[0].attempt_id.as_deref().unwrap());
     let roster = BTreeMap::new();
     for error in [
         Some(ServiceError::NotFound),
@@ -368,10 +369,7 @@ async fn checks_retry_returns_url_and_preserves_service_errors() {
             assert!(records.0.lock().unwrap().is_empty());
         } else {
             let next = result.unwrap().payload["url"].as_str().unwrap().to_owned();
-            assert!(next.starts_with(&format!(
-                "{}/workspaces/acme/repos/demo/jobs/",
-                services.base()
-            )));
+            assert!(next.starts_with(&jobs));
             assert_ne!(next, job);
             assert_eq!(records.0.lock().unwrap()[0]["command"], "checks retry");
         }
