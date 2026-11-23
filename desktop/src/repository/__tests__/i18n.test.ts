@@ -3,14 +3,34 @@ import { describe, expect, it } from "vitest";
 import { LANES } from "../api/types";
 import { en } from "../i18n/en";
 import { ja } from "../i18n/ja";
+import { shared } from "../../sharedLocales";
 
 const dictionaries = { en, ja };
 
-describe("i18n", () => {
+describe.each([
+  { namespace: "repository", ...dictionaries },
+  { namespace: "shared", ...shared },
+])("$namespace translations", ({ en, ja }) => {
   it("has identical keys in Japanese and English", () => {
     expect(Object.keys(ja).sort()).toEqual(Object.keys(en).sort());
   });
 
+  it("has no empty messages and the same placeholders in both languages", () => {
+    const placeholders = (message: string) =>
+      [...message.matchAll(/\{\{\s*-?\s*([^,}]+?)(?:,[^}]+)?\s*\}\}/g)]
+        .map((match) => match[1]?.trim())
+        .sort();
+    const japanese: Record<string, string> = ja;
+    for (const [key, value] of Object.entries(en)) {
+      const translated = japanese[key] ?? "";
+      expect(value.trim(), key).not.toBe("");
+      expect(translated.trim(), key).not.toBe("");
+      expect(placeholders(translated), key).toEqual(placeholders(value));
+    }
+  });
+});
+
+describe("i18n", () => {
   it("describes independent landing without a gate or queue", () => {
     for (const words of Object.values(dictionaries)) {
       for (const key of [
@@ -28,16 +48,6 @@ describe("i18n", () => {
     expect(dictionaries.en["notifications.help"]).toContain("repair ticket");
     expect(dictionaries.ja["notifications.help"]).toContain("作業が人の対応を待って止まった");
     expect(dictionaries.en["notifications.help"]).toContain("member work stops");
-  });
-
-  it("has no empty messages and the same placeholders in both languages", () => {
-    const placeholders = (s: string) => [...s.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]).sort();
-    for (const [key, value] of Object.entries(dictionaries.en)) {
-      const ja = dictionaries.ja[key as keyof typeof dictionaries.ja];
-      expect(value.trim(), key).not.toBe("");
-      expect(ja.trim(), key).not.toBe("");
-      expect(placeholders(ja), key).toEqual(placeholders(value));
-    }
   });
 
   it("describes automatic responders as agent PR authors in both languages", () => {
