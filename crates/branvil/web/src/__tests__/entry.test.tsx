@@ -6,22 +6,27 @@ import { apiError, fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 const page = (items: unknown[]) => json(200, { items, next_cursor: null });
 
 describe("entering through the host", () => {
-  it.each(["en", "ja"] as const)("explains how to open the printed link in the same browser (%s)", async (language) => {
-    fakeApi({
-      "GET /api/v1/session": apiError(401, "unauthorized", "No valid token or session."),
-    });
-    renderApp("/", language);
-    expect(await screen.findByText("guildbotics open --print")).toBeInTheDocument();
-    expect(screen.getByText(language === "en" ? /Paste the printed URL into the address bar of this same browser/ : /表示されたURLを、この画面と同じブラウザのアドレスバーに貼り付けて/)).toBeInTheDocument();
-  });
+  it.each(["en", "ja"] as const)(
+    "explains how to open the printed link in the same browser (%s)",
+    async (language) => {
+      fakeApi({
+        "GET /api/v1/session": apiError(401, "unauthorized", "No valid token or session."),
+      });
+      renderApp("/", language);
+      expect(await screen.findByText("guildbotics open --print")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          language === "en"
+            ? /Paste the printed URL into the address bar of this same browser/
+            : /表示されたURLを、この画面と同じブラウザのアドレスバーに貼り付けて/,
+        ),
+      ).toBeInTheDocument();
+    },
+  );
 
   it("shows how to open Branvil on every page without a session, even when the session read fails", async () => {
     fakeApi({
-      "GET /api/v1/session": apiError(
-        401,
-        "unauthorized",
-        "No valid token or session.",
-      ),
+      "GET /api/v1/session": apiError(401, "unauthorized", "No valid token or session."),
     });
     renderApp("/acme/demo");
     expect(
@@ -45,17 +50,11 @@ describe("entering through the host", () => {
     expect(
       await screen.findByText("On the Hub machine, print an entry link with:"),
     ).toBeInTheDocument();
-    expect(
-      await screen.findByText("This Host is not Branvil's."),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("This Host is not Branvil's.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Retry" }));
-    expect(
-      await screen.findByRole("heading", { name: "No workspace yet" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "No workspace yet" })).toBeInTheDocument();
     await waitFor(() =>
-      expect(
-        fake.calls("GET", "/api/v1/session").length,
-      ).toBeGreaterThanOrEqual(2),
+      expect(fake.calls("GET", "/api/v1/session").length).toBeGreaterThanOrEqual(2),
     );
   });
 });

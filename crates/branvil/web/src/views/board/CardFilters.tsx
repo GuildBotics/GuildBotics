@@ -37,12 +37,24 @@ export function CardFilters({
 }) {
   const t = useT();
   const assigneeNames = useMemo(
-    () => [...new Set(cards.flatMap((c) => (c.assignee ? [c.assignee.name] : [])).concat(people.map((p) => p.name)))].sort(),
+    () =>
+      [
+        ...new Set(
+          cards
+            .flatMap((c) => (c.assignee ? [c.assignee.name] : []))
+            .concat(people.map((p) => p.name)),
+        ),
+      ].sort(),
     [cards, people],
   );
   const labels = useMemo(() => [...new Set(cards.flatMap((c) => c.labels))].sort(), [cards]);
   return (
-    <form className="board-toolbar" role="search" aria-label={t("board.filters")} onSubmit={(e) => e.preventDefault()}>
+    <form
+      className="board-toolbar"
+      role="search"
+      aria-label={t("board.filters")}
+      onSubmit={(e) => e.preventDefault()}
+    >
       <TextInput
         className="board-search"
         aria-label={t("board.filterText")}
@@ -69,7 +81,10 @@ export function CardFilters({
         value={filter.label || ANY}
         onChange={(v) => onFilter({ ...filter, label: !v || v === ANY ? "" : v })}
         allowDeselect={false}
-        data={[{ value: ANY, label: `${t("board.filterLabel")}: ${t("board.any")}` }, ...labels.map((l) => ({ value: l, label: l }))]}
+        data={[
+          { value: ANY, label: `${t("board.filterLabel")}: ${t("board.any")}` },
+          ...labels.map((l) => ({ value: l, label: l })),
+        ]}
       />
       {repositories.length > 1 && (
         <Select
@@ -78,10 +93,17 @@ export function CardFilters({
           value={filter.repository || ANY}
           onChange={(v) => onFilter({ ...filter, repository: !v || v === ANY ? "" : v })}
           allowDeselect={false}
-          data={[{ value: ANY, label: `${t("board.repository")}: ${t("board.any")}` }, ...repositories.map((r) => ({ value: r, label: r }))]}
+          data={[
+            { value: ANY, label: `${t("board.repository")}: ${t("board.any")}` },
+            ...repositories.map((r) => ({ value: r, label: r })),
+          ]}
         />
       )}
-      <Checkbox label={t("board.includeClosed")} checked={includeClosed} onChange={(e) => onIncludeClosed(e.currentTarget.checked)} />
+      <Checkbox
+        label={t("board.includeClosed")}
+        checked={includeClosed}
+        onChange={(e) => onIncludeClosed(e.currentTarget.checked)}
+      />
       <Text size="xs" c="dimmed" aria-live="polite" role="status" className="board-status">
         {status}
       </Text>

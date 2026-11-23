@@ -42,13 +42,17 @@ describe("drag scroll", () => {
     el.getBoundingClientRect = () => new DOMRect(0, 0, 200, 400);
     // jsdom does no layout: keep scrollTop within the content as a browser does.
     let top = 0;
-    Object.defineProperty(el, "scrollTop", { get: () => top, set: (v: number) => (top = Math.max(0, Math.min(height - 400, v))) });
+    Object.defineProperty(el, "scrollTop", {
+      get: () => top,
+      set: (v: number) => (top = Math.max(0, Math.min(height - 400, v))),
+    });
     const inner = document.createElement("span");
     el.append(inner);
     document.body.append(el);
     return { el, inner };
   };
-  const dragOver = (target: Element, y: number) => target.dispatchEvent(new MouseEvent("dragover", { bubbles: true, clientX: 100, clientY: y }));
+  const dragOver = (target: Element, y: number) =>
+    target.dispatchEvent(new MouseEvent("dragover", { bubbles: true, clientX: 100, clientY: y }));
 
   it("keeps scrolling the box under a drag near its edge until the drag ends", () => {
     const { el, inner } = box("auto", 2000);
@@ -83,7 +87,11 @@ describe("drag scroll", () => {
     Object.defineProperties(page, {
       clientWidth: { value: 800, configurable: true },
       clientHeight: { value: 600, configurable: true },
-      scrollTop: { get: () => top, set: (v: number) => (top = Math.max(0, Math.min(1400, v))), configurable: true },
+      scrollTop: {
+        get: () => top,
+        set: (v: number) => (top = Math.max(0, Math.min(1400, v))),
+        configurable: true,
+      },
     });
     Object.defineProperty(document, "scrollingElement", { value: page, configurable: true });
     try {

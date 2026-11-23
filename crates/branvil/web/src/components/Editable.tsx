@@ -41,7 +41,11 @@ export function EditableTitle({
       </Title>
     );
   }
-  const save = () => void onSave(editing.trim()).then(() => setEditing(null), () => undefined);
+  const save = () =>
+    void onSave(editing.trim()).then(
+      () => setEditing(null),
+      () => undefined,
+    );
   return (
     <form
       onSubmit={(e) => {

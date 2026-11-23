@@ -4,7 +4,15 @@ import { memo, type PointerEvent } from "react";
 import { ticketRef, type Card, type Lane } from "../../api/types";
 import type { Person } from "../../components/PeoplePicker";
 import { useT } from "../../i18n";
-import { CardView, ChildrenToggle, CopyUrlItem, DeleteCardItem, InteractiveItem, LaneButton, LazyMenu } from "../board/CardView";
+import {
+  CardView,
+  ChildrenToggle,
+  CopyUrlItem,
+  DeleteCardItem,
+  InteractiveItem,
+  LaneButton,
+  LazyMenu,
+} from "../board/CardView";
 
 /** A ticket made from a card's menu: its parent, a child of it, or the next one, which waits for it. */
 export type Addition = "parent" | "child" | "next";
@@ -75,7 +83,9 @@ export const RelationCard = memo(function RelationCard({
       loadChecks={loadChecks}
       busy={busy}
       // A parent has the colour of the header it becomes once opened, also while none of its children is shown.
-      className={[card.children.length > 0 && "parent", dim && "dim", highlighted && "highlighted"].filter(Boolean).join(" ")}
+      className={[card.children.length > 0 && "parent", dim && "dim", highlighted && "highlighted"]
+        .filter(Boolean)
+        .join(" ")}
       lane={
         tag ? (
           // The lane and its number read as one: the number is the card's place among that lane's tickets.
@@ -92,7 +102,9 @@ export const RelationCard = memo(function RelationCard({
               onClick={() => onTag(ref, tag.assignee)}
             >
               {tag.n}
-              {tag.waiting && !tag.stuck && <Hourglass size={12} className="pickup-wait" aria-hidden />}
+              {tag.waiting && !tag.stuck && (
+                <Hourglass size={12} className="pickup-wait" aria-hidden />
+              )}
               {tag.stuck && (
                 <span className="pickup-warn" aria-hidden>
                   !
@@ -104,7 +116,11 @@ export const RelationCard = memo(function RelationCard({
           <LaneButton card={card} lanes={lanes} onLane={onLane} disabled={busy} />
         )
       }
-      lead={open === undefined ? undefined : <ChildrenToggle open={open} onToggle={() => onToggle(ref, !open)} />}
+      lead={
+        open === undefined ? undefined : (
+          <ChildrenToggle open={open} onToggle={() => onToggle(ref, !open)} />
+        )
+      }
     >
       <span
         className="rel-handle"
@@ -119,7 +135,13 @@ export const RelationCard = memo(function RelationCard({
       <div className="card-menu">
         <LazyMenu
           trigger={(open) => (
-            <ActionIcon variant="subtle" color="gray" size="sm" aria-label={t("board.cardMenu", { key: ref })} onClick={open}>
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              size="sm"
+              aria-label={t("board.cardMenu", { key: ref })}
+              onClick={open}
+            >
               <Ellipsis size={16} />
             </ActionIcon>
           )}
@@ -127,7 +149,10 @@ export const RelationCard = memo(function RelationCard({
           <Menu.Item leftSection={<CornerLeftUp size={14} />} onClick={() => onAdd(card, "parent")}>
             {t("relations.addParent")}
           </Menu.Item>
-          <Menu.Item leftSection={<CornerDownRight size={14} />} onClick={() => onAdd(card, "child")}>
+          <Menu.Item
+            leftSection={<CornerDownRight size={14} />}
+            onClick={() => onAdd(card, "child")}
+          >
             {t("relations.addChild")}
           </Menu.Item>
           <Menu.Item leftSection={<ArrowRight size={14} />} onClick={() => onAdd(card, "next")}>

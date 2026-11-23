@@ -21,7 +21,8 @@ export function createQueryClient(): QueryClient {
         // Freshness comes from the event stream, not from polling.
         staleTime: 60_000,
         refetchOnWindowFocus: false,
-        retry: (count, err) => !(err instanceof ApiError && err.status >= 400 && err.status < 500) && count < 2,
+        retry: (count, err) =>
+          !(err instanceof ApiError && err.status >= 400 && err.status < 500) && count < 2,
       },
       mutations: { retry: false },
     },
@@ -52,32 +53,55 @@ export function useSession() {
 export const useRepos = () => useQuery({ queryKey: keys.repos(), queryFn: () => api.repos.list() });
 
 export const useMarkdown = (repo: string, source: string) =>
-  useQuery({ queryKey: keys.markdown(repo, source), queryFn: ({ signal }) => api.markdown(repo, source, signal), enabled: source.length > 0 });
+  useQuery({
+    queryKey: keys.markdown(repo, source),
+    queryFn: ({ signal }) => api.markdown(repo, source, signal),
+    enabled: source.length > 0,
+  });
 
-export const useWorkspaces = () => useQuery({ queryKey: keys.workspaces(), queryFn: () => api.workspaces.list() });
+export const useWorkspaces = () =>
+  useQuery({ queryKey: keys.workspaces(), queryFn: () => api.workspaces.list() });
 
 /** A commit never changes: cached for the session. */
 export const useCommit = (repo: string, sha: string) =>
-  useQuery({ queryKey: keys.commit(repo, sha), queryFn: () => api.repos.commit(repo, sha), staleTime: Infinity });
+  useQuery({
+    queryKey: keys.commit(repo, sha),
+    queryFn: () => api.repos.commit(repo, sha),
+    staleTime: Infinity,
+  });
 
 export const useCommitChecks = (repo: string, sha: string) =>
-  useQuery({ queryKey: keys.commitChecks(repo, sha), queryFn: () => api.repos.commitChecks(repo, sha) });
+  useQuery({
+    queryKey: keys.commitChecks(repo, sha),
+    queryFn: () => api.repos.commitChecks(repo, sha),
+  });
 
 export const useBranch = (repo: string, name: string, enabled = true) =>
-  useQuery({ queryKey: keys.branch(repo, name), queryFn: () => api.repos.branch(repo, name), enabled });
+  useQuery({
+    queryKey: keys.branch(repo, name),
+    queryFn: () => api.repos.branch(repo, name),
+    enabled,
+  });
 
-export const useRepo = (repo: string) => useQuery({ queryKey: keys.repo(repo), queryFn: () => api.repos.get(repo) });
-
+export const useRepo = (repo: string) =>
+  useQuery({ queryKey: keys.repo(repo), queryFn: () => api.repos.get(repo) });
 
 export const useRepoPulls = (repo: string, state: "open" | "closed" | "all") =>
   useQuery({ queryKey: keys.repoPulls(repo, state), queryFn: () => api.repos.pulls(repo, state) });
 
-export const useMembers = () => useQuery({ queryKey: keys.members(), queryFn: () => api.members.list() });
+export const useMembers = () =>
+  useQuery({ queryKey: keys.members(), queryFn: () => api.members.list() });
 
 /** Those pickers offer (an assignee, reviewers): everyone but runners; empty while loading or on failure. */
 export function usePeople(): { name: string; kind: MemberKind }[] {
   const { data } = useMembers();
-  return useMemo(() => (data?.items ?? []).filter((m) => m.kind !== "runner").map((m) => ({ name: m.name, kind: m.kind })), [data]);
+  return useMemo(
+    () =>
+      (data?.items ?? [])
+        .filter((m) => m.kind !== "runner")
+        .map((m) => ({ name: m.name, kind: m.kind })),
+    [data],
+  );
 }
 
 /** A member's kind by name (avatars color agents); undefined while loading or for a stranger. */
@@ -92,7 +116,9 @@ export function useMemberKinds(): (name: string) => MemberKind | undefined {
 /** A member's picture by name; undefined while loading, for none, or for a stranger. */
 export function useMemberAvatar(name: string): string | undefined {
   const { data } = useMembers();
-  return data?.items.find((m) => m.name.toLowerCase() === name.toLowerCase())?.avatar_url ?? undefined;
+  return (
+    data?.items.find((m) => m.name.toLowerCase() === name.toLowerCase())?.avatar_url ?? undefined
+  );
 }
 
 export const useMemberTokens = (name: string) =>
@@ -100,10 +126,19 @@ export const useMemberTokens = (name: string) =>
 
 /** The service's state: what the warnings at the top of every page are made of. The runner has no events, so it is polled. */
 export const useDiagnostics = () =>
-  useQuery({ queryKey: keys.diagnostics(), queryFn: () => api.admin.diagnostics(), refetchInterval: (query) => query.state.data?.hub?.operation ? 2000 : 30_000 });
+  useQuery({
+    queryKey: keys.diagnostics(),
+    queryFn: () => api.admin.diagnostics(),
+    refetchInterval: (query) => (query.state.data?.hub?.operation ? 2000 : 30_000),
+  });
 
 /** The notification webhook; polled, since how its last send went has no events. */
-export const useWebhook = () => useQuery({ queryKey: keys.webhook(), queryFn: () => api.admin.webhook(), refetchInterval: 30_000 });
+export const useWebhook = () =>
+  useQuery({
+    queryKey: keys.webhook(),
+    queryFn: () => api.admin.webhook(),
+    refetchInterval: 30_000,
+  });
 
 /** The CI settings; polled to refresh runner reports and image operations. */
 export const useCiSettings = () =>
@@ -122,28 +157,47 @@ export const useTicket = (repo: string, key: string) =>
   useQuery({ queryKey: keys.ticket(repo, key), queryFn: () => api.tickets.get(repo, key) });
 
 export const useTicketComments = (repo: string, key: string) =>
-  useQuery({ queryKey: keys.ticketPart(repo, key, "comments"), queryFn: () => api.tickets.comments(repo, key) });
+  useQuery({
+    queryKey: keys.ticketPart(repo, key, "comments"),
+    queryFn: () => api.tickets.comments(repo, key),
+  });
 
 export const useTicketPulls = (repo: string, key: string) =>
-  useQuery({ queryKey: keys.ticketPart(repo, key, "pulls"), queryFn: () => api.tickets.pulls(repo, key) });
+  useQuery({
+    queryKey: keys.ticketPart(repo, key, "pulls"),
+    queryFn: () => api.tickets.pulls(repo, key),
+  });
 
 export const useBoard = (workspace: string) =>
   useQuery({ queryKey: keys.board(workspace), queryFn: () => api.workspaces.get(workspace) });
 
 export const useCards = (workspace: string, state: "open" | "all", enabled = true) =>
-  useQuery({ queryKey: keys.cards(workspace, state), queryFn: () => api.workspaces.cards(workspace, state), enabled });
+  useQuery({
+    queryKey: keys.cards(workspace, state),
+    queryFn: () => api.workspaces.cards(workspace, state),
+    enabled,
+  });
 
 export const usePull = (repo: string, number: number) =>
   useQuery({ queryKey: keys.pull(repo, number), queryFn: () => api.pulls.get(repo, number) });
 
 export const usePullActivity = (repo: string, number: number) =>
-  useQuery({ queryKey: keys.pullPart(repo, number, "activity"), queryFn: () => api.pulls.activity(repo, number) });
+  useQuery({
+    queryKey: keys.pullPart(repo, number, "activity"),
+    queryFn: () => api.pulls.activity(repo, number),
+  });
 
 export const usePullThreads = (repo: string, number: number) =>
-  useQuery({ queryKey: keys.pullPart(repo, number, "threads"), queryFn: () => api.pulls.threads(repo, number) });
+  useQuery({
+    queryKey: keys.pullPart(repo, number, "threads"),
+    queryFn: () => api.pulls.threads(repo, number),
+  });
 
 export const usePullCommits = (repo: string, number: number) =>
-  useQuery({ queryKey: keys.pullPart(repo, number, "commits"), queryFn: () => api.pulls.commits(repo, number) });
+  useQuery({
+    queryKey: keys.pullPart(repo, number, "commits"),
+    queryFn: () => api.pulls.commits(repo, number),
+  });
 
 /** Keyed by the head sha: the diff changes only when the head does. */
 export const usePullFiles = (repo: string, number: number, headSha: string | undefined) =>
@@ -162,13 +216,23 @@ export const usePublishPreview = (repo: string, number: number, enabled = true) 
   });
 
 export const useChecks = (repo: string, number: number, enabled = true) =>
-  useQuery({ queryKey: keys.pullPart(repo, number, "checks"), queryFn: () => api.pulls.checks(repo, number), enabled });
+  useQuery({
+    queryKey: keys.pullPart(repo, number, "checks"),
+    queryFn: () => api.pulls.checks(repo, number),
+    enabled,
+  });
 
 export const useJob = (repo: string, id: string, enabled = true) =>
   useQuery({
-    queryKey: keys.job(repo, id), queryFn: () => api.jobs.get(repo, id), enabled,
-    refetchInterval: (query) => query.state.data?.retry_wait ? 5000 : false,
+    queryKey: keys.job(repo, id),
+    queryFn: () => api.jobs.get(repo, id),
+    enabled,
+    refetchInterval: (query) => (query.state.data?.retry_wait ? 5000 : false),
   });
 
 export const useJobLog = (repo: string, id: string, tail: number, enabled = true) =>
-  useQuery({ queryKey: keys.jobLog(repo, id, tail), queryFn: () => api.jobs.log(repo, id, tail), enabled });
+  useQuery({
+    queryKey: keys.jobLog(repo, id, tail),
+    queryFn: () => api.jobs.log(repo, id, tail),
+    enabled,
+  });

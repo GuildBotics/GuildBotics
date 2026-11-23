@@ -30,7 +30,8 @@ export interface Account {
 }
 
 /** What an account is set with; sent once and never returned. */
-export type AccountCredential = { token: string } | { app: { app_id: string; installation_id: string; private_key: string } };
+export type AccountCredential =
+  { token: string } | { app: { app_id: string; installation_id: string; private_key: string } };
 
 /** The upstream hosts this build knows, by provider name. */
 export const PROVIDERS = [{ name: "github", label: "GitHub" }] as const;
@@ -280,7 +281,18 @@ export interface PullRequest {
 /** The readiness-sorted list carries its server-computed comparison key. */
 export type ListedPull = PullRequest & { merge_order: [number, number, number] };
 
-export type LandingNext = "conditions" | "publishing" | "owner_publish" | "host_checks" | "owner_merge_host" | "following" | "owner_fix_following" | "host_closed" | "owner_fix_auto" | "auto_merge" | "owner_merge";
+export type LandingNext =
+  | "conditions"
+  | "publishing"
+  | "owner_publish"
+  | "host_checks"
+  | "owner_merge_host"
+  | "following"
+  | "owner_fix_following"
+  | "host_closed"
+  | "owner_fix_auto"
+  | "auto_merge"
+  | "owner_merge";
 export interface Landing {
   number: number;
   head_sha: string;
@@ -289,7 +301,15 @@ export interface Landing {
   told: string[];
   notified_at: string | null;
   error: string | null;
-  blockers: { held?: { number: number; assignee: string | null } | null; code: string; message: string; jobs: string[]; files: string[]; count?: number; required?: number }[];
+  blockers: {
+    held?: { number: number; assignee: string | null } | null;
+    code: string;
+    message: string;
+    jobs: string[];
+    files: string[];
+    count?: number;
+    required?: number;
+  }[];
   next: LandingNext;
   host_url: string | null;
   next_detail: string | null;
@@ -388,13 +408,7 @@ export interface FileChange {
 
 export type CheckStatus = "queued" | "in_progress" | "completed";
 export type CheckConclusion =
-  | "success"
-  | "failure"
-  | "cancelled"
-  | "timed_out"
-  | "skipped"
-  | "startup_failure"
-  | null;
+  "success" | "failure" | "cancelled" | "timed_out" | "skipped" | "startup_failure" | null;
 
 export interface ReusedFrom {
   attempt_id: string;
@@ -518,7 +532,12 @@ type RunnerVersionMismatch = { name: string; version: string };
 /** What `/admin/diagnostics` says that the warnings use; the rest is for people reading the API. */
 export interface Diagnostics {
   hub?: import("@guildbotics/ui/HubStatus").HubStatus | null;
-  runner?: { state: "ready" | "no_runner" | "executor_unavailable" | "stopping" | string; detail: string; mode: string; version_mismatch?: RunnerVersionMismatch | null };
+  runner?: {
+    state: "ready" | "no_runner" | "executor_unavailable" | "stopping" | string;
+    detail: string;
+    mode: string;
+    version_mismatch?: RunnerVersionMismatch | null;
+  };
   upstream?: { state: string; problems?: { repository: string; problem: string }[] };
 }
 
@@ -563,7 +582,12 @@ export interface CiRunner {
   executor_state: "ready" | "unavailable" | null;
   executor_detail: string | null;
   architecture: string | null;
-  machine: { logical_cpus: number; total_memory_mib: number; available_memory_mib: number; commit?: { available_mib: number } } | null;
+  machine: {
+    logical_cpus: number;
+    total_memory_mib: number;
+    available_memory_mib: number;
+    commit?: { available_mib: number };
+  } | null;
   resource_wait: ({ attempt_id: string; repo: string; job: string } & ResourceShortfall) | null;
   missing_images: string[] | null;
   limits: CiLimits;
@@ -616,7 +640,15 @@ export interface ImageOperation {
   loaded: { reference: string }[];
 }
 
-export type ChangeKind = "hub_status_changed" | "verification" |"ticket" | "pull" | "board" | "check" | "upstream" | "repo";
+export type ChangeKind =
+  | "hub_status_changed"
+  | "verification"
+  | "ticket"
+  | "pull"
+  | "board"
+  | "check"
+  | "upstream"
+  | "repo";
 
 export interface ChangeEvent {
   kind: ChangeKind;
@@ -633,10 +665,21 @@ export interface Verification {
   state: VerificationState;
   ahead: number | null;
   latest_verified: { sha: string; verified_at: string } | null;
-  current: { sha: string; base: string | null; state: string; started_at: string; finished_at: string | null; retry: { number: number; max: number }; failed_jobs: { name: string; attempt_id: string | null; details: string | null }[] } | null;
+  current: {
+    sha: string;
+    base: string | null;
+    state: string;
+    started_at: string;
+    finished_at: string | null;
+    retry: { number: number; max: number };
+    failed_jobs: { name: string; attempt_id: string | null; details: string | null }[];
+  } | null;
   failing_since: string | null;
 }
 export interface VerificationCommit {
-  sha: string; title: string; author: string; authored_at: string;
+  sha: string;
+  title: string;
+  author: string;
+  authored_at: string;
   mark: "verified" | "verifying" | "failed" | null;
 }

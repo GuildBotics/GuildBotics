@@ -16,17 +16,22 @@ const keyOf = (q: Query) => q.queryKey as readonly unknown[];
 
 const isCards = (q: Query) => keyOf(q)[0] === "board" && keyOf(q)[2] === "cards";
 /** Paths name the same item whatever their case (the service compares them case-insensitively). */
-const samePath = (key: unknown, path: string) => typeof key === "string" && key.toLowerCase() === path.toLowerCase();
+const samePath = (key: unknown, path: string) =>
+  typeof key === "string" && key.toLowerCase() === path.toLowerCase();
 
 function boardCardsWhere(test: (cards: Card[]) => boolean): Predicate {
   return (q) => isCards(q) && test((q.state.data as { items: Card[] } | undefined)?.items ?? []);
 }
 
 const isRepo = (q: Query, repo: string) => keyOf(q)[0] === "repo" && samePath(keyOf(q)[1], repo);
-const isPullList = (q: Query, repo: string) => keyOf(q)[0] === "pull-lists" && (keyOf(q)[1] as string[]).some((p) => samePath(p, repo));
+const isPullList = (q: Query, repo: string) =>
+  keyOf(q)[0] === "pull-lists" && (keyOf(q)[1] as string[]).some((p) => samePath(p, repo));
 
 /** A changed priority or reusable result can reorder another commit's queued checks. */
-const isCheckList = (q: Query) => keyOf(q)[0] === "repo" && keyOf(q)[4] === "checks" && ["pull", "commit"].includes(String(keyOf(q)[2]));
+const isCheckList = (q: Query) =>
+  keyOf(q)[0] === "repo" &&
+  keyOf(q)[4] === "checks" &&
+  ["pull", "commit"].includes(String(keyOf(q)[2]));
 
 /** The pull request number of a repository query (`["repo", repo, "pull", n, ...]`). */
 const pullNumberOf = (q: Query) => (keyOf(q)[2] === "pull" ? String(keyOf(q)[3]) : null);
@@ -50,7 +55,10 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
         isCheckList,
         // Ticket ancestry is not cached with a PR, and interactive ancestors
         // can clear author actions across repositories. Refresh linked PRs.
-        (q) => keyOf(q)[0] === "repo" && keyOf(q)[2] === "pull" && keyOf(q).length === 4 &&
+        (q) =>
+          keyOf(q)[0] === "repo" &&
+          keyOf(q)[2] === "pull" &&
+          keyOf(q).length === 4 &&
           ((q.state.data as PullRequest | undefined)?.tickets?.length ?? 0) > 0,
         (q) => keyOf(q)[0] === "pull-lists",
         (q) => isRepo(q, path) && keyOf(q)[2] === "ticket" && (id === "" || keyOf(q)[3] === id),
@@ -72,7 +80,9 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
           cards.some((c) =>
             c.pull_requests.some((p) => {
               const r = routeOfUrl(p.url);
-              return r?.name === "pull" && r.repo === path && (id === "" || String(r.number) === id);
+              return (
+                r?.name === "pull" && r.repo === path && (id === "" || String(r.number) === id)
+              );
             }),
           ),
         ),
@@ -84,7 +94,10 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
         isCheckList,
         (q) => isPullList(q, path),
         // The server's per-pull landing decision changes with head checks.
-        (q) => isRepo(q, path) && keyOf(q)[2] === "pull" && keyOf(q).length === 4 &&
+        (q) =>
+          isRepo(q, path) &&
+          keyOf(q)[2] === "pull" &&
+          keyOf(q).length === 4 &&
           (id === "" || (q.state.data as PullRequest | undefined)?.head_sha === id),
         (q) => {
           if (!isRepo(q, path)) return false;
@@ -109,14 +122,24 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
         (q) => keyOf(q)[0] === "repos",
         (q) => {
           const k = keyOf(q);
-          return isRepo(q, path) && k[4] !== "files" && k[2] !== "ticket" && (k[2] !== "commit" || k[4] === "checks");
+          return (
+            isRepo(q, path) &&
+            k[4] !== "files" &&
+            k[2] !== "ticket" &&
+            (k[2] !== "commit" || k[4] === "checks")
+          );
         },
       ];
     case "upstream":
       return [
         (q) => isPullList(q, path),
         (q) => keyOf(q)[0] === "repos",
-        (q) => isRepo(q, path) && (keyOf(q).length === 2 || keyOf(q)[2] === "landing" || keyOf(q)[2] === "pull-list" || (keyOf(q)[2] === "pull" && keyOf(q)[4] !== "files")),
+        (q) =>
+          isRepo(q, path) &&
+          (keyOf(q).length === 2 ||
+            keyOf(q)[2] === "landing" ||
+            keyOf(q)[2] === "pull-list" ||
+            (keyOf(q)[2] === "pull" && keyOf(q)[4] !== "files")),
         (q) => keyOf(q)[0] === "diagnostics",
       ];
     default:
@@ -168,7 +191,10 @@ export function useChangeStream(client: QueryClient, enabled: boolean): boolean 
             connected = true;
           } else {
             connected = false;
-            lostTimer = setTimeout(() => setLost(true), Math.max(0, LOST_AFTER_MS - (Date.now() - message.downSince)));
+            lostTimer = setTimeout(
+              () => setLost(true),
+              Math.max(0, LOST_AFTER_MS - (Date.now() - message.downSince)),
+            );
           }
         } else if (message.type === "reset") {
           refetchShown();

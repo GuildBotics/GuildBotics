@@ -1,11 +1,42 @@
-import { Alert, Anchor, Button, Card, CopyButton, Group, Loader, Modal, NumberInput, Radio, SimpleGrid, Stack, Switch, Text, TextInput } from "@mantine/core";
+import {
+  Alert,
+  Anchor,
+  Button,
+  Card,
+  CopyButton,
+  Group,
+  Loader,
+  Modal,
+  NumberInput,
+  Radio,
+  SimpleGrid,
+  Stack,
+  Switch,
+  Text,
+  TextInput,
+} from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, FolderGit2, Plus, TriangleAlert } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { isApiError } from "../../api/client";
 import * as api from "../../api/endpoints";
-import type { CachedImage, CiLimits, CiRunner, CiSettings as Settings, ImageOperation, MissingImage } from "../../api/types";
-import { ErrorMessage, Loading, Notice, Refusal, StateBadge, Time, type Tone } from "../../components/common";
+import type {
+  CachedImage,
+  CiLimits,
+  CiRunner,
+  CiSettings as Settings,
+  ImageOperation,
+  MissingImage,
+} from "../../api/types";
+import {
+  ErrorMessage,
+  Loading,
+  Notice,
+  Refusal,
+  StateBadge,
+  Time,
+  type Tone,
+} from "../../components/common";
 import { PanelHeader } from "../../components/PanelHeader";
 import { useT, type MessageKey } from "../../i18n";
 import { resourceShortfallText } from "../../i18n/resourceShortfall";
@@ -14,8 +45,17 @@ import { keys } from "../../query/keys";
 import { Link } from "../../router/Router";
 import { href } from "../../router/routes";
 
-const CONNECTION_TONE: Record<CiRunner["connection"], Tone> = { online: "success", offline: "warning", never_seen: "neutral" };
-const RUNNER_TONE: Record<Settings["runner"]["state"], Tone> = { ready: "success", no_runner: "warning", executor_unavailable: "danger", stopping: "warning" };
+const CONNECTION_TONE: Record<CiRunner["connection"], Tone> = {
+  online: "success",
+  offline: "warning",
+  never_seen: "neutral",
+};
+const RUNNER_TONE: Record<Settings["runner"]["state"], Tone> = {
+  ready: "success",
+  no_runner: "warning",
+  executor_unavailable: "danger",
+  stopping: "warning",
+};
 
 /** An image's size as people read it (the cache holds images of hundreds of MiB to GiB). */
 function size(bytes: number): string {
@@ -85,7 +125,9 @@ export function CiSettings() {
                     <span className="setting-row-name">
                       <Link to={href.repoSettings(r.path)}>{r.path}</Link>
                     </span>
-                    <StateBadge tone={r.ci_network ? "warning" : "neutral"}>{t(r.ci_network ? "ci.settings.networkAllowed" : "ci.settings.networkDenied")}</StateBadge>
+                    <StateBadge tone={r.ci_network ? "warning" : "neutral"}>
+                      {t(r.ci_network ? "ci.settings.networkAllowed" : "ci.settings.networkDenied")}
+                    </StateBadge>
                   </div>
                 ))}
               </Stack>
@@ -99,7 +141,9 @@ export function CiSettings() {
 
 function ResourceQueue({ runners }: { runners: CiRunner[] }) {
   const t = useT();
-  const waiting = runners.flatMap((r) => r.resource_wait ? [{ name: r.name, ...r.resource_wait }] : []);
+  const waiting = runners.flatMap((r) =>
+    r.resource_wait ? [{ name: r.name, ...r.resource_wait }] : [],
+  );
   if (!waiting.length) return null;
   return (
     <Section title={t("ci.settings.resourceQueue")}>
@@ -108,7 +152,9 @@ function ResourceQueue({ runners }: { runners: CiRunner[] }) {
           const message = resourceShortfallText(t, name, shortfall);
           return (
             <Text size="sm" key={name}>
-              <Link to={href.job(repo, attempt_id)}>{repo} · {job}</Link>
+              <Link to={href.job(repo, attempt_id)}>
+                {repo} · {job}
+              </Link>
               {message && ` — ${message}`}
             </Text>
           );
@@ -119,7 +165,17 @@ function ResourceQueue({ runners }: { runners: CiRunner[] }) {
 }
 
 /** One part of the page, a card inside the page's card as the other settings pages nest theirs; what it holds (a Save button) belongs to it alone. */
-function Section({ title, description, action, children }: { title: string; description?: string; action?: ReactNode; children: ReactNode }) {
+function Section({
+  title,
+  description,
+  action,
+  children,
+}: {
+  title: string;
+  description?: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <Card p="md" withBorder component="section" aria-label={title}>
       <PanelHeader order={4} title={title} description={description} action={action} />
@@ -128,7 +184,15 @@ function Section({ title, description, action, children }: { title: string; desc
   );
 }
 
-function Runner({ settings, selected, onSelect }: { settings: Settings; selected: string; onSelect: (name: string) => void }) {
+function Runner({
+  settings,
+  selected,
+  onSelect,
+}: {
+  settings: Settings;
+  selected: string;
+  onSelect: (name: string) => void;
+}) {
   const t = useT();
   const { runner } = settings;
   const setMode = useCiChange(api.admin.setRunner);
@@ -136,9 +200,13 @@ function Runner({ settings, selected, onSelect }: { settings: Settings; selected
     <Section title={t("ci.settings.runner")}>
       <Stack gap="md">
         <Group gap="xs">
-          <StateBadge tone={RUNNER_TONE[runner.state]}>{t(`ci.settings.state.${runner.state}`)}</StateBadge>
+          <StateBadge tone={RUNNER_TONE[runner.state]}>
+            {t(`ci.settings.state.${runner.state}`)}
+          </StateBadge>
           <Text span size="sm">
-            {runner.version_mismatch ? t("ci.runnerVersionMismatch", runner.version_mismatch) : runner.detail}
+            {runner.version_mismatch
+              ? t("ci.runnerVersionMismatch", runner.version_mismatch)
+              : runner.detail}
           </Text>
         </Group>
         <Switch
@@ -156,7 +224,9 @@ function Runner({ settings, selected, onSelect }: { settings: Settings; selected
         ) : (
           <Radio.Group aria-label={t("ci.settings.runners")} value={selected} onChange={onSelect}>
             <Stack gap={6} role="list" aria-label={t("ci.settings.runners")}>
-              {runner.runners.map((r) => <RunnerRow key={r.name} runner={r} />)}
+              {runner.runners.map((r) => (
+                <RunnerRow key={r.name} runner={r} />
+              ))}
             </Stack>
           </Radio.Group>
         )}
@@ -175,13 +245,15 @@ function Runner({ settings, selected, onSelect }: { settings: Settings; selected
 function RunnerRow({ runner: r }: { runner: CiRunner }) {
   const t = useT();
   const online = r.connection === "online";
-  const reportTone = (ok: boolean): Tone => online ? (ok ? "success" : "warning") : "neutral";
+  const reportTone = (ok: boolean): Tone => (online ? (ok ? "success" : "warning") : "neutral");
   return (
     <div role="listitem" className="setting-row">
       <Stack gap={4} className="setting-row-name">
         <Radio value={r.name} label={r.name} />
         <Group gap="xs">
-          <StateBadge tone={CONNECTION_TONE[r.connection]}>{t(`ci.settings.connection.${r.connection}`)}</StateBadge>
+          <StateBadge tone={CONNECTION_TONE[r.connection]}>
+            {t(`ci.settings.connection.${r.connection}`)}
+          </StateBadge>
           <Text size="xs" c="dimmed">
             {online && r.max_jobs !== null
               ? t("ci.settings.capacity", { running: r.running_jobs, max: r.max_jobs })
@@ -191,30 +263,56 @@ function RunnerRow({ runner: r }: { runner: CiRunner }) {
         {r.last_seen_at && (
           <Stack gap={4}>
             <Text size="xs" c="dimmed">
-              {t(online ? "ci.settings.lastSeen" : "ci.settings.lastReport")} <Time value={r.last_seen_at} />
+              {t(online ? "ci.settings.lastSeen" : "ci.settings.lastReport")}{" "}
+              <Time value={r.last_seen_at} />
             </Text>
             <Group gap="xs">
               {r.executor_state && (
                 <StateBadge tone={reportTone(r.executor_state === "ready")}>
-                  {r.executor} · {t(r.executor_state === "ready" ? "ci.settings.state.ready" : "ci.settings.state.executor_unavailable")}
+                  {r.executor} ·{" "}
+                  {t(
+                    r.executor_state === "ready"
+                      ? "ci.settings.state.ready"
+                      : "ci.settings.state.executor_unavailable",
+                  )}
                 </StateBadge>
               )}
               {r.version && (
                 <StateBadge tone={reportTone(r.version_matches === true)}>
-                  {t(r.version_matches ? "ci.settings.versionMatches" : "ci.settings.versionMismatch", { version: r.version })}
+                  {t(
+                    r.version_matches
+                      ? "ci.settings.versionMatches"
+                      : "ci.settings.versionMismatch",
+                    { version: r.version },
+                  )}
                 </StateBadge>
               )}
             </Group>
             {!online && r.max_jobs !== null && (
-              <Text size="xs" c="dimmed">{t("ci.settings.reportedCapacity", { max: r.max_jobs })}</Text>
+              <Text size="xs" c="dimmed">
+                {t("ci.settings.reportedCapacity", { max: r.max_jobs })}
+              </Text>
             )}
-            {r.executor_detail && <Text size="xs" c="dimmed">{r.executor_detail}</Text>}
+            {r.executor_detail && (
+              <Text size="xs" c="dimmed">
+                {r.executor_detail}
+              </Text>
+            )}
             <Text size="xs" c="dimmed">
-              {r.machine ? t("ci.settings.machine", { cpus: r.machine.logical_cpus, total: r.machine.total_memory_mib, available: r.machine.available_memory_mib }) : t("ci.settings.machineUnknown")}
+              {r.machine
+                ? t("ci.settings.machine", {
+                    cpus: r.machine.logical_cpus,
+                    total: r.machine.total_memory_mib,
+                    available: r.machine.available_memory_mib,
+                  })
+                : t("ci.settings.machineUnknown")}
             </Text>
             {!!r.missing_images?.length && (
               <Text size="xs">
-                {t("ci.settings.runnerMissingImages", { cpu: r.architecture ?? "", images: r.missing_images.join(", ") })}
+                {t("ci.settings.runnerMissingImages", {
+                  cpu: r.architecture ?? "",
+                  images: r.missing_images.join(", "),
+                })}
               </Text>
             )}
           </Stack>
@@ -252,8 +350,12 @@ function Limits({ runner }: { runner: CiRunner }) {
   return (
     <Section title={t("ci.settings.limits")} description={t("ci.settings.limitsHelp")}>
       <Group gap="xs" mb="sm">
-        <Text size="sm" fw={600}>{runner.name}</Text>
-        <Text size="xs" c="dimmed">{t(`ci.settings.limitsSource.${runner.limits_source}`)}</Text>
+        <Text size="sm" fw={600}>
+          {runner.name}
+        </Text>
+        <Text size="xs" c="dimmed">
+          {t(`ci.settings.limitsSource.${runner.limits_source}`)}
+        </Text>
       </Group>
       <form
         aria-label={t("ci.settings.limits")}
@@ -299,18 +401,24 @@ function Limits({ runner }: { runner: CiRunner }) {
   );
 }
 
-
 function Images({ settings }: { settings: Settings }) {
   const t = useT();
   const { images, operation } = settings;
   const [adding, setAdding] = useState(false);
   // The images the latest operation brought, marked in the list.
-  const added = new Set(operation?.state === "succeeded" ? operation.loaded.map((l) => l.reference) : []);
+  const added = new Set(
+    operation?.state === "succeeded" ? operation.loaded.map((l) => l.reference) : [],
+  );
   return (
     <Section
       title={t("ci.settings.images")}
       action={
-        <Button size="xs" variant="default" leftSection={<Plus size={14} />} onClick={() => setAdding(true)}>
+        <Button
+          size="xs"
+          variant="default"
+          leftSection={<Plus size={14} />}
+          onClick={() => setAdding(true)}
+        >
           {t("ci.settings.addImage")}
         </Button>
       }
@@ -350,9 +458,15 @@ function Images({ settings }: { settings: Settings }) {
 /** An image pipelines name that the cache does not hold. */
 function Missing({ image: m }: { image: MissingImage }) {
   const t = useT();
-  const users = m.repositories.map((r) => t("ci.settings.jobsOf", { jobs: r.jobs.join(", "), repository: r.repository })).join(" · ");
+  const users = m.repositories
+    .map((r) => t("ci.settings.jobsOf", { jobs: r.jobs.join(", "), repository: r.repository }))
+    .join(" · ");
   return (
-    <Alert color="warning" icon={<TriangleAlert size={18} />} title={t("ci.settings.missingTitle", { users })}>
+    <Alert
+      color="warning"
+      icon={<TriangleAlert size={18} />}
+      title={t("ci.settings.missingTitle", { users })}
+    >
       <Stack gap={4}>
         <code className="secret">{m.image}</code>
         <Text size="sm">{t("ci.settings.missingAbsent")}</Text>
@@ -392,7 +506,12 @@ function CopyReference({ value }: { value: string }) {
   return (
     <CopyButton value={value} timeout={2000}>
       {({ copied, copy }) => (
-        <Button size="compact-xs" variant="default" leftSection={copied ? <Check size={12} /> : <Copy size={12} />} onClick={copy}>
+        <Button
+          size="compact-xs"
+          variant="default"
+          leftSection={copied ? <Check size={12} /> : <Copy size={12} />}
+          onClick={copy}
+        >
           {t(copied ? "common.copied" : "ci.settings.copyReference")}
         </Button>
       )}
@@ -403,13 +522,41 @@ function CopyReference({ value }: { value: string }) {
 type Source = "pull" | "load";
 
 /** Where an image comes from: the one field the dialog asks for, and the operation that adds it. */
-const SOURCES: Record<Source, { label: MessageKey; field: MessageKey; description?: MessageKey; placeholder: string; add: (value: string) => Promise<Settings> }> = {
-  pull: { label: "ci.settings.pull", field: "ci.settings.pullReference", placeholder: "debian:bookworm", add: api.admin.pullImage },
-  load: { label: "ci.settings.load", field: "ci.settings.loadPath", description: "ci.settings.loadHelp", placeholder: "/path/to/image.tar", add: api.admin.loadImage },
+const SOURCES: Record<
+  Source,
+  {
+    label: MessageKey;
+    field: MessageKey;
+    description?: MessageKey;
+    placeholder: string;
+    add: (value: string) => Promise<Settings>;
+  }
+> = {
+  pull: {
+    label: "ci.settings.pull",
+    field: "ci.settings.pullReference",
+    placeholder: "debian:bookworm",
+    add: api.admin.pullImage,
+  },
+  load: {
+    label: "ci.settings.load",
+    field: "ci.settings.loadPath",
+    description: "ci.settings.loadHelp",
+    placeholder: "/path/to/image.tar",
+    add: api.admin.loadImage,
+  },
 };
 
 /** The "Add image" dialog: it starts a pull or a load and follows it (the page polls a running operation) to its outcome. */
-function AddImage({ operation, opened, onClose }: { operation: ImageOperation | null; opened: boolean; onClose: () => void }) {
+function AddImage({
+  operation,
+  opened,
+  onClose,
+}: {
+  operation: ImageOperation | null;
+  opened: boolean;
+  onClose: () => void;
+}) {
   const t = useT();
   const [source, setSource] = useState<Source>("pull");
   const [value, setValue] = useState("");
@@ -427,7 +574,13 @@ function AddImage({ operation, opened, onClose }: { operation: ImageOperation | 
     onClose();
   }
   return (
-    <Modal opened={opened} onClose={close} title={t("ci.settings.addImage")} closeButtonProps={{ "aria-label": t("common.close") }} centered>
+    <Modal
+      opened={opened}
+      onClose={close}
+      title={t("ci.settings.addImage")}
+      closeButtonProps={{ "aria-label": t("common.close") }}
+      centered
+    >
       <form
         aria-label={t("ci.settings.addImage")}
         onSubmit={(e) => {
@@ -444,7 +597,11 @@ function AddImage({ operation, opened, onClose }: { operation: ImageOperation | 
         }}
       >
         <Stack gap="md">
-          <Radio.Group label={t("ci.settings.source")} value={source} onChange={(v) => setSource(v as Source)}>
+          <Radio.Group
+            label={t("ci.settings.source")}
+            value={source}
+            onChange={(v) => setSource(v as Source)}
+          >
             <Stack gap="xs" mt={6}>
               {(["pull", "load"] as const).map((s) => (
                 <Radio key={s} value={s} label={t(SOURCES[s].label)} />
@@ -460,7 +617,12 @@ function AddImage({ operation, opened, onClose }: { operation: ImageOperation | 
             data-autofocus
           />
           {shown && <Outcome operation={shown} />}
-          {add.isError && (isApiError(add.error, "conflict") ? <Refusal>{t("ci.settings.busy")}</Refusal> : <ErrorMessage error={add.error} />)}
+          {add.isError &&
+            (isApiError(add.error, "conflict") ? (
+              <Refusal>{t("ci.settings.busy")}</Refusal>
+            ) : (
+              <ErrorMessage error={add.error} />
+            ))}
           <Group justify="flex-end">
             <Button type="submit" disabled={running || add.isPending || !value.trim()}>
               {t("ci.settings.addSubmit")}

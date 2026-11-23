@@ -32,11 +32,18 @@ export function workspaceOfRoute(route: Route): string | null {
  * The shown workspace and the list it was picked from (null while the list
  * loads; `name` is null when there is none).
  */
-export function useCurrentWorkspace(route: Route): { name: string | null; names: string[] | null; select: (name: string) => void } {
+export function useCurrentWorkspace(route: Route): {
+  name: string | null;
+  names: string[] | null;
+  select: (name: string) => void;
+} {
   const workspaces = useWorkspaces();
   const [last, select] = useStored(REMEMBERED);
   const fromRoute = workspaceOfRoute(route);
-  const names = useMemo(() => (workspaces.data ? workspaces.data.items.map((w) => w.name) : null), [workspaces.data]);
+  const names = useMemo(
+    () => (workspaces.data ? workspaces.data.items.map((w) => w.name) : null),
+    [workspaces.data],
+  );
   useEffect(() => {
     if (fromRoute) select(fromRoute);
   }, [fromRoute, select]);

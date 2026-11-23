@@ -35,41 +35,47 @@ export function subscribeChangeStream(receive: (message: StreamMessage) => void)
   // Joining tabs need the current connection state even if no change arrives.
   receive(status());
   channel.postMessage({ type: "hello" });
-  void navigator.locks.request(STREAM_NAME, { signal: abort.signal }, async () => {
-    if (stopped) return;
-    leader = true;
-    downSince ??= Date.now();
-    let backoff = 1000;
-    const connect = () => {
-      source = new EventSource("/api/v1/events", { withCredentials: true });
-      source.onopen = () => {
-        backoff = 1000;
-        downSince = null;
-        publish(status());
+  void navigator.locks
+    .request(STREAM_NAME, { signal: abort.signal }, async () => {
+      if (stopped) return;
+      leader = true;
+      downSince ??= Date.now();
+      let backoff = 1000;
+      const connect = () => {
+        source = new EventSource("/api/v1/events", { withCredentials: true });
+        source.onopen = () => {
+          backoff = 1000;
+          downSince = null;
+          publish(status());
+        };
+        source.addEventListener("change", (e) =>
+          publish({ type: "change", data: (e as MessageEvent<string>).data }),
+        );
+        source.addEventListener("reset", () => publish({ type: "reset" }));
+        source.onerror = () => {
+          downSince ??= Date.now();
+          publish(status());
+          // EventSource reconnects CONNECTING streams itself. CLOSED streams
+          // (including a service shutdown) need a new instance after a backoff.
+          if (source?.readyState === EventSource.CLOSED) {
+            source.close();
+            retry = setTimeout(connect, backoff);
+            backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
+          }
+        };
       };
-      source.addEventListener("change", (e) => publish({ type: "change", data: (e as MessageEvent<string>).data }));
-      source.addEventListener("reset", () => publish({ type: "reset" }));
-      source.onerror = () => {
-        downSince ??= Date.now();
-        publish(status());
-        // EventSource reconnects CONNECTING streams itself. CLOSED streams
-        // (including a service shutdown) need a new instance after a backoff.
-        if (source?.readyState === EventSource.CLOSED) {
-          source.close();
-          retry = setTimeout(connect, backoff);
-          backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
-        }
-      };
-    };
-    publish(status());
-    connect();
-    await new Promise<void>((resolve) => { release = resolve; });
-  }).catch((error: unknown) => {
-    if (!stopped) {
-      // Lock acquisition failure must not open independent per-tab streams.
-      console.error("Could not acquire the change stream lock", error);
-    }
-  });
+      publish(status());
+      connect();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    })
+    .catch((error: unknown) => {
+      if (!stopped) {
+        // Lock acquisition failure must not open independent per-tab streams.
+        console.error("Could not acquire the change stream lock", error);
+      }
+    });
 
   return () => {
     stopped = true;

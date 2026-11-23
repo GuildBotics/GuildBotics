@@ -16,14 +16,21 @@ const REFUSALS = ["move_upstream_issue", "move_closing_pull", "move_repair", "co
  * confirms what changes with it: its number and URL, and the labels the other
  * repository does not define.
  */
-export function RepositoryField({ ticket, onMoved }: { ticket: Ticket; onMoved: (moved: Ticket) => void }) {
+export function RepositoryField({
+  ticket,
+  onMoved,
+}: {
+  ticket: Ticket;
+  onMoved: (moved: Ticket) => void;
+}) {
   const t = useT();
   const client = useQueryClient();
   const repos = useRepos();
   const workspace = ticket.repository.split("/")[0];
   const choices = (repos.data?.items ?? []).filter((r) => r.path.startsWith(`${workspace}/`));
   const move = useMutation({
-    mutationFn: (repository: string) => api.tickets.move(ticket.repository, ticket.key, { repository, revision: ticket.revision }),
+    mutationFn: (repository: string) =>
+      api.tickets.move(ticket.repository, ticket.key, { repository, revision: ticket.revision }),
     onSuccess: (res) => onMoved(res.ticket),
     onSettled: () => void client.invalidateQueries({ queryKey: ["board"] }),
   });
@@ -34,7 +41,9 @@ export function RepositoryField({ ticket, onMoved }: { ticket: Ticket; onMoved: 
     const dropped = ticket.labels.filter((l) => !to.labels.includes(l));
     const message = [
       t("ticket.moveConfirm", { key: `#${ticket.key}`, repository: to.path }),
-      ...(dropped.length ? [t("ticket.moveDropsLabels", { repository: to.path, labels: dropped.join(", ") })] : []),
+      ...(dropped.length
+        ? [t("ticket.moveDropsLabels", { repository: to.path, labels: dropped.join(", ") })]
+        : []),
     ].join("\n\n");
     if (window.confirm(message)) move.mutate(to.path);
   };
@@ -49,7 +58,12 @@ export function RepositoryField({ ticket, onMoved }: { ticket: Ticket; onMoved: 
         onChange={choose}
         data={choices.map((r) => ({ value: r.path, label: r.path }))}
       />
-      {move.isError && (refusal ? <Refusal>{t(`ticket.${refusal}`)}</Refusal> : <ErrorMessage error={move.error} />)}
+      {move.isError &&
+        (refusal ? (
+          <Refusal>{t(`ticket.${refusal}`)}</Refusal>
+        ) : (
+          <ErrorMessage error={move.error} />
+        ))}
     </Stack>
   );
 }

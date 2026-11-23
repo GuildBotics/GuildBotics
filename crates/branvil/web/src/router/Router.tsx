@@ -1,7 +1,14 @@
 // A minimal History API router: the GUI has few routes and its URL grammar
 // (`/{path}/-/{kind}/{id}`) is parsed by routes.ts.
 
-import { useEffect, useRef, useSyncExternalStore, type AnchorHTMLAttributes, type MouseEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useSyncExternalStore,
+  type AnchorHTMLAttributes,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { inAppPath } from "./routes";
 
 const listeners = new Set<() => void>();
@@ -51,7 +58,11 @@ export function usePathname(): string {
 const fragment = () => window.location.hash;
 
 function fragmentId(hash: string): string | null {
-  try { return decodeURIComponent(hash.slice(1)); } catch { return null; }
+  try {
+    return decodeURIComponent(hash.slice(1));
+  } catch {
+    return null;
+  }
 }
 
 function reveal(element: HTMLElement) {
@@ -73,13 +84,18 @@ export function useFragmentTarget(id: string) {
   return { ref, "data-target": fragmentId(hash) === id || undefined };
 }
 
-type LinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & { to: string; children: ReactNode; go?: () => void };
+type LinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
+  to: string;
+  children: ReactNode;
+  go?: () => void;
+};
 
 /** An in-app link: plain left clicks navigate without reloading the page (or `go` instead), others open `to` as a link does. */
 export function Link({ to, children, onClick, go = () => navigate(to), ...rest }: LinkProps) {
   const handle = (e: MouseEvent<HTMLAnchorElement>) => {
     onClick?.(e);
-    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
+      return;
     e.preventDefault();
     go();
   };
@@ -91,7 +107,15 @@ export function Link({ to, children, onClick, go = () => navigate(to), ...rest }
 }
 
 /** A link for a `url` the service returned: in-app when it is ours, external otherwise. */
-export function ServiceLink({ url, children, className }: { url: string; children: ReactNode; className?: string }) {
+export function ServiceLink({
+  url,
+  children,
+  className,
+}: {
+  url: string;
+  children: ReactNode;
+  className?: string;
+}) {
   const path = inAppPath(url);
   if (path !== null) {
     return (

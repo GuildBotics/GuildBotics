@@ -24,35 +24,56 @@ export function Tickets({ pull }: { pull: PullRequest }) {
   return (
     <Stack gap="xs" mt="md" component="section" aria-label={t("pull.tickets")}>
       <Group justify="space-between">
-        <Text size="sm" c="dimmed">{t("pull.tickets")}</Text>
+        <Text size="sm" c="dimmed">
+          {t("pull.tickets")}
+        </Text>
         {pull.state === "open" && !editing && (
-          <Button size="compact-xs" variant="subtle" onClick={() => setEditing(true)}>{t("pull.editTickets")}</Button>
+          <Button size="compact-xs" variant="subtle" onClick={() => setEditing(true)}>
+            {t("pull.editTickets")}
+          </Button>
         )}
       </Group>
       {editing && pull.state === "open" ? (
         <TicketsEditor pull={pull} label={label} onDone={() => setEditing(false)} />
       ) : (
         <Text size="sm" component="div">
-          {pull.tickets.length === 0 ? t("pull.noTickets") : pull.tickets.map((tk, i) => (
-            <span key={tk.url}>
-              {i > 0 && ", "}
-              <ServiceLink url={tk.url}>{label(tk.url)}</ServiceLink>
-              {tk.closes && <Text span c="dimmed"> {t("pull.closesTicket")}</Text>}
-            </span>
-          ))}
+          {pull.tickets.length === 0
+            ? t("pull.noTickets")
+            : pull.tickets.map((tk, i) => (
+                <span key={tk.url}>
+                  {i > 0 && ", "}
+                  <ServiceLink url={tk.url}>{label(tk.url)}</ServiceLink>
+                  {tk.closes && (
+                    <Text span c="dimmed">
+                      {" "}
+                      {t("pull.closesTicket")}
+                    </Text>
+                  )}
+                </span>
+              ))}
         </Text>
       )}
     </Stack>
   );
 }
 
-function TicketsEditor({ pull, label, onDone }: { pull: PullRequest; label: (url: string) => string; onDone: () => void }) {
+function TicketsEditor({
+  pull,
+  label,
+  onDone,
+}: {
+  pull: PullRequest;
+  label: (url: string) => string;
+  onDone: () => void;
+}) {
   const t = useT();
   const client = useQueryClient();
   const [form, setForm] = useState({ tickets: pull.tickets, revision: pull.revision });
   const workspace = pull.repository.split("/")[0] as string;
   const cards = useCards(workspace, "all");
-  const choices = (cards.data?.items ?? []).filter((c) => !form.tickets.some((tk) => tk.url === c.url));
+  const choices = (cards.data?.items ?? []).filter(
+    (c) => !form.tickets.some((tk) => tk.url === c.url),
+  );
   const save = useMutation({
     mutationFn: () => api.pulls.update(pull.repository, pull.number, form),
     onSuccess: (p) => {
@@ -60,16 +81,26 @@ function TicketsEditor({ pull, label, onDone }: { pull: PullRequest; label: (url
       // Ticket pages and board cards also show which PRs refer to each ticket.
       for (const tk of [...pull.tickets, ...p.tickets]) {
         const route = routeOfUrl(tk.url, new URL(pull.url).origin);
-        if (route?.name === "ticket") void client.invalidateQueries({ queryKey: keys.ticketPart(route.repo, route.key, "pulls") });
+        if (route?.name === "ticket")
+          void client.invalidateQueries({
+            queryKey: keys.ticketPart(route.repo, route.key, "pulls"),
+          });
       }
       void client.invalidateQueries({ queryKey: keys.board(workspace) });
       onDone();
     },
-    onSettled: () => client.invalidateQueries({ queryKey: keys.pull(pull.repository, pull.number) }),
+    onSettled: () =>
+      client.invalidateQueries({ queryKey: keys.pull(pull.repository, pull.number) }),
   });
   const conflict = save.isError && isApiError(save.error, "conflict");
   return (
-    <form aria-label={t("pull.editTickets")} onSubmit={(e) => { e.preventDefault(); if (!save.isPending && !conflict) save.mutate(); }}>
+    <form
+      aria-label={t("pull.editTickets")}
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!save.isPending && !conflict) save.mutate();
+      }}
+    >
       <Stack gap="sm">
         {form.tickets.map((tk) => {
           const title = cards.data?.items.find((c) => c.url === tk.url)?.title;
@@ -77,10 +108,14 @@ function TicketsEditor({ pull, label, onDone }: { pull: PullRequest; label: (url
           // Only canonical service URLs name local tickets to the API; browser
           // loopback aliases are useful for navigation but remain references.
           const prefix = pull.url.slice(0, pull.url.lastIndexOf("/-/pulls/")) + "/-/tickets/";
-          const canClose = tk.url.startsWith(prefix) && route?.name === "ticket" && route.repo === pull.repository;
+          const canClose =
+            tk.url.startsWith(prefix) && route?.name === "ticket" && route.repo === pull.repository;
           return (
             <Group key={tk.url} role="group" aria-label={label(tk.url)} justify="space-between">
-              <ServiceLink url={tk.url}>{label(tk.url)}{title && ` ${title}`}</ServiceLink>
+              <ServiceLink url={tk.url}>
+                {label(tk.url)}
+                {title && ` ${title}`}
+              </ServiceLink>
               <Group gap="xs">
                 <Checkbox
                   label={t("pull.closeOnMerge")}
@@ -88,33 +123,65 @@ function TicketsEditor({ pull, label, onDone }: { pull: PullRequest; label: (url
                   disabled={!canClose || save.isPending}
                   onChange={(e) => {
                     const closes = e.currentTarget.checked;
-                    setForm({ ...form, tickets: form.tickets.map((x) => x.url === tk.url ? { ...x, closes } : x) });
+                    setForm({
+                      ...form,
+                      tickets: form.tickets.map((x) => (x.url === tk.url ? { ...x, closes } : x)),
+                    });
                   }}
                 />
-                {!canClose && <Text size="xs" c="dimmed">{t("pull.referenceOnly")}</Text>}
-                <ActionIcon variant="subtle" color="gray" disabled={save.isPending} aria-label={t("pull.removeTicket", { ticket: label(tk.url) })}
-                  onClick={() => setForm({ ...form, tickets: form.tickets.filter((x) => x.url !== tk.url) })}>
+                {!canClose && (
+                  <Text size="xs" c="dimmed">
+                    {t("pull.referenceOnly")}
+                  </Text>
+                )}
+                <ActionIcon
+                  variant="subtle"
+                  color="gray"
+                  disabled={save.isPending}
+                  aria-label={t("pull.removeTicket", { ticket: label(tk.url) })}
+                  onClick={() =>
+                    setForm({ ...form, tickets: form.tickets.filter((x) => x.url !== tk.url) })
+                  }
+                >
                   <X size={14} />
                 </ActionIcon>
               </Group>
             </Group>
           );
         })}
-        {cards.isPending ? <Loading /> : cards.isError ? <ErrorMessage error={cards.error} /> : (
+        {cards.isPending ? (
+          <Loading />
+        ) : cards.isError ? (
+          <ErrorMessage error={cards.error} />
+        ) : (
           <Select
             label={t("pull.addTicket")}
             searchable
             value={null}
-            data={choices.map((c) => ({ value: c.url, label: `${ticketRef(c)} ${c.title}${c.state === "closed" ? ` (${t("ticket.closed")})` : ""}` }))}
+            data={choices.map((c) => ({
+              value: c.url,
+              label: `${ticketRef(c)} ${c.title}${c.state === "closed" ? ` (${t("ticket.closed")})` : ""}`,
+            }))}
             disabled={save.isPending}
             nothingFoundMessage={t("pull.noTicketChoices")}
-            onChange={(url) => { if (url) setForm({ ...form, tickets: [...form.tickets, { url, closes: false }] }); }}
+            onChange={(url) => {
+              if (url) setForm({ ...form, tickets: [...form.tickets, { url, closes: false }] });
+            }}
           />
         )}
-        {save.isError && (conflict ? <Refusal>{t("pull.ticketsConflict")}</Refusal> : <ErrorMessage error={save.error} />)}
+        {save.isError &&
+          (conflict ? (
+            <Refusal>{t("pull.ticketsConflict")}</Refusal>
+          ) : (
+            <ErrorMessage error={save.error} />
+          ))}
         <Group justify="flex-end" gap="xs">
-          <Button variant="default" disabled={save.isPending} onClick={onDone}>{t("common.cancel")}</Button>
-          <Button type="submit" disabled={save.isPending || conflict}>{t("common.save")}</Button>
+          <Button variant="default" disabled={save.isPending} onClick={onDone}>
+            {t("common.cancel")}
+          </Button>
+          <Button type="submit" disabled={save.isPending || conflict}>
+            {t("common.save")}
+          </Button>
         </Group>
       </Stack>
     </form>

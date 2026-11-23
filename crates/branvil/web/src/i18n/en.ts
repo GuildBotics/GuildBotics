@@ -2,13 +2,14 @@
 
 export const en = {
   "hub.versionLabel": '{sha} ("{subject}")',
-  "hub.preparingVersions": "Preparing an automatic Hub update from {current} to {target}. New runs will stop being accepted soon.",
-  "hub.updateVersions": "The Hub is updating automatically and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. After {runs} running tasks and {ci_jobs} CI jobs finish, the Hub will switch from {current} to {target}. Services will resume afterward if they were running when the stop was accepted.",
+  "hub.preparingVersions":
+    "Preparing an automatic Hub update from {current} to {target}. New runs will stop being accepted soon.",
+  "hub.updateVersions":
+    "The Hub is updating automatically and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. After {runs} running tasks and {ci_jobs} CI jobs finish, the Hub will switch from {current} to {target}. Services will resume afterward if they were running when the stop was accepted.",
   "hub.title": "Hub maintenance",
   "hub.version": "Hub version",
   "hub.dismiss": "Dismiss until the phase changes",
-  "hub.preparing":
-    "Preparing an automatic Hub update. New runs will stop being accepted soon.",
+  "hub.preparing": "Preparing an automatic Hub update. New runs will stop being accepted soon.",
   "hub.update":
     "The Hub is updating automatically and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. After {runs} running tasks and {ci_jobs} CI jobs finish, the Hub will switch versions. Services will resume afterward if they were running when the stop was accepted.",
   "hub.restart":
@@ -45,8 +46,10 @@ export const en = {
   "common.notProvided": "Not provided",
   "common.notAvailableYet": "Not available yet on this Branvil.",
   "common.forbidden": "You do not have permission.",
-  "common.sessionChanged": "This change was not saved. Copy what you entered, then reload the page and try again.",
-  "common.networkError": "Branvil is not reachable. Check that Branvil is running on the Hub. If you are using a machine other than the Hub, also check that the OpenSSH forwarding service is running.",
+  "common.sessionChanged":
+    "This change was not saved. Copy what you entered, then reload the page and try again.",
+  "common.networkError":
+    "Branvil is not reachable. Check that Branvil is running on the Hub. If you are using a machine other than the Hub, also check that the OpenSSH forwarding service is running.",
 
   "nav.main": "Main",
   "nav.home": "Home",
@@ -55,7 +58,8 @@ export const en = {
   "notFound.title": "Page not found",
 
   "guide.run": "On the Hub machine, print an entry link with:",
-  "guide.why": "Paste the printed URL into the address bar of this same browser. The link works once, for 60 seconds; access applies only to that browser.",
+  "guide.why":
+    "Paste the printed URL into the address bar of this same browser. The link works once, for 60 seconds; access applies only to that browser.",
 
   "lane.new": "New",
   "lane.ready": "Ready",
@@ -92,7 +96,8 @@ export const en = {
   "ticket.labels": "Labels",
   "ticket.interactive": "Interactive",
   "ticket.interactiveHelp": "While on, members do not start or reply to this ticket automatically.",
-  "ticket.interactiveInherited": "{ticket} is interactive, so members do not start or reply to this ticket automatically either.",
+  "ticket.interactiveInherited":
+    "{ticket} is interactive, so members do not start or reply to this ticket automatically either.",
   "ticket.noLabelsDefined": "The repository defines no labels.",
   "ticket.assignee": "Assignee",
   "ticket.upstreamIssue": "{host} issue",
@@ -107,7 +112,8 @@ export const en = {
   "ticket.closeDrawer": "Close the drawer",
   "ticket.copyUrl": "Copy the ticket's URL",
   "ticket.drawer": "Ticket",
-  "ticket.conflict": "The ticket was changed by someone else since you started editing. Review the latest version and edit again.",
+  "ticket.conflict":
+    "The ticket was changed by someone else since you started editing. Review the latest version and edit again.",
   "ticket.relations": "Relations",
   "ticket.parent": "Parent ticket",
   "ticket.children": "Child tickets",
@@ -163,17 +169,20 @@ export const en = {
   "pull.closeOnMerge": "Close on merge",
   "pull.referenceOnly": "Reference only (this link cannot be closed on merge)",
   "pull.noTicketChoices": "No matching tickets",
-  "pull.ticketsConflict": "The pull request changed, so your changes were not saved. Canceling discards your edits. Open the editor again and reapply your changes to the latest ticket links.",
+  "pull.ticketsConflict":
+    "The pull request changed, so your changes were not saved. Canceling discards your edits. Open the editor again and reapply your changes to the latest ticket links.",
   "pull.changes": "Changed files",
   "pull.checks": "Checks",
   "pull.checksOn": "on",
-  "pull.behindBy": "The base branch ({base}) is {count} commit(s) ahead of this PR's branch. Update this PR's branch with the latest base branch.",
+  "pull.behindBy":
+    "The base branch ({base}) is {count} commit(s) ahead of this PR's branch. Update this PR's branch with the latest base branch.",
   "pull.conversation": "Conversation and reviews",
   "pull.onRevision": "on",
   "pull.olderRevision": "an older revision",
   "pull.reviewingRevision": "Your review applies to head",
   "pull.reviewSubmitted": "Review submitted.",
-  "pull.headMoved": "The head moved after you loaded {sha}, so nothing was recorded. The pull request was reloaded; review the new head.",
+  "pull.headMoved":
+    "The head moved after you loaded {sha}, so nothing was recorded. The pull request was reloaded; review the new head.",
   "pull.otherActions": "Pull request actions",
   "pull.markReady": "Mark ready for review",
   "pull.markDraft": "Convert to draft",
@@ -217,7 +226,8 @@ export const en = {
   "landing.unanswered": "Awaiting the author's answer",
   "landing.detail.draft": "The pull request is a draft.",
   "landing.detail.already_in_base": "The head adds nothing to the base.",
-  "landing.detail.publish_requirements": "Publishing requires the default base and an author account on the host.",
+  "landing.detail.publish_requirements":
+    "Publishing requires the default base and an author account on the host.",
   "landing.detail.checking": "Checking the current head and base.",
   "landing.detail.head_checks": "Waiting for required checks.",
   "landing.detail.conflict": "Conflicting files: {files}",
@@ -230,11 +240,15 @@ export const en = {
   "landing.check.pathsSkipped": "Skipped by paths",
   "landing.check.postMergeSkipped": "Runs after merge",
   "settings.holdWhileFailing": "Publish only repair PRs while main verification is failing",
-  "settings.holdWhileFailingHelp": "PRs without a repair ticket are not merged until main verification passes. Both owner merges and automatic merges are held.",
-  "settings.holdWhileFailingHelpUpstream": "PRs without a repair ticket stay unpublished to {host} until main verification passes. Branvil cannot stop merges on {host} for PRs already published to {host}. Those PRs are shown as held.",
+  "settings.holdWhileFailingHelp":
+    "PRs without a repair ticket are not merged until main verification passes. Both owner merges and automatic merges are held.",
+  "settings.holdWhileFailingHelpUpstream":
+    "PRs without a repair ticket stay unpublished to {host} until main verification passes. Branvil cannot stop merges on {host} for PRs already published to {host}. Those PRs are shown as held.",
   "landing.blocker.held": "Held (main failing)",
-  "landing.held": "Held: main verification is failing (repair #{number}, assigned to {name}). The hold lifts when main verification passes.",
-  "landing.heldUnassigned": "Held: main verification is failing (repair #{number}, unassigned). The hold lifts when main verification passes.",
+  "landing.held":
+    "Held: main verification is failing (repair #{number}, assigned to {name}). The hold lifts when main verification passes.",
+  "landing.heldUnassigned":
+    "Held: main verification is failing (repair #{number}, unassigned). The hold lifts when main verification passes.",
   "landing.repairLink": "Open repair ticket #{number}",
   "landing.heldPublished": "Merging on {host} is still possible; Branvil cannot stop it.",
   "landing.blocker.draft": "Draft",
@@ -260,9 +274,11 @@ export const en = {
   "merge.merging": "Merging…",
   "merge.done": "Merged.",
   "merge.draft": "A draft cannot be merged; mark it ready first.",
-  "merge.auto": "This repository merges it automatically when its head checks, approvals and other landing conditions are met.",
+  "merge.auto":
+    "This repository merges it automatically when its head checks, approvals and other landing conditions are met.",
   "merge.headMoved": "The head moved since this page was loaded. Reload and review the new head.",
-  "merge.baseMoved": "The base moved during the merge; nothing was written. Update the branch and try again.",
+  "merge.baseMoved":
+    "The base moved during the merge; nothing was written. Update the branch and try again.",
   "merge.notMergeable": "Not mergeable: {message}",
 
   "files.summary": "{count} file(s)",
@@ -292,8 +308,10 @@ export const en = {
   "ci.conclusion.timed_out": "timed out",
   "ci.conclusion.skipped": "skipped",
   "settings.postMergeJobs": "Post-merge only jobs",
-  "settings.postMergeJobsHelp": "Jobs listed here run only during main verification after merging, not on PRs. They cannot be required checks.",
-  "ci.postMergeReason": "This job runs only after merging (repository setting), so it doesn't run on pull requests. It runs in the main verification after the merge. You can retry it to check it now.",
+  "settings.postMergeJobsHelp":
+    "Jobs listed here run only during main verification after merging, not on PRs. They cannot be required checks.",
+  "ci.postMergeReason":
+    "This job runs only after merging (repository setting), so it doesn't run on pull requests. It runs in the main verification after the merge. You can retry it to check it now.",
   "ci.postMergeSkipped": "Post-merge only",
   "ci.pathsSkipped": "Skipped (no changes)",
   "ci.pathsReason": "No changed file matches: {paths}",
@@ -319,7 +337,8 @@ export const en = {
   "ci.remaining": "about {time} left",
   "ci.lastTime": "{time} last time",
   "ci.artifacts": "Artifacts",
-  "ci.error.retry_pr_head_required": "Runner selection requires a current, unprotected pull request head.",
+  "ci.error.retry_pr_head_required":
+    "Runner selection requires a current, unprotected pull request head.",
   "ci.error.retry_runner_ineligible": "Select a runner with the job's image and the Hub version.",
   "ci.error.retry_runner_excluded": "The selected runner is also excluded.",
   "ci.retryRunner": "Select runner",
@@ -358,7 +377,8 @@ export const en = {
   "settings.loadLatest": "Load the latest values",
 
   "upstream.title": "Upstream",
-  "upstream.explain": "The repository on a code host this one follows: Branvil's default branch moves only to the host's, and pull requests are published there to be merged by people. One member's account on the host reads it.",
+  "upstream.explain":
+    "The repository on a code host this one follows: Branvil's default branch moves only to the host's, and pull requests are published there to be merged by people. One member's account on the host reads it.",
   "upstream.none": "No upstream: pull requests are merged here.",
   "upstream.provider": "Host",
   "upstream.repository": "Repository there",
@@ -371,7 +391,8 @@ export const en = {
   "upstream.checkNow": "Check now",
   "upstream.remove": "Remove upstream",
   "upstream.confirmRemove": "Stop following {repository}? Pull requests are then merged here.",
-  "upstream.noAccount": "Set a member's {host} account under Members first (an agent's bot account is enough): it reads the upstream.",
+  "upstream.noAccount":
+    "Set a member's {host} account under Members first (an agent's bot account is enough): it reads the upstream.",
   "upstream.reader": "Reads as",
   "upstream.readerPicked": "picked",
   "upstream.readerChosen": "chosen",
@@ -381,8 +402,10 @@ export const en = {
   "upstream.readerApply": "Change",
   "upstream.defaultBranchFollows": "It follows the upstream's default branch.",
   "account.title": "Accounts on code hosts",
-  "account.explainAgent": "Pull requests this member authored are published as this account. A repository's upstream may also be read as it (see the repository's upstream).",
-  "account.explainOwner": "The owner's own pull requests are published as this account. An upstream is read as it only when no agent has an account there, or when chosen.",
+  "account.explainAgent":
+    "Pull requests this member authored are published as this account. A repository's upstream may also be read as it (see the repository's upstream).",
+  "account.explainOwner":
+    "The owner's own pull requests are published as this account. An upstream is read as it only when no agent has an account there, or when chosen.",
   "account.none": "not set",
   "account.setAt": "set",
   "account.token": "{host} token",
@@ -390,7 +413,8 @@ export const en = {
   "account.form": "How the {host} account is set",
   "account.kind.token": "Token",
   "account.kind.app": "{host} App",
-  "account.appHelp": "The app's ID, the ID of its installation on the account that owns the repositories, and its private key. Branvil makes the app's short-lived tokens itself; the account acts as the app's bot.",
+  "account.appHelp":
+    "The app's ID, the ID of its installation on the account that owns the repositories, and its private key. Branvil makes the app's short-lived tokens itself; the account acts as the app's bot.",
   "account.appId": "App ID",
   "account.installationId": "Installation ID",
   "account.privateKey": "Private key (PEM)",
@@ -399,10 +423,12 @@ export const en = {
   "account.remove": "Remove",
   "account.confirmRemove": "Remove the {host} account {login}?",
   "publish.title": "Publish to {host}",
-  "publish.explain": "This repository follows {repository} on {host}: pull requests are not merged here but published to {host} and merged there. Publishing pushes the branch and opens a pull request as its author.",
+  "publish.explain":
+    "This repository follows {repository} on {host}: pull requests are not merged here but published to {host} and merged there. Publishing pushes the branch and opens a pull request as its author.",
   "publish.edit": "Edit title and body",
   "publish.body": "Body",
-  "publish.source": "They are Branvil's: {host} gets them as previewed, and an edit made on {host} is replaced when they change here.",
+  "publish.source":
+    "They are Branvil's: {host} gets them as previewed, and an edit made on {host} is replaced when they change here.",
   "publish.preview": "What will be posted",
   "publish.postedAs": "Posted on {host} as {login}.",
   "publish.noAccount": "{account} has no {host} account in Branvil; set it under Members.",
@@ -411,13 +437,15 @@ export const en = {
   "publish.confirmAgain": "Replace what {host} has on this branch with Branvil's head?",
   "publish.publishing": "Publishing…",
   "publish.draft": "A draft is not published; mark it ready first.",
-  "publish.auto": "This repository publishes it to {host} automatically when its head checks, approvals and other landing conditions are met.",
+  "publish.auto":
+    "This repository publishes it to {host} automatically when its head checks, approvals and other landing conditions are met.",
   "publish.automatically": "published automatically",
   "publish.notReady": "Not ready to publish: {message}",
   "publish.mergeThere": "Published. People review and merge it on {host}; Branvil follows.",
   "publish.noPullYet": "branch pushed, pull request not opened yet",
   "publish.as": "as {account}",
-  "publish.stopped": "Sending stopped: {reason} Publish again when the conditions are met to replace the host branch with Branvil's head.",
+  "publish.stopped":
+    "Sending stopped: {reason} Publish again when the conditions are met to replace the host branch with Branvil's head.",
   "publish.failing": "Last attempt failed (retried): {reason}",
 
   "member.create": "Create member",
@@ -425,9 +453,11 @@ export const en = {
   "member.avatarChoose": "Choose a picture",
   "member.avatarRemove": "Remove the picture",
   "member.reviewers": "Reviewers",
-  "member.reviewersExplain": "Every pull request {name} opens asks these members to review it. Pull requests already open stay as they are.",
+  "member.reviewersExplain":
+    "Every pull request {name} opens asks these members to review it. Pull requests already open stay as they are.",
   "member.reviewersTrigger": "Reviewers of {name}'s pull requests: {names} — click to change",
-  "member.reviewersHelp": "A tick asks for a review of every pull request {name} opens. {name} is not offered.",
+  "member.reviewersHelp":
+    "A tick asks for a review of every pull request {name} opens. {name} is not offered.",
   "member.reviewersNone": "No one is asked yet.",
   "member.reviewersNobody": "no one",
   "member.displayName": "Display name",
@@ -493,7 +523,8 @@ export const en = {
   "pickup.why.new": "{ticket} is in New",
   "pickup.why.unassigned": "{ticket} has no assignee",
   "pickup.why.done_open": "{ticket} is in Done but still open",
-  "pickup.waitHint": "Will not start until all of these tickets are closed: {tickets}; ready tickets further down can start first in the meantime",
+  "pickup.waitHint":
+    "Will not start until all of these tickets are closed: {tickets}; ready tickets further down can start first in the meantime",
   "pickup.waits": "Waiting: {blockers}",
   "pickup.waitFor": "until {ticket} closes",
   "pickup.waitDetails": " ({assignee} · {lane})",
@@ -502,14 +533,17 @@ export const en = {
   "pickup.sentence": ". ",
   "pickup.parent": "Parent: {ticket}",
   "pickup.filtered": "Hidden by the filters",
-  "pickup.lifted": "{key} lifted, number {position} of {count}. Move it with the up and down arrows, drop it with Space, cancel with Escape.",
+  "pickup.lifted":
+    "{key} lifted, number {position} of {count}. Move it with the up and down arrows, drop it with Space, cancel with Escape.",
   "pickup.position": "{key}: number {position} of {count}.",
   "pickup.dropped": "{key} dropped at number {position} of {count}.",
   "pickup.cancelled": "Moving {key} was cancelled.",
   "pickup.reordered": "Changed the pickup order: {key}.",
-  "pickup.reorderedWith": "Changed the pickup order: {key}, with {tickets} it waits for moved before it.",
+  "pickup.reorderedWith":
+    "Changed the pickup order: {key}, with {tickets} it waits for moved before it.",
   "pickup.stale": "{key} left the Ready lane meanwhile, so the order was not changed.",
-  "pickup.undoGone": "The moved tickets have all left the Ready lane meanwhile: there is nothing to put back.",
+  "pickup.undoGone":
+    "The moved tickets have all left the Ready lane meanwhile: there is nothing to put back.",
   "board.assignee": "Assignee of {key}: {name} — click to change",
   "workspace.label": "Workspace",
   "workspace.new": "New workspace",
@@ -522,10 +556,13 @@ export const en = {
   "alert.region": "Warnings",
   "alert.title": "Warning",
   "alert.dismiss": "Dismiss",
-  "alert.noRunner": "No CI runner is connected. Checks do not run; their jobs end as startup failures. Check the runner on the Hub.",
-  "alert.streamLost": "The connection to the server is lost, so what you see may be out of date. Reconnecting…",
+  "alert.noRunner":
+    "No CI runner is connected. Checks do not run; their jobs end as startup failures. Check the runner on the Hub.",
+  "alert.streamLost":
+    "The connection to the server is lost, so what you see may be out of date. Reconnecting…",
   "alert.executorUnavailable": "The CI runner cannot run jobs: {detail}",
-  "alert.stopping": "Branvil is stopping for an update or a restart once the running CI jobs finish. New jobs wait and start after it runs again.",
+  "alert.stopping":
+    "Branvil is stopping for an update or a restart once the running CI jobs finish. New jobs wait and start after it runs again.",
   "alert.upstream": "The upstream of {repository} cannot be followed: {problem}",
   "alert.openSettings": "Open the repository settings",
   "board.summary": "{workspace} · {count} open",
@@ -534,16 +571,24 @@ export const en = {
   "board.copyUrl": "Copy URL",
   "ticket.delete": "Delete",
   "ticket.confirmDelete": "Delete {key} and all its comments? This cannot be undone.",
-  "ticket.delete_has_children": "This ticket has child tickets. Remove their parent links before deleting it.",
-  "ticket.delete_blocks_tickets": "Other tickets are blocked by this ticket. Remove those links before deleting it.",
-  "ticket.delete_linked_pull": "This ticket is linked to a pull request. Remove the link before deleting it.",
-  "ticket.delete_upstream_issue": "This ticket is linked to an upstream issue. Remove the link before deleting it.",
+  "ticket.delete_has_children":
+    "This ticket has child tickets. Remove their parent links before deleting it.",
+  "ticket.delete_blocks_tickets":
+    "Other tickets are blocked by this ticket. Remove those links before deleting it.",
+  "ticket.delete_linked_pull":
+    "This ticket is linked to a pull request. Remove the link before deleting it.",
+  "ticket.delete_upstream_issue":
+    "This ticket is linked to an upstream issue. Remove the link before deleting it.",
   "ticket.repository": "Repository",
-  "ticket.moveConfirm": "Move {key} to {repository}? It takes the next number of {repository}, so its URL changes. Its current URL keeps leading to it.",
+  "ticket.moveConfirm":
+    "Move {key} to {repository}? It takes the next number of {repository}, so its URL changes. Its current URL keeps leading to it.",
   "ticket.moveDropsLabels": "Labels {repository} does not define are removed: {labels}",
-  "ticket.move_upstream_issue": "A ticket linked to an upstream issue cannot be moved. Remove the link before moving it.",
-  "ticket.move_closing_pull": "An open pull request closes this ticket. A merge closes only tickets of its own repository, so remove that link or merge it before moving the ticket.",
-  "ticket.move_repair": "A repair ticket fixes the failing checks of its own repository, so it cannot be moved.",
+  "ticket.move_upstream_issue":
+    "A ticket linked to an upstream issue cannot be moved. Remove the link before moving it.",
+  "ticket.move_closing_pull":
+    "An open pull request closes this ticket. A merge closes only tickets of its own repository, so remove that link or merge it before moving the ticket.",
+  "ticket.move_repair":
+    "A repair ticket fixes the failing checks of its own repository, so it cannot be moved.",
   "board.add": "Add ticket",
   "board.newTicketIn": "New ticket ({lane})",
   "people.nobody": "No one",
@@ -580,14 +625,16 @@ export const en = {
   "pulls.updated": "Updated",
   "pulls.noneOpen": "No open pull requests.",
   "pulls.none": "No pull requests.",
-  "pulls.noLoadedMatches": "No matching pull requests among those loaded. Load more to continue searching.",
+  "pulls.noLoadedMatches":
+    "No matching pull requests among those loaded. Load more to continue searching.",
   "pulls.noMatches": "No matching pull requests.",
   "pulls.loadMore": "Load more pull requests",
   "pulls.tipChecks": "Default branch CI",
   "pulls.tipOfWorkspace": "Default branch CI of {workspace}",
   "pulls.tipError": "could not load",
   "pulls.tipEmpty": "no commits",
-  "pulls.tipCut": "Checks are loaded for the first {count} repositories; {omitted} more are omitted.",
+  "pulls.tipCut":
+    "Checks are loaded for the first {count} repositories; {omitted} more are omitted.",
   "people.reviewersSummary": "Reviewers: {names}",
   "repo.tipChecks": "Checks of {branch}",
   "repo.noTip": "{branch} has no commits yet.",
@@ -602,11 +649,15 @@ export const en = {
   "settings.repoName": "Name",
   "settings.tagsHelp": "Type one and press Enter.",
   "settings.tabBasic": "Basics",
-  "settings.protectedHelp": "Branches that refuse direct pushes and deletion. Type one and press Enter.",
+  "settings.protectedHelp":
+    "Branches that refuse direct pushes and deletion. Type one and press Enter.",
   "settings.requiredHelp": "Checks that must succeed before a merge.",
-  "settings.requiredHelpUpstream": "Checks that must succeed before publishing to the upstream host.",
-  "settings.approvalsHelp": "How many members other than the author must have approved the current head before a merge (a later comment keeps an approval); 0 needs none.",
-  "settings.approvalsHelpUpstream": "How many members other than the author must have approved the current head before publishing to the upstream host (a later comment keeps an approval); 0 needs none.",
+  "settings.requiredHelpUpstream":
+    "Checks that must succeed before publishing to the upstream host.",
+  "settings.approvalsHelp":
+    "How many members other than the author must have approved the current head before a merge (a later comment keeps an approval); 0 needs none.",
+  "settings.approvalsHelpUpstream":
+    "How many members other than the author must have approved the current head before publishing to the upstream host (a later comment keeps an approval); 0 needs none.",
   "settings.labelsHelp": "Labels this repository's tickets may carry. Type one and press Enter.",
   "settings.addBranch": "Add a branch",
   "settings.addCheck": "Add a check (e.g. test)",
@@ -616,10 +667,13 @@ export const en = {
   "upstream.readerChoose": "Choose a member…",
   "settings.tabCi": "CI",
   "settings.autoLand": "Land automatically",
-  "settings.autoLandHelp": "When the required head checks and approvals are in place and the head does not conflict with the base, Branvil merges automatically. The combination with the base is verified after merging. Keep it a draft to hold it.",
-  "settings.autoLandHelpUpstream": "When the required head checks and approvals are in place and the head does not conflict with the base, Branvil publishes to {host} automatically as the author. People merge on {host}. Once the {host} checks succeed, the Notifications webhook is notified for each PR. The combination with the base is verified after merging. Keep it a draft to hold it.",
+  "settings.autoLandHelp":
+    "When the required head checks and approvals are in place and the head does not conflict with the base, Branvil merges automatically. The combination with the base is verified after merging. Keep it a draft to hold it.",
+  "settings.autoLandHelpUpstream":
+    "When the required head checks and approvals are in place and the head does not conflict with the base, Branvil publishes to {host} automatically as the author. People merge on {host}. Once the {host} checks succeed, the Notifications webhook is notified for each PR. The combination with the base is verified after merging. Keep it a draft to hold it.",
   "settings.notifications": "Notifications",
-  "notifications.help": "When a PR in a repository that lands automatically becomes ready to merge on the host, this webhook is notified once per PR. The message links to both pull requests (a Slack Incoming Webhook accepts it). Creating a repair ticket after main verification fails sends one notice with the failed jobs, range, ticket URL and assignee. The same webhook receives notices when member work stops for a person, the automatic re-review limit is reached, or a Hub update stops. The webhook URL is kept like a credential and is never shown again.",
+  "notifications.help":
+    "When a PR in a repository that lands automatically becomes ready to merge on the host, this webhook is notified once per PR. The message links to both pull requests (a Slack Incoming Webhook accepts it). Creating a repair ticket after main verification fails sends one notice with the failed jobs, range, ticket URL and assignee. The same webhook receives notices when member work stops for a person, the automatic re-review limit is reached, or a Hub update stops. The webhook URL is kept like a credential and is never shown again.",
   "notifications.url": "Webhook URL",
   "notifications.urlHelp": "An http or https URL; saving replaces the one set.",
   "notifications.set": "Set ({host})",
@@ -628,19 +682,23 @@ export const en = {
   "notifications.problem": "The last send failed: {reason}",
   "settings.responder": "Default responder",
   "settings.responderAuto": "Automatic",
-  "settings.responderHelp": "Assigned when main verification fails and the repair ticket cannot be assigned to a PR author. Automatic uses the active author of the most recently merged agent PR, then the first active person_id. An unavailable selected agent falls back to automatic assignment.",
+  "settings.responderHelp":
+    "Assigned when main verification fails and the repair ticket cannot be assigned to a PR author. Automatic uses the active author of the most recently merged agent PR, then the first active person_id. An unavailable selected agent falls back to automatic assignment.",
   "settings.ciNetwork": "Network for jobs",
-  "settings.ciNetworkHelp": "Lets this repository's CI jobs use the network. They reach public destinations only, never the Branvil machine or private networks, and destinations are not filtered by host name.",
+  "settings.ciNetworkHelp":
+    "Lets this repository's CI jobs use the network. They reach public destinations only, never the Branvil machine or private networks, and destinations are not filtered by host name.",
   "ci.runnerVersionMismatch": "{name} reported version {version}, which differs from the Hub.",
   "ci.settings.title": "CI",
-  "ci.settings.help": "The runner that runs jobs, what one job may use, and the images jobs run in.",
+  "ci.settings.help":
+    "The runner that runs jobs, what one job may use, and the images jobs run in.",
   "ci.settings.runner": "Runner",
   "ci.settings.state.ready": "Ready",
   "ci.settings.state.no_runner": "No runner",
   "ci.settings.state.executor_unavailable": "Executor unavailable",
   "ci.settings.state.stopping": "Stopping",
   "ci.settings.runHere": "Run the runner on the Branvil machine",
-  "ci.settings.runHereHelp": "Branvil starts the runner with the service and keeps it running. Switching it off interrupts the job it is running.",
+  "ci.settings.runHereHelp":
+    "Branvil starts the runner with the service and keeps it running. Switching it off interrupts the job it is running.",
   "ci.settings.runners": "Runners",
   "ci.settings.noRunners": "No runner members.",
   "ci.settings.connection.online": "Connected",
@@ -653,7 +711,8 @@ export const en = {
   "ci.settings.versionMismatch": "Version differs from the Hub ({version})",
   "ci.settings.runnerMissingImages": "Missing images for {cpu}: {images}",
   "ci.settings.forwarding": "Set up SSH forwarding before joining",
-  "ci.settings.forwardingUrl": "https://github.com/GuildBotics/GuildBotics/blob/main/docs/branvil_integration.en.md#set-up-ssh-forwarding-on-another-machine",
+  "ci.settings.forwardingUrl":
+    "https://github.com/GuildBotics/GuildBotics/blob/main/docs/branvil_integration.en.md#set-up-ssh-forwarding-on-another-machine",
   "ci.settings.lastReport": "Last report",
   "ci.settings.lastSeen": "last seen",
   "ci.settings.executor": "Executor",
@@ -662,7 +721,8 @@ export const en = {
   "ci.settings.limits": "Job resources",
   "ci.settings.limitsSource.default": "Hub defaults",
   "ci.settings.limitsSource.runner": "Saved for this runner",
-  "ci.settings.limitsHelp": "Every job runs with these CPUs and this memory, in a microVM of its own. Up to the number of parallel jobs run at once, using that many times the CPUs and memory. Work directory space is what a job may write to /work beyond the checkout and the restored cache. The time limit caps a pipeline's timeout_secs and is the limit of a job that gives none. Saved values apply from the next job the runner starts (running jobs go on).",
+  "ci.settings.limitsHelp":
+    "Every job runs with these CPUs and this memory, in a microVM of its own. Up to the number of parallel jobs run at once, using that many times the CPUs and memory. Work directory space is what a job may write to /work beyond the checkout and the restored cache. The time limit caps a pipeline's timeout_secs and is the limit of a job that gives none. Saved values apply from the next job the runner starts (running jobs go on).",
   "ci.settings.maxCpus": "CPUs",
   "ci.settings.maxMemory": "Memory (MiB)",
   "ci.settings.workQuota": "Work directory space (MiB)",
@@ -700,7 +760,8 @@ export const en = {
   "ci.settings.loaded": "Added images",
   "ci.settings.addedImage": "Added {reference}",
   "ci.settings.network": "Network",
-  "ci.settings.networkHelp": "Whether each repository's jobs may use the network. Change it on the CI tab of the repository's settings.",
+  "ci.settings.networkHelp":
+    "Whether each repository's jobs may use the network. Change it on the CI tab of the repository's settings.",
   "ci.settings.networkAllowed": "Allowed",
   "ci.settings.networkDenied": "Not allowed",
 } as const;

@@ -12,7 +12,9 @@ import { TicketOpener } from "./TicketLink";
  * only those typed in have a selection (not a checkbox's chip).
  */
 export const ownsEscape = (el: HTMLElement) =>
-  ((el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && el.selectionStart !== null)) && !el.readOnly) ||
+  ((el instanceof HTMLTextAreaElement ||
+    (el instanceof HTMLInputElement && el.selectionStart !== null)) &&
+    !el.readOnly) ||
   el.dataset.mantineStopPropagation === "true";
 
 /**
@@ -31,7 +33,8 @@ export function TicketDrawer({ children }: { children: ReactNode }) {
   useWindowEvent(
     "keydown",
     (e) => {
-      if (ticket && e.key === "Escape" && !e.isComposing && !ownsEscape(e.target as HTMLElement)) close();
+      if (ticket && e.key === "Escape" && !e.isComposing && !ownsEscape(e.target as HTMLElement))
+        close();
     },
     { capture: true },
   );
@@ -45,14 +48,29 @@ export function TicketDrawer({ children }: { children: ReactNode }) {
   return (
     <TicketOpener.Provider value={open}>
       {children}
-      <Drawer.Root opened={ticket !== null} onClose={close} position="right" size={960} closeOnEscape={false}>
+      <Drawer.Root
+        opened={ticket !== null}
+        onClose={close}
+        position="right"
+        size={960}
+        closeOnEscape={false}
+      >
         <Drawer.Overlay />
         <Drawer.Content ref={content} aria-label={t("ticket.drawer")}>
           {/* The header stays in view, so the drawer can be closed from anywhere in a long ticket. */}
           <Drawer.Header>
             <Drawer.CloseButton aria-label={t("ticket.closeDrawer")} />
           </Drawer.Header>
-          <Drawer.Body>{ticket && <TicketView key={`${ticket.repo}#${ticket.key}`} repo={ticket.repo} ticketKey={ticket.key} drawer />}</Drawer.Body>
+          <Drawer.Body>
+            {ticket && (
+              <TicketView
+                key={`${ticket.repo}#${ticket.key}`}
+                repo={ticket.repo}
+                ticketKey={ticket.key}
+                drawer
+              />
+            )}
+          </Drawer.Body>
         </Drawer.Content>
       </Drawer.Root>
     </TicketOpener.Provider>

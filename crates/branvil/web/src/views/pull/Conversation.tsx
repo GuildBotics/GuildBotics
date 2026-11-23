@@ -8,8 +8,30 @@ import { ChevronRight, GitCommitHorizontal, MessageSquare } from "lucide-react";
 import { useState } from "react";
 import { isApiError } from "../../api/client";
 import * as api from "../../api/endpoints";
-import type { Activity, MemberKind, PullCommit, PullRequest, Reaction, Review, Thread, Verdict } from "../../api/types";
-import { CommentView, ComposeForm, ErrorMessage, Loading, Notice, PostHead, Reactions, Refusal, Sha, StateBadge, Time, type OnReact } from "../../components/common";
+import type {
+  Activity,
+  MemberKind,
+  PullCommit,
+  PullRequest,
+  Reaction,
+  Review,
+  Thread,
+  Verdict,
+} from "../../api/types";
+import {
+  CommentView,
+  ComposeForm,
+  ErrorMessage,
+  Loading,
+  Notice,
+  PostHead,
+  Reactions,
+  Refusal,
+  Sha,
+  StateBadge,
+  Time,
+  type OnReact,
+} from "../../components/common";
 import { Markdown } from "../../components/Markdown";
 import { useT } from "../../i18n";
 import { keys } from "../../query/keys";
@@ -41,13 +63,45 @@ function CommitLine({ repo, commit }: { repo: string; commit: PullCommit }) {
   );
 }
 
-function ReviewView({ repo, number, review, headSha, kind, onReact }: { repo: string; number: number; review: Review; headSha: string; kind?: MemberKind; onReact: OnReact }) {
+function ReviewView({
+  repo,
+  number,
+  review,
+  headSha,
+  kind,
+  onReact,
+}: {
+  repo: string;
+  number: number;
+  review: Review;
+  headSha: string;
+  kind?: MemberKind;
+  onReact: OnReact;
+}) {
   const t = useT();
   const target = useFragmentTarget(review.id);
   return (
-    <article {...target} className={`comment ${review.verdict}`} id={review.id} aria-label={t("review.by", { author: review.author })}>
-      <PostHead author={review.author} kind={kind} at={review.submitted_at} url={`${href.pull(repo, number)}#${encodeURIComponent(review.id)}`}>
-        <StateBadge tone={review.verdict === "approve" ? "success" : review.verdict === "request_changes" ? "danger" : "neutral"}>
+    <article
+      {...target}
+      className={`comment ${review.verdict}`}
+      id={review.id}
+      aria-label={t("review.by", { author: review.author })}
+    >
+      <PostHead
+        author={review.author}
+        kind={kind}
+        at={review.submitted_at}
+        url={`${href.pull(repo, number)}#${encodeURIComponent(review.id)}`}
+      >
+        <StateBadge
+          tone={
+            review.verdict === "approve"
+              ? "success"
+              : review.verdict === "request_changes"
+                ? "danger"
+                : "neutral"
+          }
+        >
           {t(`verdict.${review.verdict}`)}
         </StateBadge>
         <Text span size="xs" c="dimmed">
@@ -83,17 +137,34 @@ function ThreadView({
     void client.invalidateQueries({ queryKey: keys.pullPart(repo, number, "threads") });
     void client.invalidateQueries({ queryKey: keys.pullPart(repo, number, "activity") });
   };
-  const reply = useMutation({ mutationFn: (body: string) => api.pulls.reply(repo, number, thread.id, body), onSettled: refresh });
-  const resolve = useMutation({ mutationFn: (resolved: boolean) => api.pulls.resolve(repo, number, thread.id, resolved), onSettled: refresh });
+  const reply = useMutation({
+    mutationFn: (body: string) => api.pulls.reply(repo, number, thread.id, body),
+    onSettled: refresh,
+  });
+  const resolve = useMutation({
+    mutationFn: (resolved: boolean) => api.pulls.resolve(repo, number, thread.id, resolved),
+    onSettled: refresh,
+  });
   const react = useMutation({
-    mutationFn: ({ id, reaction, on }: { id: string; reaction: Reaction; on: boolean }) => api.pulls.react(repo, number, id, reaction, on),
+    mutationFn: ({ id, reaction, on }: { id: string; reaction: Reaction; on: boolean }) =>
+      api.pulls.react(repo, number, id, reaction, on),
     onSettled: refresh,
   });
   const first = thread.comments[0];
   return (
-    <details className="thread" open={open} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+    <details
+      className="thread"
+      open={open}
+      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+    >
       <summary>
-        <ChevronRight size={14} style={{ transform: open ? "rotate(90deg)" : undefined, color: "var(--mantine-color-dimmed)" }} />
+        <ChevronRight
+          size={14}
+          style={{
+            transform: open ? "rotate(90deg)" : undefined,
+            color: "var(--mantine-color-dimmed)",
+          }}
+        />
         <MessageSquare size={14} color="var(--mantine-color-dimmed)" />
         <Anchor
           component="button"
@@ -125,7 +196,14 @@ function ThreadView({
       {/* Keep replies mounted so a fragment can reveal a collapsed thread. */}
       <div className="thread-body">
         {thread.comments.map((c) => (
-          <CommentView repo={repo} key={c.id} comment={c} url={`${href.pull(repo, number)}#${encodeURIComponent(c.id)}`} kind={kindOf(c.author)} onReact={(reaction, on) => react.mutate({ id: c.id, reaction, on })} />
+          <CommentView
+            repo={repo}
+            key={c.id}
+            comment={c}
+            url={`${href.pull(repo, number)}#${encodeURIComponent(c.id)}`}
+            kind={kindOf(c.author)}
+            onReact={(reaction, on) => react.mutate({ id: c.id, reaction, on })}
+          />
         ))}
         <ComposeForm
           label={t("thread.reply")}
@@ -134,12 +212,18 @@ function ThreadView({
           error={reply.error}
           onSubmit={(body) => reply.mutateAsync(body)}
           actions={() => (
-            <Button variant="default" onClick={() => resolve.mutate(!thread.resolved)} disabled={resolve.isPending}>
+            <Button
+              variant="default"
+              onClick={() => resolve.mutate(!thread.resolved)}
+              disabled={resolve.isPending}
+            >
               {thread.resolved ? t("thread.unresolve") : t("thread.resolve")}
             </Button>
           )}
         />
-        {(resolve.isError || react.isError) && <ErrorMessage error={resolve.error ?? react.error} />}
+        {(resolve.isError || react.isError) && (
+          <ErrorMessage error={resolve.error ?? react.error} />
+        )}
       </div>
     </details>
   );
@@ -171,15 +255,21 @@ export function Conversation({
   const repo = pull.repository;
   const number = pull.number;
   const [headMoved, setHeadMoved] = useState<string | null>(null);
-  const refresh = () => void client.invalidateQueries({ queryKey: keys.pullPart(repo, number, "activity") });
+  const refresh = () =>
+    void client.invalidateQueries({ queryKey: keys.pullPart(repo, number, "activity") });
   const react = useMutation({
-    mutationFn: ({ id, reaction, on }: { id: string; reaction: Reaction; on: boolean }) => api.pulls.react(repo, number, id, reaction, on),
+    mutationFn: ({ id, reaction, on }: { id: string; reaction: Reaction; on: boolean }) =>
+      api.pulls.react(repo, number, id, reaction, on),
     onSettled: refresh,
   });
-  const comment = useMutation({ mutationFn: (body: string) => api.pulls.comment(repo, number, body), onSettled: refresh });
+  const comment = useMutation({
+    mutationFn: (body: string) => api.pulls.comment(repo, number, body),
+    onSettled: refresh,
+  });
   const review = useMutation({
     // `commit` is the head the user is looking at; the service refuses it if the head moved.
-    mutationFn: ({ verdict, body }: { verdict: Verdict; body: string }) => api.pulls.review(repo, number, verdict, body, pull.head_sha),
+    mutationFn: ({ verdict, body }: { verdict: Verdict; body: string }) =>
+      api.pulls.review(repo, number, verdict, body, pull.head_sha),
     onMutate: () => setHeadMoved(null),
     onError: (err) => {
       if (isApiError(err, "head_moved")) setHeadMoved(pull.head_sha);
@@ -194,7 +284,9 @@ export function Conversation({
   // appears only when all of its sources have answered: nothing is inserted
   // above the target afterwards. A thread takes its place in the timeline
   // when its first comment was posted.
-  const settled = Boolean((activity || activityError) && (threads || threadsError) && (commits || commitsError));
+  const settled = Boolean(
+    (activity || activityError) && (threads || threadsError) && (commits || commitsError),
+  );
   const entries: Entry[] = settled
     ? [
         ...(activity?.comments ?? []).map((c) => ({ at: c.created_at, comment: c })),
@@ -215,17 +307,45 @@ export function Conversation({
         {!settled && <Loading />}
         {entries.map((e) =>
           "comment" in e ? (
-            <CommentView repo={repo} key={e.comment.id} comment={e.comment} url={`${href.pull(repo, number)}#${encodeURIComponent(e.comment.id)}`} kind={kindOf(e.comment.author)} onReact={(reaction, on) => react.mutate({ id: e.comment.id, reaction, on })} />
+            <CommentView
+              repo={repo}
+              key={e.comment.id}
+              comment={e.comment}
+              url={`${href.pull(repo, number)}#${encodeURIComponent(e.comment.id)}`}
+              kind={kindOf(e.comment.author)}
+              onReact={(reaction, on) => react.mutate({ id: e.comment.id, reaction, on })}
+            />
           ) : "review" in e ? (
-            <ReviewView repo={repo} number={number} key={e.review.id} review={e.review} headSha={pull.head_sha} kind={kindOf(e.review.author)} onReact={(reaction, on) => react.mutate({ id: e.review.id, reaction, on })} />
+            <ReviewView
+              repo={repo}
+              number={number}
+              key={e.review.id}
+              review={e.review}
+              headSha={pull.head_sha}
+              kind={kindOf(e.review.author)}
+              onReact={(reaction, on) => react.mutate({ id: e.review.id, reaction, on })}
+            />
           ) : "commit" in e ? (
             <CommitLine key={e.commit.sha} repo={repo} commit={e.commit} />
           ) : (
-            <ThreadView key={e.thread.id} repo={repo} number={number} thread={e.thread} kindOf={kindOf} onOpenFile={onOpenFile} />
+            <ThreadView
+              key={e.thread.id}
+              repo={repo}
+              number={number}
+              thread={e.thread}
+              kindOf={kindOf}
+              onOpenFile={onOpenFile}
+            />
           ),
         )}
         {react.isError && <ErrorMessage error={react.error} />}
-        {headMoved && <Refusal>{beforeHead}<Sha repo={repo} value={headMoved} />{afterHead}</Refusal>}
+        {headMoved && (
+          <Refusal>
+            {beforeHead}
+            <Sha repo={repo} value={headMoved} />
+            {afterHead}
+          </Refusal>
+        )}
         {review.isError && !headMoved && <ErrorMessage error={review.error} />}
         {review.isSuccess && <Notice>{t("pull.reviewSubmitted")}</Notice>}
         <ComposeForm
@@ -245,10 +365,20 @@ export function Conversation({
           trailing={(body, clear) =>
             open && (
               <>
-                <Button variant="default" disabled={review.isPending || !pull.head_sha} onClick={() => review.mutate({ verdict: "request_changes", body }, { onSuccess: clear })}>
+                <Button
+                  variant="default"
+                  disabled={review.isPending || !pull.head_sha}
+                  onClick={() =>
+                    review.mutate({ verdict: "request_changes", body }, { onSuccess: clear })
+                  }
+                >
                   {t("verdict.request_changes")}
                 </Button>
-                <Button variant="light" disabled={review.isPending || !pull.head_sha} onClick={() => review.mutate({ verdict: "approve", body }, { onSuccess: clear })}>
+                <Button
+                  variant="light"
+                  disabled={review.isPending || !pull.head_sha}
+                  onClick={() => review.mutate({ verdict: "approve", body }, { onSuccess: clear })}
+                >
                   {t("verdict.approve")}
                 </Button>
               </>

@@ -32,9 +32,23 @@ function pageOf(route: Route): Page {
   }
 }
 
-function NavItem({ to, active, icon, children }: { to: string; active: boolean; icon: ReactNode; children: ReactNode }) {
+function NavItem({
+  to,
+  active,
+  icon,
+  children,
+}: {
+  to: string;
+  active: boolean;
+  icon: ReactNode;
+  children: ReactNode;
+}) {
   return (
-    <Link to={to} className={active ? "nav-item active" : "nav-item"} aria-current={active ? "page" : undefined}>
+    <Link
+      to={to}
+      className={active ? "nav-item active" : "nav-item"}
+      aria-current={active ? "page" : undefined}
+    >
       {icon}
       <span>{children}</span>
     </Link>
@@ -66,7 +80,11 @@ export function Sidebar({
     // Preserve top-level pages; detail pages return to the task flow,
     // independently of the sidebar's current-location highlight.
     navigate(
-      route.name === "pulls" ? href.pulls(name) : route.name === "settings" ? href.settings() : href.workspace(name),
+      route.name === "pulls"
+        ? href.pulls(name)
+        : route.name === "settings"
+          ? href.settings()
+          : href.workspace(name),
     );
   };
   return (
@@ -90,10 +108,18 @@ export function Sidebar({
       <nav className="nav" aria-label={t("nav.main")}>
         {workspace && (
           <>
-            <NavItem to={href.workspace(workspace)} active={page === "workspace"} icon={<Workflow size={18} />}>
+            <NavItem
+              to={href.workspace(workspace)}
+              active={page === "workspace"}
+              icon={<Workflow size={18} />}
+            >
               {t("nav.relations")}
             </NavItem>
-            <NavItem to={href.pulls(workspace)} active={page === "pulls"} icon={<GitPullRequest size={18} />}>
+            <NavItem
+              to={href.pulls(workspace)}
+              active={page === "pulls"}
+              icon={<GitPullRequest size={18} />}
+            >
               {t("nav.pulls")}
             </NavItem>
             <div className="nav-separator" />
@@ -102,7 +128,12 @@ export function Sidebar({
         <NavItem to={href.settings()} active={page === "settings"} icon={<Settings size={18} />}>
           {t("nav.settings")}
         </NavItem>
-        {navigation && <a className="nav-item" href={navigation.url}><ArrowLeftRight size={18} aria-hidden="true" /><span>{navigation.label}</span></a>}
+        {navigation && (
+          <a className="nav-item" href={navigation.url}>
+            <ArrowLeftRight size={18} aria-hidden="true" />
+            <span>{navigation.label}</span>
+          </a>
+        )}
       </nav>
       <Stack gap={6} className="sidebar-language">
         <Text component="label" htmlFor="language-switch" className="sidebar-field-label">

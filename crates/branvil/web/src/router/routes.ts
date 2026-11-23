@@ -38,8 +38,10 @@ export function parseRoute(pathname: string): Route {
 
   if (segs[0] === "-") {
     const [, page, ...rest] = segs;
-    if (page === "settings" && rest.length <= 1) return { name: "settings", section: rest[0] ?? null };
-    if (page === "settings" && rest[0] === "repos" && rest.length === 3) return { name: "settings", section: null, repo: rest.slice(1).join("/") };
+    if (page === "settings" && rest.length <= 1)
+      return { name: "settings", section: rest[0] ?? null };
+    if (page === "settings" && rest[0] === "repos" && rest.length === 3)
+      return { name: "settings", section: null, repo: rest.slice(1).join("/") };
     return { name: "not_found", pathname };
   }
 
@@ -48,7 +50,9 @@ export function parseRoute(pathname: string): Route {
     return { name: "pulls", workspace: segs[0] as string };
   if (dash === -1) {
     if (segs.length === 1) return { name: "workspace", workspace: segs[0] as string };
-    return segs.length === 2 ? { name: "repo", repo: segs.join("/") } : { name: "not_found", pathname };
+    return segs.length === 2
+      ? { name: "repo", repo: segs.join("/") }
+      : { name: "not_found", pathname };
   }
   if (dash !== 2 || segs.length !== 5) return { name: "not_found", pathname };
   const path = segs.slice(0, dash).join("/");
@@ -59,7 +63,9 @@ export function parseRoute(pathname: string): Route {
     case "tickets":
     case "pulls": {
       if (!/^[1-9][0-9]*$/.test(id)) return { name: "not_found", pathname };
-      return kind === "tickets" ? { name: "ticket", repo: path, key: id } : { name: "pull", repo: path, number: Number(id) };
+      return kind === "tickets"
+        ? { name: "ticket", repo: path, key: id }
+        : { name: "pull", repo: path, number: Number(id) };
     }
     case "commits":
       return { name: "commit", repo: path, sha: id };
@@ -74,7 +80,8 @@ const joinPath = (path: string) => path.split("/").map(encodeURIComponent).join(
 
 export const href = {
   home: () => "/",
-  settings: (section?: string) => (section ? `/-/settings/${encodeURIComponent(section)}` : "/-/settings"),
+  settings: (section?: string) =>
+    section ? `/-/settings/${encodeURIComponent(section)}` : "/-/settings",
   repoSettings: (repo: string) => `/-/settings/repos/${joinPath(repo)}`,
   workspace: (workspace: string) => `/${encodeURIComponent(workspace)}`,
   pulls: (workspace: string) => `/${encodeURIComponent(workspace)}/-/pulls`,

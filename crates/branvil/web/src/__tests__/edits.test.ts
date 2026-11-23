@@ -3,7 +3,14 @@ import type { Card, TicketRef } from "../api/types";
 import { linkEdit, parentEdit, readied, unlinkEdit } from "../views/relations/edits";
 import { card } from "./fixtures";
 
-const ref = (c: Card): TicketRef => ({ url: c.url, repository: c.repository, key: c.key, title: c.title, state: c.state, state_reason: null });
+const ref = (c: Card): TicketRef => ({
+  url: c.url,
+  repository: c.repository,
+  key: c.key,
+  title: c.title,
+  state: c.state,
+  state_reason: null,
+});
 
 const url = (key: string) => `${window.location.origin}/acme/demo/-/tickets/${key}`;
 
@@ -47,7 +54,9 @@ describe("relations edits", () => {
     expect(parentEdit(child, parent)).toBeNull();
     expect(parentEdit(orphan, null)).toBeNull();
     // The same number in another repository is another ticket.
-    expect(parentEdit(child, card("1", "ready", { repository: "acme/web" }))?.changes[0]).toMatchObject({
+    expect(
+      parentEdit(child, card("1", "ready", { repository: "acme/web" }))?.changes[0],
+    ).toMatchObject({
       patch: { parent: `${window.location.origin}/acme/web/-/tickets/1` },
     });
   });
@@ -82,12 +91,25 @@ describe("relations edits", () => {
 
     it("makes the new tickets a relation is made between ready after it, and new again when it is undone", () => {
       expect(parentEdit(fresh, another)).toMatchObject({
-        changes: [{ key: "5", patch: { parent: url("6") } }, lane("5", "ready"), lane("6", "ready")],
+        changes: [
+          { key: "5", patch: { parent: url("6") } },
+          lane("5", "ready"),
+          lane("6", "ready"),
+        ],
         inverse: [{ key: "5", patch: { parent: null } }, lane("5", "new"), lane("6", "new")],
       });
-      expect(parentEdit(child, fresh)).toMatchObject({ changes: [{ key: "4" }, lane("5", "ready")], inverse: [{ key: "4" }, lane("5", "new")] });
-      expect(linkEdit(fresh, other)).toMatchObject({ changes: [{ key: "2" }, lane("5", "ready")], inverse: [{ key: "2" }, lane("5", "new")] });
-      expect(linkEdit(other, fresh)).toMatchObject({ changes: [{ key: "5" }, lane("5", "ready")], inverse: [{ key: "5" }, lane("5", "new")] });
+      expect(parentEdit(child, fresh)).toMatchObject({
+        changes: [{ key: "4" }, lane("5", "ready")],
+        inverse: [{ key: "4" }, lane("5", "new")],
+      });
+      expect(linkEdit(fresh, other)).toMatchObject({
+        changes: [{ key: "2" }, lane("5", "ready")],
+        inverse: [{ key: "2" }, lane("5", "new")],
+      });
+      expect(linkEdit(other, fresh)).toMatchObject({
+        changes: [{ key: "5" }, lane("5", "ready")],
+        inverse: [{ key: "5" }, lane("5", "new")],
+      });
     });
 
     it("makes a new child taken out onto the background ready, and new again in its parent when it is undone", () => {
@@ -102,7 +124,9 @@ describe("relations edits", () => {
       const inNew = card("8", "new", { blocked_by: [ref(other)] });
       expect(unlinkEdit(other, inNew).changes).toHaveLength(1);
       expect(parentEdit(closed, other)?.changes).toHaveLength(1);
-      expect(parentEdit(card("9", "new", { state: "closed", parent: ref(parent) }), null)?.changes).toHaveLength(1);
+      expect(
+        parentEdit(card("9", "new", { state: "closed", parent: ref(parent) }), null)?.changes,
+      ).toHaveLength(1);
       expect(readied([closed, fresh, other])).toEqual([lane("5", "ready")]);
     });
   });

@@ -9,7 +9,16 @@ import { Markdown } from "../components/Markdown";
 import { PageHeader } from "../components/PageHeader";
 import { ReviewersPicker } from "../components/PeoplePicker";
 import { useT } from "../i18n";
-import { useMemberKinds, usePull, usePullActivity, usePullCommits, usePullFiles, usePullThreads, useRepo, usePeople } from "../query/hooks";
+import {
+  useMemberKinds,
+  usePull,
+  usePullActivity,
+  usePullCommits,
+  usePullFiles,
+  usePullThreads,
+  useRepo,
+  usePeople,
+} from "../query/hooks";
 import { keys } from "../query/keys";
 import { Link, navigate } from "../router/Router";
 import { href } from "../router/routes";
@@ -20,7 +29,15 @@ import { MergeCard, PublishCard } from "./pull/Landing";
 import { LandingJourney } from "./pull/LandingStatus";
 import { Tickets } from "./pull/Tickets";
 
-export function PullView({ repo, number, openJob }: { repo: string; number: number; openJob?: string }) {
+export function PullView({
+  repo,
+  number,
+  openJob,
+}: {
+  repo: string;
+  number: number;
+  openJob?: string;
+}) {
   const t = useT();
   const client = useQueryClient();
   const pull = usePull(repo, number);
@@ -31,7 +48,9 @@ export function PullView({ repo, number, openJob }: { repo: string; number: numb
   const files = usePullFiles(repo, number, pull.data?.head_sha);
   const kindOf = useMemberKinds();
   const [filesOpen, setFilesOpen] = useState<{ focus: string | null } | null>(null);
-  const [check, setCheck] = useState<{ attemptId: string; hosted: Check | null } | null>(openJob ? { attemptId: openJob, hosted: null } : null);
+  const [check, setCheck] = useState<{ attemptId: string; hosted: Check | null } | null>(
+    openJob ? { attemptId: openJob, hosted: null } : null,
+  );
   const refresh = () => void client.invalidateQueries({ queryKey: keys.pull(repo, number) });
   const people = usePeople();
 
@@ -41,14 +60,18 @@ export function PullView({ repo, number, openJob }: { repo: string; number: numb
     onSettled: refresh,
   });
   const closeReopen = useMutation({
-    mutationFn: (close: boolean) => (close ? api.pulls.close(repo, number) : api.pulls.reopen(repo, number)),
+    mutationFn: (close: boolean) =>
+      close ? api.pulls.close(repo, number) : api.pulls.reopen(repo, number),
     onSuccess: (p) => client.setQueryData(keys.pull(repo, number), p),
     onSettled: refresh,
   });
   const reviewer = useMutation({
     mutationFn: ({ name, request }: { name: string; request: boolean }) =>
-      request ? api.pulls.requestReviewer(repo, number, name) : api.pulls.withdrawReviewer(repo, number, name),
-    onSettled: () => void client.invalidateQueries({ queryKey: keys.pull(repo, number), exact: true }),
+      request
+        ? api.pulls.requestReviewer(repo, number, name)
+        : api.pulls.withdrawReviewer(repo, number, name),
+    onSettled: () =>
+      void client.invalidateQueries({ queryKey: keys.pull(repo, number), exact: true }),
   });
 
   if (pull.isPending) return <Loading />;
@@ -69,7 +92,9 @@ export function PullView({ repo, number, openJob }: { repo: string; number: numb
         }
         meta={
           <>
-            <StateBadge tone={state === "closed" ? "neutral" : "success"}>{t(`pull.state.${state}`)}</StateBadge>
+            <StateBadge tone={state === "closed" ? "neutral" : "success"}>
+              {t(`pull.state.${state}`)}
+            </StateBadge>
             {pr.draft && <StateBadge tone="warning">{t("pull.draft")}</StateBadge>}
             <Anchor component={Link} to={href.repo(repo)} size="sm" title={t("pull.repoPulls")}>
               {repo}
@@ -86,7 +111,12 @@ export function PullView({ repo, number, openJob }: { repo: string; number: numb
             <Text span c="dimmed">
               ·
             </Text>
-            <Anchor component="button" type="button" size="sm" onClick={() => setFilesOpen({ focus: null })}>
+            <Anchor
+              component="button"
+              type="button"
+              size="sm"
+              onClick={() => setFilesOpen({ focus: null })}
+            >
               <Group gap={4} wrap="nowrap">
                 <FileDiff size={14} />
                 {t("files.summary", { count: fileItems?.length ?? pr.changed_files })}
@@ -111,7 +141,9 @@ export function PullView({ repo, number, openJob }: { repo: string; number: numb
         }
       />
       {reviewer.isError && <ErrorMessage error={reviewer.error} />}
-      {pr.state === "open" && repository.data && <LandingJourney pull={pr} repo={repository.data} />}
+      {pr.state === "open" && repository.data && (
+        <LandingJourney pull={pr} repo={repository.data} />
+      )}
 
       <Post head={<PostHead author={pr.author} kind={kindOf(pr.author)} at={pr.created_at} />}>
         <section aria-label={t("pull.description")}>
@@ -138,7 +170,12 @@ export function PullView({ repo, number, openJob }: { repo: string; number: numb
         onOpenFile={(path) => setFilesOpen({ focus: path })}
       />
 
-      <ChecksCard repo={repo} pull={pr} requiredChecks={repository.data?.required_checks ?? []} onOpen={(c) => setCheck(drawerTarget(c))} />
+      <ChecksCard
+        repo={repo}
+        pull={pr}
+        requiredChecks={repository.data?.required_checks ?? []}
+        onOpen={(c) => setCheck(drawerTarget(c))}
+      />
 
       {pr.state === "open" &&
         (repository.data?.upstream && pr.base === repository.data.default_branch ? (
@@ -148,14 +185,24 @@ export function PullView({ repo, number, openJob }: { repo: string; number: numb
         ) : null)}
 
       <Group justify="flex-end" gap="xs" component="section" aria-label={t("pull.otherActions")}>
-        {(setDraft.isError || closeReopen.isError) && <ErrorMessage error={setDraft.error ?? closeReopen.error} />}
+        {(setDraft.isError || closeReopen.isError) && (
+          <ErrorMessage error={setDraft.error ?? closeReopen.error} />
+        )}
         {pr.state === "open" && (
-          <Button variant="default" onClick={() => setDraft.mutate(!pr.draft)} disabled={setDraft.isPending}>
+          <Button
+            variant="default"
+            onClick={() => setDraft.mutate(!pr.draft)}
+            disabled={setDraft.isPending}
+          >
             {pr.draft ? t("pull.markReady") : t("pull.markDraft")}
           </Button>
         )}
         {!pr.merged && (
-          <Button variant="default" onClick={() => closeReopen.mutate(pr.state === "open")} disabled={closeReopen.isPending}>
+          <Button
+            variant="default"
+            onClick={() => closeReopen.mutate(pr.state === "open")}
+            disabled={closeReopen.isPending}
+          >
             {pr.state === "open" ? t("pull.close") : t("pull.reopen")}
           </Button>
         )}

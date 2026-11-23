@@ -2,7 +2,14 @@ import { Button, Card, Group, Select, Stack, Text, TextInput } from "@mantine/co
 import { Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { PullRequest } from "../api/types";
-import { ErrorMessage, Loading, MemberAvatar, StateBadge, Time, type Tone } from "../components/common";
+import {
+  ErrorMessage,
+  Loading,
+  MemberAvatar,
+  StateBadge,
+  Time,
+  type Tone,
+} from "../components/common";
 import { PageHeader } from "../components/PageHeader";
 import { useT } from "../i18n";
 import { useChecks, useMemberKinds, useRepos } from "../query/hooks";
@@ -20,13 +27,21 @@ const ALL_REPOS = "*";
 /** The most rows whose checks are read (one request each), as the board limits them. */
 const CI_BUDGET = 30;
 
-const CI_TONE: Record<CiRollup, Tone> = { passing: "success", failing: "danger", pending: "warning", not_registered: "warning", none: "neutral" };
+const CI_TONE: Record<CiRollup, Tone> = {
+  passing: "success",
+  failing: "danger",
+  pending: "warning",
+  not_registered: "warning",
+  none: "neutral",
+};
 
 function CiCell({ pull, load }: { pull: PullRequest; load: boolean }) {
   const t = useT();
   const checks = useChecks(pull.repository, pull.number, load);
   if (!checks.data) return null;
-  return <StateBadge tone={CI_TONE[rollup(checks.data)]}>{t(`ci.${rollup(checks.data)}`)}</StateBadge>;
+  return (
+    <StateBadge tone={CI_TONE[rollup(checks.data)]}>{t(`ci.${rollup(checks.data)}`)}</StateBadge>
+  );
 }
 
 /**
@@ -51,13 +66,18 @@ export function PullsView({ workspace, repo }: { workspace: string; repo: string
   const pending = repos.isPending || list.isPending;
   const failed = repos.error ?? (list.data ? null : list.error);
   const needle = text.trim().toLowerCase();
-  const pulls = (list.data?.pages.flatMap((p) => p.items) ?? [])
-    .filter((p) => !needle || `${p.repository} ${p.label} ${p.title}`.toLowerCase().includes(needle));
+  const pulls = (list.data?.pages.flatMap((p) => p.items) ?? []).filter(
+    (p) => !needle || `${p.repository} ${p.label} ${p.title}`.toLowerCase().includes(needle),
+  );
   // Checks are read for the first open rows only (closed rows show no checks).
   let opened = 0;
   const emptyMessage = needle
-    ? list.hasNextPage ? t("pulls.noLoadedMatches") : t("pulls.noMatches")
-    : state === "open" ? t("pulls.noneOpen") : t("pulls.none");
+    ? list.hasNextPage
+      ? t("pulls.noLoadedMatches")
+      : t("pulls.noMatches")
+    : state === "open"
+      ? t("pulls.noneOpen")
+      : t("pulls.none");
 
   return (
     <Stack gap="lg">
@@ -68,7 +88,9 @@ export function PullsView({ workspace, repo }: { workspace: string; repo: string
             {repo ?? t("pulls.ofWorkspace", { workspace })}
           </Text>
         }
-        right={<TipChecks key={repo ?? ALL_REPOS} workspace={workspace} paths={paths} repo={repo} />}
+        right={
+          <TipChecks key={repo ?? ALL_REPOS} workspace={workspace} paths={paths} repo={repo} />
+        }
       />
       <Card p="lg">
         <Group gap="sm" mb={14} role="search" aria-label={t("pulls.filters")}>
@@ -86,7 +108,10 @@ export function PullsView({ workspace, repo }: { workspace: string; repo: string
             value={repo ?? ALL_REPOS}
             allowDeselect={false}
             onChange={(v) => v && navigate(v === ALL_REPOS ? href.pulls(workspace) : href.repo(v))}
-            data={[{ value: ALL_REPOS, label: `${t("pulls.repository")}: ${t("board.any")}` }, ...paths.map((p) => ({ value: p, label: p }))]}
+            data={[
+              { value: ALL_REPOS, label: `${t("pulls.repository")}: ${t("board.any")}` },
+              ...paths.map((p) => ({ value: p, label: p })),
+            ]}
           />
           <Select
             aria-label={t("pulls.state")}
@@ -125,7 +150,13 @@ export function PullsView({ workspace, repo }: { workspace: string; repo: string
                 const load = s === "open" && opened++ < CI_BUDGET;
                 const repository = repoOf(p.repository);
                 return (
-                  <Link key={p.url} to={href.pull(p.repository, p.number)} className="list-row pull-cols" role="row" aria-label={`${p.repository} ${p.label} ${p.title}`}>
+                  <Link
+                    key={p.url}
+                    to={href.pull(p.repository, p.number)}
+                    className="list-row pull-cols"
+                    role="row"
+                    aria-label={`${p.repository} ${p.label} ${p.title}`}
+                  >
                     <Text span size="sm" c="dimmed" role="cell" truncate title={p.repository}>
                       {p.repository.slice(workspace.length + 1)}
                     </Text>
@@ -134,7 +165,13 @@ export function PullsView({ workspace, repo }: { workspace: string; repo: string
                     </span>
                     <span role="cell">{p.title}</span>
                     <span role="cell">
-                      {s !== "open" ? <StateBadge tone={s === "closed" ? "neutral" : "success"}>{t(`pull.state.${s}`)}</StateBadge> : repository && <JourneyBadge pull={p} repo={repository} load={load} />}
+                      {s !== "open" ? (
+                        <StateBadge tone={s === "closed" ? "neutral" : "success"}>
+                          {t(`pull.state.${s}`)}
+                        </StateBadge>
+                      ) : (
+                        repository && <JourneyBadge pull={p} repo={repository} load={load} />
+                      )}
                     </span>
                     <span role="cell">{p.state === "open" && <CiCell pull={p} load={load} />}</span>
                     <Group gap={6} role="cell" wrap="nowrap">
@@ -157,7 +194,12 @@ export function PullsView({ workspace, repo }: { workspace: string; repo: string
         )}
         {list.data && list.error && <ErrorMessage error={list.error} />}
         {list.hasNextPage && (
-          <Button variant="light" mt="sm" loading={list.isFetching} onClick={() => void list.fetchNextPage()}>
+          <Button
+            variant="light"
+            mt="sm"
+            loading={list.isFetching}
+            onClick={() => void list.fetchNextPage()}
+          >
             {t("pulls.loadMore")}
           </Button>
         )}

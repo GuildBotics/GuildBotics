@@ -33,38 +33,53 @@ it.each([true, false])(
     });
     renderApp("/", "en");
     if (embedded) {
-      expect(
-        await screen.findByText(/3 running tasks and 2 CI jobs/),
-      ).toBeInTheDocument();
+      expect(await screen.findByText(/3 running tasks and 2 CI jobs/)).toBeInTheDocument();
       expect(screen.getByRole("link", { name: "abcdef01" })).toHaveAttribute(
         "href",
         "https://example.com/commit/abcdef012345",
       );
       expect(screen.queryByText(/Branvil is stopping/)).not.toBeInTheDocument();
     } else {
-      expect(
-        await screen.findByText(/Branvil is stopping/),
-      ).toBeInTheDocument();
+      expect(await screen.findByText(/Branvil is stopping/)).toBeInTheDocument();
     }
   },
 );
 
 it("polls standalone and idle diagnostics slowly, with short intervals only during Hub work", async () => {
   vi.useFakeTimers();
-  const client = new QueryClient({defaultOptions:{queries:{retry:false}}});
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   let operation: unknown = null;
-  const calls = fakeApi({"GET /api/v1/admin/diagnostics": () => json(200,{hub:{operation}})});
+  const calls = fakeApi({
+    "GET /api/v1/admin/diagnostics": () => json(200, { hub: { operation } }),
+  });
   try {
-    renderHook(() => useDiagnostics(),{wrapper:({children}) => <QueryClientProvider client={client}>{children}</QueryClientProvider>});
-    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    renderHook(() => useDiagnostics(), {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
     expect(calls.requests).toHaveLength(1);
-    await act(async () => { await vi.advanceTimersByTimeAsync(29999); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(29999);
+    });
     expect(calls.requests).toHaveLength(2);
-    operation = {kind:"update",phase:"preparing"};
-    await act(async () => { client.setQueryData(["diagnostics"],{hub:{operation}}); await vi.advanceTimersByTimeAsync(2000); });
+    operation = { kind: "update", phase: "preparing" };
+    await act(async () => {
+      client.setQueryData(["diagnostics"], { hub: { operation } });
+      await vi.advanceTimersByTimeAsync(2000);
+    });
     expect(calls.requests).toHaveLength(3);
     operation = null;
-    await act(async () => { client.setQueryData(["diagnostics"],{hub:{operation}}); await vi.advanceTimersByTimeAsync(2000); });
+    await act(async () => {
+      client.setQueryData(["diagnostics"], { hub: { operation } });
+      await vi.advanceTimersByTimeAsync(2000);
+    });
     expect(calls.requests).toHaveLength(3);
-  } finally { client.clear(); vi.useRealTimers(); }
+  } finally {
+    client.clear();
+    vi.useRealTimers();
+  }
 });

@@ -21,14 +21,20 @@ export const keys = {
   commit: (repo: string, sha: string) => ["repo", repo, "commit", sha] as const,
   commitChecks: (repo: string, sha: string) => ["repo", repo, "commit", sha, "checks"] as const,
   pull: (repo: string, number: number) => ["repo", repo, "pull", number] as const,
-  pullPart: (repo: string, number: number, part: "activity" | "threads" | "commits" | "files" | "checks" | "publish") =>
-    ["repo", repo, "pull", number, part] as const,
+  pullPart: (
+    repo: string,
+    number: number,
+    part: "activity" | "threads" | "commits" | "files" | "checks" | "publish",
+  ) => ["repo", repo, "pull", number, part] as const,
   job: (repo: string, id: string) => ["repo", repo, "job", id] as const,
-  jobLog: (repo: string, id: string, tail: number) => ["repo", repo, "job", id, "log", tail] as const,
+  jobLog: (repo: string, id: string, tail: number) =>
+    ["repo", repo, "job", id, "log", tail] as const,
   ticket: (repo: string, key: string) => ["repo", repo, "ticket", key] as const,
-  ticketPart: (repo: string, key: string, part: "comments" | "pulls") => ["repo", repo, "ticket", key, part] as const,
+  ticketPart: (repo: string, key: string, part: "comments" | "pulls") =>
+    ["repo", repo, "ticket", key, part] as const,
 
   /** A workspace with its board. */
   board: (workspace: string) => ["board", workspace] as const,
-  cards: (workspace: string, state: "open" | "all") => ["board", workspace, "cards", state] as const,
+  cards: (workspace: string, state: "open" | "all") =>
+    ["board", workspace, "cards", state] as const,
 };

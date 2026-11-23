@@ -39,7 +39,20 @@ export const NEW_HEAD = "b".repeat(40);
 export const BASE = "c".repeat(40);
 
 export function landing(extra: Partial<Landing> = {}): Landing {
-  return { number: 3, head_sha: HEAD, base_sha: BASE, conflicts: [], told: [], notified_at: null, error: null, blockers: [], next: "owner_merge_host", host_url: "https://example.test/pulls/3", next_detail: null, ...extra };
+  return {
+    number: 3,
+    head_sha: HEAD,
+    base_sha: BASE,
+    conflicts: [],
+    told: [],
+    notified_at: null,
+    error: null,
+    blockers: [],
+    next: "owner_merge_host",
+    host_url: "https://example.test/pulls/3",
+    next_detail: null,
+    ...extra,
+  };
 }
 
 export function pull(extra: Partial<ListedPull> = {}): ListedPull {

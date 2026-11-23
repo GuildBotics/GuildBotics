@@ -1,17 +1,46 @@
-import { ActionIcon, Anchor, Button, Card, Chip, Group, Menu, Select, Stack, Switch, Text, TextInput } from "@mantine/core";
+import {
+  ActionIcon,
+  Anchor,
+  Button,
+  Card,
+  Chip,
+  Group,
+  Menu,
+  Select,
+  Stack,
+  Switch,
+  Text,
+  TextInput,
+} from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Pencil } from "lucide-react";
 import { useCallback, useContext, useEffect, useState } from "react";
 import { isApiError } from "../api/client";
 import * as api from "../api/endpoints";
 import { LANES, type Lane, type Reaction, type Ticket, type TicketRef } from "../api/types";
-import { ComposeForm, CopyButton, ErrorMessage, Loading, Post, PostHead, Refusal, StateBadge } from "../components/common";
+import {
+  ComposeForm,
+  CopyButton,
+  ErrorMessage,
+  Loading,
+  Post,
+  PostHead,
+  Refusal,
+  StateBadge,
+} from "../components/common";
 import { BodyEditor, EditableTitle, EditPencil } from "../components/Editable";
 import { Markdown } from "../components/Markdown";
 import { PageHeader } from "../components/PageHeader";
 import { AssigneePicker } from "../components/PeoplePicker";
 import { useT } from "../i18n";
-import { useMemberKinds, useRepo, useTicket, useTicketComments, useTicketPulls, usePeople } from "../query/hooks";
+import {
+  useMemberKinds,
+  useRepo,
+  useTicket,
+  useTicketComments,
+  useTicketPulls,
+  usePeople,
+} from "../query/hooks";
 import { keys } from "../query/keys";
 import { navigate, ServiceLink } from "../router/Router";
 import { href } from "../router/routes";
@@ -21,7 +50,15 @@ import { TicketComment } from "./ticket/TicketComment";
 import { TicketLink, TicketOpener } from "./ticket/TicketLink";
 
 /** A ticket: its page, or, in a `drawer` over a page, whose URL it does not take: then it offers its own to copy. */
-export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKey: string; drawer?: boolean }) {
+export function TicketView({
+  repo,
+  ticketKey,
+  drawer,
+}: {
+  repo: string;
+  ticketKey: string;
+  drawer?: boolean;
+}) {
   const t = useT();
   const client = useQueryClient();
   const ticket = useTicket(repo, ticketKey);
@@ -40,7 +77,8 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
     onSettled: refresh,
   });
   const react = useMutation({
-    mutationFn: ({ id, reaction, on }: { id: string; reaction: Reaction; on: boolean }) => api.tickets.react(repo, ticketKey, id, reaction, on),
+    mutationFn: ({ id, reaction, on }: { id: string; reaction: Reaction; on: boolean }) =>
+      api.tickets.react(repo, ticketKey, id, reaction, on),
     onSettled: refresh,
   });
   const update = useMutation({
@@ -55,7 +93,8 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
     },
   });
   const assignee = useMutation({
-    mutationFn: (name: string | null) => (name ? api.tickets.assign(repo, ticketKey, name) : api.tickets.unassign(repo, ticketKey)),
+    mutationFn: (name: string | null) =>
+      name ? api.tickets.assign(repo, ticketKey, name) : api.tickets.unassign(repo, ticketKey),
     onSettled: () => {
       refresh();
       refreshBoards();
@@ -73,10 +112,16 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
   // address leads to it, and so does a move made here.
   const opener = useContext(TicketOpener);
   const relocate = useCallback(
-    (at: Ticket) => (drawer && opener ? opener(at.repository, at.key) : navigate(href.ticket(at.repository, at.key), { replace: true })),
+    (at: Ticket) =>
+      drawer && opener
+        ? opener(at.repository, at.key)
+        : navigate(href.ticket(at.repository, at.key), { replace: true }),
     [drawer, opener],
   );
-  const moved = ticket.data && (ticket.data.repository !== repo || ticket.data.key !== ticketKey) ? ticket.data : null;
+  const moved =
+    ticket.data && (ticket.data.repository !== repo || ticket.data.key !== ticketKey)
+      ? ticket.data
+      : null;
   useEffect(() => {
     if (moved) relocate(moved);
   }, [moved, relocate]);
@@ -92,20 +137,36 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
       <PageHeader
         title={
           <Group gap={4} wrap="nowrap" align="center">
-            <EditableTitle prefix={`#${tk.key}`} value={tk.title} pending={update.isPending} onSave={(title) => save({ title })} />
+            <EditableTitle
+              prefix={`#${tk.key}`}
+              value={tk.title}
+              pending={update.isPending}
+              onSave={(title) => save({ title })}
+            />
             {drawer && <CopyButton value={tk.url} label={t("ticket.copyUrl")} />}
           </Group>
         }
         meta={
           <>
             {tk.repair && <StateBadge tone="warning">{t("ticket.repair")}</StateBadge>}
-            <StateBadge tone={tk.state === "open" ? "success" : "neutral"}>{t(tk.state === "open" ? "ticket.open" : "ticket.closed")}</StateBadge>
-            {tk.state_reason && <Text span size="sm" c="dimmed">{t(`ticket.reason.${tk.state_reason}`)}</Text>}
+            <StateBadge tone={tk.state === "open" ? "success" : "neutral"}>
+              {t(tk.state === "open" ? "ticket.open" : "ticket.closed")}
+            </StateBadge>
+            {tk.state_reason && (
+              <Text span size="sm" c="dimmed">
+                {t(`ticket.reason.${tk.state_reason}`)}
+              </Text>
+            )}
             <span>{tk.repository}</span>
           </>
         }
         right={
-          <AssigneePicker current={tk.assignee?.name ?? null} people={people} disabled={assignee.isPending} onChoose={(name) => assignee.mutate(name)} />
+          <AssigneePicker
+            current={tk.assignee?.name ?? null}
+            people={people}
+            disabled={assignee.isPending}
+            onChoose={(name) => assignee.mutate(name)}
+          />
         }
       />
       {update.isError && <TicketError error={update.error} />}
@@ -116,7 +177,9 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
           <Post
             head={
               <PostHead author={tk.author} kind={kindOf(tk.author)} at={tk.created_at}>
-                {!editingBody && <EditPencil label={t("ticket.editBody")} onClick={() => setEditingBody(true)} />}
+                {!editingBody && (
+                  <EditPencil label={t("ticket.editBody")} onClick={() => setEditingBody(true)} />
+                )}
               </PostHead>
             }
           >
@@ -126,7 +189,12 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
                 pending={update.isPending}
                 attachTo={repo}
                 onCancel={() => setEditingBody(false)}
-                onSave={(body) => void save({ body }).then(() => setEditingBody(false), () => undefined)}
+                onSave={(body) =>
+                  void save({ body }).then(
+                    () => setEditingBody(false),
+                    () => undefined,
+                  )
+                }
               />
             ) : tk.body.trim() ? (
               <Markdown repo={repo} source={tk.body} />
@@ -145,7 +213,14 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
                 <ErrorMessage error={comments.error} />
               ) : (
                 comments.data.items.map((c) => (
-                  <TicketComment key={c.id} repo={repo} ticketKey={ticketKey} comment={c} kind={kindOf(c.author)} onReact={(reaction, on) => react.mutate({ id: c.id, reaction, on })} />
+                  <TicketComment
+                    key={c.id}
+                    repo={repo}
+                    ticketKey={ticketKey}
+                    comment={c}
+                    kind={kindOf(c.author)}
+                    onReact={(reaction, on) => react.mutate({ id: c.id, reaction, on })}
+                  />
                 ))
               )}
               {react.isError && <ErrorMessage error={react.error} />}
@@ -190,7 +265,9 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
                         size="xs"
                         checked={tk.labels.includes(l)}
                         disabled={update.isPending}
-                        onChange={(on) => update.mutate(on ? { add_labels: [l] } : { remove_labels: [l] })}
+                        onChange={(on) =>
+                          update.mutate(on ? { add_labels: [l] } : { remove_labels: [l] })
+                        }
                       >
                         {l}
                       </Chip>
@@ -200,7 +277,13 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
               </Stack>
               <Switch
                 label={t("ticket.interactive")}
-                description={tk.interactive_ancestor ? <InheritedInteractive ancestor={tk.interactive_ancestor} ticket={tk} /> : t("ticket.interactiveHelp")}
+                description={
+                  tk.interactive_ancestor ? (
+                    <InheritedInteractive ancestor={tk.interactive_ancestor} ticket={tk} />
+                  ) : (
+                    t("ticket.interactiveHelp")
+                  )
+                }
                 checked={tk.interactive || tk.interactive_ancestor !== null}
                 disabled={update.isPending || tk.interactive_ancestor !== null}
                 onChange={(e) => update.mutate({ interactive: e.currentTarget.checked })}
@@ -238,7 +321,11 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
                       {p.label} {p.title}
                     </Anchor>
                     <Group gap={6} mt={4}>
-                      <StateBadge tone={p.merged ? "success" : p.state === "open" ? "success" : "neutral"}>{t(`pull.state.${p.merged ? "merged" : p.state}`)}</StateBadge>
+                      <StateBadge
+                        tone={p.merged ? "success" : p.state === "open" ? "success" : "neutral"}
+                      >
+                        {t(`pull.state.${p.merged ? "merged" : p.state}`)}
+                      </StateBadge>
                       {p.closes && (
                         <Text span size="xs" c="dimmed">
                           {t("ticket.closesThis")}
@@ -251,7 +338,11 @@ export function TicketView({ repo, ticketKey, drawer }: { repo: string; ticketKe
             )}
           </Card>
 
-          <CloseButton ticket={tk} pending={update.isPending} onChange={(patch) => update.mutate(patch)} />
+          <CloseButton
+            ticket={tk}
+            pending={update.isPending}
+            onChange={(patch) => update.mutate(patch)}
+          />
         </aside>
       </div>
     </Stack>
@@ -267,11 +358,24 @@ function TicketError({ error }: { error: unknown }) {
 }
 
 /** Close (as completed, or as not planned from its menu), or reopen. */
-function CloseButton({ ticket, pending, onChange }: { ticket: Ticket; pending: boolean; onChange: (patch: api.TicketPatch) => void }) {
+function CloseButton({
+  ticket,
+  pending,
+  onChange,
+}: {
+  ticket: Ticket;
+  pending: boolean;
+  onChange: (patch: api.TicketPatch) => void;
+}) {
   const t = useT();
   if (ticket.state === "closed") {
     return (
-      <Button variant="default" fullWidth disabled={pending} onClick={() => onChange({ state: "open", state_reason: null })}>
+      <Button
+        variant="default"
+        fullWidth
+        disabled={pending}
+        onClick={() => onChange({ state: "open", state_reason: null })}
+      >
         {t("ticket.reopen")}
       </Button>
     );
@@ -299,8 +403,12 @@ function CloseButton({ ticket, pending, onChange }: { ticket: Ticket; pending: b
           </ActionIcon>
         </Menu.Target>
         <Menu.Dropdown>
-          <Menu.Item onClick={() => onChange({ state: "closed", state_reason: "completed" })}>{t("ticket.closeCompleted")}</Menu.Item>
-          <Menu.Item onClick={() => onChange({ state: "closed", state_reason: "not_planned" })}>{t("ticket.closeNotPlanned")}</Menu.Item>
+          <Menu.Item onClick={() => onChange({ state: "closed", state_reason: "completed" })}>
+            {t("ticket.closeCompleted")}
+          </Menu.Item>
+          <Menu.Item onClick={() => onChange({ state: "closed", state_reason: "not_planned" })}>
+            {t("ticket.closeNotPlanned")}
+          </Menu.Item>
         </Menu.Dropdown>
       </Menu>
     </Group>
@@ -330,7 +438,13 @@ function UpstreamIssueField({
         </Text>
         <Group gap={6} wrap="nowrap">
           {ticket.upstream_issue ? (
-            <Anchor href={ticket.upstream_issue} target="_blank" rel="noopener noreferrer" size="sm" style={{ overflowWrap: "anywhere" }}>
+            <Anchor
+              href={ticket.upstream_issue}
+              target="_blank"
+              rel="noopener noreferrer"
+              size="sm"
+              style={{ overflowWrap: "anywhere" }}
+            >
               {issueLabel(ticket.upstream_issue)}
             </Anchor>
           ) : (
@@ -338,7 +452,13 @@ function UpstreamIssueField({
               {t("ticket.noUpstreamIssue")}
             </Text>
           )}
-          <ActionIcon variant="subtle" color="gray" size="sm" aria-label={t("ticket.editUpstreamIssue")} onClick={() => setEditing(ticket.upstream_issue ?? "")}>
+          <ActionIcon
+            variant="subtle"
+            color="gray"
+            size="sm"
+            aria-label={t("ticket.editUpstreamIssue")}
+            onClick={() => setEditing(ticket.upstream_issue ?? "")}
+          >
             <Pencil size={14} />
           </ActionIcon>
         </Group>
@@ -349,7 +469,10 @@ function UpstreamIssueField({
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        void onSave(editing.trim() || null).then(() => setEditing(null), () => undefined);
+        void onSave(editing.trim() || null).then(
+          () => setEditing(null),
+          () => undefined,
+        );
       }}
     >
       <Stack gap={6}>

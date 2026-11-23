@@ -17,8 +17,19 @@ vi.mock("@guildbotics/ui/diagram", () => ({ drawDiagram: vi.fn() }));
 
 const endpoint = "/api/v1/repos/acme/demo/markdown";
 
-function markdownView(source: string, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
-  const view = (text: string) => <MantineProvider env="test"><QueryClientProvider client={client}><I18nProvider initial="ja"><Markdown repo="acme/demo" source={text} /></I18nProvider></QueryClientProvider></MantineProvider>;
+function markdownView(
+  source: string,
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+) {
+  const view = (text: string) => (
+    <MantineProvider env="test">
+      <QueryClientProvider client={client}>
+        <I18nProvider initial="ja">
+          <Markdown repo="acme/demo" source={text} />
+        </I18nProvider>
+      </QueryClientProvider>
+    </MantineProvider>
+  );
   return { ...render(view(source)), client, view };
 }
 
@@ -68,7 +79,9 @@ describe("Markdown rendering", () => {
     const source = "[docs](https://example.com/x)";
     fakeApi({ [`POST ${endpoint}`]: json(200, { markdown: source }) });
     const { container, client } = markdownView(source);
-    await waitFor(() => expect(client.getQueryData(keys.markdown("acme/demo", source))).toBeDefined());
+    await waitFor(() =>
+      expect(client.getQueryData(keys.markdown("acme/demo", source))).toBeDefined(),
+    );
     const a = container.querySelector("a");
     expect(a?.getAttribute("href")).toBe("https://example.com/x");
     expect(a?.getAttribute("rel")).toBe("noopener noreferrer nofollow");
@@ -78,14 +91,20 @@ describe("Markdown rendering", () => {
   it.each(examples.cases)("displays the service's shared example: $name", async (example) => {
     const fake = fakeApi({ [`POST ${endpoint}`]: json(200, { markdown: example.markdown }) });
     const { container, client } = markdownView(example.source);
-    await waitFor(() => expect(client.getQueryData(keys.markdown("acme/demo", example.source))).toEqual({ markdown: example.markdown }));
+    await waitFor(() =>
+      expect(client.getQueryData(keys.markdown("acme/demo", example.source))).toEqual({
+        markdown: example.markdown,
+      }),
+    );
     const links = [...container.querySelectorAll<HTMLAnchorElement>("a[data-branvil-kind]")];
     expect(links).toHaveLength(example.links.length);
     for (const [i, expected] of example.links.entries()) {
       const target = examples.targets[expected.target]!;
       const a = links[i]!;
       expect(a.textContent).toBe(expected.label);
-      expect(a.href).toBe(`${examples.base_url}/${target.repository}/-/${target.kind === "ticket" ? "tickets" : "pulls"}/${target.number}`);
+      expect(a.href).toBe(
+        `${examples.base_url}/${target.repository}/-/${target.kind === "ticket" ? "tickets" : "pulls"}/${target.number}`,
+      );
       expect(a.dataset.branvilKind).toBe(target.kind);
       expect(a.dataset.branvilState).toBe(target.state);
       expect(a.title).toContain(target.title);
@@ -101,18 +120,31 @@ describe("Markdown rendering", () => {
 
   it("sanitizes the service's result, including hostile reference titles", async () => {
     const safe = examples.cases[0]!.markdown;
-    fakeApi({ [`POST ${endpoint}`]: json(200, { markdown: `${safe}\n\n<img src="https://example.com/x" onerror="alert(1)"><script>alert(2)</script><a href="javascript:alert(3)" data-branvil-kind="ticket" data-branvil-state="open">evil</a>` }) });
+    fakeApi({
+      [`POST ${endpoint}`]: json(200, {
+        markdown: `${safe}\n\n<img src="https://example.com/x" onerror="alert(1)"><script>alert(2)</script><a href="javascript:alert(3)" data-branvil-kind="ticket" data-branvil-state="open">evil</a>`,
+      }),
+    });
     const { container, client } = markdownView("#1");
-    await waitFor(() => expect(client.getQueryData(keys.markdown("acme/demo", "#1"))).toBeDefined());
+    await waitFor(() =>
+      expect(client.getQueryData(keys.markdown("acme/demo", "#1"))).toBeDefined(),
+    );
     expect(container.innerHTML).not.toMatch(/<script|onerror|javascript:/i);
-    expect(container.querySelector<HTMLAnchorElement>('a[data-branvil-kind="ticket"]')?.title).toContain('Ticket <one> " &');
+    expect(
+      container.querySelector<HTMLAnchorElement>('a[data-branvil-kind="ticket"]')?.title,
+    ).toContain('Ticket <one> " &');
     expect(container.querySelector("one")).toBeNull();
   });
 
   it("refreshes references to another repository after its target changes", async () => {
     const source = "acme/other#1";
     const open = `<a href="/acme/other/-/tickets/1" data-branvil-kind="ticket" data-branvil-state="open" title="Other">acme/other#1</a>`;
-    fakeApi({ [`POST ${endpoint}`]: [json(200, { markdown: open }), json(200, { markdown: open.replace('state="open"', 'state="closed"') })] });
+    fakeApi({
+      [`POST ${endpoint}`]: [
+        json(200, { markdown: open }),
+        json(200, { markdown: open.replace('state="open"', 'state="closed"') }),
+      ],
+    });
     const { container, client } = markdownView(source);
     await waitFor(() => expect(container.querySelector("a")?.dataset.branvilState).toBe("open"));
     act(() => applyChange({ kind: "ticket", path: "acme/other", id: "1" }, client));
@@ -122,12 +154,20 @@ describe("Markdown rendering", () => {
 
   it("does not put a late result into an edited body", async () => {
     let answer!: (value: ReturnType<typeof json>) => void;
-    fakeApi({ [`POST ${endpoint}`]: (req) => (req.body as { source: string }).source === "old #1"
-      ? new Promise((resolve) => { answer = resolve; }) : json(200, { markdown: "new !999" }) });
+    fakeApi({
+      [`POST ${endpoint}`]: (req) =>
+        (req.body as { source: string }).source === "old #1"
+          ? new Promise((resolve) => {
+              answer = resolve;
+            })
+          : json(200, { markdown: "new !999" }),
+    });
     const { container, rerender, view, client } = markdownView("old #1");
     await waitFor(() => expect(answer).toBeTypeOf("function"));
     rerender(view("new !999"));
-    await waitFor(() => expect(client.getQueryData(keys.markdown("acme/demo", "new !999"))).toBeDefined());
+    await waitFor(() =>
+      expect(client.getQueryData(keys.markdown("acme/demo", "new !999"))).toBeDefined(),
+    );
     await act(async () => answer(json(200, { markdown: examples.cases[0]!.markdown })));
     expect(container).toHaveTextContent("new !999");
     expect(container.querySelector("a")).toBeNull();
@@ -136,7 +176,9 @@ describe("Markdown rendering", () => {
   it("keeps the body readable if resolution fails", async () => {
     fakeApi({ [`POST ${endpoint}`]: apiError(500, "internal", "Unavailable") });
     const { container, client } = markdownView("**body** #1");
-    await waitFor(() => expect(client.getQueryState(keys.markdown("acme/demo", "**body** #1"))?.status).toBe("error"));
+    await waitFor(() =>
+      expect(client.getQueryState(keys.markdown("acme/demo", "**body** #1"))?.status).toBe("error"),
+    );
     expect(container.querySelector("strong")).toHaveTextContent("body");
     expect(container).toHaveTextContent("#1");
     expect(container.querySelector("a")).toBeNull();
@@ -148,17 +190,25 @@ describe("Mermaid diagrams", () => {
 
   it("keeps a Mermaid block as escaped source, marked for drawing", () => {
     const html = renderMarkdown(`${diagram}\n\n\`\`\`ts\nconst x = 1;\n\`\`\``);
-    expect(html).toContain('<pre data-mermaid=""><code>flowchart LR\n  A[&lt;b&gt;a&lt;/b&gt;] --&gt; B</code></pre>');
+    expect(html).toContain(
+      '<pre data-mermaid=""><code>flowchart LR\n  A[&lt;b&gt;a&lt;/b&gt;] --&gt; B</code></pre>',
+    );
     expect(html).toContain("<pre><code>const x = 1;");
   });
 
   it("shows the drawn diagram with its source one click away", async () => {
-    vi.mocked(drawDiagram).mockResolvedValue({ src: "data:image/svg+xml,<svg/>", alt: "承認の流れ" });
+    vi.mocked(drawDiagram).mockResolvedValue({
+      src: "data:image/svg+xml,<svg/>",
+      alt: "承認の流れ",
+    });
     fakeApi({ [`POST ${endpoint}`]: json(200, { markdown: diagram }) });
     const { container } = markdownView(diagram);
     const image = await screen.findByRole("img", { name: "承認の流れ" });
     expect(image).toHaveAttribute("src", "data:image/svg+xml,<svg/>");
-    expect(drawDiagram).toHaveBeenCalledWith("flowchart LR\n  A[<b>a</b>] --> B", container.querySelector(".markdown"));
+    expect(drawDiagram).toHaveBeenCalledWith(
+      "flowchart LR\n  A[<b>a</b>] --> B",
+      container.querySelector(".markdown"),
+    );
     expect(container.querySelector("figure details summary")).toHaveTextContent("ソースを表示");
     expect(container.querySelector("figure details pre")).toHaveTextContent("flowchart LR");
   });
@@ -171,7 +221,10 @@ describe("Mermaid diagrams", () => {
     expect(open).toHaveAttribute("title", "原寸で表示: 図");
     await userEvent.click(open);
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByRole("img", { name: "図" })).toHaveAttribute("src", "data:image/svg+xml,<svg/>");
+    expect(within(dialog).getByRole("img", { name: "図" })).toHaveAttribute(
+      "src",
+      "data:image/svg+xml,<svg/>",
+    );
     await userEvent.click(within(dialog).getByRole("button", { name: "閉じる" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
@@ -199,11 +252,19 @@ describe("Mermaid diagrams", () => {
   });
 
   it("redraws in place when the color scheme changes, replacing a failure note without repeating it", async () => {
-    vi.mocked(drawDiagram).mockRejectedValueOnce(new Error("first")).mockResolvedValue({ src: "data:image/svg+xml,<svg/>", alt: "" });
+    vi.mocked(drawDiagram)
+      .mockRejectedValueOnce(new Error("first"))
+      .mockResolvedValue({ src: "data:image/svg+xml,<svg/>", alt: "" });
     fakeApi({ [`POST ${endpoint}`]: json(200, { markdown: diagram }) });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const view = (scheme: "light" | "dark") => (
-      <MantineProvider env="test" forceColorScheme={scheme}><QueryClientProvider client={client}><I18nProvider initial="ja"><Markdown repo="acme/demo" source={diagram} /></I18nProvider></QueryClientProvider></MantineProvider>
+      <MantineProvider env="test" forceColorScheme={scheme}>
+        <QueryClientProvider client={client}>
+          <I18nProvider initial="ja">
+            <Markdown repo="acme/demo" source={diagram} />
+          </I18nProvider>
+        </QueryClientProvider>
+      </MantineProvider>
     );
     const { container, rerender } = render(view("light"));
     expect(await screen.findByRole("alert")).toHaveTextContent("first");
@@ -220,7 +281,9 @@ describe("Mermaid diagrams", () => {
     vi.mocked(drawDiagram).mockRejectedValue(new Error("Parse error on line 2"));
     fakeApi({ [`POST ${endpoint}`]: json(200, { markdown: diagram }) });
     const { container } = markdownView(diagram);
-    expect(await screen.findByRole("alert")).toHaveTextContent("図を描画できませんでした: Parse error on line 2");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "図を描画できませんでした: Parse error on line 2",
+    );
     expect(container.querySelector("figure")).toBeNull();
     expect(container.querySelector("pre[data-mermaid]")).toHaveTextContent("flowchart LR");
   });

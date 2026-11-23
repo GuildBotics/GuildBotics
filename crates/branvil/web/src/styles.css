@@ -17,7 +17,9 @@ a:hover {
 }
 
 /* ---- shell (as GuildBotics' .shell / .sidebar / .workspace) ---- */
-.sidebar { overflow-y: auto; }
+.sidebar {
+  overflow-y: auto;
+}
 
 .nav {
   display: flex;
@@ -930,7 +932,9 @@ pre {
 }
 
 .pull-list {
-  grid-template-columns: minmax(90px, 120px) max-content minmax(160px, 1fr) max-content max-content 110px 124px max-content;
+  grid-template-columns:
+    minmax(90px, 120px) max-content minmax(160px, 1fr)
+    max-content max-content 110px 124px max-content;
   column-gap: 10px;
   min-width: 0;
   overflow-x: auto;
@@ -1257,18 +1261,83 @@ pre {
   }
 }
 
-
 /* One continuous path; each node keeps its explanation below the line. */
-.journey { list-style: none; margin: 0; padding: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
-.journey-stop { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 0 2px; font-size: 12px; text-align: center; overflow-wrap: anywhere; color: var(--mantine-color-dimmed); }
-@media (max-width: 36em) { .journey-stop { font-size: 11px; letter-spacing: -0.02em; } }
-.journey-stop:not(:last-child)::after { content: ""; position: absolute; top: 13px; left: calc(50% + 16px); right: calc(-50% + 16px); height: 2px; background: var(--mantine-color-default-border); }
-.journey-stop[data-state="done"]::after { background: var(--color-success); }
-.journey-dot { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--mantine-color-default-border); background: var(--mantine-color-body); font-size: 12px; font-weight: 700; }
-.journey-stop[data-state="done"] .journey-dot { color: var(--color-success-text); background: var(--color-success-bg); border-color: var(--color-success-border); }
-.journey-stop[data-state="now"] { color: var(--mantine-color-text); font-weight: 700; }
-.journey-stop[data-state="now"] .journey-dot { color: var(--color-brand); border-color: var(--color-brand); }
-.journey-stop[data-state="turn"] { color: var(--color-warning-text); font-weight: 700; }
-.journey-stop[data-state="turn"] .journey-dot { background: var(--color-warning-bg); border-color: var(--color-warning); }
-.journey-stop[data-state="failed"] { color: var(--color-danger-text); font-weight: 700; }
-.journey-stop[data-state="failed"] .journey-dot { background: var(--color-danger-bg); border-color: var(--color-danger); }
+.journey {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+}
+.journey-stop {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 0 2px;
+  font-size: 12px;
+  text-align: center;
+  overflow-wrap: anywhere;
+  color: var(--mantine-color-dimmed);
+}
+@media (max-width: 36em) {
+  .journey-stop {
+    font-size: 11px;
+    letter-spacing: -0.02em;
+  }
+}
+.journey-stop:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 13px;
+  left: calc(50% + 16px);
+  right: calc(-50% + 16px);
+  height: 2px;
+  background: var(--mantine-color-default-border);
+}
+.journey-stop[data-state="done"]::after {
+  background: var(--color-success);
+}
+.journey-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--mantine-color-default-border);
+  background: var(--mantine-color-body);
+  font-size: 12px;
+  font-weight: 700;
+}
+.journey-stop[data-state="done"] .journey-dot {
+  color: var(--color-success-text);
+  background: var(--color-success-bg);
+  border-color: var(--color-success-border);
+}
+.journey-stop[data-state="now"] {
+  color: var(--mantine-color-text);
+  font-weight: 700;
+}
+.journey-stop[data-state="now"] .journey-dot {
+  color: var(--color-brand);
+  border-color: var(--color-brand);
+}
+.journey-stop[data-state="turn"] {
+  color: var(--color-warning-text);
+  font-weight: 700;
+}
+.journey-stop[data-state="turn"] .journey-dot {
+  background: var(--color-warning-bg);
+  border-color: var(--color-warning);
+}
+.journey-stop[data-state="failed"] {
+  color: var(--color-danger-text);
+  font-weight: 700;
+}
+.journey-stop[data-state="failed"] .journey-dot {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger);
+}

@@ -28,16 +28,26 @@ export function UpstreamTab({ repo }: { repo: Repository }) {
   const t = useT();
   const client = useQueryClient();
   const up = repo.upstream;
-  const [form, setForm] = useState({ provider: up?.provider ?? PROVIDERS[0].name, repository: up?.repository ?? "" });
+  const [form, setForm] = useState({
+    provider: up?.provider ?? PROVIDERS[0].name,
+    repository: up?.repository ?? "",
+  });
   const settle = () => {
     void client.invalidateQueries({ queryKey: keys.repos() });
     void client.invalidateQueries({ queryKey: keys.repo(repo.path) });
   };
   const save = useMutation({
-    mutationFn: () => api.repos.setUpstream(repo.path, { provider: form.provider, repository: form.repository.trim() }),
+    mutationFn: () =>
+      api.repos.setUpstream(repo.path, {
+        provider: form.provider,
+        repository: form.repository.trim(),
+      }),
     onSettled: settle,
   });
-  const remove = useMutation({ mutationFn: () => api.repos.deleteUpstream(repo.path), onSettled: settle });
+  const remove = useMutation({
+    mutationFn: () => api.repos.deleteUpstream(repo.path),
+    onSettled: settle,
+  });
   // null is no change; PICK_AGAIN asks the service to pick a reader again.
   const [readerChoice, setReaderChoice] = useState<string | null>(null);
   const changeReader = useMutation({
@@ -51,8 +61,13 @@ export function UpstreamTab({ repo }: { repo: Repository }) {
     onSettled: settle,
   });
   const members = useMembers();
-  const withAccount = (members.data?.items ?? []).filter((m) => up && m.accounts.some((a) => a.provider === up.provider));
-  const check = useMutation({ mutationFn: () => api.repos.refreshUpstream(repo.path), onSettled: settle });
+  const withAccount = (members.data?.items ?? []).filter(
+    (m) => up && m.accounts.some((a) => a.provider === up.provider),
+  );
+  const check = useMutation({
+    mutationFn: () => api.repos.refreshUpstream(repo.path),
+    onSettled: settle,
+  });
   const hostLabel = PROVIDERS.find((p) => p.name === form.provider)?.label ?? form.provider;
   const failure = save.error ?? remove.error ?? check.error ?? changeReader.error;
 
@@ -73,11 +88,16 @@ export function UpstreamTab({ repo }: { repo: Repository }) {
           <dd>
             <Group gap="xs">
               <StateBadge tone={upstreamTone(repo)}>
-                {up.following.stopped ? t("upstream.stopped") : up.following.error ? t("upstream.failing") : t("upstream.following", { branch: repo.default_branch })}
+                {up.following.stopped
+                  ? t("upstream.stopped")
+                  : up.following.error
+                    ? t("upstream.failing")
+                    : t("upstream.following", { branch: repo.default_branch })}
               </StateBadge>
               {up.following.tip && <Sha repo={repo.path} value={up.following.tip} />}
               <Text span size="xs" c="dimmed">
-                {t("upstream.checked")} {up.following.checked_at ? <Time value={up.following.checked_at} /> : "—"}
+                {t("upstream.checked")}{" "}
+                {up.following.checked_at ? <Time value={up.following.checked_at} /> : "—"}
               </Text>
             </Group>
             {(up.following.stopped ?? up.following.error) && (
@@ -116,11 +136,18 @@ export function UpstreamTab({ repo }: { repo: Repository }) {
             value={readerChoice}
             onChange={setReaderChoice}
             data={[
-              ...withAccount.map((m) => ({ value: m.name, label: `${m.name} (${m.accounts.find((a) => a.provider === up.provider)?.login ?? ""})` })),
+              ...withAccount.map((m) => ({
+                value: m.name,
+                label: `${m.name} (${m.accounts.find((a) => a.provider === up.provider)?.login ?? ""})`,
+              })),
               { group: " ", items: [{ value: PICK_AGAIN, label: t("upstream.readerPickAgain") }] },
             ]}
           />
-          <Button variant="default" disabled={!readerChoice || changeReader.isPending} onClick={() => changeReader.mutate()}>
+          <Button
+            variant="default"
+            disabled={!readerChoice || changeReader.isPending}
+            onClick={() => changeReader.mutate()}
+          >
             {t("upstream.readerApply")}
           </Button>
         </Group>
@@ -149,7 +176,11 @@ export function UpstreamTab({ repo }: { repo: Repository }) {
             placeholder="owner/name"
             required
           />
-          <Button type="submit" variant="default" disabled={save.isPending || !form.repository.trim()}>
+          <Button
+            type="submit"
+            variant="default"
+            disabled={save.isPending || !form.repository.trim()}
+          >
             {t("upstream.set")}
           </Button>
         </Group>
@@ -162,14 +193,22 @@ export function UpstreamTab({ repo }: { repo: Repository }) {
           <Button
             variant="light"
             color="danger"
-            onClick={() => window.confirm(t("upstream.confirmRemove", { repository: up.repository })) && remove.mutate()}
+            onClick={() =>
+              window.confirm(t("upstream.confirmRemove", { repository: up.repository })) &&
+              remove.mutate()
+            }
             disabled={remove.isPending}
           >
             {t("upstream.remove")}
           </Button>
         </Group>
       )}
-      {failure && (isApiError(failure, "no_account") ? <Refusal>{t("upstream.noAccount", { host: hostLabel })}</Refusal> : <ErrorMessage error={failure} />)}
+      {failure &&
+        (isApiError(failure, "no_account") ? (
+          <Refusal>{t("upstream.noAccount", { host: hostLabel })}</Refusal>
+        ) : (
+          <ErrorMessage error={failure} />
+        ))}
     </Stack>
   );
 }

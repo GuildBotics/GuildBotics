@@ -5,7 +5,9 @@ import { ticketRef, type Card, type Lane, type Ticket } from "../../api/types";
 import type { MessageKey } from "../../i18n/en";
 
 /** A ticket's update, or its move in a lane of its board: just before or after a ticket of it (`at`), or to its end. */
-export type Change = { repo: string; key: string } & ({ patch: TicketPatch } | { lane: Lane; at?: { before: string } | { after: string } });
+export type Change = { repo: string; key: string } & (
+  { patch: TicketPatch } | { lane: Lane; at?: { before: string } | { after: string } }
+);
 
 export type EditMessage = Extract<
   MessageKey,
@@ -23,7 +25,9 @@ export interface Edit {
 
 /** The moves of the open new tickets among `tickets` to `lane` (a closed one moved would be reopened). */
 const moves = (tickets: Ticket[], lane: Lane): Change[] =>
-  tickets.filter((t) => t.lane === "new" && t.state === "open").map((t) => ({ repo: t.repository, key: t.key, lane }));
+  tickets
+    .filter((t) => t.lane === "new" && t.state === "open")
+    .map((t) => ({ repo: t.repository, key: t.key, lane }));
 
 /**
  * The moves that make the new tickets among `tickets` ready, as they are being
@@ -59,9 +63,17 @@ export function parentEdit(dragged: Card, target: Card | null): Edit | null {
   const child = ticketRef(dragged);
   if (!target) {
     if (!parent) return null;
-    return edit(dragged, { parent: null }, { parent: parent.url }, "relations.unparented", { child, parent: ticketRef(parent) }, [dragged]);
+    return edit(
+      dragged,
+      { parent: null },
+      { parent: parent.url },
+      "relations.unparented",
+      { child, parent: ticketRef(parent) },
+      [dragged],
+    );
   }
-  if (ticketRef(target) === child || (parent && ticketRef(target) === ticketRef(parent))) return null;
+  if (ticketRef(target) === child || (parent && ticketRef(target) === ticketRef(parent)))
+    return null;
   return edit(
     dragged,
     { parent: target.url },
@@ -75,7 +87,8 @@ export function parentEdit(dragged: Card, target: Card | null): Edit | null {
 /** The update for drawing a line from `blocker` to `blocked`; null when it changes nothing. */
 export function linkEdit(blocker: Card, blocked: Card): Edit | null {
   const ref = ticketRef(blocker);
-  if (ref === ticketRef(blocked) || blocked.blocked_by.some((r) => ticketRef(r) === ref)) return null;
+  if (ref === ticketRef(blocked) || blocked.blocked_by.some((r) => ticketRef(r) === ref))
+    return null;
   return dependency(blocker, blocked, true);
 }
 

@@ -4,13 +4,14 @@ import type { MessageKey } from "./en";
 
 export const ja: Record<MessageKey, string> = {
   "hub.versionLabel": "{sha}（{subject}）",
-  "hub.preparingVersions": "Hub を {current} から {target} に自動更新する準備をしています。まもなく新しい実行の受け付けを止めます。",
-  "hub.updateVersions": "Hub の自動更新のため、新しい実行の受け付けを止めています。巡回・定期実行・チャットの受信は止まり、手動の実行や実行環境のビルドは断ります。実行中の作業 {runs} 件と CI のジョブ {ci_jobs} 件が終わると、{current} から {target} に切り替わります。止めた時点でサービスが動いていたら、切り替えのあとに再開します。",
+  "hub.preparingVersions":
+    "Hub を {current} から {target} に自動更新する準備をしています。まもなく新しい実行の受け付けを止めます。",
+  "hub.updateVersions":
+    "Hub の自動更新のため、新しい実行の受け付けを止めています。巡回・定期実行・チャットの受信は止まり、手動の実行や実行環境のビルドは断ります。実行中の作業 {runs} 件と CI のジョブ {ci_jobs} 件が終わると、{current} から {target} に切り替わります。止めた時点でサービスが動いていたら、切り替えのあとに再開します。",
   "hub.title": "Hub の作業",
   "hub.version": "Hub の版",
   "hub.dismiss": "段階が変わるまで閉じる",
-  "hub.preparing":
-    "Hub を自動更新する準備をしています。まもなく新しい実行の受け付けを止めます。",
+  "hub.preparing": "Hub を自動更新する準備をしています。まもなく新しい実行の受け付けを止めます。",
   "hub.update":
     "Hub の自動更新のため、新しい実行の受け付けを止めています。巡回・定期実行・チャットの受信は止まり、手動の実行や実行環境のビルドは断ります。実行中の作業 {runs} 件と CI のジョブ {ci_jobs} 件が終わると、版を切り替えます。止めた時点でサービスが動いていたら、切り替えのあとに再開します。",
   "hub.restart":
@@ -47,8 +48,10 @@ export const ja: Record<MessageKey, string> = {
   "common.notProvided": "未記入",
   "common.notAvailableYet": "このBranvilではまだ利用できません。",
   "common.forbidden": "権限がありません。",
-  "common.sessionChanged": "今回の書き込みは保存されていません。入力した内容を控えてから、ページを再読み込みしてもう一度お試しください。",
-  "common.networkError": "Branvilに届きません。HubでBranvilが動いているか確認してください。Hub以外のマシンから開いている場合は、OpenSSHの転送サービスが動いているかも確認してください。",
+  "common.sessionChanged":
+    "今回の書き込みは保存されていません。入力した内容を控えてから、ページを再読み込みしてもう一度お試しください。",
+  "common.networkError":
+    "Branvilに届きません。HubでBranvilが動いているか確認してください。Hub以外のマシンから開いている場合は、OpenSSHの転送サービスが動いているかも確認してください。",
 
   "nav.main": "メイン",
   "nav.home": "ホーム",
@@ -57,7 +60,8 @@ export const ja: Record<MessageKey, string> = {
   "notFound.title": "ページが見つかりません",
 
   "guide.run": "Hubマシンで次のコマンドを実行して、入口のURLを表示します：",
-  "guide.why": "表示されたURLを、この画面と同じブラウザのアドレスバーに貼り付けて開いてください。リンクは60秒間に1回だけ使え、入ったことはそのブラウザでだけ有効です。",
+  "guide.why":
+    "表示されたURLを、この画面と同じブラウザのアドレスバーに貼り付けて開いてください。リンクは60秒間に1回だけ使え、入ったことはそのブラウザでだけ有効です。",
 
   "lane.new": "新規",
   "lane.ready": "着手可",
@@ -94,7 +98,8 @@ export const ja: Record<MessageKey, string> = {
   "ticket.labels": "ラベル",
   "ticket.interactive": "対話で進める",
   "ticket.interactiveHelp": "ON の間はメンバーが自動で着手・返答しません。",
-  "ticket.interactiveInherited": "{ticket} で対話中のため、このチケットもメンバーは自動で着手・返答しません。",
+  "ticket.interactiveInherited":
+    "{ticket} で対話中のため、このチケットもメンバーは自動で着手・返答しません。",
   "ticket.noLabelsDefined": "リポジトリにラベルの定義がありません。",
   "ticket.assignee": "担当者",
   "ticket.upstreamIssue": "{host} の Issue",
@@ -109,7 +114,8 @@ export const ja: Record<MessageKey, string> = {
   "ticket.closeDrawer": "閉じる",
   "ticket.copyUrl": "チケットの URL をコピー",
   "ticket.drawer": "チケット",
-  "ticket.conflict": "編集を始めてから他の人がチケットを変更しました。最新の内容を確認して、もう一度編集してください。",
+  "ticket.conflict":
+    "編集を始めてから他の人がチケットを変更しました。最新の内容を確認して、もう一度編集してください。",
   "ticket.relations": "関係",
   "ticket.parent": "親チケット",
   "ticket.children": "子チケット",
@@ -165,17 +171,20 @@ export const ja: Record<MessageKey, string> = {
   "pull.closeOnMerge": "マージで閉じる",
   "pull.referenceOnly": "参照のみ（このリンクはマージで閉じられません）",
   "pull.noTicketChoices": "該当するチケットはありません",
-  "pull.ticketsConflict": "PR が更新されたため保存できませんでした。キャンセルすると編集中の変更は破棄されます。編集を開き直し、最新の紐付けに対してもう一度変更してください。",
+  "pull.ticketsConflict":
+    "PR が更新されたため保存できませんでした。キャンセルすると編集中の変更は破棄されます。編集を開き直し、最新の紐付けに対してもう一度変更してください。",
   "pull.changes": "変更ファイル",
   "pull.checks": "チェック",
   "pull.checksOn": "対象",
-  "pull.behindBy": "ベースのブランチ（{base}）が、この PR のブランチより {count} コミット先に進んでいます。この PR のブランチを最新のベースに追いつかせてください。",
+  "pull.behindBy":
+    "ベースのブランチ（{base}）が、この PR のブランチより {count} コミット先に進んでいます。この PR のブランチを最新のベースに追いつかせてください。",
   "pull.conversation": "会話とレビュー",
   "pull.onRevision": "対象",
   "pull.olderRevision": "古いrevision",
   "pull.reviewingRevision": "このレビューの対象head",
   "pull.reviewSubmitted": "レビューを送信しました。",
-  "pull.headMoved": "{sha} を読み込んだ後にheadが移動したため、何も記録されていません。PRを再読み込みしたので、新しいheadをレビューしてください。",
+  "pull.headMoved":
+    "{sha} を読み込んだ後にheadが移動したため、何も記録されていません。PRを再読み込みしたので、新しいheadをレビューしてください。",
   "pull.otherActions": "PRの操作",
   "pull.markReady": "レビュー可能にする",
   "pull.markDraft": "ドラフトに戻す",
@@ -219,7 +228,8 @@ export const ja: Record<MessageKey, string> = {
   "landing.unanswered": "作者の返答待ち",
   "landing.detail.draft": "このPRはドラフトです。",
   "landing.detail.already_in_base": "このPRの変更はbaseに取り込み済みです。",
-  "landing.detail.publish_requirements": "公開には既定のbaseとホスト上の作者のアカウントが必要です。",
+  "landing.detail.publish_requirements":
+    "公開には既定のbaseとホスト上の作者のアカウントが必要です。",
   "landing.detail.checking": "現在のheadとbaseを確認中です。",
   "landing.detail.head_checks": "必須チェックを待っています。",
   "landing.detail.conflict": "衝突したファイル：{files}",
@@ -232,11 +242,15 @@ export const ja: Record<MessageKey, string> = {
   "landing.check.pathsSkipped": "パスにより対象外",
   "landing.check.postMergeSkipped": "マージ後に実行",
   "settings.holdWhileFailing": "main の確認が失敗している間は、修復の PR だけを出す",
-  "settings.holdWhileFailingHelp": "修復チケットにつながっていない PR は、main の確認が通るまでマージしません。オーナーのマージも自動のマージも保留します。",
-  "settings.holdWhileFailingHelpUpstream": "修復チケットにつながっていない PR は、main の確認が通るまで {host} に出しません。すでに {host} に出ている PR は、{host} でのマージを Branvil は止められません。その PR は保留中と表示します。",
+  "settings.holdWhileFailingHelp":
+    "修復チケットにつながっていない PR は、main の確認が通るまでマージしません。オーナーのマージも自動のマージも保留します。",
+  "settings.holdWhileFailingHelpUpstream":
+    "修復チケットにつながっていない PR は、main の確認が通るまで {host} に出しません。すでに {host} に出ている PR は、{host} でのマージを Branvil は止められません。その PR は保留中と表示します。",
   "landing.blocker.held": "保留中（main の失敗）",
-  "landing.held": "保留中：main の確認が失敗しています（修復 #{number}、担当 {name}）。main の確認が通ると、保留が解けます。",
-  "landing.heldUnassigned": "保留中：main の確認が失敗しています（修復 #{number}、担当なし）。main の確認が通ると、保留が解けます。",
+  "landing.held":
+    "保留中：main の確認が失敗しています（修復 #{number}、担当 {name}）。main の確認が通ると、保留が解けます。",
+  "landing.heldUnassigned":
+    "保留中：main の確認が失敗しています（修復 #{number}、担当なし）。main の確認が通ると、保留が解けます。",
   "landing.repairLink": "修復チケット #{number} を開く",
   "landing.heldPublished": "{host} ではマージできますが、Branvil は止められません。",
   "landing.blocker.draft": "ドラフト",
@@ -262,9 +276,12 @@ export const ja: Record<MessageKey, string> = {
   "merge.merging": "マージ中…",
   "merge.done": "マージしました。",
   "merge.draft": "ドラフトはマージできません。先にレビュー可能にしてください。",
-  "merge.auto": "head のチェック、承認などの着地条件がそろうと、このリポジトリは自動でマージします。",
-  "merge.headMoved": "ページを読み込んだ後にheadが移動しました。再読み込みして新しいheadをレビューしてください。",
-  "merge.baseMoved": "マージ中にbaseが移動したため、何も書き込んでいません。ブランチを更新してやり直してください。",
+  "merge.auto":
+    "head のチェック、承認などの着地条件がそろうと、このリポジトリは自動でマージします。",
+  "merge.headMoved":
+    "ページを読み込んだ後にheadが移動しました。再読み込みして新しいheadをレビューしてください。",
+  "merge.baseMoved":
+    "マージ中にbaseが移動したため、何も書き込んでいません。ブランチを更新してやり直してください。",
   "merge.notMergeable": "マージできません：{message}",
 
   "files.summary": "{count} ファイル",
@@ -294,8 +311,10 @@ export const ja: Record<MessageKey, string> = {
   "ci.conclusion.timed_out": "タイムアウト",
   "ci.conclusion.skipped": "スキップ",
   "settings.postMergeJobs": "マージ後だけ流すジョブ",
-  "settings.postMergeJobsHelp": "ここに入れたジョブは、PR では流さず、マージのあとの main の確認で流します。必須チェックには入れられません。",
-  "ci.postMergeReason": "リポジトリの設定でマージ後だけ流すジョブなので、PR では流していません。マージのあとの main の確認で流れます。今すぐ確かめたいときは再実行で流せます。",
+  "settings.postMergeJobsHelp":
+    "ここに入れたジョブは、PR では流さず、マージのあとの main の確認で流します。必須チェックには入れられません。",
+  "ci.postMergeReason":
+    "リポジトリの設定でマージ後だけ流すジョブなので、PR では流していません。マージのあとの main の確認で流れます。今すぐ確かめたいときは再実行で流せます。",
   "ci.postMergeSkipped": "マージ後だけ",
   "ci.pathsSkipped": "省略（変更なし）",
   "ci.pathsReason": "変更されたファイルが次の paths に一致しません: {paths}",
@@ -321,8 +340,10 @@ export const ja: Record<MessageKey, string> = {
   "ci.remaining": "残り約 {time}",
   "ci.lastTime": "前回 {time}",
   "ci.artifacts": "成果物",
-  "ci.error.retry_pr_head_required": "ランナーを指定できるのは、保護ブランチではない現在のプルリクエストの head です。",
-  "ci.error.retry_runner_ineligible": "ジョブのイメージを持ち、Hub と同じ版のランナーを選んでください。",
+  "ci.error.retry_pr_head_required":
+    "ランナーを指定できるのは、保護ブランチではない現在のプルリクエストの head です。",
+  "ci.error.retry_runner_ineligible":
+    "ジョブのイメージを持ち、Hub と同じ版のランナーを選んでください。",
   "ci.error.retry_runner_excluded": "指定したランナーが除外にも含まれています。",
   "ci.retryRunner": "ランナーを指定",
   "ci.excludeRunners": "ランナーを除外",
@@ -360,7 +381,8 @@ export const ja: Record<MessageKey, string> = {
   "settings.loadLatest": "最新の値を読み込む",
 
   "upstream.title": "上流",
-  "upstream.explain": "このリポジトリが追従するコードホスト上のリポジトリです。Branvil の既定ブランチは上流に合わせてだけ進み、PR は上流に出して人がマージします。上流の読み取りには、メンバー 1 人のアカウントを使います。",
+  "upstream.explain":
+    "このリポジトリが追従するコードホスト上のリポジトリです。Branvil の既定ブランチは上流に合わせてだけ進み、PR は上流に出して人がマージします。上流の読み取りには、メンバー 1 人のアカウントを使います。",
   "upstream.none": "上流はありません。PR はここでマージします。",
   "upstream.provider": "ホスト",
   "upstream.repository": "上流のリポジトリ",
@@ -373,7 +395,8 @@ export const ja: Record<MessageKey, string> = {
   "upstream.checkNow": "今すぐ確認",
   "upstream.remove": "上流を外す",
   "upstream.confirmRemove": "{repository} の追従をやめますか？ 以後、PR はここでマージします。",
-  "upstream.noAccount": "先にメンバー設定で、誰かの {host} アカウントを登録してください（エージェントの bot アカウントで十分です）。上流の読み取りに使います。",
+  "upstream.noAccount":
+    "先にメンバー設定で、誰かの {host} アカウントを登録してください（エージェントの bot アカウントで十分です）。上流の読み取りに使います。",
   "upstream.reader": "読み取り",
   "upstream.readerPicked": "自動で選択",
   "upstream.readerChosen": "指定",
@@ -383,8 +406,10 @@ export const ja: Record<MessageKey, string> = {
   "upstream.readerApply": "変更",
   "upstream.defaultBranchFollows": "上流の既定ブランチに追従しています。",
   "account.title": "コードホストのアカウント",
-  "account.explainAgent": "このメンバーが作成した PR は、このアカウントで上流に出します。上流の読み取りに使われることもあります（リポジトリ設定の上流で確認できます）。",
-  "account.explainOwner": "オーナー自身が作成した PR は、このアカウントで上流に出します。上流の読み取りに使うのは、エージェントのアカウントが無いときか、指定したときだけです。",
+  "account.explainAgent":
+    "このメンバーが作成した PR は、このアカウントで上流に出します。上流の読み取りに使われることもあります（リポジトリ設定の上流で確認できます）。",
+  "account.explainOwner":
+    "オーナー自身が作成した PR は、このアカウントで上流に出します。上流の読み取りに使うのは、エージェントのアカウントが無いときか、指定したときだけです。",
   "account.none": "未登録",
   "account.setAt": "登録",
   "account.token": "{host} のトークン",
@@ -392,7 +417,8 @@ export const ja: Record<MessageKey, string> = {
   "account.form": "{host} アカウントの登録方法",
   "account.kind.token": "トークン",
   "account.kind.app": "{host} App",
-  "account.appHelp": "App の ID、リポジトリを持つアカウントへのインストールの ID、秘密鍵を入力します。短期トークンは Branvil が作り、アカウントは App のボットとして動きます。",
+  "account.appHelp":
+    "App の ID、リポジトリを持つアカウントへのインストールの ID、秘密鍵を入力します。短期トークンは Branvil が作り、アカウントは App のボットとして動きます。",
   "account.appId": "App ID",
   "account.installationId": "インストール ID",
   "account.privateKey": "秘密鍵（PEM）",
@@ -401,25 +427,31 @@ export const ja: Record<MessageKey, string> = {
   "account.remove": "削除",
   "account.confirmRemove": "{host} のアカウント {login} を削除しますか？",
   "publish.title": "{host} に出す",
-  "publish.explain": "このリポジトリは {host} の {repository} に従っています。ここではマージせず、PR を {host} に出してそちらでマージします。出すと、ブランチを push し、作成者として PR を開きます。",
+  "publish.explain":
+    "このリポジトリは {host} の {repository} に従っています。ここではマージせず、PR を {host} に出してそちらでマージします。出すと、ブランチを push し、作成者として PR を開きます。",
   "publish.edit": "タイトルと本文を直す",
   "publish.body": "本文",
-  "publish.source": "元は Branvil の PR です。{host} には「投稿される内容」の形で届き、{host} で直しても、ここで変わったときに上書きされます。",
+  "publish.source":
+    "元は Branvil の PR です。{host} には「投稿される内容」の形で届き、{host} で直しても、ここで変わったときに上書きされます。",
   "publish.preview": "投稿される内容",
   "publish.postedAs": "{host} には {login} として投稿します。",
-  "publish.noAccount": "{account} の {host} アカウントが Branvil に登録されていません。メンバー設定で登録してください。",
+  "publish.noAccount":
+    "{account} の {host} アカウントが Branvil に登録されていません。メンバー設定で登録してください。",
   "publish.submit": "{host} に出す",
   "publish.again": "{host} にもう一度出す",
   "publish.confirmAgain": "{host} のこのブランチを、Branvil の head で置き換えますか？",
   "publish.publishing": "出しています…",
   "publish.draft": "ドラフトは出せません。先にレビュー可能にしてください。",
-  "publish.auto": "head のチェック、承認などの着地条件がそろうと、このリポジトリは自動で{host}に出します。",
+  "publish.auto":
+    "head のチェック、承認などの着地条件がそろうと、このリポジトリは自動で{host}に出します。",
   "publish.automatically": "自動で出しました",
   "publish.notReady": "まだ出せません：{message}",
-  "publish.mergeThere": "出しました。{host} で人がレビューしてマージし、Branvil はそれに追従します。",
+  "publish.mergeThere":
+    "出しました。{host} で人がレビューしてマージし、Branvil はそれに追従します。",
   "publish.noPullYet": "ブランチは push 済み、PR はまだ開いていません",
   "publish.as": "{account} として",
-  "publish.stopped": "送信を止めています：{reason} 条件がそろったらもう一度公開すると、上流のブランチを Branvil の head で置き換えます。",
+  "publish.stopped":
+    "送信を止めています：{reason} 条件がそろったらもう一度公開すると、上流のブランチを Branvil の head で置き換えます。",
   "publish.failing": "直近の試行に失敗（再試行します）：{reason}",
 
   "member.create": "メンバーを作成",
@@ -427,9 +459,11 @@ export const ja: Record<MessageKey, string> = {
   "member.avatarChoose": "画像を選ぶ",
   "member.avatarRemove": "画像を外す",
   "member.reviewers": "レビュアー",
-  "member.reviewersExplain": "{name} が作る PR では、ここで選んだメンバーにレビューを依頼します。作成済みの PR は変わりません。",
+  "member.reviewersExplain":
+    "{name} が作る PR では、ここで選んだメンバーにレビューを依頼します。作成済みの PR は変わりません。",
   "member.reviewersTrigger": "{name} の PR のレビュアー: {names} — クリックで変更",
-  "member.reviewersHelp": "チェックした人に、{name} が作る PR ごとにレビューを依頼します。{name} 自身は選べません。",
+  "member.reviewersHelp":
+    "チェックした人に、{name} が作る PR ごとにレビューを依頼します。{name} 自身は選べません。",
   "member.reviewersNone": "まだ誰も選ばれていません。",
   "member.reviewersNobody": "なし",
   "member.displayName": "表示名",
@@ -504,14 +538,17 @@ export const ja: Record<MessageKey, string> = {
   "pickup.sentence": "。",
   "pickup.parent": "親: {ticket}",
   "pickup.filtered": "絞り込みで非表示",
-  "pickup.lifted": "{key} を持ち上げました（{count} 件中 {position} 番目）。上下の矢印で動かし、Space で置き、Esc で取り消します。",
+  "pickup.lifted":
+    "{key} を持ち上げました（{count} 件中 {position} 番目）。上下の矢印で動かし、Space で置き、Esc で取り消します。",
   "pickup.position": "{key}: {count} 件中 {position} 番目",
   "pickup.dropped": "{key} を {count} 件中 {position} 番目に置きました。",
   "pickup.cancelled": "{key} の移動を取り消しました。",
   "pickup.reordered": "{key} の着手の順を変えました。",
-  "pickup.reorderedWith": "{key} の着手の順を変えました。待っている {tickets} もその前へ動かしました。",
+  "pickup.reorderedWith":
+    "{key} の着手の順を変えました。待っている {tickets} もその前へ動かしました。",
   "pickup.stale": "{key} がその間に着手可のレーンを離れたため、順を変えませんでした。",
-  "pickup.undoGone": "動かしたチケットはその間にすべて着手可のレーンを離れたため、戻すものはありません。",
+  "pickup.undoGone":
+    "動かしたチケットはその間にすべて着手可のレーンを離れたため、戻すものはありません。",
   "board.assignee": "{key} の担当者: {name} — クリックで変更",
   "workspace.label": "ワークスペース",
   "workspace.new": "新しいワークスペース",
@@ -520,14 +557,18 @@ export const ja: Record<MessageKey, string> = {
   "workspace.nameHelp": "リポジトリのパスの前半になります（acme/demo の acme）。",
   "workspace.create": "作成",
   "workspace.noneTitle": "ワークスペースがありません",
-  "workspace.noneHelp": "ワークスペースはリポジトリとボードを 1 つ持ちます。まず 1 つ作ってください。",
+  "workspace.noneHelp":
+    "ワークスペースはリポジトリとボードを 1 つ持ちます。まず 1 つ作ってください。",
   "alert.region": "警告",
   "alert.title": "警告",
   "alert.dismiss": "閉じる",
-  "alert.noRunner": "CI のランナーが接続されていません。チェックは実行されず、ジョブは起動失敗で終わります。Hub で、ランナーの状態を確かめてください。",
-  "alert.streamLost": "サーバーとの接続が切れています。画面は最新でないかもしれません。再接続しています…",
+  "alert.noRunner":
+    "CI のランナーが接続されていません。チェックは実行されず、ジョブは起動失敗で終わります。Hub で、ランナーの状態を確かめてください。",
+  "alert.streamLost":
+    "サーバーとの接続が切れています。画面は最新でないかもしれません。再接続しています…",
   "alert.executorUnavailable": "CI のランナーがジョブを実行できません: {detail}",
-  "alert.stopping": "Branvil は更新か再起動のため、実行中の CI ジョブが終わったら止まります。新しいジョブは待って、起動し直してから始まります。",
+  "alert.stopping":
+    "Branvil は更新か再起動のため、実行中の CI ジョブが終わったら止まります。新しいジョブは待って、起動し直してから始まります。",
   "alert.upstream": "{repository} の上流を追従できていません: {problem}",
   "alert.openSettings": "リポジトリの設定を開く",
   "board.summary": "{workspace} · オープン {count} 件",
@@ -537,15 +578,22 @@ export const ja: Record<MessageKey, string> = {
   "ticket.delete": "削除",
   "ticket.confirmDelete": "{key} とそのコメントをすべて削除しますか？ 元に戻すことはできません。",
   "ticket.delete_has_children": "子チケットがあります。子の親指定を外してから削除してください。",
-  "ticket.delete_blocks_tickets": "ほかのチケットに待たれています。その待ち指定を外してから削除してください。",
-  "ticket.delete_linked_pull": "プルリクエストとつながっています。そのリンクを外してから削除してください。",
-  "ticket.delete_upstream_issue": "upstream の issue とつながっています。そのリンクを外してから削除してください。",
+  "ticket.delete_blocks_tickets":
+    "ほかのチケットに待たれています。その待ち指定を外してから削除してください。",
+  "ticket.delete_linked_pull":
+    "プルリクエストとつながっています。そのリンクを外してから削除してください。",
+  "ticket.delete_upstream_issue":
+    "upstream の issue とつながっています。そのリンクを外してから削除してください。",
   "ticket.repository": "リポジトリ",
-  "ticket.moveConfirm": "{key} を {repository} へ移します。{repository} の次の番号になるので、URL が変わります。いまの URL からも、移したチケットを開けます。",
+  "ticket.moveConfirm":
+    "{key} を {repository} へ移します。{repository} の次の番号になるので、URL が変わります。いまの URL からも、移したチケットを開けます。",
   "ticket.moveDropsLabels": "{repository} で定義されていないラベルは外れます: {labels}",
-  "ticket.move_upstream_issue": "upstream の issue とつながっているチケットは移せません。そのリンクを外してから移してください。",
-  "ticket.move_closing_pull": "開いているプルリクエストがこのチケットを閉じます。マージは同じリポジトリのチケットしか閉じないので、そのリンクを外すかマージしてから移してください。",
-  "ticket.move_repair": "修復チケットは、このリポジトリの既定ブランチの失敗を直すためのものなので、移せません。",
+  "ticket.move_upstream_issue":
+    "upstream の issue とつながっているチケットは移せません。そのリンクを外してから移してください。",
+  "ticket.move_closing_pull":
+    "開いているプルリクエストがこのチケットを閉じます。マージは同じリポジトリのチケットしか閉じないので、そのリンクを外すかマージしてから移してください。",
+  "ticket.move_repair":
+    "修復チケットは、このリポジトリの既定ブランチの失敗を直すためのものなので、移せません。",
   "board.add": "チケットを追加",
   "board.newTicketIn": "新しいチケット（{lane}）",
   "people.nobody": "担当なし",
@@ -582,14 +630,16 @@ export const ja: Record<MessageKey, string> = {
   "pulls.updated": "更新",
   "pulls.noneOpen": "オープンな PR はありません。",
   "pulls.none": "PR はありません。",
-  "pulls.noLoadedMatches": "読み込んだ PR には一致するものがありません。さらに表示して検索を続けられます。",
+  "pulls.noLoadedMatches":
+    "読み込んだ PR には一致するものがありません。さらに表示して検索を続けられます。",
   "pulls.noMatches": "一致する PR はありません。",
   "pulls.loadMore": "PR をさらに表示",
   "pulls.tipChecks": "既定ブランチの CI",
   "pulls.tipOfWorkspace": "{workspace} の既定ブランチの CI",
   "pulls.tipError": "取得失敗",
   "pulls.tipEmpty": "コミットなし",
-  "pulls.tipCut": "先頭の {count} リポジトリのチェックを取得しています。残り {omitted} 件は省略しています。",
+  "pulls.tipCut":
+    "先頭の {count} リポジトリのチェックを取得しています。残り {omitted} 件は省略しています。",
   "people.reviewersSummary": "レビュアー: {names}",
   "repo.tipChecks": "{branch} のチェック",
   "repo.noTip": "{branch} にはまだコミットがありません。",
@@ -599,7 +649,8 @@ export const ja: Record<MessageKey, string> = {
   "account.noneOn": "{host} アカウントなし",
   "settings.workspaceGroup": "ワークスペース",
   "settings.branvilGroup": "Branvil 全体",
-  "settings.workspaceHelp": "ワークスペース。ボードを 1 つと、そこにチケットを置くリポジトリを持ちます。",
+  "settings.workspaceHelp":
+    "ワークスペース。ボードを 1 つと、そこにチケットを置くリポジトリを持ちます。",
   "settings.noRepos": "リポジトリはまだありません。",
   "settings.repoName": "名前",
   "settings.tagsHelp": "入力して Enter で追加します。",
@@ -607,42 +658,53 @@ export const ja: Record<MessageKey, string> = {
   "settings.protectedHelp": "直接の push と削除を断るブランチです。入力して Enter で追加します。",
   "settings.requiredHelp": "マージの前に成功していなければならないチェックの名前です。",
   "settings.requiredHelpUpstream": "上流に出す前に成功していなければならないチェックの名前です。",
-  "settings.approvalsHelp": "マージの前に、作者以外の何人のメンバーが今の head を承認していなければならないかです（承認のあとのコメントでは承認は消えません）。0 は承認を求めません。",
-  "settings.approvalsHelpUpstream": "上流に出す前に、作者以外の何人のメンバーが今の head を承認していなければならないかです（承認のあとのコメントでは承認は消えません）。0 は承認を求めません。",
+  "settings.approvalsHelp":
+    "マージの前に、作者以外の何人のメンバーが今の head を承認していなければならないかです（承認のあとのコメントでは承認は消えません）。0 は承認を求めません。",
+  "settings.approvalsHelpUpstream":
+    "上流に出す前に、作者以外の何人のメンバーが今の head を承認していなければならないかです（承認のあとのコメントでは承認は消えません）。0 は承認を求めません。",
   "settings.labelsHelp": "チケットに付けられるラベルです。入力して Enter で追加します。",
   "settings.addBranch": "ブランチ名を追加",
   "settings.addCheck": "チェック名を追加（例: test）",
   "settings.addLabel": "ラベルを追加",
   "settings.saved": "保存しました。",
-  "settings.membersHelp": "オーナー、エージェント、ランナーと、コードホストのアカウントを管理します。",
+  "settings.membersHelp":
+    "オーナー、エージェント、ランナーと、コードホストのアカウントを管理します。",
   "upstream.readerChoose": "メンバーを選ぶ…",
   "settings.tabCi": "CI",
   "settings.autoLand": "自動で取り込む",
-  "settings.autoLandHelp": "head の必須チェックと承認がそろい、base と衝突しなければ、Branvil が自動でマージします。base との組み合わせは、マージのあとに確かめます。止めておくにはドラフトのままにしてください。",
-  "settings.autoLandHelpUpstream": "head の必須チェックと承認がそろい、base と衝突しなければ、Branvil が作成者として自動で {host} に出します。マージは {host} で人が行います。{host} のチェックが成功すると、PR ごとに「通知」の webhook に知らせます。base との組み合わせは、マージのあとに確かめます。止めておくにはドラフトのままにしてください。",
+  "settings.autoLandHelp":
+    "head の必須チェックと承認がそろい、base と衝突しなければ、Branvil が自動でマージします。base との組み合わせは、マージのあとに確かめます。止めておくにはドラフトのままにしてください。",
+  "settings.autoLandHelpUpstream":
+    "head の必須チェックと承認がそろい、base と衝突しなければ、Branvil が作成者として自動で {host} に出します。マージは {host} で人が行います。{host} のチェックが成功すると、PR ごとに「通知」の webhook に知らせます。base との組み合わせは、マージのあとに確かめます。止めておくにはドラフトのままにしてください。",
   "settings.notifications": "通知",
-  "notifications.help": "自動で取り込むリポジトリの PR がホストでマージできるようになると、PR ごとに 1 回知らせます。メッセージには両方の PR へのリンクがあり、Slack の Incoming Webhook がそのまま受け取れます。mainの確認が失敗して修復チケットを作ると、落ちたジョブ、範囲、チケットのURL、担当を1回知らせます。メンバーの作業が人の対応を待って止まったとき、自動再レビューの上限に達したとき、Hubの更新が止まったときも同じwebhookで知らせます。webhookのURLは資格情報として保管し、二度と表示しません。",
+  "notifications.help":
+    "自動で取り込むリポジトリの PR がホストでマージできるようになると、PR ごとに 1 回知らせます。メッセージには両方の PR へのリンクがあり、Slack の Incoming Webhook がそのまま受け取れます。mainの確認が失敗して修復チケットを作ると、落ちたジョブ、範囲、チケットのURL、担当を1回知らせます。メンバーの作業が人の対応を待って止まったとき、自動再レビューの上限に達したとき、Hubの更新が止まったときも同じwebhookで知らせます。webhookのURLは資格情報として保管し、二度と表示しません。",
   "notifications.url": "Webhook の URL",
-  "notifications.urlHelp": "http または https の URL です。保存すると設定済みのものを置き換えます。",
+  "notifications.urlHelp":
+    "http または https の URL です。保存すると設定済みのものを置き換えます。",
   "notifications.set": "設定済み（{host}）",
   "notifications.unset": "未設定",
   "notifications.remove": "削除",
   "notifications.problem": "直近の送信に失敗しました：{reason}",
   "settings.responder": "既定の担当者",
   "settings.responderAuto": "自動",
-  "settings.responderHelp": "main の確認が落ちたとき、修復チケットの担当が PR の作者で決まらない場合に付ける。自動では、在籍中の AI メンバー（agent）の PR のうち最後にマージされたものの作者か、person_id 順の先頭を選ぶ。指定したメンバーが作業できない場合も自動で担当を決める。",
+  "settings.responderHelp":
+    "main の確認が落ちたとき、修復チケットの担当が PR の作者で決まらない場合に付ける。自動では、在籍中の AI メンバー（agent）の PR のうち最後にマージされたものの作者か、person_id 順の先頭を選ぶ。指定したメンバーが作業できない場合も自動で担当を決める。",
   "settings.ciNetwork": "ジョブのネットワーク",
-  "settings.ciNetworkHelp": "このリポジトリの CI ジョブにネットワークの利用を許可します。届くのは公開された宛先だけで、Branvil のマシンやプライベートネットワークには届きません。ホスト名による絞り込みはありません。",
+  "settings.ciNetworkHelp":
+    "このリポジトリの CI ジョブにネットワークの利用を許可します。届くのは公開された宛先だけで、Branvil のマシンやプライベートネットワークには届きません。ホスト名による絞り込みはありません。",
   "ci.runnerVersionMismatch": "{name} の版（{version}）は Hub と異なります。",
   "ci.settings.title": "CI",
-  "ci.settings.help": "ジョブを実行するランナー、1 つのジョブが使える量、ジョブを動かすイメージを管理します。",
+  "ci.settings.help":
+    "ジョブを実行するランナー、1 つのジョブが使える量、ジョブを動かすイメージを管理します。",
   "ci.settings.runner": "ランナー",
   "ci.settings.state.ready": "準備完了",
   "ci.settings.state.no_runner": "ランナーなし",
   "ci.settings.state.executor_unavailable": "実行環境を使えません",
   "ci.settings.state.stopping": "停止待ち",
   "ci.settings.runHere": "Branvil のマシンでランナーを動かす",
-  "ci.settings.runHereHelp": "サービスと一緒にランナーを起動し、動かし続けます。止めると、実行中のジョブは中断されます。",
+  "ci.settings.runHereHelp":
+    "サービスと一緒にランナーを起動し、動かし続けます。止めると、実行中のジョブは中断されます。",
   "ci.settings.runners": "ランナー一覧",
   "ci.settings.noRunners": "ランナーのメンバーがいません。",
   "ci.settings.connection.online": "接続中",
@@ -655,7 +717,8 @@ export const ja: Record<MessageKey, string> = {
   "ci.settings.versionMismatch": "Hub と版が異なる（{version}）",
   "ci.settings.runnerMissingImages": "{cpu} 向けの不足イメージ: {images}",
   "ci.settings.forwarding": "参加の前に SSH 転送を設定",
-  "ci.settings.forwardingUrl": "https://github.com/GuildBotics/GuildBotics/blob/main/docs/branvil_integration.ja.md#hub-以外のマシンで-ssh-転送を設定する",
+  "ci.settings.forwardingUrl":
+    "https://github.com/GuildBotics/GuildBotics/blob/main/docs/branvil_integration.ja.md#hub-以外のマシンで-ssh-転送を設定する",
   "ci.settings.lastReport": "最後の報告",
   "ci.settings.lastSeen": "最終接続",
   "ci.settings.executor": "実行環境",
@@ -664,7 +727,8 @@ export const ja: Record<MessageKey, string> = {
   "ci.settings.limits": "ジョブのリソース",
   "ci.settings.limitsSource.default": "Hub の既定値",
   "ci.settings.limitsSource.runner": "このランナー用に保存済み",
-  "ci.settings.limitsHelp": "すべてのジョブは、この CPU 数とメモリで、それぞれの microVM で動きます。同時に動くジョブは最大で同時実行数までで、そのぶん CPU とメモリも同時に使います。作業ディレクトリの容量は、チェックアウトと復元したキャッシュに加えて、ジョブが /work に書き込める量です。制限時間は、パイプラインの timeout_secs の上限で、timeout_secs を書かないジョブの制限時間です。保存した値は、ランナーが次に始めるジョブから使います（実行中のジョブはそのまま続きます）。",
+  "ci.settings.limitsHelp":
+    "すべてのジョブは、この CPU 数とメモリで、それぞれの microVM で動きます。同時に動くジョブは最大で同時実行数までで、そのぶん CPU とメモリも同時に使います。作業ディレクトリの容量は、チェックアウトと復元したキャッシュに加えて、ジョブが /work に書き込める量です。制限時間は、パイプラインの timeout_secs の上限で、timeout_secs を書かないジョブの制限時間です。保存した値は、ランナーが次に始めるジョブから使います（実行中のジョブはそのまま続きます）。",
   "ci.settings.maxCpus": "CPU 数",
   "ci.settings.maxMemory": "メモリ（MiB）",
   "ci.settings.workQuota": "作業ディレクトリの容量（MiB）",
@@ -689,20 +753,23 @@ export const ja: Record<MessageKey, string> = {
   "ci.settings.added": "追加しました",
   "ci.settings.missingTitle": "{users} が使うイメージがキャッシュにありません",
   "ci.settings.jobsOf": "{repository} の {jobs}",
-  "ci.settings.missingAbsent": "追加するまで、ジョブは開始できません。「イメージを追加」から追加してください。",
+  "ci.settings.missingAbsent":
+    "追加するまで、ジョブは開始できません。「イメージを追加」から追加してください。",
   "ci.settings.adding": "イメージを追加しています: {target}",
   "ci.settings.source": "追加元",
   "ci.settings.pull": "レジストリから取得",
   "ci.settings.pullReference": "イメージの参照",
   "ci.settings.load": "Branvil のマシンのファイルから読み込む",
   "ci.settings.loadPath": "アーカイブの絶対パス",
-  "ci.settings.loadHelp": "Branvil を動かしているマシン上の、docker save または OCI 形式のアーカイブ（.tar）です。",
+  "ci.settings.loadHelp":
+    "Branvil を動かしているマシン上の、docker save または OCI 形式のアーカイブ（.tar）です。",
   "ci.settings.addSubmit": "追加",
   "ci.settings.busy": "別のイメージ操作を実行中です。終わってからもう一度試してください。",
   "ci.settings.loaded": "追加したイメージ",
   "ci.settings.addedImage": "{reference} を追加しました",
   "ci.settings.network": "ネットワーク",
-  "ci.settings.networkHelp": "リポジトリごとに、ジョブがネットワークを使えるかどうかです。リポジトリ設定の CI タブで変更します。",
+  "ci.settings.networkHelp":
+    "リポジトリごとに、ジョブがネットワークを使えるかどうかです。リポジトリ設定の CI タブで変更します。",
   "ci.settings.networkAllowed": "許可",
   "ci.settings.networkDenied": "不許可",
 };

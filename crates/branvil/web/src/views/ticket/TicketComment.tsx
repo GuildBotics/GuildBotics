@@ -12,7 +12,13 @@ import { useSession } from "../../query/hooks";
 import { keys } from "../../query/keys";
 import { href } from "../../router/routes";
 
-export function TicketComment({ repo, ticketKey, comment, kind, onReact }: {
+export function TicketComment({
+  repo,
+  ticketKey,
+  comment,
+  kind,
+  onReact,
+}: {
   repo: string;
   ticketKey: string;
   comment: Comment;
@@ -36,22 +42,59 @@ export function TicketComment({ repo, ticketKey, comment, kind, onReact }: {
     },
   });
   return (
-    <CommentView repo={repo} comment={comment} url={`${href.ticket(repo, ticketKey)}#${encodeURIComponent(comment.id)}`} kind={kind} onReact={onReact} actions={allowed && !editing && (
-      <Group gap={4} ml="auto">
-        <ActionIcon variant="subtle" color="gray" aria-label={t("comment.edit")} disabled={change.isPending} onClick={() => { change.reset(); setEditing(true); }}>
-          <Pencil size={16} />
-        </ActionIcon>
-        <ActionIcon variant="subtle" color="red" aria-label={t("comment.delete")} disabled={change.isPending} onClick={() => {
-          if (window.confirm(t("comment.confirmDelete"))) change.mutate(null);
-        }}>
-          <Trash2 size={16} />
-        </ActionIcon>
-      </Group>
-    )}>
+    <CommentView
+      repo={repo}
+      comment={comment}
+      url={`${href.ticket(repo, ticketKey)}#${encodeURIComponent(comment.id)}`}
+      kind={kind}
+      onReact={onReact}
+      actions={
+        allowed &&
+        !editing && (
+          <Group gap={4} ml="auto">
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              aria-label={t("comment.edit")}
+              disabled={change.isPending}
+              onClick={() => {
+                change.reset();
+                setEditing(true);
+              }}
+            >
+              <Pencil size={16} />
+            </ActionIcon>
+            <ActionIcon
+              variant="subtle"
+              color="red"
+              aria-label={t("comment.delete")}
+              disabled={change.isPending}
+              onClick={() => {
+                if (window.confirm(t("comment.confirmDelete"))) change.mutate(null);
+              }}
+            >
+              <Trash2 size={16} />
+            </ActionIcon>
+          </Group>
+        )
+      }
+    >
       {editing ? (
-        <BodyEditor value={comment.body} label={t("comment.body")} required pending={change.isPending} attachTo={repo}
-          onCancel={() => { setEditing(false); change.reset(); }} onSave={(body) => change.mutate(body)} />
-      ) : <Markdown repo={repo} source={comment.body} />}
+        <BodyEditor
+          value={comment.body}
+          label={t("comment.body")}
+          required
+          pending={change.isPending}
+          attachTo={repo}
+          onCancel={() => {
+            setEditing(false);
+            change.reset();
+          }}
+          onSave={(body) => change.mutate(body)}
+        />
+      ) : (
+        <Markdown repo={repo} source={comment.body} />
+      )}
       {change.isError && <ErrorMessage error={change.error} />}
     </CommentView>
   );

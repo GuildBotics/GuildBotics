@@ -14,7 +14,9 @@ function compare(a: ListedPull, b: ListedPull) {
   }
   return a.updated_at === b.updated_at
     ? a.repository.localeCompare(b.repository) || b.number - a.number
-    : a.updated_at > b.updated_at ? -1 : 1;
+    : a.updated_at > b.updated_at
+      ? -1
+      : 1;
 }
 
 /** Merge sorted streams, keeping unused rows for the next workspace page. */
@@ -23,19 +25,24 @@ async function nextPage(sources: Source[], state: "open" | "closed" | "all") {
   const items: ListedPull[] = [];
   while (items.length < PAGE_SIZE) {
     // An empty source must be refilled before picking the next newest row.
-    await Promise.all(remaining.map(async (s) => {
-      if (s.items.length === 0 && s.cursor !== null) {
-        const page = await api.repos.pulls(s.repo, state, s.cursor);
-        s.items = page.items;
-        s.cursor = page.next_cursor;
-      }
-    }));
+    await Promise.all(
+      remaining.map(async (s) => {
+        if (s.items.length === 0 && s.cursor !== null) {
+          const page = await api.repos.pulls(s.repo, state, s.cursor);
+          s.items = page.items;
+          s.cursor = page.next_cursor;
+        }
+      }),
+    );
     const available = remaining.filter((s) => s.items.length > 0);
     if (available.length === 0) break;
     available.sort((a, b) => compare(a.items[0]!, b.items[0]!));
     items.push(available[0]!.items.shift()!);
   }
-  return { items, next: remaining.some((s) => s.items.length > 0 || s.cursor !== null) ? remaining : undefined };
+  return {
+    items,
+    next: remaining.some((s) => s.items.length > 0 || s.cursor !== null) ? remaining : undefined,
+  };
 }
 
 export function usePullList(paths: string[], state: "open" | "closed" | "all", enabled: boolean) {

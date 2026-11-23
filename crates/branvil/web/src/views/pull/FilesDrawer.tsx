@@ -58,11 +58,25 @@ function FileRow({ file, focused }: { file: FileChange; focused: boolean }) {
   useEffect(() => {
     if (focused) ref.current?.scrollIntoView?.({ block: "start" });
   }, [focused]);
-  const name = file.previous_path && file.previous_path !== file.path ? `${file.previous_path} → ${file.path}` : file.path;
+  const name =
+    file.previous_path && file.previous_path !== file.path
+      ? `${file.previous_path} → ${file.path}`
+      : file.path;
   return (
-    <details className="file" ref={ref} open={open} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+    <details
+      className="file"
+      ref={ref}
+      open={open}
+      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+    >
       <summary>
-        <ChevronRight size={14} style={{ transform: open ? "rotate(90deg)" : undefined, color: "var(--mantine-color-dimmed)" }} />
+        <ChevronRight
+          size={14}
+          style={{
+            transform: open ? "rotate(90deg)" : undefined,
+            color: "var(--mantine-color-dimmed)",
+          }}
+        />
         <Badge color={STATUS_COLOR[file.status]} variant="light" size="sm">
           {t(`files.status.${file.status}`)}
         </Badge>
@@ -122,7 +136,8 @@ export function FilesDrawer({
       ) : (
         <>
           <Text size="sm" mb="sm">
-            {t("files.summary", { count: items.length })} <span className="add">+{items.reduce((n, f) => n + f.additions, 0)}</span>{" "}
+            {t("files.summary", { count: items.length })}{" "}
+            <span className="add">+{items.reduce((n, f) => n + f.additions, 0)}</span>{" "}
             <span className="del">−{items.reduce((n, f) => n + f.deletions, 0)}</span>
           </Text>
           {items.length === 0 ? (

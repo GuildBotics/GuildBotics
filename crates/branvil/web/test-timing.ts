@@ -11,7 +11,11 @@ export default class TestTiming implements Reporter {
     this.startedAt = Date.now();
   }
 
-  onTestRunEnd(modules: ReadonlyArray<TestModule>, _errors: ReadonlyArray<unknown>, reason: TestRunEndReason) {
+  onTestRunEnd(
+    modules: ReadonlyArray<TestModule>,
+    _errors: ReadonlyArray<unknown>,
+    reason: TestRunEndReason,
+  ) {
     const finishedAt = Date.now();
     const files = modules.map((module) => ({
       file: module.relativeModuleId,
@@ -25,11 +29,25 @@ export default class TestTiming implements Reporter {
     }));
     const directory = process.env.GUILDBOTICS_TEST_RESULTS ?? "test-results";
     mkdirSync(directory, { recursive: true });
-    writeFileSync(join(directory, "timing.json"), JSON.stringify({
-      startedAt: this.startedAt, finishedAt, elapsedMs: finishedAt - this.startedAt, reason,
-      node: process.version, platform: platform(), release: release(), cpus: availableParallelism(),
-      commit: process.env.GB_CI_SHA, attempt: process.env.GB_CI_ATTEMPT_ID,
-      files,
-    }, null, 2) + "\n");
+    writeFileSync(
+      join(directory, "timing.json"),
+      JSON.stringify(
+        {
+          startedAt: this.startedAt,
+          finishedAt,
+          elapsedMs: finishedAt - this.startedAt,
+          reason,
+          node: process.version,
+          platform: platform(),
+          release: release(),
+          cpus: availableParallelism(),
+          commit: process.env.GB_CI_SHA,
+          attempt: process.env.GB_CI_ATTEMPT_ID,
+          files,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
   }
 }
