@@ -148,7 +148,7 @@ impl Fixture {
             std::fs::write(
                 path,
                 format!(
-                    "#!/bin/sh\nBRANVIL_TEST_HOOK={hook} exec {exe} --exact {} --nocapture\n",
+                    "#!/bin/sh\nGUILDBOTICS_TEST_HOOK={hook} exec {exe} --exact {} --nocapture\n",
                     quote(test_name)
                 ),
             )
@@ -432,7 +432,7 @@ fn fixture_git(root: &Path, repo: &str, args: &[&str]) -> String {
 
 /// Called by the downstream test named in `install_test_hooks`.
 pub fn hook() {
-    let Ok(name) = std::env::var("BRANVIL_TEST_HOOK") else {
+    let Ok(name) = std::env::var("GUILDBOTICS_TEST_HOOK") else {
         return;
     };
     assert!(["pre-receive", "post-receive"].contains(&name.as_str()));

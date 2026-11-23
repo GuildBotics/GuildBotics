@@ -1543,7 +1543,7 @@ async fn a_vault_that_cannot_keep_or_open_secrets_stops_them_with_the_reason() {
     assert!(!s.data.join("secrets").exists());
 
     // The embedding host cannot provide a vault: report its reason.
-    w.restart(&[("BRANVIL_TEST_NO_VAULT", "1")]);
+    w.restart(&[("GUILDBOTICS_TEST_NO_VAULT", "1")]);
     let s = &w.server;
     let (st, v) = s.put(&upstream, &w.owner, setting).await;
     assert_eq!(

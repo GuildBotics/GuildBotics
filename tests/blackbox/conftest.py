@@ -83,9 +83,8 @@ def checkout(stack, tmp_path: Path):
     seed.mkdir()
     setup = Checkout(seed, stack.env | stack.provider.git_env)
     setup.git("init", "-q", "-b", "main")
-    (seed / ".branvil").mkdir()
     setup.commit(
-        ".branvil/ci.toml",
+        ".guildbotics-ci.toml",
         '[[jobs]]\nname = "test"\nimage = "docker.io/library/alpine:3.22"\ncommands = ["true"]\n',
     )
     setup.commit("README.md", "base\n")

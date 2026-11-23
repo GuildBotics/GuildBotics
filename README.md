@@ -75,7 +75,7 @@ In another terminal, run `"$HOME/.guildbotics/bin/guildbotics" open` to open the
 
 `install` places the executable in `~/.guildbotics/bin/guildbotics` and copies the bundled skill into the user directories of the AI CLI tools it finds. It preserves edited skills and user-owned commands. Add `~/.local/bin` to `PATH` to use the link there.
 
-The first start creates the code host's data in `~/.guildbotics/data/code-host`. To keep it elsewhere or use existing data, set `BRANVIL_DATA_DIR` to its absolute path before starting. Open the code host's screens with `"$HOME/.guildbotics/bin/guildbotics" open --branvil`. For login startup, updates, and recovery, see the [macOS Hub guide](docs/hub-server.md).
+The first start creates the code host's data in `~/.guildbotics/data/code-host`. To keep it elsewhere or use existing data, set `GUILDBOTICS_CODE_HOST_DATA_DIR` to its absolute path before starting. Open the code host's screens with `"$HOME/.guildbotics/bin/guildbotics" open --branvil`. For login startup, updates, and recovery, see the [macOS Hub guide](docs/hub-server.md).
 
 ### Initial Setup
 

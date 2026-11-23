@@ -6,7 +6,7 @@
 //! the SDK and uses the same directory as isolated commands.
 //!
 //! ```sh
-//! BRANVIL_REAL_EXECUTOR=1 BRANVIL_REAL_EXECUTOR_DATA=/absolute/path/to/test-data \
+//! GUILDBOTICS_REAL_EXECUTOR=1 GUILDBOTICS_REAL_EXECUTOR_DATA=/absolute/path/to/test-data \
 //!   cargo nextest run --locked -p branvil --features test-support --test main -E 'test(/^real_executor::/)'
 //! ```
 
@@ -23,7 +23,7 @@ const IMAGE: &str = "docker.io/library/alpine:3.22";
 const GIT_IMAGE: &str = "docker.io/library/node:22.23.2-bookworm";
 
 fn enabled() -> bool {
-    std::env::var("BRANVIL_REAL_EXECUTOR").as_deref() == Ok("1")
+    std::env::var("GUILDBOTICS_REAL_EXECUTOR").as_deref() == Ok("1")
 }
 
 fn home() -> String {
@@ -36,7 +36,7 @@ fn test_data() -> std::path::PathBuf {
         "real executor requires an attending owner"
     );
     let data = std::path::PathBuf::from(
-        std::env::var_os("BRANVIL_REAL_EXECUTOR_DATA").expect("disposable test data required"),
+        std::env::var_os("GUILDBOTICS_REAL_EXECUTOR_DATA").expect("disposable test data required"),
     );
     assert!(data.is_absolute(), "use an absolute path for test data");
     data
@@ -173,7 +173,7 @@ name = "workspace"
 image = "{GIT_IMAGE}"
 timeout_secs = 120
 commands = [
-  "test \"$(git rev-parse HEAD)\" = \"$BRANVIL_SHA\"",
+  "test \"$(git rev-parse HEAD)\" = \"$GB_CI_SHA\"",
   "git ls-files | grep -qx README.md",
   "git diff-index --quiet HEAD",
   "test \"$(git describe --tags)\" = v-real",
@@ -185,7 +185,7 @@ commands = [
   "grep -q '^/dev/[a-z]* /tmp ext4 ' /proc/mounts",
   "grep -q '^/dev/[a-z]* /work ext4 ' /proc/mounts",
   "touch \"$HOME/x\"",
-  "mkdir -p .ci/cache && echo $BRANVIL_ATTEMPT >> .ci/cache/attempts && echo cached $(cat .ci/cache/attempts)",
+  "mkdir -p .ci/cache && echo $GB_CI_ATTEMPT >> .ci/cache/attempts && echo cached $(cat .ci/cache/attempts)",
 ]
 cache = {{ paths = [".ci/cache"], key_files = ["README.md"] }}
 
@@ -207,7 +207,7 @@ artifacts = [{{name = "late", paths = ["out/"]}}]
 #[tokio::test]
 async fn jobs_run_in_microvms_without_network_or_host_files() {
     if !enabled() {
-        eprintln!("skipped: set BRANVIL_REAL_EXECUTOR=1 to run the real executor test");
+        eprintln!("skipped: set GUILDBOTICS_REAL_EXECUTOR=1 to run the real executor test");
         return;
     }
     let w = World::new().await;
@@ -233,8 +233,7 @@ async fn jobs_run_in_microvms_without_network_or_host_files() {
     // The pipeline lands on main through a reviewed pull request; main's new
     // tip (also the tip of `setup`) gets the run.
     let port = s.url.rsplit(':').next().unwrap().to_string();
-    std::fs::create_dir_all(w.work.join(".branvil")).unwrap();
-    let head = w.push_change("setup", ".branvil/ci.toml", &pipeline(&port));
+    let head = w.push_change("setup", ".guildbotics-ci.toml", &pipeline(&port));
     git_ok(&w.work, &["tag", "v-real", &head]);
     git_as_ok(
         &w.work,
@@ -267,9 +266,9 @@ async fn jobs_run_in_microvms_without_network_or_host_files() {
         .arg(&config)
         .arg("--work-dir")
         .arg(&work_dir)
-        .env("BRANVIL_TOKEN", &token)
-        .env("BRANVIL_LOG", "branvil=debug")
-        .env("BRANVIL_TEST_VM_DATA", test_data())
+        .env("GUILDBOTICS_RUNNER_TOKEN", &token)
+        .env("GUILDBOTICS_TEST_LOG", "branvil=debug")
+        .env("GUILDBOTICS_TEST_VM_DATA", test_data())
         .stdout(Stdio::null())
         .stderr(std::fs::File::create(w.dir.path().join("runner.log")).unwrap())
         .spawn()
@@ -369,11 +368,11 @@ async fn jobs_run_in_microvms_without_network_or_host_files() {
     );
     assert!(probe_log.contains("bad address 'example.com'"), "no DNS");
     assert!(
-        probe_log.contains("BRANVIL_SHA="),
+        probe_log.contains("GB_CI_SHA="),
         "job metadata is in the environment"
     );
     assert!(
-        !probe_log.contains("BRANVIL_TOKEN"),
+        !probe_log.contains("GUILDBOTICS_RUNNER_TOKEN"),
         "no token in the job environment"
     );
     let startup_ms: u64 = probe_log

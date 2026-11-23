@@ -50,7 +50,7 @@ Seeded through the API by `bench seed` with the defaults:
 
 | | |
 | --- | --- |
-| Repositories | 4 (`acme/app-0..3`), each with `main` (200 files, a `.branvil/ci.toml` with one job), 500 PR branches and 400 spare branches (901 refs each, 3,604 in all) |
+| Repositories | 4 (`acme/app-0..3`), each with `main` (200 files, a `.guildbotics-ci.toml` with one job), 500 PR branches and 400 spare branches (901 refs each, 3,604 in all) |
 | Boards | 2 boards; each repository's tickets on one of them (two repositories per board), 6 labels per repository (seeded before tickets moved into repositories and repositories into workspaces: then 4 trackers, one per repository, held the tickets and the labels, and the boards were `acme/board-0..1`; `bench seed` now creates 2 workspaces `acme-0..1` with two repositories each, `acme-0/app-0..1` and `acme-1/app-2..3`, whose tickets are on their workspace's board, and gives the repositories the labels) |
 | Members | 3 humans (one admin), 8 agents, 1 runner (seeded before Branvil had a single owner and fixed rights per member kind; `bench seed` now makes the admin the owner and the other two humans, `ken` and `mia`, agents, without grants) |
 | Tickets | 10,000 (2,500 per repository): lanes new 25%, ready 6%, in progress 4%, done 65% (closed); agents assigned to all but 70% of the new ones; 0–3 labels |
@@ -253,17 +253,17 @@ files uncompressed (`Cache-Control: public, max-age=3600`).
 
 The current Desktop harness (`desktop/e2e/branvil-perf.spec.ts`) measures only
 its disposable `acme` workspace with one card. Run it from `desktop` with
-`BRANVIL_E2E_PERF=1 npm run e2e -- --project=branvil --trace off`.
-It accepts neither a pre-seeded data directory nor `BRANVIL_E2E_WORKSPACE`;
+`GUILDBOTICS_E2E_PERF=1 npm run e2e -- --project=branvil --trace off`.
+It accepts neither a pre-seeded data directory nor `GUILDBOTICS_E2E_WORKSPACE`;
 its output labels this small fixture and is **not comparable** to the
 large-board results below. Do not use it to validate large-board performance
 until a representative disposable dataset is available in the harness.
 
 The following is a historical measurement, not a procedure supported by the
 current harness. The former perf spec ran in Google Chrome with
-`BRANVIL_E2E_CHANNEL=chrome`, a new browser context per run and tracing off.
+`GUILDBOTICS_E2E_CHANNEL=chrome`, a new browser context per run and tracing off.
 It measured fixture board `acme/board-0` (later workspace `acme-0`, selected
-with `BRANVIL_E2E_WORKSPACE`): 1,695 open cards in the default view, fetched
+with `GUILDBOTICS_E2E_WORKSPACE`): 1,695 open cards in the default view, fetched
 in 17 pages. It entered with a `guildbotics branvil open --print` link and
 counted from the board page's navigation.
 Besides the first painted frame it reports *busy until*: a timer on the page
@@ -437,7 +437,7 @@ Conditions:
 | Build | `branvil` debug build (`cargo test`); `msb` is the GuildBotics-deployed release binary |
 | Image | `docker.io/library/alpine@sha256:5291449c…8fa8` (3.9 MiB, already in Branvil's image cache) |
 | Job | 1 vCPU, 512 MiB, network off, the commit's tree (two files) mounted at `/work`, run as root with `/tmp` in memory |
-| Harness | `BRANVIL_REAL_EXECUTOR=1 cargo test --test main real_executor:: -- --nocapture` (three jobs of one run, one after another: a probe job, an `exit 3` job, a `sleep` job stopped by a 5 s timeout) |
+| Harness | `GUILDBOTICS_REAL_EXECUTOR=1 cargo test --test main real_executor:: -- --nocapture` (three jobs of one run, one after another: a probe job, an `exit 3` job, a `sleep` job stopped by a 5 s timeout) |
 | Sampling | `ps -o rss` every 250 ms while the jobs run (peaks can be missed between samples) |
 
 Results of seven runs on 2026-10-14:
@@ -463,7 +463,7 @@ hosts, and the service's own CPU and memory during CI.
 
 ### Branvil's own pipeline
 
-The six jobs of `.branvil/ci.toml` on the same machine, read from the lines
+The six jobs of `.guildbotics-ci.toml` on the same machine, read from the lines
 the runner writes in each job's log (`docs/ci.md`, "The runner"), on
 2026-10-23: a throwaway service and one runner (debug build, `max_cpus` 4,
 `max_memory_mib` 6144, one job at a time), the image
@@ -495,7 +495,7 @@ in 76–127 ms, its sandbox started in 252–553 ms and removed in 40–66 ms.
 - What the runner adds (source, checkout, sandbox start and removal, cache
   restore and save) is about 30 s of the warm run (5 %). In the warm `test`,
   Cargo compiles the branvil crate for 53.5 s of the 93.9 s (the pipeline
-  rebuilds it on purpose, `.branvil/ci.toml`).
+  rebuilds it on purpose, `.guildbotics-ci.toml`).
 - A job's peak memory is what the guest touched: about 560 MiB for a VM that
   only boots and runs a shell command, and up to about 3.1 GiB for `test`,
   below the 6 GiB every job gets.
@@ -527,7 +527,7 @@ local measurement outside the checkout:
 
 ```sh
 cd web
-BRANVIL_TEST_RESULTS=/tmp/branvil-web-timing npm run test
+GUILDBOTICS_TEST_RESULTS=/tmp/branvil-web-timing npm run test
 ```
 
 Initial measurements for #78 on 2026-10-24: 231 tests in 20 files, Vitest 5.0.2,

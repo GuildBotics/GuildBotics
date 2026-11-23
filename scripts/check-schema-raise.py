@@ -10,13 +10,10 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 STORE = "crates/branvil/src/store.rs"
 UPGRADE = "crates/branvil/src/upgrade.rs"
-SCRIPT = "scripts/check-schema-raise.py"
 
 
-def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(ROOT), *args], capture_output=True, check=check
-    )
+def git(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, check=True)
 
 
 def version(source: bytes) -> int:
@@ -27,20 +24,12 @@ def version(source: bytes) -> int:
 
 
 def main() -> int:
-    verified = os.environ.get("BRANVIL_VERIFIED_SHA", "")
+    verified = os.environ.get("GB_CI_VERIFIED_SHA", "")
     if not verified:
-        print("Skipping schema-raise: BRANVIL_VERIFIED_SHA is empty or unset.")
+        print("Skipping schema-raise: GB_CI_VERIFIED_SHA is empty or unset.")
         return 0
     sha = git("rev-parse", "--verify", "--end-of-options", f"{verified}^{{commit}}")
     verified = sha.stdout.decode().strip()
-    ancestor = git("merge-base", "--is-ancestor", verified, "HEAD", check=False)
-    if ancestor.returncode == 1:
-        print("Skipping schema-raise: the verified commit is not an ancestor of HEAD.")
-        return 0
-    ancestor.check_returncode()
-    if not git("ls-tree", "--name-only", verified, "--", SCRIPT).stdout:
-        print("Skipping schema-raise: the verified commit predates this script.")
-        return 0
     before = version(git("show", f"{verified}:{STORE}").stdout)
     after = version((ROOT / STORE).read_bytes())
     reason = ""

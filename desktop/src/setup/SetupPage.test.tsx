@@ -316,14 +316,14 @@ vi.mock("./providers/slack/api", async (importOriginal) => {
     })),
   };
 });
-const BRANVIL_GIT_CONFIG = vi.hoisted(
+const CODE_HOST_GIT_CONFIG = vi.hoisted(
   () => '[credential "http://127.0.0.1:8866"]\n\thelper = "!guildbotics git-credential"',
 );
 vi.mock("./providers/branvil/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./providers/branvil/api")>();
   return {
     ...actual,
-    getGitConfig: vi.fn(async () => ({ git_config: BRANVIL_GIT_CONFIG })),
+    getGitConfig: vi.fn(async () => ({ git_config: CODE_HOST_GIT_CONFIG })),
     listWorkspaces: vi.fn(async () => ({ workspaces: ["acme", "other"] })),
   };
 });
@@ -350,7 +350,7 @@ function userOnFakeClock() {
 
 describe("SetupPage", () => {
   it("opens the requested member and provider account tab from a deep link", async () => {
-    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ services: BRANVIL_AND_SLACK }));
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ services: CODE_HOST_AND_SLACK }));
     renderSetupPage("/setup?section=members&person_id=alice&tab=slack");
 
     await waitFor(() => expect(vi.mocked(getMemberConfig).mock.calls[0]?.[0]).toBe("alice"));
@@ -1001,7 +1001,7 @@ describe("SetupPage", () => {
     await chooseProvider(user, "chat_service", "Slack");
     await saveSection(user);
     await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(updateProjectConfig).mock.calls[0][0].services).toEqual(BRANVIL_AND_SLACK);
+    expect(vi.mocked(updateProjectConfig).mock.calls[0][0].services).toEqual(CODE_HOST_AND_SLACK);
   });
 
   it("navigates between sections with the next and back buttons", async () => {
@@ -1266,7 +1266,7 @@ describe("SetupPage", () => {
   it("renders the verification section and runs diagnostics", async () => {
     const user = userEvent.setup();
     vi.mocked(getProjectConfig).mockResolvedValue(
-      projectConfig({ services: { ticket_service: BRANVIL_AND_SLACK.ticket_service } }),
+      projectConfig({ services: { ticket_service: CODE_HOST_AND_SLACK.ticket_service } }),
     );
     vi.mocked(runScenarioDiagnostics).mockResolvedValue(scenarioResponse());
     renderSetupPage("/setup?section=verification");
@@ -1521,7 +1521,7 @@ const PROVIDERS: ProviderOption[] = [
 ];
 
 /** A Branvil project with Slack chat. */
-const BRANVIL_AND_SLACK: ProjectServices = {
+const CODE_HOST_AND_SLACK: ProjectServices = {
   code_hosting_service: { name: "branvil", workspace: "acme" },
   ticket_service: { name: "branvil", workspace: "acme" },
   chat_service: { name: "slack" },
@@ -1699,7 +1699,9 @@ describe("createProjectSchema", () => {
   });
 
   it("accepts every chosen provider with valid items", () => {
-    expect(schema.safeParse(baseProjectValues({ services: BRANVIL_AND_SLACK })).success).toBe(true);
+    expect(schema.safeParse(baseProjectValues({ services: CODE_HOST_AND_SLACK })).success).toBe(
+      true,
+    );
   });
 });
 
@@ -1741,23 +1743,23 @@ describe("initialProjectValues", () => {
       projectConfig({
         language: "ja",
         description: "Existing",
-        services: BRANVIL_AND_SLACK,
+        services: CODE_HOST_AND_SLACK,
       }),
     );
     expect(values.language).toBe("ja");
     expect(values.description).toBe("Existing");
-    expect(values.services).toEqual(BRANVIL_AND_SLACK);
+    expect(values.services).toEqual(CODE_HOST_AND_SLACK);
     expect(values.providerApiKeys).toEqual({});
   });
 });
 
 describe("toProjectSetupRequest", () => {
   it("sends the chosen services as the form holds them", () => {
-    const request = toProjectSetupRequest(baseProjectValues({ services: BRANVIL_AND_SLACK }));
+    const request = toProjectSetupRequest(baseProjectValues({ services: CODE_HOST_AND_SLACK }));
     expect(request).not.toHaveProperty("env_file_path");
     expect(request).not.toHaveProperty("env_file_option");
     expect(request.config_dir).toBe("/workspace/.guildbotics/config");
-    expect(request.services).toEqual(BRANVIL_AND_SLACK);
+    expect(request.services).toEqual(CODE_HOST_AND_SLACK);
   });
 
   it("sends no service when none is chosen", () => {
@@ -1788,11 +1790,11 @@ describe("toProjectUpdateRequest", () => {
 
   it("sends the chosen services against the revisions it was composed against", () => {
     const request = toProjectUpdateRequest(
-      baseProjectValues({ services: BRANVIL_AND_SLACK }),
+      baseProjectValues({ services: CODE_HOST_AND_SLACK }),
       configStatus(),
       snapshot,
     );
-    expect(request.services).toEqual(BRANVIL_AND_SLACK);
+    expect(request.services).toEqual(CODE_HOST_AND_SLACK);
     expect(request.expected_revisions).toEqual(snapshot.revisions);
   });
 });
@@ -2360,7 +2362,7 @@ describe("MembersSection", () => {
 
   beforeEach(() => {
     // The member's account tabs are those of the providers the project uses.
-    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ services: BRANVIL_AND_SLACK }));
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ services: CODE_HOST_AND_SLACK }));
   });
 
   afterEach(async () => {
@@ -2981,7 +2983,7 @@ describe("MembersSection", () => {
   });
 
   it.each([
-    ["has a ticket service", BRANVIL_AND_SLACK, ["workflows/ticket_driven_workflow"]],
+    ["has a ticket service", CODE_HOST_AND_SLACK, ["workflows/ticket_driven_workflow"]],
     ["has no ticket service", { chat_service: { name: "slack" } }, []],
   ])(
     "preselects the ticket workflow for a new agent only when the project %s",
@@ -3806,7 +3808,7 @@ describe("PatrolSettingsEditor", () => {
 
   it("does not seed the default routine while editing an existing GitHub member with no patrol commands", async () => {
     const user = userEvent.setup();
-    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ services: BRANVIL_AND_SLACK }));
+    vi.mocked(getProjectConfig).mockResolvedValue(projectConfig({ services: CODE_HOST_AND_SLACK }));
     vi.mocked(getMemberConfig).mockResolvedValue(
       memberConfigDetail({
         git_email: "bot@example.com",

@@ -32,7 +32,7 @@ use executor::{Executor, Health, JobRun, Microsandbox, Outcome};
 pub struct RunnerArgs {
     #[command(subcommand)]
     command: Option<RunnerCommand>,
-    /// Per-job work directories and the dependency cache [default: ci.executor.work_dir of the configuration, else ~/.branvil/runner]
+    /// Per-job work directories and the dependency cache [default: ci.executor.work_dir of the configuration, else <machine root>/runner/work]
     #[arg(long)]
     work_dir: Option<PathBuf>,
     #[arg(skip)]
@@ -41,16 +41,16 @@ pub struct RunnerArgs {
     #[arg(skip)]
     vm_home: Option<PathBuf>,
     /// Base URL of the server [default: the server on this machine]
-    #[arg(long, env = "BRANVIL_URL")]
+    #[arg(long, env = "GUILDBOTICS_RUNNER_URL")]
     url: Option<String>,
     /// The runner's token
-    #[arg(long, env = "BRANVIL_TOKEN", hide_env_values = true)]
+    #[arg(long, env = "GUILDBOTICS_RUNNER_TOKEN", hide_env_values = true)]
     token: Option<String>,
     /// Configuration file for this machine [default: the one of the data directory]
     #[arg(long)]
     config: Option<PathBuf>,
     /// Data directory of the configuration [default: the server's]
-    #[arg(long, env = "BRANVIL_DATA_DIR")]
+    #[arg(long, env = "GUILDBOTICS_CODE_HOST_DATA_DIR")]
     data_dir: Option<PathBuf>,
 }
 
@@ -138,7 +138,7 @@ enum RunnerCommand {
     },
     /// Show which msb is used and whether the executor is ready
     Doctor,
-    /// Copy an msb binary (and the libkrunfw next to it) into ~/.branvil/msb
+    /// Copy an msb binary (and the libkrunfw next to it) into <machine root>/runner/msb
     InstallMsb {
         /// Path of an msb binary that reports the pinned version
         #[arg(long)]
@@ -173,7 +173,7 @@ impl Settings {
             work_dir: work_dir
                 .or(ci.executor.work_dir)
                 .or(default_work_dir)
-                .unwrap_or_else(|| executor::branvil_home().join("runner")),
+                .unwrap_or_else(|| executor::runner_home().join("work")),
             msb_path: ci.microsandbox.msb_path.clone(),
             #[cfg(feature = "host")]
             vm_home: None,
@@ -181,7 +181,7 @@ impl Settings {
                 .microsandbox
                 .home
                 .clone()
-                .unwrap_or_else(|| executor::branvil_home().join("msb-home")),
+                .unwrap_or_else(|| executor::runner_home().join("msb-home")),
         })
     }
 
@@ -201,7 +201,7 @@ impl Settings {
         let token = self
             .token
             .clone()
-            .context("a runner token is needed: pass --token or set BRANVIL_TOKEN (`guildbotics runner register`)")?;
+            .context("a runner token is needed: pass --token or set GUILDBOTICS_RUNNER_TOKEN (`guildbotics runner register`)")?;
         Ok(Api {
             url: self.url.clone(),
             token,
@@ -650,7 +650,7 @@ pub async fn doctor(settings: &Settings) -> anyhow::Result<u8> {
 }
 
 /// Copies an msb binary that reports the pinned version, and the libkrunfw
-/// library next to it (`../lib/`), into `~/.branvil/msb`.
+/// library next to it (`../lib/`), into `<machine root>/runner/msb`.
 pub fn install_msb(from: &Path) -> anyhow::Result<()> {
     match executor::resolve_msb(Some(from)) {
         executor::Msb::Found(p) if p == from => {}
@@ -660,7 +660,7 @@ pub fn install_msb(from: &Path) -> anyhow::Result<()> {
             executor::MSB_VERSION
         ),
     }
-    let dest = executor::branvil_home().join("msb");
+    let dest = executor::runner_home().join("msb");
     let lib_src = from
         .parent()
         .and_then(Path::parent)
@@ -1525,16 +1525,15 @@ async fn upload_log(api: Api, c: Claim, mut rx: mpsc::Receiver<Vec<u8>>) {
 pub fn job_environment(c: &Claim) -> Vec<(String, String)> {
     let mut env = vec![
         ("CI".to_string(), "true".to_string()),
-        ("BRANVIL_CI".to_string(), "true".to_string()),
-        ("BRANVIL_REPOSITORY".to_string(), c.repo.clone()),
-        ("BRANVIL_SHA".to_string(), c.sha.clone()),
-        ("BRANVIL_JOB".to_string(), c.job.name.clone()),
-        ("BRANVIL_ATTEMPT_ID".to_string(), c.attempt_id.clone()),
-        ("BRANVIL_ATTEMPT".to_string(), c.attempt.to_string()),
+        ("GB_CI_REPOSITORY".to_string(), c.repo.clone()),
+        ("GB_CI_SHA".to_string(), c.sha.clone()),
+        ("GB_CI_JOB".to_string(), c.job.name.clone()),
+        ("GB_CI_ATTEMPT_ID".to_string(), c.attempt_id.clone()),
+        ("GB_CI_ATTEMPT".to_string(), c.attempt.to_string()),
     ];
     if c.job.verified_sha {
         env.push((
-            "BRANVIL_VERIFIED_SHA".into(),
+            "GB_CI_VERIFIED_SHA".into(),
             c.verified_sha.clone().unwrap_or_default(),
         ));
     }
@@ -1542,7 +1541,7 @@ pub fn job_environment(c: &Claim) -> Vec<(String, String)> {
 }
 
 /// Runs the test `test` (its full path) again in a child process with `env`
-/// added and `BRANVIL_TEST_CHILD` set, for what a test cannot change in its
+/// added and `GUILDBOTICS_TEST_CHILD` set, for what a test cannot change in its
 /// own process: Git and the runner read the environment. Fails with the
 /// child's output unless it passed.
 #[cfg(test)]
@@ -1550,7 +1549,7 @@ pub(crate) fn pass_in_child(test: &str, env: &[(&str, &std::ffi::OsStr)]) {
     let (_, test) = test.split_once("::").expect("a test path");
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", test, "--nocapture"])
-        .env("BRANVIL_TEST_CHILD", "1")
+        .env("GUILDBOTICS_TEST_CHILD", "1")
         .envs(env.iter().copied())
         .output()
         .unwrap();

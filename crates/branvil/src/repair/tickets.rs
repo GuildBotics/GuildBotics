@@ -273,7 +273,7 @@ async fn evidence(
         .map(|(f, _)| text(&f.name))
         .collect::<Vec<_>>();
     if !jobs.is_empty() {
-        body.push_str(&format!("\nNo pull request's head in the range ran {}: they skipped it because no file matching its paths changed, reused a result with the same contents of its paths, or have no record. If the failure comes from a file outside the job's paths, add that file to the job's paths in .branvil/ci.toml as part of the repair.\n",jobs.join(", ")));
+        body.push_str(&format!("\nNo pull request's head in the range ran {}: they skipped it because no file matching its paths changed, reused a result with the same contents of its paths, or have no record. If the failure comes from a file outside the job's paths, add that file to the job's paths in .guildbotics-ci.toml as part of the repair.\n",jobs.join(", ")));
     }
     if commits.len() > 100 {
         body.push_str(&format!("\n{} more commits.\n", commits.len() - 100));

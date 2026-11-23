@@ -113,7 +113,7 @@ desktop journey は Rust HTTP API と一時 vault で実行する。golden の�
 CI に含めず、ワークフローで実行する。隔離環境を含むjourneyと画面の目視は利用者の立ち会いで行う。
 Branvilの画面E2Eは継続する。
 
-CLIを変更したら `cargo run --locked -p guildbotics -- generate-cli-reference` で [CLIリファレンス](docs/cli_reference.md) を再生成し、READMEの例も照合する。同梱コマンドの仕様を変更したらカスタムコマンドガイドの両言語を確認する。Hubのスクリプトは `sh -n scripts/hub-server.sh` と `cargo nextest run --locked -p guildbotics --test main -E 'test(/^hub_server::/)'` で検査し、LaunchAgentの実登録は承認を得て行う。Branvilの実microVMは `BRANVIL_REAL_EXECUTOR=1` の任意実行。
+CLIを変更したら `cargo run --locked -p guildbotics -- generate-cli-reference` で [CLIリファレンス](docs/cli_reference.md) を再生成し、READMEの例も照合する。同梱コマンドの仕様を変更したらカスタムコマンドガイドの両言語を確認する。Hubのスクリプトは `sh -n scripts/hub-server.sh` と `cargo nextest run --locked -p guildbotics --test main -E 'test(/^hub_server::/)'` で検査し、LaunchAgentの実登録は承認を得て行う。Branvilの実microVMは `GUILDBOTICS_REAL_EXECUTOR=1` の任意実行。
 
 ## 品質とテスト
 

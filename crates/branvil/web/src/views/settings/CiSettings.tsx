@@ -386,7 +386,7 @@ function Cached({ image: c, added }: { image: CachedImage; added: boolean }) {
   );
 }
 
-/** Copies an image's tag: the value to write as `image` in `.branvil/ci.toml`. */
+/** Copies an image's tag: the value to write as `image` in `.guildbotics-ci.toml`. */
 function CopyReference({ value }: { value: string }) {
   const t = useT();
   return (

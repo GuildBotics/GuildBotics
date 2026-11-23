@@ -194,7 +194,7 @@ are atomic together.
    repository is rescanned. Pushes accepted while the service was down or
    between Git and the database are recorded.
 
-`BRANVIL_FAILPOINT=merge_before_update_ref|merge_after_update_ref|post_receive_before_record`
+`GUILDBOTICS_FAILPOINT=merge_before_update_ref|merge_after_update_ref|post_receive_before_record`
 aborts the process at that point. `tests/recovery.rs` uses it to stop between
 Git and the database and checks that the next start converges. This simulates
 a killed process, not power loss.
@@ -707,6 +707,6 @@ The range table distinguishes paths reuse as `reused <sha7> (same contents of
 paths)` while tree reuse remains success. If at least one PR is in the range and
 all its heads skipped a failed job by paths, reused it by paths, or lack a record,
 the body asks the repairer to include causal files outside the job's paths in
-`.branvil/ci.toml`. Actual executions, tree reuse, and post-merge-only skips
+`.guildbotics-ci.toml`. Actual executions, tree reuse, and post-merge-only skips
 suppress this hint for that job. The decision covers the full range even when
 the displayed table is truncated.

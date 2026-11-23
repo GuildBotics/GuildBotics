@@ -221,15 +221,11 @@ pub enum Msb {
     Missing(String),
 }
 
-fn home_dir() -> Option<PathBuf> {
-    directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf())
-}
-
-/// `~/.branvil` (short on every OS, outside OS temp directories).
-pub fn branvil_home() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".branvil")
+/// `<machine root>/runner` (short on every OS, outside OS temp directories).
+pub fn runner_home() -> PathBuf {
+    gb_base::home::machine_root()
+        .unwrap_or_else(|_| PathBuf::from(".guildbotics"))
+        .join("runner")
 }
 
 /// The candidates in order: the configured binary, the embedding host's
@@ -243,7 +239,7 @@ pub fn resolve_msb(configured: Option<&Path>) -> Msb {
     if let Some((path, _)) = HOST_RUNTIME.get() {
         candidates.push(path.clone());
     }
-    candidates.push(branvil_home().join("msb/bin").join(msb_file()));
+    candidates.push(runner_home().join("msb/bin").join(msb_file()));
     let mut notes = Vec::new();
     for c in candidates {
         if !c.is_file() {
@@ -2164,9 +2160,9 @@ pub(crate) mod tests {
         type Resolve<'a> = &'a dyn Fn(&Path) -> std::io::Result<PathBuf>;
         let cases: [(&str, Resolve, Option<&str>); 6] = [
             (
-                r"\\?\C:\Users\x\.branvil\runner",
+                r"\\?\C:\Users\x\.guildbotics\runner",
                 &windows,
-                Some(r"C:\Users\x\.branvil\runner"),
+                Some(r"C:\Users\x\.guildbotics\runner"),
             ),
             (r"\\?\C:\Review\runner.", &windows, None),
             (r"\\?\C:\Review\runner ", &windows, None),
@@ -3579,7 +3575,7 @@ esac
             "star*/x",
             "it's",
             "missing",
-            "missing\nBRANVIL_KEEP\nBRANVIL\nx",
+            "missing\nCACHE_KEEP\nBRANVIL\nx",
         ];
         // Both faults let tar copy all its bytes before returning an error.
         write_script(
@@ -3910,8 +3906,8 @@ esac
     #[cfg(unix)]
     #[tokio::test]
     async fn a_missing_git_is_reported() {
-        if std::env::var_os("BRANVIL_TEST_CHILD").is_some() {
-            let dir = PathBuf::from(std::env::var_os("BRANVIL_TEST_DIR").unwrap());
+        if std::env::var_os("GUILDBOTICS_TEST_CHILD").is_some() {
+            let dir = PathBuf::from(std::env::var_os("GUILDBOTICS_TEST_DIR").unwrap());
             let ms = Microsandbox::new(Msb::Found(dir.join("msb")), dir.join("home"), "t");
             let h = ms.health().await;
             assert!(!h.ready);
@@ -3939,7 +3935,7 @@ esac
         crate::runner::pass_in_child(
             &format!("{}::a_missing_git_is_reported", module_path!()),
             &[
-                ("BRANVIL_TEST_DIR", dir.path().as_os_str()),
+                ("GUILDBOTICS_TEST_DIR", dir.path().as_os_str()),
                 ("PATH", dir.path().join("empty").as_os_str()),
             ],
         );

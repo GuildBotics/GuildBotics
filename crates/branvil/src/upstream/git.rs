@@ -11,9 +11,9 @@ use std::path::Path;
 
 use crate::git::Git;
 
-const ENV_ASKPASS: &str = "BRANVIL_ASKPASS";
-const ENV_USERNAME: &str = "BRANVIL_UPSTREAM_USERNAME";
-const ENV_PASSWORD: &str = "BRANVIL_UPSTREAM_PASSWORD";
+const ENV_ASKPASS: &str = "GUILDBOTICS_UPSTREAM_ASKPASS";
+const ENV_USERNAME: &str = "GUILDBOTICS_UPSTREAM_USERNAME";
+const ENV_PASSWORD: &str = "GUILDBOTICS_UPSTREAM_PASSWORD";
 /// Messages kept from Git.
 const MAX_ERROR: usize = 600;
 

@@ -8,7 +8,7 @@ in bare repositories.
 
 It is an internal component, not a product of its own. The GuildBotics server
 (`guildbotics server start`) prepares it on the server's listener and creates
-its data directory (`BRANVIL_DATA_DIR`, by default
+its data directory (`GUILDBOTICS_CODE_HOST_DATA_DIR`, by default
 `GUILDBOTICS_HOME/data/code-host`) at the first start; the server's owner is
 its owner, authenticated by GuildBotics. Its CI jobs run in a separate
 `guildbotics runner` process, Git runs its hooks as
@@ -163,7 +163,7 @@ isolated from the user's Git configuration and credential helpers. They are one 
 
 Branvil browser journeys and fixture layouts run in Desktop E2E:
 `cd desktop && npm run e2e -- --project=branvil`. The stack owns a disposable
-embedded service and uses the host browser session. Set `BRANVIL_E2E_PERF=1`
+embedded service and uses the host browser session. Set `GUILDBOTICS_E2E_PERF=1`
 only for one-card fixture timing investigations; these are not large-board benchmarks.
 
 ### GitHub Actions

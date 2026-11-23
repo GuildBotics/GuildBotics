@@ -8,7 +8,7 @@ usage() {
 Usage: scripts/hub-server.sh install | update | restart | status | recover | uninstall | auto-install | auto-uninstall | auto-once
 
 install    Build HEAD, install the CLI and skill, and start the LaunchAgent.
-           Set BRANVIL_DATA_DIR to the absolute path of the code host's data
+           Set GUILDBOTICS_CODE_HOST_DATA_DIR to the absolute path of the code host's data
            (the first start creates it), and GUILDBOTICS_HUB_SIGNING_IDENTITY
            to the code signing identity. Set GUILDBOTICS_HUB_STORAGE to an
            absolute path to keep builds and backups on another disk.
@@ -269,19 +269,10 @@ build_head() {
 backup_and_rehearse() {
     stage=backup
     mkdir -p "$backups"
-    if [ -n "${GUILDBOTICS_HUB_MANUAL_BACKUP:-}" ]; then
-        # A backup the owner took by hand, when the running build cannot take
-        # it (docs/hub-server.md).
-        backup=$GUILDBOTICS_HUB_MANUAL_BACKUP
-        [ -f "$backup/manifest.json" ] && [ -f "$backup/code-host/manifest.json" ] ||
-            fail "GUILDBOTICS_HUB_MANUAL_BACKUP must name a complete backup."
-        printf 'Backup taken by hand: %s\n' "$backup"
-    else
-        backup=$(mktemp -d "$backups/hub-update-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
-        # The running build backs up what its server serves.
-        "$current" server hub-data backup --to "$backup"
-        printf 'Backup before update: %s\n' "$backup"
-    fi
+    backup=$(mktemp -d "$backups/hub-update-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
+    # The running build backs up what its server serves.
+    "$current" server hub-data backup --to "$backup"
+    printf 'Backup before update: %s\n' "$backup"
 
     # No other backup writer can run under operation. Remove interrupted copies.
     set --
@@ -310,7 +301,9 @@ write_plist() {
         printf '<key>ProgramArguments</key><array><string>%s</string><string>server</string><string>start</string></array>\n' "$(xml "$current")"
         printf '%s\n' '<key>EnvironmentVariables</key><dict>'
         entry PATH "$agent_path"
-        entry BRANVIL_DATA_DIR "$BRANVIL_DATA_DIR"
+        entry GUILDBOTICS_CODE_HOST_DATA_DIR "$GUILDBOTICS_CODE_HOST_DATA_DIR"
+        # The build before the rename reads this name if an update returns to it.
+        entry BRANVIL_DATA_DIR "$GUILDBOTICS_CODE_HOST_DATA_DIR"
         entry GUILDBOTICS_HOME "$GUILDBOTICS_HOME"
         if [ -n "${GUILDBOTICS_IDENTITY_ROOT:-}" ]; then entry GUILDBOTICS_IDENTITY_ROOT "$GUILDBOTICS_IDENTITY_ROOT"; fi
         if [ -n "${GUILDBOTICS_HUB_STORAGE:-}" ]; then entry GUILDBOTICS_HUB_STORAGE "$GUILDBOTICS_HUB_STORAGE"; fi
@@ -344,19 +337,22 @@ read_plist() {
     # Build with the invoking shell's tools, but run commands against the same
     # machine root, code host data directory and port as the installed agent.
     agent_path=$(setting EnvironmentVariables.PATH)
-    BRANVIL_DATA_DIR=$(setting EnvironmentVariables.BRANVIL_DATA_DIR)
+    GUILDBOTICS_CODE_HOST_DATA_DIR=$(setting EnvironmentVariables.GUILDBOTICS_CODE_HOST_DATA_DIR) ||
+        fail "The LaunchAgent has no GUILDBOTICS_CODE_HOST_DATA_DIR. See docs/hub-server.md."
     GUILDBOTICS_HOME=$(setting EnvironmentVariables.GUILDBOTICS_HOME)
     GUILDBOTICS_SERVER_PORT=$(setting EnvironmentVariables.GUILDBOTICS_SERVER_PORT || true)
     GUILDBOTICS_IDENTITY_ROOT=$(setting EnvironmentVariables.GUILDBOTICS_IDENTITY_ROOT || true)
     GUILDBOTICS_HUB_STORAGE=$(setting EnvironmentVariables.GUILDBOTICS_HUB_STORAGE || true)
-    export BRANVIL_DATA_DIR GUILDBOTICS_HOME GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT
+    # The running build may be the one before the rename.
+    BRANVIL_DATA_DIR=$GUILDBOTICS_CODE_HOST_DATA_DIR
+    export BRANVIL_DATA_DIR GUILDBOTICS_CODE_HOST_DATA_DIR GUILDBOTICS_HOME GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT
     use_storage
 }
 # Guidance runs with this Hub's settings, whatever the shell it is pasted into
 # sets: a bare guildbotics may run another Hub's build against other data.
 hub_env() {
     unset_settings= settings=
-    for key in GUILDBOTICS_HOME BRANVIL_DATA_DIR GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT GUILDBOTICS_HUB_STORAGE; do
+    for key in GUILDBOTICS_HOME GUILDBOTICS_CODE_HOST_DATA_DIR GUILDBOTICS_SERVER_PORT GUILDBOTICS_IDENTITY_ROOT GUILDBOTICS_HUB_STORAGE; do
         eval "value=\${$key:-}"
         if [ -n "$value" ]; then settings="$settings$key=$(quote "$value") "
         else unset_settings="$unset_settings-u $key "; fi
@@ -428,20 +424,20 @@ case "$action" in
     install)
         agent_path=$PATH
         : "${GUILDBOTICS_HOME:=$HOME/.guildbotics}"
-        case "${BRANVIL_DATA_DIR:-}" in
+        case "${GUILDBOTICS_CODE_HOST_DATA_DIR:-}" in
             /*) ;;
-            *) fail "Set BRANVIL_DATA_DIR to the absolute path of the code host's data." ;;
+            *) fail "Set GUILDBOTICS_CODE_HOST_DATA_DIR to the absolute path of the code host's data." ;;
         esac
         case "$GUILDBOTICS_HOME" in /*) ;; *) fail "GUILDBOTICS_HOME must be an absolute path." ;; esac
         case "${GUILDBOTICS_HUB_STORAGE:-}" in ''|/*) ;; *) fail "GUILDBOTICS_HUB_STORAGE must be an absolute path." ;; esac
         identity=${GUILDBOTICS_HUB_SIGNING_IDENTITY:-}
         [ -n "$identity" ] ||
             fail "Set GUILDBOTICS_HUB_SIGNING_IDENTITY to the code signing identity. See docs/hub-server.md."
-        case "$HOME$PATH$GUILDBOTICS_HOME$BRANVIL_DATA_DIR${GUILDBOTICS_IDENTITY_ROOT:-}${GUILDBOTICS_SERVER_PORT:-}${GUILDBOTICS_HUB_STORAGE:-}$identity" in
+        case "$HOME$PATH$GUILDBOTICS_HOME$GUILDBOTICS_CODE_HOST_DATA_DIR${GUILDBOTICS_IDENTITY_ROOT:-}${GUILDBOTICS_SERVER_PORT:-}${GUILDBOTICS_HUB_STORAGE:-}$identity" in
             *'
 '*) fail "Paths and environment settings must not contain line breaks." ;;
         esac
-        export BRANVIL_DATA_DIR GUILDBOTICS_HOME
+        export GUILDBOTICS_CODE_HOST_DATA_DIR GUILDBOTICS_HOME
         if [ -n "${GUILDBOTICS_HUB_STORAGE:-}" ]; then
             require_storage
             # Record one spelling: backup rotation compares these paths as text.
