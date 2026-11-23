@@ -489,10 +489,11 @@ CI設定の `[ci.microsandbox]` で旧ストアを指定していた場合は、
 この版で、CI の設定ファイルは `.guildbotics-ci.toml`、ジョブが受け取る環境変数は `GB_CI_*`、コードホストのデータの場所を指す環境変数は `GUILDBOTICS_CODE_HOST_DATA_DIR` になります。データの場所は変わりません。自動更新は手作業が必要として止まります。
 
 1. **ランナーの置き場所を固定します。** 設定のないランナーの msb のホームと作業場所の既定値は、`<machine root>/runner` の下に変わります。msb のホームの定義は絶対パスを持つので、フォルダーは移さず、今の場所を設定に書きます。ランナーは Hub の版に追従して再起動するので、Hub の更新より前に行います。
-   - Hub 以外のマシンでは、`ci.microsandbox.home` を設定していなければ、`<machine root>/runner/branvil.toml` に今のホームを書きます。
+   - Hub 以外のマシンでは、`ci.microsandbox.home` を設定していなければ、ランナーが読む設定ファイルに今のホームを書きます。既定は `<machine root>/runner/branvil.toml` で、起動時に `--config` や `--data-dir`、データディレクトリの環境変数を渡している場合は、その指す先のファイルです。
    - Hub では、`ci.executor.work_dir` と `ci.microsandbox.home` を設定していなければ、コードホストのデータの `branvil.toml` に今の場所を書きます。
    - `guildbotics runner install-msb` で置いた msb を使っているマシンでは、`ci.microsandbox.msb_path` に今の msb のパスも書きます。
-   - パスは単一引用符で囲みます。Windows のパスの `\` もそのまま書けます。書いたあと、`guildbotics runner doctor` で msb が見つかることを確かめます。
+   - 起動スクリプトやサービスの定義で `BRANVIL_TOKEN`、`BRANVIL_URL`、`BRANVIL_DATA_DIR` を渡しているランナーには、`GUILDBOTICS_RUNNER_TOKEN`、`GUILDBOTICS_RUNNER_URL`、`GUILDBOTICS_CODE_HOST_DATA_DIR` も同じ値で渡し、サービスの定義を読み込み直してランナーを起動し直します。前の版は古い名前だけを読むので、古い名前は次の版へ更新するまで残します。
+   - パスは単一引用符で囲みます。Windows のパスの `\` もそのまま書けます。書いたあと、ランナーと同じ環境変数と引数で `guildbotics runner doctor` を実行し、msb が見つかることを確かめます。
 
    ```toml
    [ci.executor]
@@ -503,7 +504,8 @@ CI設定の `[ci.microsandbox]` で旧ストアを指定していた場合は、
    msb_path = '/absolute/path/to/current-msb'
    ```
 
-2. **Hub を更新します。** 自動更新を止め、LaunchAgent に新しい名前を足してから更新します。前のビルドへ戻る場合に備えて、古い名前もこの版の間は残ります。
+2. **ほかのリポジトリにも新しい設定ファイルを置きます。** この Hub で CI を使うリポジトリごとに、`.guildbotics-ci.toml` を Hub の更新より前に、既定のブランチと保護しているブランチへ入れます。内容は `.branvil/ci.toml` と同じにし、コマンドやスクリプトが読む `BRANVIL_` のジョブの変数は `GB_CI_*` に変えます。古いファイルは、そのリポジトリの CI が新しい Hub で動くことを確かめてから消します。
+3. **Hub を更新します。** 自動更新を止め、LaunchAgent に新しい名前を足してから更新します。前のビルドへ戻る場合に備えて、古い名前もこの版の間は残ります。
 
    ```sh
    scripts/hub-server.sh auto-uninstall
@@ -516,5 +518,6 @@ CI設定の `[ci.microsandbox]` で旧ストアを指定していた場合は、
    scripts/hub-server.sh auto-install
    ```
 
-3. **シェルの設定を直します。** `~/.zshrc` などで `BRANVIL_DATA_DIR` を設定している場合は、`GUILDBOTICS_CODE_HOST_DATA_DIR` に置き換えます。
-4. **開いている PR に main を取り込みます。** 新しい Hub は `.guildbotics-ci.toml` だけを読むので、このファイルを含まない head の必須チェックは失敗します。
+4. **シェルの設定を直します。** `~/.zshrc` などで `BRANVIL_DATA_DIR` を設定している場合は、`GUILDBOTICS_CODE_HOST_DATA_DIR` に置き換えます。
+5. **ランナーを確かめます。** CI の設定画面で、各ランナーが新しい版で Hub に接続し、ジョブを取得することを確かめます。
+6. **開いている PR に main を取り込みます。** 新しい Hub は `.guildbotics-ci.toml` だけを読むので、このファイルを含まない head の必須チェックは失敗します。

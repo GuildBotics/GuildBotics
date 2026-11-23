@@ -114,8 +114,18 @@ def test_repository_itself() -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_ci_schema_command_runs_without_a_virtualenv(repo: Path) -> None:
-    jobs = tomllib.loads((ROOT / ".guildbotics-ci.toml").read_text())["jobs"]
+@pytest.mark.parametrize(
+    ("pipeline", "variable"),
+    [
+        (".guildbotics-ci.toml", "GB_CI_VERIFIED_SHA"),
+        (".branvil/ci.toml", "BRANVIL_VERIFIED_SHA"),
+        (".branvil/ci.toml", "GB_CI_VERIFIED_SHA"),
+    ],
+)
+def test_ci_schema_command_runs_without_a_virtualenv(
+    repo: Path, pipeline: str, variable: str
+) -> None:
+    jobs = tomllib.loads((ROOT / pipeline).read_text())["jobs"]
     [job] = [job for job in jobs if job["name"] == "schema-raise"]
     # Match the image's command names without a virtualenv's bare python.
     bin_dir = repo / "bin"
@@ -124,20 +134,27 @@ def test_ci_schema_command_runs_without_a_virtualenv(repo: Path) -> None:
         executable = shutil.which(name)
         assert executable is not None
         (bin_dir / name).symlink_to(executable)
-    env = {**os.environ, "PATH": str(bin_dir), "GB_CI_VERIFIED_SHA": "HEAD"}
-    for command in job["commands"]:
-        result = subprocess.run(
+    env = {**os.environ, "PATH": str(bin_dir), variable: "HEAD"}
+
+    def run_job() -> subprocess.CompletedProcess:
+        [command] = job["commands"]
+        return subprocess.run(
             ["/bin/sh", "-c", command],
             cwd=repo,
             env=env,
             capture_output=True,
             text=True,
         )
-        assert result.returncode == 0, result.stderr
-        assert (
-            "schema-raise passed: verified version 25, checkout version 25"
-            in result.stdout
-        )
+
+    result = run_job()
+    assert result.returncode == 0, result.stderr
+    assert (
+        "schema-raise passed: verified version 25, checkout version 25" in result.stdout
+    )
+    store(repo, 27)
+    result = run_job()
+    assert result.returncode == 1, result.stdout
+    assert "verified version 25, checkout version 27" in result.stderr
 
 
 def test_ci_schema_job() -> None:
