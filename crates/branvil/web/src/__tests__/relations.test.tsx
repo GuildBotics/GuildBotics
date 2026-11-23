@@ -78,7 +78,7 @@ describe("relations", () => {
   it("is reached from the sidebar and lays out parents, their collapsed dependencies, and tickets without relations", async () => {
     const user = userEvent.setup();
     const fake = fakeApi(routes());
-    renderApp("/acme/-/board");
+    renderApp("/-/settings");
     await user.click(await screen.findByRole("link", { name: "Task flow" }));
     await screen.findByRole("article", { name: /^acme\/demo#1 / });
     expect(window.location.pathname).toBe("/acme");

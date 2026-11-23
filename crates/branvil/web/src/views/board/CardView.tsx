@@ -1,8 +1,8 @@
-import { ActionIcon, Badge, Menu, Text, Tooltip, useMenuContext } from "@mantine/core";
+import { Badge, Menu, Text, Tooltip, useMenuContext } from "@mantine/core";
 import { useClipboard } from "@mantine/hooks";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Check, Copy, Ellipsis, GitPullRequest, Trash2 } from "lucide-react";
-import { memo, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { Check, Copy, GitPullRequest, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { isApiError } from "../../api/client";
 import * as api from "../../api/endpoints";
 import { ticketRef, type Card, type Lane, type PullSummary } from "../../api/types";
@@ -328,89 +328,3 @@ export function CardView({
     </article>
   );
 }
-
-/** The board's menu of a card: its lane and its place in the lane, for whoever cannot or does not drag. */
-function CardMenu({
-  card,
-  lanes,
-  position,
-  laneSize,
-  busy,
-  onMove,
-}: {
-  card: Card;
-  lanes: Lane[];
-  position: number;
-  laneSize: number;
-  busy: boolean;
-  onMove: (card: Card, lane: Lane, index: number) => void;
-}) {
-  const t = useT();
-  const ref = ticketRef(card);
-  return (
-    <div className="card-menu">
-      <LazyMenu
-        trigger={(open) => (
-          <ActionIcon variant="subtle" color="gray" size="sm" aria-label={t("board.cardMenu", { key: ref })} onClick={open} disabled={busy}>
-            <Ellipsis size={16} />
-          </ActionIcon>
-        )}
-      >
-        <Menu.Label>{t("ticket.lane")}</Menu.Label>
-        <LaneItems lanes={lanes} current={card.lane} onChoose={(l) => onMove(card, l, Number.MAX_SAFE_INTEGER)} />
-        <Menu.Divider />
-        <Menu.Item
-          leftSection={<ArrowUp size={14} />}
-          aria-label={t("board.moveUp", { key: ref })}
-          disabled={position <= 0}
-          onClick={() => onMove(card, card.lane, position - 1)}
-        >
-          {t("board.up")}
-        </Menu.Item>
-        <Menu.Item
-          leftSection={<ArrowDown size={14} />}
-          aria-label={t("board.moveDown", { key: ref })}
-          disabled={position >= laneSize - 1}
-          onClick={() => onMove(card, card.lane, position + 1)}
-        >
-          {t("board.down")}
-        </Menu.Item>
-        <Menu.Divider />
-        <InteractiveItem card={card} />
-        <CopyUrlItem url={card.url} />
-        <DeleteCardItem card={card} />
-      </LazyMenu>
-    </div>
-  );
-}
-
-/**
- * A card on the board, with its menu. Memoised: the board passes stable props,
- * so a change elsewhere on the board (a drag position, another card, a filter)
- * does not re-render it.
- */
-export const BoardCard = memo(function BoardCard({
-  card,
-  lanes,
-  position,
-  laneSize,
-  busy,
-  loadChecks,
-  people,
-  onMove,
-}: {
-  card: Card;
-  lanes: Lane[];
-  position: number;
-  laneSize: number;
-  busy: boolean;
-  loadChecks: Set<string>;
-  people: Person[];
-  onMove: (card: Card, lane: Lane, index: number) => void;
-}) {
-  return (
-    <CardView card={card} people={people} loadChecks={loadChecks} busy={busy}>
-      <CardMenu card={card} lanes={lanes} position={position} laneSize={laneSize} busy={busy} onMove={onMove} />
-    </CardView>
-  );
-});

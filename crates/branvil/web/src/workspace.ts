@@ -14,7 +14,6 @@ export function workspaceOfRoute(route: Route): string | null {
   switch (route.name) {
     case "workspace":
     case "pulls":
-    case "board":
       return route.workspace;
     case "repo":
     case "ticket":

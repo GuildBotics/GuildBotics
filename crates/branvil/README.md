@@ -1,8 +1,8 @@
 # Branvil
 
 Branvil is the code hosting of GuildBotics: Git repositories over Smart HTTP
-in workspaces, each workspace with one kanban board for the tickets of its
-repositories, pull requests with reviews and per-pull landing conditions, and
+in workspaces, a task flow for the tickets of each workspace, pull requests
+with reviews and per-pull landing conditions, and
 a CI that runs each job in a microVM. It keeps metadata in redb and Git data
 in bare repositories.
 

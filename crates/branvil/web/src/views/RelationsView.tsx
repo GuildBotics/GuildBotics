@@ -415,7 +415,7 @@ export function RelationsView({ workspace }: { workspace: string }) {
         workspace={workspace}
         lanes={lanes}
         // A ticket made related to a card is ready: only one without relations is new.
-        start={adding && { lane: adding.to ? "ready" : "new", title: "" }}
+        initialLane={adding && (adding.to ? "ready" : "new")}
         note={adding?.to && addingNote(adding.to, adding.as, t)}
         onCreated={onCreated}
         repos={wsRepos}

@@ -225,8 +225,8 @@ test("one entry opens both screens, APIs and the consent page", async ({ page, c
   await context.clearCookies();
   await page.goto(link.url);
   await page.waitForURL((address) => address.pathname === "/");
-  await page.goto("/shared-session/-/board");
-  await expect(page.getByRole("heading", { name: /^(Task board|タスクボード)$/ })).toBeVisible();
+  await page.goto("/shared-session");
+  await expect(page.getByRole("heading", { name: /^(Task flow|タスクフロー)$/ })).toBeVisible();
   const query = new URLSearchParams({
     client: "test-app",
     redirect_uri: "http://127.0.0.1:12345/callback",

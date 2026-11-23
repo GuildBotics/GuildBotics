@@ -179,10 +179,9 @@ describe("ticket view", () => {
     const user = userEvent.setup();
     renderApp("/acme/demo/-/tickets/1");
     expect(await screen.findByRole("button", { name: "Assignee: aiko — click to change" })).toBeInTheDocument();
-    // Within its repository a ticket reads #1. Its page is at its own URL: the board is
-    // reached from the sidebar, and no URL is offered to copy.
+    // Within its repository a ticket reads #1 and its own page has no copy button.
     expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("#1 Title of 1");
-    expect(screen.getAllByRole("link", { name: "Task board" }).map((a) => a.getAttribute("href"))).toEqual(["/acme/-/board"]);
+    expect(screen.getByRole("link", { name: "Task flow" })).toHaveAttribute("href", "/acme");
     expect(screen.queryByRole("button", { name: "Copy the ticket's URL" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Assignee: aiko — click to change" }));

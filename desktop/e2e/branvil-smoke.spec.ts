@@ -24,18 +24,9 @@ test.afterEach(({ page }) => {
   expect(problems.get(page) ?? []).toEqual([]);
 });
 
-const lane = (page: Page, name: RegExp) => page.getByRole("region", { name });
-
-/** Opens the workspace's board. */
-async function openBoard(page: Page) {
-  await enter(page, `/${env.workspace}/-/board`);
-  await expect(page.getByRole("heading", { name: /^(Task board|タスクボード)$/ })).toBeVisible();
-}
-
-/** Opens a card's menu and picks an item in it. */
-async function fromCardMenu(page: Page, ref: RegExp, item: RegExp) {
-  await page.getByRole("button", { name: ref }).click();
-  await page.getByRole("menuitem", { name: item }).click();
+async function openTaskFlow(page: Page) {
+  await enter(page, `/${env.workspace}`);
+  await expect(page.getByRole("heading", { name: /^(Task flow|タスクフロー)$/ })).toBeVisible();
 }
 
 test("enters through the host session and keeps it across reloads", async ({ page, context }) => {
@@ -62,14 +53,15 @@ test("enters through the host session and keeps it across reloads", async ({ pag
 test("creates a ticket, moves it with its menu, and persists the move across reloads", async ({
   page,
 }) => {
-  await openBoard(page);
+  await openTaskFlow(page);
   const title = `E2E ticket ${Date.now()}`;
-  await page.getByRole("button", { name: /^(Add a ticket to New|新規 にチケットを追加)$/ }).click();
-  await page.getByRole("textbox", { name: /^(Title|タイトル)$/ }).fill(title);
-  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: /^(Add ticket|チケットを追加)$/ }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("textbox", { name: /^(Title|タイトル)$/ }).fill(title);
+  await dialog.getByRole("button", { name: /^(Create ticket|チケットを作成)$/ }).click();
   const card = page.getByRole("article", { name: new RegExp(title) });
-  await expect(lane(page, /^(New|新規)/).getByText(title)).toBeVisible();
-  const ref = (await card.getAttribute("aria-label"))?.split(" ")[0] as string;
+  const newLane = card.getByRole("button", { name: /^(Lane of .*: New |.* のレーン: 新規 )/ });
+  await expect(newLane).toBeVisible();
 
   // One representative write journey; drag and assignment branches live in component tests.
   const saved = page.waitForResponse(
@@ -77,13 +69,14 @@ test("creates a ticket, moves it with its menu, and persists the move across rel
       response.request().method() === "PUT" &&
       /^\/api\/v1\/repos\/[^/]+\/tickets\/[^/]+\/board$/.test(new URL(response.url()).pathname),
   );
-  await fromCardMenu(page, new RegExp(`^(Actions of ${ref}|${ref} の操作)$`), /^(Ready|着手可)$/);
+  await newLane.click();
+  await page.getByRole("menuitem", { name: /^(Ready|着手可)$/ }).click();
   expect((await saved).ok()).toBe(true);
-  await expect(lane(page, /^(Ready|着手可)/).getByText(title)).toBeVisible();
+  const ready = card.getByRole("button", { name: /^(Lane of .*: Ready |.* のレーン: 着手可 )/ });
+  await expect(ready).toBeVisible();
 
-  // A fresh load shows the server's state, not the optimistic one.
-  await page.goto(`/${env.workspace}/-/board`);
-  await expect(lane(page, /^(Ready|着手可)/).getByText(title)).toBeVisible();
+  await page.reload();
+  await expect(ready).toBeVisible();
 });
 
 test("shows a change made elsewhere without a reload (event stream)", async ({ page }) => {
@@ -91,10 +84,12 @@ test("shows a change made elsewhere without a reload (event stream)", async ({ p
   const streamOpen = page.waitForResponse(
     (r) => new URL(r.url()).pathname === "/api/v1/events" && r.ok(),
   );
-  await openBoard(page);
+  await openTaskFlow(page);
   await streamOpen;
+  const empty = page.getByText(/^(No tickets to show\.|表示するチケットはありません。)$/);
+  await expect(page.getByRole("article").first().or(empty)).toBeVisible();
   // Another HTTP client uses the shared host session to create a ticket in the
-  // repository the board offers first.
+  // workspace's first repository.
   const api = await request.newContext({
     baseURL: entryEnv.base,
     storageState: await page.context().storageState(),
@@ -108,6 +103,6 @@ test("shows a change made elsewhere without a reload (event stream)", async ({ p
     data: { title, body: "", labels: [], lane: "ready" },
   });
   expect(created.status()).toBe(201);
-  await expect(lane(page, /^(Ready|着手可)/).getByText(title)).toBeVisible();
+  await expect(page.getByRole("article", { name: new RegExp(title) })).toBeVisible();
   await api.dispose();
 });

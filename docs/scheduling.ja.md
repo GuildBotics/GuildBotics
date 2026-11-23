@@ -61,7 +61,7 @@ routine_commands:
 
 **典型的な用途**:
 
-- タスクボードの定期チェック（例: `workflows/ticket_driven_workflow`）
+- チケットの定期巡回（例: `workflows/ticket_driven_workflow`）
 - 継続的な監視タスク
 - 定期巡回型の処理
 

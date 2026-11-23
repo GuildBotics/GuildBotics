@@ -1,8 +1,8 @@
 # Branvil Integration Guide
 
-Branvil is a code host and board you run yourself: Git repositories over Smart HTTP in
-workspaces, pull requests with reviews and CI, and each repository's tickets on its
-workspace's board. GuildBotics uses it through the `branvil` provider as the code host
+Branvil is a code host you run yourself. It provides Git repositories over Smart HTTP in
+workspaces, pull requests with reviews and CI, and a task flow for each workspace's
+tickets. GuildBotics uses it through the `branvil` provider as the code host
 (`services.code_hosting_service`) and the tickets (`services.ticket_service`), in place of
 GitHub. The chat stays whatever the
 project chooses (Slack, for example).

@@ -2,7 +2,7 @@
 // pages, and the display language at the bottom.
 
 import { Select, Stack, Text } from "@mantine/core";
-import { ArrowLeftRight, GitPullRequest, Settings, SquareKanban, Workflow } from "lucide-react";
+import { ArrowLeftRight, GitPullRequest, Settings, Workflow } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useI18n, type Language } from "../i18n";
 import { Link, navigate } from "../router/Router";
@@ -12,7 +12,7 @@ import { NewWorkspaceModal } from "./NewWorkspace";
 
 const NEW_WORKSPACE = "\u0000new";
 
-type Page = "board" | "workspace" | "pulls" | "settings" | null;
+type Page = "workspace" | "pulls" | "settings" | null;
 
 function pageOf(route: Route): Page {
   switch (route.name) {
@@ -24,7 +24,6 @@ function pageOf(route: Route): Page {
     case "job":
       return "pulls";
     case "workspace":
-    case "board":
     case "pulls":
     case "settings":
       return route.name;
@@ -47,13 +46,11 @@ export function Sidebar({
   workspace,
   workspaces,
   onWorkspaceChange,
-  showBoard,
 }: {
   route: Route;
   workspace: string | null;
   workspaces: string[] | null;
   onWorkspaceChange: (name: string) => void;
-  showBoard: boolean;
 }) {
   const { t, lang, setLang } = useI18n();
   const navigation = useSession().data?.host_navigation;
@@ -69,7 +66,7 @@ export function Sidebar({
     // Preserve top-level pages; detail pages return to the task flow,
     // independently of the sidebar's current-location highlight.
     navigate(
-      route.name === "pulls" ? href.pulls(name) : route.name === "board" && showBoard ? href.board(name) : route.name === "settings" ? href.settings() : href.workspace(name),
+      route.name === "pulls" ? href.pulls(name) : route.name === "settings" ? href.settings() : href.workspace(name),
     );
   };
   return (
@@ -96,11 +93,6 @@ export function Sidebar({
             <NavItem to={href.workspace(workspace)} active={page === "workspace"} icon={<Workflow size={18} />}>
               {t("nav.relations")}
             </NavItem>
-            {showBoard && (
-              <NavItem to={href.board(workspace)} active={page === "board"} icon={<SquareKanban size={18} />}>
-                {t("nav.board")}
-              </NavItem>
-            )}
             <NavItem to={href.pulls(workspace)} active={page === "pulls"} icon={<GitPullRequest size={18} />}>
               {t("nav.pulls")}
             </NavItem>
