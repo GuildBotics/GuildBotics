@@ -84,6 +84,7 @@ image = "docker.io/library/alpine:3.22"   # [registry/]name[:tag], no digest
 commands = ["./scripts/test.sh", "make lint"]   # 1-64 commands, each run by /bin/sh -c
 paths = ["src/**", "tests/*.rs", "Cargo.lock"]  # optional; empty/omitted runs every change
 verified_sha = false             # optional; declares GB_CI_VERIFIED_SHA as an input
+required = true                   # optional; the repository setting still decides required checks
 timeout_secs = 600                # optional, 1-86400; default the runner's time limit
 tmpfs_mib = 2048                   # optional, 1-4096; /tmp uses a 4 GiB disk by default
 # ram_workspace = { paths = ["out/cache"], max_mib = 4608 }  # optional, see below
@@ -393,7 +394,8 @@ them before merge too, regardless of paths.
 Manual retries also execute them and their skips cannot supply reusable results.
 
 The owner controls this in repository settings rather than `.guildbotics-ci.toml` so a
-PR cannot exempt its own jobs. Required checks and post-merge jobs cannot overlap.
+PR cannot exempt its own jobs. Required checks and post-merge jobs cannot overlap:
+a pipeline that marks a post-merge job `required` is invalid.
 Selection records include the setting; reconciliation reselects open heads when
 it changes. Newly excluded queued jobs complete as `skipped`, not `cancelled`;
 running jobs finish and manual retries remain executable. Removing a name restores

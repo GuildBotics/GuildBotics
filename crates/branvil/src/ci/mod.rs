@@ -464,7 +464,7 @@ impl Ci {
     /// Reads the pipeline of commit `sha` (`pipeline::read`).
     async fn read_pipeline(&self, repo: &Repo, sha: &str) -> AppResult<PipelineState> {
         let dir = self.inner.git.repo_dir(&repo.path);
-        pipeline::read(&self.inner.git, &dir, sha).await
+        pipeline::read(&self.inner.git, &dir, sha, &repo.post_merge_jobs).await
     }
 
     /// Registers CI of `sha` for `branch` when the branch wants CI: it is the
@@ -2258,6 +2258,63 @@ mod tests {
             )
         );
     }
+    #[tokio::test]
+    async fn required_in_a_pipeline_is_checked_while_the_repository_setting_decides() {
+        let (temp, ci, mut repo) = setup();
+        let app = app(&temp, &ci);
+        let dir = app.git.repo_dir(&repo.path);
+        app.git.init_bare(&dir, "main").await.unwrap();
+        let work = temp.path().join("work");
+        app.git
+            .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
+            .await
+            .unwrap();
+        std::fs::write(
+            work.join(".guildbotics-ci.toml"),
+            "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n\n\
+             [[jobs]]\nname='lint'\nimage='alpine'\ncommands=['true']\nrequired=true\n",
+        )
+        .unwrap();
+        let sha = commit_all(&app.git, &work, "pipeline").await;
+        app.git
+            .run_ok(
+                None,
+                &[
+                    "-C",
+                    work.to_str().unwrap(),
+                    "push",
+                    "-q",
+                    dir.to_str().unwrap(),
+                    "HEAD:refs/heads/main",
+                ],
+            )
+            .await
+            .unwrap();
+
+        let names: Vec<_> = ci
+            .head_checks(&repo, &sha)
+            .await
+            .unwrap()
+            .checks
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(names, ["test"], "the file does not add a required check");
+
+        repo.post_merge_jobs = vec!["test".into()];
+        assert!(matches!(
+            ci.read_pipeline(&repo, &sha).await.unwrap(),
+            PipelineState::Jobs { jobs } if jobs.len() == 2
+        ));
+        repo.post_merge_jobs = vec!["lint".into()];
+        assert_eq!(
+            ci.read_pipeline(&repo, &sha).await.unwrap(),
+            PipelineState::Invalid {
+                message: "Job lint: cannot be both required and post-merge only.".into()
+            }
+        );
+    }
+
     #[tokio::test]
     async fn verification_batches_main_and_marks_only_completed_success() {
         let (temp, ci, mut repo) = setup();

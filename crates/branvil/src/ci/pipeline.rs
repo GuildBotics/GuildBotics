@@ -31,7 +31,13 @@ const MAX_TMPFS_MIB: u32 = 4096;
 /// pipeline path the commit's tree does not have reads as `Absent`; any Git
 /// failure (a missing commit, an unreadable tree or blob) is an error, never a
 /// pipeline (the service's registration is retried by the reconciler).
-pub async fn read(git: &Git, dir: &Path, sha: &str) -> AppResult<PipelineState> {
+/// `post_merge_jobs` is the repository's setting the pipeline is checked against.
+pub async fn read(
+    git: &Git,
+    dir: &Path,
+    sha: &str,
+    post_merge_jobs: &[String],
+) -> AppResult<PipelineState> {
     let failed = |what: &str, stderr: &str| {
         AppError::internal(format!(
             "{what} {PIPELINE_PATH} of {sha}: {}",
@@ -70,7 +76,7 @@ pub async fn read(git: &Git, dir: &Path, sha: &str) -> AppResult<PipelineState> 
         });
     }
     Ok(match String::from_utf8(out.stdout) {
-        Ok(text) => match parse(&text) {
+        Ok(text) => match parse_for(&text, post_merge_jobs) {
             Ok(jobs) => PipelineState::Jobs { jobs },
             Err(message) => PipelineState::Invalid { message },
         },
@@ -101,6 +107,10 @@ fn one() -> u32 {
 struct JobSchema {
     #[serde(default)]
     verified_sha: bool,
+    /// What the branch demands of a PR, not how the job runs: it stays out of
+    /// `JobDef`, so stored runs, reuse and the runner's messages do not change.
+    #[serde(default)]
+    required: bool,
     name: String,
     image: String,
     commands: Vec<String>,
@@ -117,9 +127,30 @@ struct JobSchema {
     memory_mib: Option<IgnoredAny>,
 }
 
-/// Parses and validates a pipeline. `Err` is the message shown on the
-/// failing `pipeline` check.
+#[cfg(test)]
 pub fn parse(text: &str) -> Result<Vec<JobDef>, String> {
+    parse_for(text, &[])
+}
+
+/// Parses and validates the pipeline of a repository with these post-merge
+/// only jobs: they do not run on a PR head, so none of them can be required.
+/// `Err` is the message shown on the failing `pipeline` check.
+fn parse_for(text: &str, post_merge_jobs: &[String]) -> Result<Vec<JobDef>, String> {
+    let file = parse_file(text)?;
+    if let Some(name) = file.required.iter().find(|n| post_merge_jobs.contains(n)) {
+        return Err(format!(
+            "Job {name}: cannot be both required and post-merge only."
+        ));
+    }
+    Ok(file.jobs)
+}
+
+struct ParsedFile {
+    jobs: Vec<JobDef>,
+    required: Vec<String>,
+}
+
+fn parse_file(text: &str) -> Result<ParsedFile, String> {
     let file: FileSchema =
         toml::from_str(text).map_err(|e| format!("{PIPELINE_PATH} is not valid: {e}"))?;
     if file.version != 1 {
@@ -136,8 +167,9 @@ pub fn parse(text: &str) -> Result<Vec<JobDef>, String> {
             "{PIPELINE_PATH} defines more than {MAX_JOBS} jobs."
         ));
     }
-    let mut jobs = Vec::new();
+    let (mut jobs, mut required) = (Vec::new(), Vec::new());
     for j in file.jobs {
+        let is_required = j.required;
         let job = validate_job(j)?;
         if jobs
             .iter()
@@ -145,9 +177,12 @@ pub fn parse(text: &str) -> Result<Vec<JobDef>, String> {
         {
             return Err(format!("Two jobs are named {}.", job.name));
         }
+        if is_required {
+            required.push(job.name.clone());
+        }
         jobs.push(job);
     }
-    Ok(jobs)
+    Ok(ParsedFile { jobs, required })
 }
 
 fn validate_job(j: JobSchema) -> Result<JobDef, String> {
@@ -455,6 +490,37 @@ mod tests {
         assert!(!valid_digest("sha256:abc"));
         assert!(!valid_digest(&DIGEST.replace("sha256", "sha512")));
     }
+    #[test]
+    fn required_is_an_optional_boolean_that_leaves_the_job_definition_alone() {
+        let job = "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n";
+        assert!(parse_file(job).unwrap().required.is_empty());
+        let marked = parse_file(&format!("{job}required=true\n")).unwrap();
+        assert_eq!(marked.required, ["test"]);
+        assert_eq!(marked.jobs, parse(job).unwrap());
+        assert!(
+            parse_file(&format!("{job}required=false\n"))
+                .unwrap()
+                .required
+                .is_empty()
+        );
+        for value in ["'yes'", "1"] {
+            let error = parse(&format!("{job}required={value}\n")).unwrap_err();
+            assert!(error.contains("required"), "{value}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_required_job_cannot_be_post_merge_only() {
+        let pipeline = "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\nrequired=true\n\
+                        [[jobs]]\nname='slow'\nimage='alpine'\ncommands=['true']\n";
+        assert_eq!(
+            parse_for(pipeline, &["test".into()]).unwrap_err(),
+            "Job test: cannot be both required and post-merge only."
+        );
+        assert_eq!(parse_for(pipeline, &["slow".into()]).unwrap().len(), 2);
+        assert_eq!(parse_for(pipeline, &[]).unwrap().len(), 2);
+    }
+
     #[test]
     fn verified_sha_is_an_explicit_optional_pipeline_input() {
         let job = "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n";
