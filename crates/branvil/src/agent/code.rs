@@ -249,11 +249,8 @@ impl CodeAgent {
         while let Some(t) = parent {
             if t.repository == repository {
                 let branch = format!("ticket/{}", t.key);
-                for url in self.open_pull_requests(repository, &branch).await? {
-                    let p = self.pull(&url).await?;
-                    if p["draft"] == true && p["base"] == default {
-                        return Ok(branch);
-                    }
+                if self.collection_branch(repository, &branch).await? {
+                    return Ok(branch);
                 }
             }
             self.repository(&t.repository)?;
@@ -264,6 +261,33 @@ impl CodeAgent {
                 .parent;
         }
         Ok(default)
+    }
+
+    async fn collection_branch(
+        &self,
+        repository: &str,
+        branch: &str,
+    ) -> Result<bool, ServiceError> {
+        use crate::domain::{pulls, repo_by_path};
+
+        let _open = self
+            .data()
+            .guard()
+            .map_err(|e| error(e, "collection_branch"))?;
+        let repository = repository.to_owned();
+        let branch = branch.to_owned();
+        self.data()
+            .app
+            .store
+            .read(move |r| {
+                let repo = repo_by_path(r, &repository)?;
+                let Some(pull) = pulls::open_pull(r, &repo, &branch, &repo.default_branch)? else {
+                    return Ok(false);
+                };
+                pulls::collects_child_tickets(r, &repo, &pull)
+            })
+            .await
+            .map_err(|e| error(e, "collection_branch"))
     }
 
     pub fn create_pull_request(
@@ -602,6 +626,7 @@ impl CodeAgent {
                             && pull.state == "open"
                             && fold(&pull.author) == me
                             && !crate::domain::pulls::interactive(rd, &pull)?
+                            && !crate::domain::pulls::collects_child_tickets(rd, &repo, &pull)?
                         {
                             out.push(format!("{}/{}/-/pulls/{}", base, repo.path, pull.number));
                         }
