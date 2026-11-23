@@ -284,19 +284,27 @@ What a job's commands find, as on common CI services:
 
 Set `ram_workspace = { paths = ["out/cache"], max_mib = 4608 }` on a job to
 keep changes to the selected directories in RAM. Specify one to eight distinct,
-non-overlapping paths relative to `/work`. Each path must name an existing
-directory after checkout and cache restore, without symbolic links. The
-directories remain at their usual paths and serve as mount points for the job.
-Changes within them, including deletions, disappear when the VM shuts down.
+non-overlapping paths relative to `/work`. Each path must name a directory
+that exists after checkout and cache restore, without symbolic links. The
+directories keep their usual paths. The RAM changes disappear when the VM shuts down, after any
+required cache and artifact data have been collected.
 The selected directories share one tmpfs of 1–65536 MiB. The job's separate
 `tmpfs_mib` continues to control `/tmp`.
 
 The Hub SDK and remote `msb` CLI use the same Linux guest implementation.
 The image needs Python 3.8 or later and the `mount`, `umount`, `setpriv`,
 and `unshare` tools. The guest kernel must support OverlayFS, tmpfs, and a PID
-namespace for the job processes. The runner uses RAM only after it restores an
-exact cache hit whose changes do not need to be saved. It keeps 1024 MiB of
-VM memory beyond the sum of both tmpfs limits for commands. It also checks
+namespace for the job processes. RAM can be used with an exact hit or a
+restored compatible older cache. Jobs with no restored cache use disk, which
+allows clean builds to remove and recreate the entire work directories. A job
+that needs to save a cache also needs guest loop-device support. Its cache volume is
+created only after the commands succeed. The runner copies the declared paths
+from the merged workspace directly to that volume while the VM still holds
+the RAM changes. Files pass through memory on their way to the volume.
+Collection can finish after the command deadline. The published cache is
+reusable on subsequent jobs. With an exact hit the runner skips saving a new
+cache. The runner keeps 1024 MiB of VM memory beyond the sum of both tmpfs
+limits for commands. It also checks
 that the host's usable physical memory can cover a full VM for each configured
 slot and that current available memory can cover this VM, retaining the runner's
 configured reserve in both checks. On Windows it also checks available commit.
