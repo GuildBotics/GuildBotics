@@ -7,6 +7,10 @@ const CACHE_PROBED: &str = "ram-cache.probed";
 pub(super) const CACHE_IMAGE: &str = "cache.raw";
 const COMMAND_HEADROOM_MIB: u64 = 1024;
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 pub(super) fn vm_timeout_secs(commands: u64, ram: Option<&RamWorkspace<'_>>) -> u64 {
     let collection = ram.filter(|ram| ram.cache).map_or(0, |_| HELPER_SECS);
     commands + collection + 60
@@ -38,16 +42,22 @@ pub(super) fn cancelled_outcome(ram: Option<&RamWorkspace<'_>>, has_artifacts: b
 }
 
 /// The preparation VM uses the same image and guest kernel as the job.
-pub(super) fn probe(script: &mut String) {
+pub(super) fn probe(script: &mut String, save_cache: bool) {
     script.push_str(&format!(
         "if command -v mount >/dev/null && command -v umount >/dev/null && \
          python3 -I -S -c 'import ctypes, sys, tarfile; assert sys.version_info >= (3, 8)' >/dev/null 2>&1 && \
          unshare --pid --fork --kill-child --mount-proc setpriv --no-new-privs \
          --pdeathsig=keep --reuid={JOB_USER_ID} --regid={JOB_USER_ID} --clear-groups /bin/true >/dev/null 2>&1; then\n  \
-         : >{IO_MOUNT}/{PROBED}\n  \
-         if [ -c /dev/loop-control ] && command -v losetup >/dev/null; then\n    \
-         : >{IO_MOUNT}/{CACHE_PROBED}\n  fi\nfi\nsync\n"
+         : >{IO_MOUNT}/{PROBED}\n"
     ));
+    if save_cache {
+        let supervisor = shell_quote(include_str!("ram_workspace.py"));
+        script.push_str(&format!(
+            "  if python3 -I -S -c {supervisor} --probe-cache >/dev/null 2>&1; then\n    \
+             : >{IO_MOUNT}/{CACHE_PROBED}\n  fi\n"
+        ));
+    }
+    script.push_str("fi\nsync\n");
 }
 
 fn memory_allows(
@@ -90,7 +100,10 @@ impl<'a> RamWorkspace<'a> {
         }
         let loop_supported = std::fs::remove_file(job.io.join(CACHE_PROBED)).is_ok();
         if cache && !loop_supported {
-            return Err("the guest cannot mount a cache image after the job".into());
+            return Err(
+                "the guest ext4 loop-mount probe failed (requires mkfs.ext4 and mount -o loop)"
+                    .into(),
+            );
         }
         let (Some(limits), Some(machine)) = (job.ram_limits, machine()) else {
             return Err("runner memory is unknown".into());
@@ -187,12 +200,11 @@ impl<'a> RamWorkspace<'a> {
         let args =
             serde_json::to_string(&(self.config.max_mib, paths, artifacts, JOB_USER_ID, keep))
                 .expect("serializing the RAM workspace configuration");
-        let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
         format!(
             "exec python3 -I -S -c {} {} {}",
-            quote(include_str!("ram_workspace.py")),
-            quote(&args),
-            quote(&job_script(&job.commands, log_file)),
+            shell_quote(include_str!("ram_workspace.py")),
+            shell_quote(&args),
+            shell_quote(&job_script(&job.commands, log_file)),
         )
     }
 
@@ -323,6 +335,77 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn cache_probe_and_save_use_mount_without_losetup() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut preparation = String::from("set -e\n");
+        probe(&mut preparation, true);
+        let preparation =
+            preparation.replace(IO_MOUNT, &shell_quote(&dir.path().to_string_lossy()));
+        let code = r##"
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+tools = root / "bin"
+tools.mkdir()
+(tools / "python3").symlink_to(sys.executable)
+
+def tool(name, body):
+    path = tools / name
+    path.write_text("#!/bin/sh\nset -eu\n" + body)
+    path.chmod(0o755)
+
+for name in ["unshare", "umount", "sync"]:
+    tool(name, "exit 0\n")
+tool("mkfs.ext4", ': >"$3"\n')
+env = {"PATH": str(tools), "TMPDIR": str(root)}
+supported = 'test "$1 $2 $3 $4" = "-t ext4 -o loop" && test -f "$5" && test -d "$6"\n'
+for case in ["standard", "without-losetup", "without-loop-mount"]:
+    tool("mount", supported if case != "without-loop-mount" else "exit 1\n")
+    if case == "standard":
+        tool("losetup", "exit 99\n")
+    else:
+        (tools / "losetup").unlink(missing_ok=True)
+    subprocess.run(["/bin/sh", "-c", sys.argv[2]], env=env, check=True)
+    assert (root / "ram-workspace.probed").is_file(), case
+    marker = root / "ram-cache.probed"
+    assert marker.is_file() == (case != "without-loop-mount"), case
+    if marker.is_file():
+        marker.unlink()
+        work, returned, cache = (root / (case + suffix) for suffix in [".work", ".return", ".cache"])
+        work.mkdir()
+        returned.mkdir()
+        (work / "output").write_text(case)
+        (returned / "cache.raw").touch()
+        os.environ.update(env)
+        guest = {"__name__": "fixture"}
+        exec(sys.argv[3], guest)
+        guest.update(WORK=work, RETURN=returned, CACHE=cache)
+        guest["save_cache"](
+            f'IFS= read -r data <output || :; printf "%s" "$data" >"{cache}/output"; '
+            f'printf "1\\n" >"{returned}/cache-result/cache.kept"'
+        )
+        assert (cache / "output").read_text() == case
+        assert (returned / "cache.kept").read_text() == "1\n"
+"##;
+        let result = std::process::Command::new("python3")
+            .args(["-I", "-S", "-c", code])
+            .arg(dir.path())
+            .arg(preparation)
+            .arg(include_str!("ram_workspace.py"))
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn ram_artifacts_contain_only_current_files_and_do_not_follow_links() {
         use std::process::Command;
 
@@ -420,6 +503,8 @@ with patch("time.monotonic", side_effect=[0, 60]), patch("__main__.run") as moun
         let mut disk_identity = None;
         let mut ram_identity = None;
         let limits = JobLimits::from(&ExecutorConfig::default());
+        let no_losetup = std::env::var("GUILDBOTICS_RAM_TEST_IMAGE_NO_LOSETUP").ok();
+        let no_loop = std::env::var("GUILDBOTICS_RAM_TEST_IMAGE_NO_LOOP").ok();
         let verify_and_write = r#"
             set -eu
             test "$(id -u):$(id -g)" = 1000:1000
@@ -467,10 +552,25 @@ with patch("time.monotonic", side_effect=[0, 60]), patch("__main__.run") as moun
                 "set -e; test \"$(cat demo/input)\" = original; echo disk > demo/current",
                 Outcome::Exited(0),
             ),
+            ("no-losetup", verify_and_write, Outcome::Exited(0)),
+            (
+                "no-loop",
+                "set -e; test \"$(cat demo/input)\" = original; echo disk > demo/current",
+                Outcome::Exited(0),
+            ),
         ] {
+            let image = match case {
+                "no-losetup" => no_losetup.as_deref(),
+                "no-loop" => no_loop.as_deref(),
+                _ => Some("guildbotics/agent-environment:dev"),
+            };
+            let Some(image) = image else { continue };
             let seed = case == "seed";
-            let active = !matches!(case, "seed" | "unsupported" | "cold");
-            let returns_changes = matches!(case, "success" | "failure" | "timeout" | "miss");
+            let active = !matches!(case, "seed" | "unsupported" | "cold" | "no-loop");
+            let returns_changes = matches!(
+                case,
+                "success" | "failure" | "timeout" | "miss" | "no-losetup"
+            );
             let save_cache = matches!(
                 case,
                 "seed"
@@ -481,6 +581,8 @@ with patch("time.monotonic", side_effect=[0, 60]), patch("__main__.run") as moun
                     | "cold"
                     | "miss-restore"
                     | "cold-restore"
+                    | "no-losetup"
+                    | "no-loop"
             );
             let mut commands = vec![
                 r#"printf 'fixture identity HOME=%s USER=%s LOGNAME=%s\n' "${HOME-<unset>}" "${USER-<unset>}" "${LOGNAME-<unset>}""#
@@ -488,6 +590,9 @@ with patch("time.monotonic", side_effect=[0, 60]), patch("__main__.run") as moun
             ];
             if matches!(case, "failure" | "timeout" | "cancel") {
                 commands.push(verify_and_write.to_string());
+            }
+            if case == "no-losetup" {
+                commands.push("! command -v losetup".into());
             }
             commands.push(command.to_string());
             let attempt = root.join(case);
@@ -514,7 +619,7 @@ with patch("time.monotonic", side_effect=[0, 60]), patch("__main__.run") as moun
             let job = JobDef {
                 verified_sha: false,
                 name: "ram-test".into(),
-                image: "guildbotics/agent-environment:dev".into(),
+                image: image.into(),
                 commands,
                 paths: vec![],
                 timeout_secs: None,
@@ -595,6 +700,12 @@ with patch("time.monotonic", side_effect=[0, 60]), patch("__main__.run") as moun
                 active,
                 "{case}: {log}"
             );
+            if case == "no-loop" {
+                assert!(
+                    log.contains("ext4 loop-mount probe failed"),
+                    "{case}: {log}"
+                );
+            }
             if matches!(case, "seed" | "success") {
                 let identity = log
                     .lines()
@@ -628,7 +739,7 @@ with patch("time.monotonic", side_effect=[0, 60]), patch("__main__.run") as moun
                 );
             } else if case == "cancel" {
                 assert!(!work.join("demo/current").exists());
-            } else if case == "unsupported" {
+            } else if matches!(case, "unsupported" | "no-loop") {
                 assert!(log.contains("using disk"), "{case}: {log}");
                 assert_eq!(
                     std::fs::read_to_string(work.join("demo/current")).unwrap(),
@@ -637,7 +748,7 @@ with patch("time.monotonic", side_effect=[0, 60]), patch("__main__.run") as moun
             }
             assert_eq!(
                 kept.is_some(),
-                matches!(case, "seed" | "miss" | "cold"),
+                matches!(case, "seed" | "miss" | "cold" | "no-losetup" | "no-loop"),
                 "{case}: {log}"
             );
             if !seed {
