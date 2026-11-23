@@ -896,6 +896,23 @@ impl Runner {
                     .map_or(sync.clone(), |cache| format!("{sync}; {cache}")),
             );
         }
+        let cache_groups = if accept && health.ready && running_jobs < max_jobs as usize {
+            let cache = self.cache.clone();
+            match blocking(move || cache.published_groups()).await {
+                Ok(groups) => groups,
+                Err(e) => {
+                    tracing::debug!("cannot list published cache groups: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let ram_unsupported_images = if health.ready {
+            executor.ram_unsupported_images(&images)
+        } else {
+            Default::default()
+        };
         let claim = self
             .api
             .claim(&RunnerReport {
@@ -918,6 +935,8 @@ impl Runner {
                     }
                     machine
                 }),
+                cache_groups,
+                ram_unsupported_images,
             })
             .await?;
         Ok(claim.map(|c| (c, health)))
@@ -1281,12 +1300,7 @@ impl Runner {
                     limits.work_quota_mib,
                     &work,
                 );
-                let owner = workspace::CacheOwner {
-                    repo: c.repo.clone(),
-                    job: job.name.clone(),
-                    user: executor::JOB_USER_ID,
-                    paths: cache.paths.clone(),
-                };
+                let owner = workspace::CacheOwner::for_job(&c.repo, job, cache);
                 (key, owner)
             });
             let cache_base = dir.join(disk::CACHE_BASE);

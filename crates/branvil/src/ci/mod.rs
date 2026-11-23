@@ -163,6 +163,10 @@ impl RunnerSeen {
     }
 }
 
+// Runners poll every two seconds; leave room for an inventory refresh, but
+// stop preferring RAM well before an unresponsive runner is considered absent.
+const RAM_REPORT_MAX_AGE: Duration = Duration::from_secs(15);
+
 #[derive(Clone)]
 pub struct Ci {
     inner: Arc<Inner>,
@@ -955,6 +959,9 @@ impl Ci {
                         images: seen.report.images,
                         limits,
                         machine: seen.report.machine,
+                        ram_fresh: seen.seen.elapsed() <= RAM_REPORT_MAX_AGE,
+                        cache_groups: seen.report.cache_groups,
+                        ram_unsupported_images: seen.report.ram_unsupported_images,
                     })
             })
             .collect())
@@ -1456,9 +1463,11 @@ mod tests {
             images: Vec::new(),
             version: gb_base::BUILD_VERSION.into(),
             max_jobs: 2,
-            accept: false,
+            accept: true,
             running_jobs: 0,
             machine: None,
+            cache_groups: None,
+            ram_unsupported_images: Default::default(),
         };
         ci.report_runner("expired", report.clone());
         ci.inner
@@ -1474,6 +1483,23 @@ mod tests {
         assert_eq!(view["runners"][0]["connection"], "offline");
         assert!(view["runners"][0]["last_seen_at"].is_string());
         ci.report_runner("ready", report);
+        ci.inner
+            .runners
+            .lock()
+            .unwrap()
+            .get_mut("ready")
+            .unwrap()
+            .seen -= RAM_REPORT_MAX_AGE + Duration::from_secs(1);
+        ci.inner
+            .store
+            .read_sync(|r| {
+                let alternatives = ci.ready_alternatives(r, "another")?;
+                assert_eq!(alternatives.len(), 1);
+                assert_eq!(alternatives[0].name, "ready");
+                assert!(!alternatives[0].ram_fresh);
+                Ok(())
+            })
+            .unwrap();
         let view = ci.diagnostics().await;
         assert_eq!(view["state"], "ready");
         assert_eq!(view["runners"][0]["connection"], "offline");
@@ -1536,6 +1562,8 @@ mod tests {
                         digest: "sha256:test".into(),
                     }],
                     version: gb_base::BUILD_VERSION.into(),
+                    cache_groups: None,
+                    ram_unsupported_images: Default::default(),
                     max_jobs: 1,
                     accept: true,
                     running_jobs: 0,

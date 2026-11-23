@@ -6,6 +6,7 @@
 mod ram_workspace;
 #[cfg(feature = "host")]
 mod sdk;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -165,6 +166,7 @@ pub enum Outcome {
 #[derive(Default)]
 pub struct ImageLock {
     _file: Option<std::fs::File>,
+    digest: Option<String>,
 }
 
 pub struct Inventory {
@@ -176,6 +178,9 @@ pub trait Executor: Send + Sync {
     fn name(&self) -> &'static str;
     fn machine(&self) -> Option<crate::ci::api::Machine> {
         None
+    }
+    fn ram_unsupported_images(&self, _images: &[crate::ci::images::Image]) -> BTreeSet<String> {
+        BTreeSet::new()
     }
     fn inventory(
         &self,
@@ -283,7 +288,8 @@ pub struct Microsandbox {
     /// Label value that marks this runner's sandboxes.
     runner: String,
     health: tokio::sync::Mutex<Option<(Instant, Health)>>,
-    started: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    started: std::sync::Mutex<BTreeSet<String>>,
+    ram_unsupported: std::sync::Mutex<BTreeMap<String, Instant>>,
     #[cfg(all(test, unix))]
     test_machine: Option<crate::ci::api::Machine>,
     #[cfg(feature = "host")]
@@ -298,6 +304,7 @@ impl Microsandbox {
             runner: runner.to_string(),
             health: tokio::sync::Mutex::new(None),
             started: std::sync::Mutex::new(Default::default()),
+            ram_unsupported: std::sync::Mutex::new(BTreeMap::new()),
             #[cfg(all(test, unix))]
             test_machine: None,
             #[cfg(feature = "host")]
@@ -562,7 +569,12 @@ impl Microsandbox {
                 file.try_lock_shared()
             };
             match locked {
-                Ok(()) => return Ok(ImageLock { _file: Some(file) }),
+                Ok(()) => {
+                    return Ok(ImageLock {
+                        _file: Some(file),
+                        digest: None,
+                    });
+                }
                 Err(std::fs::TryLockError::WouldBlock) => {
                     if let Some(w) = waiting.take() {
                         w();
@@ -885,7 +897,7 @@ pub fn plain_path(
 
 /// The uid and gid of the fixed non-root user a job's commands run as. The
 /// work and log directories are presented to the VM as this user's.
-pub const JOB_USER_ID: u32 = 1000;
+pub use crate::ci::pipeline::JOB_USER_ID;
 
 /// The size of the disk a job's `/tmp` is on: the size of the root disk msb
 /// gives a VM by default, which Branvil keeps.
@@ -1257,6 +1269,16 @@ impl Executor for Microsandbox {
         super::machine::sample(|| started.iter().cloned().collect())
     }
 
+    fn ram_unsupported_images(&self, images: &[crate::ci::images::Image]) -> BTreeSet<String> {
+        let mut unsupported = self.ram_unsupported.lock().unwrap();
+        unsupported.retain(|digest, tested| {
+            // A failed probe can be transient even when the image is unchanged.
+            tested.elapsed() <= Duration::from_secs(300)
+                && images.iter().any(|image| &image.digest == digest)
+        });
+        unsupported.keys().cloned().collect()
+    }
+
     fn needs_resolution(&self) -> bool {
         matches!(self.msb, Msb::Missing(_))
     }
@@ -1313,7 +1335,7 @@ impl Executor for Microsandbox {
         image: &str,
         log: &mpsc::Sender<Vec<u8>>,
     ) -> Result<(Option<String>, ImageLock), String> {
-        let lock = self
+        let mut lock = self
             .lock_images(false, || {
                 let note = "[branvil] waiting for an image pull or load to finish\n";
                 let _ = log.try_send(note.as_bytes().to_vec());
@@ -1325,7 +1347,10 @@ impl Executor for Microsandbox {
                 "msb image inspect reports '{}' as the configuration digest of {image}, not sha256:<64 hex>",
                 i.config_digest
             )),
-            held => Ok((held.map(|i| i.config_digest), lock)),
+            held => {
+                lock.digest = held.map(|i| i.config_digest);
+                Ok((lock.digest.clone(), lock))
+            }
         }
     }
 
@@ -1561,11 +1586,21 @@ impl Executor for Microsandbox {
                 if let Some(config) = &job.job.ram_workspace
                     && restored
                 {
+                    let tools = ram_workspace::take_probe(&job);
+                    if let Some(digest) = &image_lock.digest {
+                        let mut unsupported = self.ram_unsupported.lock().unwrap();
+                        if tools {
+                            unsupported.remove(digest);
+                        } else {
+                            unsupported.insert(digest.clone(), Instant::now());
+                        }
+                    }
                     match ram_workspace::RamWorkspace::select(
                         config,
                         &job,
                         collect_mib,
                         save_cache && !used_exact_cache,
+                        tools,
                         || self.machine(),
                     ) {
                         Ok(selected) => ram = Some(selected),
@@ -2805,6 +2840,13 @@ esac
             artifacts: vec![],
             ..job.clone()
         };
+        let ram = JobDef {
+            ram_workspace: Some(crate::ci::pipeline::RamWorkspace {
+                paths: vec!["target".into()],
+                max_mib: 64,
+            }),
+            ..job.clone()
+        };
         for (ending, collected, created_cache, mounted_cache, kept) in [
             ("fallback", true, true, true, true),
             ("miss", true, true, true, true),
@@ -2939,8 +2981,19 @@ esac
             } else {
                 None
             };
-            let runner = Microsandbox::new(Msb::Found(msb.clone()), home.clone(), "t");
-            let job = if ending.ends_with("bare") {
+            let mut runner = Microsandbox::new(Msb::Found(msb.clone()), home.clone(), "t");
+            let ram_limits = (ending == "restore-link-fails").then(|| {
+                runner.test_machine = Some(crate::ci::api::Machine {
+                    logical_cpus: 4,
+                    total_memory_mib: 8192,
+                    available_memory_mib: 8192,
+                    commit: None,
+                });
+                crate::ci::config::JobLimits::from(&crate::ci::config::ExecutorConfig::default())
+            });
+            let job = if ram_limits.is_some() {
+                &ram
+            } else if ending.ends_with("bare") {
                 &bare
             } else {
                 &job
@@ -2957,8 +3010,8 @@ esac
                             job,
                             image_lock: ImageLock::default(),
                             cpus: 1,
-                            memory_mib: 256,
-                            ram_limits: None,
+                            memory_mib: if ram_limits.is_some() { 1536 } else { 256 },
+                            ram_limits,
                             work_quota_mib: 2048,
                             timeout_secs: if ending.starts_with("timeout")
                                 || ending == "stop-while-flushing"
@@ -3044,6 +3097,12 @@ esac
                 ending == "timeout-unflushed",
                 "{ending}: {text}"
             );
+            if ram_limits.is_some() {
+                assert!(
+                    text.contains("RAM workspace disabled: no cache was restored; using disk"),
+                    "{text}"
+                );
+            }
             // Preparation, the job and collection share the overlay. On
             // misses and dropped entries, the job and collection use a volume.
             let args = |phase: &str| {

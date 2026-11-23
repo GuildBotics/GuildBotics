@@ -490,14 +490,7 @@ const DATA: &str = ".branvil-data";
 /// paths.
 const IMAGE: &str = "disk.raw";
 
-/// Cache generations are interchangeable only within this group.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
-pub struct CacheOwner {
-    pub repo: String,
-    pub job: String,
-    pub user: u32,
-    pub paths: Vec<String>,
-}
+pub(super) use crate::ci::pipeline::CacheOwner;
 
 fn record_use(entry: &Path, used: SystemTime) -> io::Result<()> {
     fs::File::create(entry.join(USED))?.set_modified(used)
@@ -620,6 +613,24 @@ impl Cache {
             .into_iter()
             .filter_map(|path| path.file_name()?.to_str().map(str::to_owned))
             .collect())
+    }
+
+    pub(super) fn published_groups(
+        &self,
+    ) -> io::Result<Option<std::collections::BTreeSet<String>>> {
+        let _reading = self.lock.read().unwrap_or_else(|e| e.into_inner());
+        let entries = dirs(&self.root)?;
+        // Bound the report and the metadata reads on the polling path.
+        if entries.len() > 256 {
+            return Ok(None);
+        }
+        Ok(Some(
+            entries
+                .into_iter()
+                .filter(|path| path.join(IMAGE).is_file() && saved_at(path).is_some())
+                .filter_map(|path| entry_owner(&path).map(|owner| owner.fingerprint()))
+                .collect(),
+        ))
     }
 
     /// Publish with the Hub's timestamp so a delayed decision cannot
@@ -918,6 +929,7 @@ mod tests {
         cache
             .stage("att_1", "first", &owner, (&image, 10), 20)
             .unwrap();
+        assert!(cache.published_groups().unwrap().unwrap().is_empty());
         assert!(
             cache
                 .restore_generation("first", &owner, &restored)
@@ -927,6 +939,10 @@ mod tests {
         cache
             .settle("att_1", Some(SystemTime::UNIX_EPOCH), 20)
             .unwrap();
+        assert_eq!(
+            cache.published_groups().unwrap().unwrap(),
+            [owner.fingerprint()].into()
+        );
         fs::write(&image, b"unmerged").unwrap();
         cache
             .stage("att_2", "second", &owner, (&image, 11), 20)

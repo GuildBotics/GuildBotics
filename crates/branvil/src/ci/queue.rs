@@ -15,12 +15,13 @@
 //! ```
 
 pub use gb_runner::ci::queue::{Basis, ResultInfo, Reuse};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use gb_runner::ci::{api::Machine, config::JobLimits};
+use gb_runner::ci::{api::Machine, config::JobLimits, pipeline::CacheOwner};
 use serde::{Deserialize, Serialize};
 
 use super::pipeline::JobDef;
+use super::priority::Class;
 use crate::error::{AppError, AppResult};
 use crate::model::{IxEntry, put_indexed};
 use crate::store::{self, Key, Rd, Wtx};
@@ -1344,6 +1345,15 @@ pub fn result_attempt(r: &impl Rd, a: &Attempt) -> AppResult<Attempt> {
 /// The current claim order, without changing any attempt or lease. Claims only
 /// inspect reuse within the best class; displays can request every class.
 pub fn scheduled(r: &impl Rd, first_only: bool) -> AppResult<Vec<(Attempt, Option<Reuse>)>> {
+    Ok(scheduled_order(r, first_only)?
+        .into_iter()
+        .map(|(a, reuse, _)| (a, reuse))
+        .collect())
+}
+
+type Scheduled = (Attempt, Option<Reuse>, Class);
+
+fn scheduled_order(r: &impl Rd, first_only: bool) -> AppResult<Vec<Scheduled>> {
     let mut snapshot = super::priority::Snapshot::default();
     let mut best = super::priority::Class::Last;
     let mut candidates = Vec::new();
@@ -1407,15 +1417,12 @@ pub fn scheduled(r: &impl Rd, first_only: bool) -> AppResult<Vec<(Attempt, Optio
             None
         };
         if first_only && reuse.is_some() {
-            return Ok(vec![(a, reuse)]);
+            return Ok(vec![(a, reuse, class)]);
         }
-        ordered.push((class, a, reuse));
+        ordered.push((a, reuse, class));
     }
-    ordered.sort_by_key(|(class, a, reuse)| (*class, reuse.is_none(), a.seq));
-    Ok(ordered
-        .into_iter()
-        .map(|(_, a, reuse)| (a, reuse))
-        .collect())
+    ordered.sort_by_key(|(a, reuse, class)| (*class, reuse.is_none(), a.seq));
+    Ok(ordered)
 }
 
 /// Hands the highest-priority queued attempt to `runner` under a new lease.
@@ -1427,14 +1434,49 @@ pub fn claim(w: &Wtx, runner: &str, lease_secs: u64, now: &str) -> AppResult<Opt
     claim_selected(w, runner, lease_secs, now, a, reuse, None).map(Some)
 }
 
+#[cfg_attr(test, derive(Clone))]
 pub struct ClaimRunner {
     pub name: String,
     pub images: Vec<super::images::Image>,
     pub limits: JobLimits,
     pub machine: Option<Machine>,
+    pub ram_fresh: bool,
+    pub cache_groups: Option<BTreeSet<String>>,
+    pub ram_unsupported_images: BTreeSet<String>,
 }
 
 impl ClaimRunner {
+    fn ram_memory(&self, budget: &Budget, reserve: Resources) -> Option<Machine> {
+        let mut machine = self.machine.clone().filter(|_| self.ram_fresh)?;
+        if let Some((_, free)) = budget.physical {
+            let host_reserve = self.limits.memory_reserve_mib(machine.total_memory_mib);
+            machine.available_memory_mib = machine.available_memory_mib.min(
+                free.memory
+                    .saturating_sub(reserve.memory)
+                    .saturating_add(host_reserve),
+            );
+        }
+        if let Some(commit) = machine.commit.as_mut() {
+            commit.available_mib = budget.commit.unwrap_or_default();
+        }
+        Some(machine)
+    }
+
+    fn ram_allows(&self, a: &Attempt, machine: Option<&Machine>) -> bool {
+        let (Some(ram), Some(cache), Some(machine)) = (&a.job.ram_workspace, &a.job.cache, machine)
+        else {
+            return false;
+        };
+        ram.memory_allows(
+            a.job.tmpfs_mib,
+            self.limits.max_memory_mib,
+            self.limits,
+            machine,
+        ) && self.cache_groups.as_ref().is_none_or(|groups| {
+            groups.contains(&CacheOwner::for_job(&a.repo_path, &a.job, cache).fingerprint())
+        })
+    }
+
     fn budget(&self, active: &[Attempt]) -> Option<Budget> {
         let Some(machine) = &self.machine else {
             return Some(Budget::default());
@@ -1498,106 +1540,261 @@ pub fn claim_images(
     alternatives: impl FnOnce() -> AppResult<Vec<ClaimRunner>>,
 ) -> AppResult<(Option<Claimed>, Option<ResourceWait>)> {
     let active = active(w)?;
-    let Some(budget) = runner.budget(&active) else {
-        return Ok((None, None));
+    let ordered = scheduled_order(w, false)?;
+    let ram = |a: &Attempt| {
+        a.purpose == Purpose::Check && a.job.ram_workspace.is_some() && a.job.cache.is_some()
     };
-    let mut alternatives = Some(alternatives);
-    let mut other_runners = Vec::new();
-    let mut waiting = None;
-    let mut reserve = Resources::default();
-    let mut estimates = BTreeMap::new();
-    for (a, reuse) in scheduled(w, false)? {
-        let Some(image) = runner.images.iter().find(|i| i.supports(&a.job.image)) else {
-            continue;
-        };
-        if let Some(retry) = &a.retry_decision {
-            if !retry.selection.allows(&runner.name) {
-                continue;
-            }
-            if let Some(until) = retry.prefer_other_until.as_deref()
-                && retry.is_failed_runner(&runner.name)
-            {
-                if now < until {
-                    continue;
-                }
-                if let Some(reports) = alternatives.take() {
-                    other_runners = reports()?;
-                }
-                if alternative_can_run(w, &a, &other_runners, &active)? {
-                    continue;
-                }
-            }
-        }
-        if reuse
-            .as_ref()
-            .is_some_and(|source| source.image_digest == image.digest)
+    let peers = if ordered.iter().any(|(a, _, _)| {
+        ram(a)
+            || a.retry_decision.as_ref().is_some_and(|retry| {
+                retry
+                    .prefer_other_until
+                    .as_deref()
+                    .is_some_and(|until| now >= until)
+            })
+    }) {
+        alternatives()?
+    } else {
+        Vec::new()
+    };
+    let scan = ClaimScan {
+        ordered: &ordered,
+        active: &active,
+        now,
+        runners: std::iter::once(&runner).chain(&peers).collect(),
+    };
+    let (choices, waits) = scan.choices(w, &runner)?;
+    for wait in &waits {
+        let a = &ordered[wait.index].0;
+        if (wait.reason.commit_shortfall_mib > 0
+            || a.retry_decision
+                .as_ref()
+                .is_some_and(|retry| retry.selection.runner.is_some()))
+            && a.runner_deferrals
+                .get(&runner.name)
+                .is_none_or(|previous| previous.wait != wait.reason)
         {
-            let claim = claim_selected(w, &runner.name, lease_secs, now, a, reuse, None)?;
-            return Ok((Some(claim), waiting));
+            // Do not persist the run-derived fields of the scheduling copy.
+            let mut stored = get_attempt(w, &a.id)?
+                .ok_or_else(|| AppError::internal("pending attempt is missing"))?;
+            stored.runner_deferrals.insert(
+                runner.name.clone(),
+                ResourceDeferral {
+                    at: now.into(),
+                    wait: wait.reason.clone(),
+                },
+            );
+            w.put(store::CI_ATTEMPTS, &Attempt::key(&a.id), &stored)?;
         }
-        let key = (a.repo.clone(), a.job.name.clone());
-        let allocation = match estimates.get(&key) {
-            Some(&allocation) => allocation,
-            None => {
-                let allocation = allocation(w, &a, runner.limits)?;
-                estimates.insert(key, allocation);
-                allocation
-            }
-        };
-        let (short, commit_shortfall_mib) = budget.shortfall(allocation, reserve);
-        if short != Resources::default() || commit_shortfall_mib != 0 {
-            let wait = ResourceWait {
-                attempt_id: a.id.clone(),
-                repo: a.repo_path.clone(),
-                job: a.job.name.clone(),
-                cpu_shortfall: short.cpus,
-                memory_shortfall_mib: short.memory,
-                commit_shortfall_mib,
-            };
-            if (commit_shortfall_mib > 0
-                || a.retry_decision
-                    .as_ref()
-                    .is_some_and(|retry| retry.selection.runner.is_some()))
-                && a.runner_deferrals
-                    .get(&runner.name)
-                    .is_none_or(|previous| previous.wait != wait)
-            {
-                // Only the diagnostics change; the scheduling copy has updated
-                // run-derived fields and must not be persisted here.
-                let mut stored = get_attempt(w, &a.id)?
-                    .ok_or_else(|| AppError::internal("pending attempt is missing"))?;
-                stored.runner_deferrals.insert(
-                    runner.name.clone(),
-                    ResourceDeferral {
-                        at: now.into(),
-                        wait: wait.clone(),
-                    },
-                );
-                w.put(store::CI_ATTEMPTS, &Attempt::key(&a.id), &stored)?;
-            }
-            waiting.get_or_insert(wait);
-            let need = Resources::from(allocation);
-            if reserve == Resources::default()
-                && let Some((total, _)) = budget.physical
-                && need.minus(total) == Resources::default()
-            {
-                reserve = need;
-            }
-            continue;
-        }
-        let claim = claim_selected(w, &runner.name, lease_secs, now, a, reuse, Some(allocation))?;
-        return Ok((Some(claim), waiting));
     }
-    Ok((None, waiting))
+    let waiting = waits.into_iter().next().map(|wait| wait.reason);
+    let Some(&first) = choices.first() else {
+        return Ok((None, waiting));
+    };
+    let chosen = if first.allocation.is_some() && choices.len() > 1 && !first.ram {
+        scan.prefer_ram(w, &choices, &peers)?
+    } else {
+        first
+    };
+    let (a, reuse, _) = &ordered[chosen.index];
+    let claim = claim_selected(
+        w,
+        &runner.name,
+        lease_secs,
+        now,
+        a.clone(),
+        reuse.clone(),
+        chosen.allocation,
+    )?;
+    Ok((Some(claim), waiting))
+}
+
+#[derive(Clone, Copy)]
+struct ClaimChoice {
+    index: usize,
+    allocation: Option<Allocation>,
+    ram: bool,
+}
+
+struct ClaimWait {
+    index: usize,
+    reason: ResourceWait,
+}
+
+struct ClaimScan<'a> {
+    ordered: &'a [Scheduled],
+    active: &'a [Attempt],
+    now: &'a str,
+    runners: Vec<&'a ClaimRunner>,
+}
+
+impl ClaimScan<'_> {
+    fn choices(
+        &self,
+        r: &impl Rd,
+        runner: &ClaimRunner,
+    ) -> AppResult<(Vec<ClaimChoice>, Vec<ClaimWait>)> {
+        let mut choices: Vec<ClaimChoice> = Vec::new();
+        let mut waiting = Vec::new();
+        let Some(budget) = runner.budget(self.active) else {
+            return Ok((choices, waiting));
+        };
+        let mut reserve = Resources::default();
+        let mut ram_memory = runner.ram_memory(&budget, reserve);
+        let mut estimates = BTreeMap::new();
+        for (index, (a, reuse, class)) in self.ordered.iter().enumerate() {
+            if let Some(first) = choices.first() {
+                let (head, head_reuse, head_class) = &self.ordered[first.index];
+                // RAM can change the job within this part of the queue,
+                // without moving it across a different group or reuse tier.
+                if *class != *head_class
+                    || reuse.is_some() != head_reuse.is_some()
+                    || a.purpose != Purpose::Check
+                    || head.purpose != Purpose::Check
+                    || a.repo != head.repo
+                    || a.sha != head.sha
+                {
+                    break;
+                }
+            }
+            let Some(image) = runner.images.iter().find(|i| i.supports(&a.job.image)) else {
+                continue;
+            };
+            if let Some(retry) = &a.retry_decision {
+                if !retry.selection.allows(&runner.name) {
+                    continue;
+                }
+                if let Some(until) = retry.prefer_other_until.as_deref()
+                    && retry.is_failed_runner(&runner.name)
+                    && (self.now < until
+                        || alternative_can_run(r, a, &self.runners, runner, self.active)?)
+                {
+                    continue;
+                }
+            }
+            if reuse
+                .as_ref()
+                .is_some_and(|source| source.image_digest == image.digest)
+            {
+                if choices.is_empty() {
+                    choices.push(ClaimChoice {
+                        index,
+                        allocation: None,
+                        ram: false,
+                    });
+                }
+                break;
+            }
+            let key = (&a.repo, &a.job.name);
+            let allocation = match estimates.get(&key) {
+                Some(&allocation) => allocation,
+                None => {
+                    let allocation = allocation(r, a, runner.limits)?;
+                    estimates.insert(key, allocation);
+                    allocation
+                }
+            };
+            let (short, commit_shortfall_mib) = budget.shortfall(allocation, reserve);
+            if short == Resources::default() && commit_shortfall_mib == 0 {
+                choices.push(ClaimChoice {
+                    index,
+                    allocation: Some(allocation),
+                    ram: a.purpose == Purpose::Check
+                        && runner.ram_allows(a, ram_memory.as_ref())
+                        && !runner.ram_unsupported_images.contains(&image.digest),
+                });
+            } else if choices.is_empty() {
+                waiting.push(ClaimWait {
+                    index,
+                    reason: ResourceWait {
+                        attempt_id: a.id.clone(),
+                        repo: a.repo_path.clone(),
+                        job: a.job.name.clone(),
+                        cpu_shortfall: short.cpus,
+                        memory_shortfall_mib: short.memory,
+                        commit_shortfall_mib,
+                    },
+                });
+                let need = Resources::from(allocation);
+                if reserve == Resources::default()
+                    && let Some((total, _)) = budget.physical
+                    && need.minus(total) == Resources::default()
+                {
+                    reserve = need;
+                    ram_memory = runner.ram_memory(&budget, reserve);
+                }
+            }
+        }
+        Ok((choices, waiting))
+    }
+
+    fn prefer_ram(
+        &self,
+        r: &impl Rd,
+        choices: &[ClaimChoice],
+        peers: &[ClaimRunner],
+    ) -> AppResult<ClaimChoice> {
+        let first = choices[0];
+        if let Some(&ram) = choices.iter().find(|choice| choice.ram) {
+            // If the peer would otherwise execute this job and cannot start
+            // ours, keep both slots working.
+            for peer in peers {
+                let (other, _) = self.choices(r, peer)?;
+                if other
+                    .first()
+                    .is_some_and(|choice| choice.index == ram.index)
+                    && !other.iter().any(|choice| choice.index == first.index)
+                {
+                    return Ok(first);
+                }
+            }
+            return Ok(ram);
+        }
+        if self.ordered[first.index].0.job.ram_workspace.is_some() {
+            // A disk runner that polls first can take another job immediately
+            // when a peer can take its first job in RAM in this same group.
+            for peer in peers
+                .iter()
+                .filter(|peer| peer.ram_fresh && peer.machine.is_some())
+            {
+                let (other, _) = self.choices(r, peer)?;
+                if other
+                    .iter()
+                    .find(|choice| choice.ram)
+                    .is_some_and(|choice| choice.index == first.index)
+                {
+                    return Ok(choices[1..]
+                        .iter()
+                        .copied()
+                        .find(|candidate| {
+                            !other
+                                .iter()
+                                .any(|peer| peer.index == candidate.index && peer.ram)
+                        })
+                        .unwrap_or(choices[1]));
+                }
+            }
+        }
+        Ok(first)
+    }
 }
 
 fn alternative_can_run(
     r: &impl Rd,
     attempt: &Attempt,
-    alternatives: &[ClaimRunner],
+    alternatives: &[&ClaimRunner],
+    requester: &ClaimRunner,
     active: &[Attempt],
 ) -> AppResult<bool> {
     for runner in alternatives {
+        if util::fold(&runner.name) == util::fold(&requester.name)
+            || attempt
+                .retry_decision
+                .as_ref()
+                .is_some_and(|retry| !retry.selection.allows(&runner.name))
+        {
+            continue;
+        }
         let jobs = active
             .iter()
             .filter(|a| {
@@ -2357,6 +2554,9 @@ mod tests {
                 images: images.to_vec(),
                 limits,
                 machine,
+                ram_fresh: false,
+                cache_groups: None,
+                ram_unsupported_images: BTreeSet::new(),
             },
             lease_secs,
             now,
@@ -2373,6 +2573,317 @@ mod tests {
             reference: job("job").image,
             architecture: "amd64".into(),
             digest: format!("sha256:{}", "2".repeat(64)),
+        }
+    }
+
+    fn runner(name: &str, vm_mib: u64) -> ClaimRunner {
+        ClaimRunner {
+            name: name.into(),
+            images: vec![held_image()],
+            limits: JobLimits {
+                max_memory_mib: vm_mib,
+                ..limits()
+            },
+            machine: Some(Machine {
+                logical_cpus: 8,
+                total_memory_mib: 20_000,
+                available_memory_mib: 18_000,
+                commit: None,
+            }),
+            ram_fresh: true,
+            cache_groups: None,
+            ram_unsupported_images: BTreeSet::new(),
+        }
+    }
+
+    fn ram_registration(sha: &str, branch: &str, names: &[&str]) -> Registration {
+        use gb_runner::ci::pipeline::{CacheDef, RamWorkspace};
+        let mut registration = reg(sha, branch, names);
+        let PipelineState::Jobs { jobs } = &mut registration.pipeline else {
+            unreachable!();
+        };
+        let ram = jobs.iter_mut().find(|job| job.name == "rust-test").unwrap();
+        ram.tmpfs_mib = Some(2048);
+        ram.ram_workspace = Some(RamWorkspace {
+            paths: vec!["target".into()],
+            max_mib: 4608,
+        });
+        ram.cache = Some(CacheDef {
+            paths: vec!["target".into()],
+            key_files: vec![],
+        });
+        registration
+    }
+
+    #[test]
+    fn ram_memory_admission_uses_the_runner_startup_thresholds() {
+        use gb_runner::ci::api::CommitMemory;
+
+        let (_dir, store) = store();
+        store
+            .write_sync(|w| {
+                register(
+                    w,
+                    ram_registration("head", "feature", &["rust-test"]),
+                    10,
+                    T0,
+                )?;
+                let attempt = &scheduled(w, false)?[0].0;
+                for (vm, available, commit, allowed) in [
+                    (7679, 18_000, None, false),
+                    (7680, 18_000, None, true),
+                    (8192, 18_000, None, true),
+                    (7680, 9679, None, false),
+                    (7680, 9680, Some(9679), false),
+                    (7680, 9680, Some(9680), true),
+                ] {
+                    let mut runner = runner("runner", vm);
+                    let machine = runner.machine.as_mut().unwrap();
+                    machine.available_memory_mib = available;
+                    machine.commit = commit.map(|available_mib| CommitMemory {
+                        available_mib,
+                        started_attempts: vec![],
+                    });
+                    let machine = runner.machine.as_ref().unwrap();
+                    let startup = attempt.job.ram_workspace.as_ref().unwrap().memory_allows(
+                        attempt.job.tmpfs_mib,
+                        vm,
+                        runner.limits,
+                        machine,
+                    );
+                    let budget = runner.budget(&[]).unwrap();
+                    assert_eq!(startup, allowed, "{vm} {available} {commit:?}");
+                    assert_eq!(
+                        runner.ram_allows(
+                            attempt,
+                            runner.ram_memory(&budget, Resources::default()).as_ref()
+                        ),
+                        startup
+                    );
+                }
+                let mut runner = runner("runner", 7680);
+                runner.limits.max_jobs = 2;
+                let mut active = attempt.clone();
+                active.runner = Some("runner".into());
+                active.allocation = Some(Allocation {
+                    cpus: 1,
+                    vm_memory_mib: 7680,
+                    reserved_memory_mib: 11_000,
+                });
+                let budget = runner.budget(&[active]).unwrap();
+                assert!(!runner.ram_allows(
+                    attempt,
+                    runner.ram_memory(&budget, Resources::default()).as_ref()
+                ));
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn concurrent_claims_pair_the_ram_job_and_keep_both_slots_working() {
+        for names in [["rust-test", "rust-clippy"], ["rust-clippy", "rust-test"]] {
+            let (_dir, store) = store();
+            store
+                .write_sync(|w| {
+                    register(w, ram_registration("head", "feature", &names), 10, T0)?;
+                    Ok(())
+                })
+                .unwrap();
+            let gate = std::sync::Barrier::new(2);
+            let claim = |name, vm, other, other_vm| {
+                gate.wait();
+                store
+                    .write_sync(|w| {
+                        super::claim_images(w, runner(name, vm), 60, T0, || {
+                            Ok(vec![runner(other, other_vm)])
+                        })
+                    })
+                    .unwrap()
+                    .0
+                    .unwrap()
+                    .attempt
+            };
+            std::thread::scope(|scope| {
+                let hub = scope.spawn(|| claim("hub", 6144, "linux", 8192));
+                let linux = scope.spawn(|| claim("linux", 8192, "hub", 6144));
+                let (hub, linux) = (hub.join().unwrap(), linux.join().unwrap());
+                assert_eq!(
+                    (hub.job.name.as_str(), linux.job.name.as_str()),
+                    ("rust-clippy", "rust-test")
+                );
+                assert_ne!(hub.id, linux.id);
+            });
+        }
+    }
+
+    #[test]
+    fn ram_preference_falls_back_when_the_peer_cannot_start_it() {
+        for case in [
+            "busy",
+            "stale",
+            "unknown",
+            "cache-miss",
+            "guest-unsupported",
+            "image",
+            "cpu",
+            "retry-selected",
+            "retry-excluded",
+        ] {
+            let (_dir, store) = store();
+            store
+                .write_sync(|w| {
+                    let mut peer = runner("linux", 8192);
+                    match case {
+                        "busy" => {
+                            register(w, reg("busy", "elsewhere", &["busy"]), 10, T0)?;
+                            super::claim_images(w, runner("linux", 8192), 60, T0, || Ok(vec![]))?
+                                .0
+                                .unwrap();
+                        }
+                        "stale" => peer.ram_fresh = false,
+                        "unknown" => peer.machine = None,
+                        "cache-miss" => peer.cache_groups = Some(BTreeSet::new()),
+                        "guest-unsupported" => {
+                            peer.ram_unsupported_images.insert(held_image().digest);
+                        }
+                        "image" => peer.images.clear(),
+                        "cpu" => {
+                            peer.limits.cpu_multiplier_percent = 100;
+                            peer.machine.as_mut().unwrap().logical_cpus = peer.limits.max_cpus - 1;
+                        }
+                        _ => {}
+                    }
+                    register(
+                        w,
+                        ram_registration("head", "feature", &["rust-test", "rust-clippy"]),
+                        10,
+                        T0,
+                    )?;
+                    if case.starts_with("retry") {
+                        let mut a = scheduled(w, false)?.remove(0).0;
+                        let selection = if case == "retry-selected" {
+                            RunnerSelection {
+                                runner: Some("hub".into()),
+                                exclude_runners: vec![],
+                            }
+                        } else {
+                            RunnerSelection {
+                                runner: None,
+                                exclude_runners: vec!["linux".into()],
+                            }
+                        };
+                        a.retry_decision = Some(RetryDecision::of(&a, None, selection));
+                        w.put(store::CI_ATTEMPTS, &Attempt::key(&a.id), &a)?;
+                    }
+                    let (claim, _) =
+                        super::claim_images(w, runner("hub", 6144), 60, T0, || Ok(vec![peer]))?;
+                    assert_eq!(claim.unwrap().attempt.job.name, "rust-test", "{case}");
+                    Ok(())
+                })
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn ram_preference_preserves_priority_between_runs() {
+        for earlier_branch in ["earlier", "main"] {
+            let (_dir, store) = store();
+            store
+                .write_sync(|w| {
+                    require_test(w)?;
+                    register(w, reg("earlier", earlier_branch, &["other"]), 10, T0)?;
+                    register(
+                        w,
+                        ram_registration("head", "feature", &["rust-clippy", "rust-test"]),
+                        10,
+                        T0,
+                    )?;
+                    let (claim, _) = super::claim_images(w, runner("linux", 8192), 60, T0, || {
+                        Ok(vec![runner("hub", 6144)])
+                    })?;
+                    assert_eq!(claim.unwrap().attempt.sha, "earlier", "{earlier_branch}");
+                    Ok(())
+                })
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn ram_preference_improves_adoption_without_delaying_the_check_group() {
+        // A two-slot workload with a warm cache and a supported guest. Keep
+        // the command durations and both poll orders fixed across policies.
+        for (branch, first_poller, names) in [
+            ("feature", "hub", ["rust-test", "rust-clippy"]),
+            ("main", "linux", ["rust-clippy", "rust-test"]),
+        ] {
+            let run = |prefer_ram| {
+                let (_dir, store) = store();
+                store
+                    .write_sync(|w| {
+                        register(w, ram_registration("head", branch, &names), 10, T0)?;
+                        let runners = [("hub", 6144), ("linux", 8192)].map(|(name, vm)| {
+                            let mut report = runner(name, vm);
+                            report.ram_fresh = prefer_ram;
+                            report
+                        });
+                        let first = usize::from(first_poller == "linux");
+                        let mut executed = Vec::new();
+                        for index in [first, 1 - first] {
+                            let report = &runners[index];
+                            let (claim, _) =
+                                super::claim_images(w, report.clone(), 300, T0, || {
+                                    Ok(vec![runners[1 - index].clone()])
+                                })?;
+                            let claim = claim.unwrap();
+                            let a = &claim.attempt;
+                            let ram_applied = a.job.ram_workspace.as_ref().is_some_and(|ram| {
+                                ram.memory_allows(
+                                    a.job.tmpfs_mib,
+                                    a.allocation.unwrap().vm_memory_mib,
+                                    report.limits,
+                                    report.machine.as_ref().unwrap(),
+                                )
+                            });
+                            let duration = if a.job.name == "rust-test" { 90 } else { 30 };
+                            executed.push((ram_applied, duration, claim));
+                        }
+                        executed.sort_by_key(|(_, duration, _)| *duration);
+                        let mut adopted = 0;
+                        let mut max_wait = 0;
+                        let mut elapsed = 0;
+                        for (ram_applied, duration, claim) in executed {
+                            let end = later(T0, duration);
+                            let a = finish(
+                                w,
+                                &claim.attempt.id,
+                                &claim.lease,
+                                "success",
+                                None,
+                                ResultInfo::default(),
+                                &end,
+                            )?;
+                            assert_eq!(a.started_at.as_deref(), Some(T0));
+                            let time = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap();
+                            let started = time(a.started_at.as_deref().unwrap());
+                            max_wait = max_wait.max((started - time(&a.created_at)).num_seconds());
+                            elapsed = elapsed.max(
+                                (started - time(T0)).num_seconds() as u64
+                                    + duration_secs(&a).unwrap(),
+                            );
+                            adopted += usize::from(ram_applied);
+                        }
+                        Ok((adopted, max_wait, elapsed))
+                    })
+                    .unwrap()
+            };
+            let before = run(false);
+            let after = run(true);
+            println!(
+                "{branch}: (RAM jobs, max job wait s, check group duration s) {before:?} -> {after:?}"
+            );
+            assert_eq!(before, (0, 0, 90));
+            assert_eq!(after, (1, 0, 90));
         }
     }
 
@@ -2461,6 +2972,9 @@ mod tests {
                     images: vec![held_image()],
                     limits: limits(),
                     machine,
+                    ram_fresh: false,
+                    cache_groups: None,
+                    ram_unsupported_images: BTreeSet::new(),
                 };
                 let empty = || Ok(Vec::new());
                 let first = super::claim_images(w, runner("windows", None), 60, T0, empty)?

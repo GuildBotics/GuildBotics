@@ -35,6 +35,13 @@ pub struct RunnerReport {
     pub accept: bool,
     pub running_jobs: usize,
     pub machine: Option<Machine>,
+    /// Fingerprints of cache groups with a published generation. None means
+    /// the inventory was unavailable, while an empty inventory means no cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_groups: Option<std::collections::BTreeSet<String>>,
+    /// Image digests whose guest tool probe failed on this executor.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub ram_unsupported_images: std::collections::BTreeSet<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

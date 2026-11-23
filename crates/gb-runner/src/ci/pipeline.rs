@@ -1,4 +1,9 @@
 use serde::{Deserialize, Serialize};
+
+use super::{api::Machine, config::JobLimits};
+
+pub const JOB_USER_ID: u32 = 1000;
+const COMMAND_HEADROOM_MIB: u64 = 1024;
 /// One job as recorded with its attempts (the snapshot taken when the run was
 /// registered; retries reuse it).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -30,6 +35,27 @@ pub struct RamWorkspace {
 }
 
 impl RamWorkspace {
+    /// The memory gate shared by admission (reported capacity) and VM startup
+    /// (live capacity). Cache restore and guest support are separate checks.
+    pub fn memory_allows(
+        &self,
+        tmpfs_mib: Option<u32>,
+        vm_mib: u64,
+        limits: JobLimits,
+        machine: &Machine,
+    ) -> bool {
+        let guest = u64::from(self.max_mib) + u64::from(tmpfs_mib.unwrap_or_default());
+        let reserve = limits.memory_reserve_mib(machine.total_memory_mib);
+        guest + COMMAND_HEADROOM_MIB <= vm_mib
+            && vm_mib.saturating_mul(u64::from(limits.max_jobs))
+                <= machine.total_memory_mib.saturating_sub(reserve)
+            && vm_mib <= machine.available_memory_mib.saturating_sub(reserve)
+            && machine
+                .commit
+                .as_ref()
+                .is_none_or(|commit| vm_mib <= commit.available_mib.saturating_sub(reserve))
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if !(1..=65_536).contains(&self.max_mib) {
             return Err("ram_workspace.max_mib must be between 1 and 65536.".into());
@@ -78,6 +104,31 @@ pub struct CacheDef {
     /// Files whose content is part of the cache key (`Cargo.lock`, ...).
     #[serde(default)]
     pub key_files: Vec<String>,
+}
+
+/// Cache generations are interchangeable only within this group.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct CacheOwner {
+    pub repo: String,
+    pub job: String,
+    pub user: u32,
+    pub paths: Vec<String>,
+}
+
+impl CacheOwner {
+    pub fn for_job(repo: &str, job: &JobDef, cache: &CacheDef) -> Self {
+        Self {
+            repo: repo.into(),
+            job: job.name.clone(),
+            user: JOB_USER_ID,
+            paths: cache.paths.clone(),
+        }
+    }
+
+    pub fn fingerprint(&self) -> String {
+        let bytes = serde_json::to_vec(self).expect("cache owner only contains strings and a u32");
+        crate::util::hex(&crate::util::sha256(&bytes))
+    }
 }
 
 pub fn check_relative(path: &str) -> Result<(), String> {
