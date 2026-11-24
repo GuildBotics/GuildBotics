@@ -2317,6 +2317,250 @@ async fn an_invalid_base_is_repaired_only_by_a_valid_head_the_owner_approves() {
     assert_eq!(st, 200, "{v}");
 }
 
+/// An approval covers what the head itself removed: a required job the base
+/// gained afterwards stays required until the head merges the base.
+#[tokio::test]
+async fn an_approved_head_answers_for_a_required_job_the_base_gains_later() {
+    let w = World::new().await;
+    let runner = Runner::new(&w, "gained-runner").await;
+    land(
+        &w,
+        "setup",
+        &[(".guildbotics-ci.toml", &required_pipeline(&["test"]))],
+        Some(&runner),
+    )
+    .await;
+    let head = w.push_change("behind", "behind.txt", "1\n");
+    let opened = w.open_pull("behind", json!([])).await;
+    let n = opened["number"].as_u64().unwrap();
+    runner.drain("success").await;
+    let at = format!("{}/pulls/{n}", w.repo_path());
+    assert_eq!(
+        crate::pulls::review(&w, &at, &w.owner, "approve", &head).await,
+        201
+    );
+
+    let main = land(
+        &w,
+        "gain",
+        &[(
+            ".guildbotics-ci.toml",
+            &required_pipeline(&["test", "lint"]),
+        )],
+        Some(&runner),
+    )
+    .await;
+    assert_eq!(
+        checks(&w, n).await["required_names"],
+        json!(["test", "lint"])
+    );
+    let lint = check(&checks(&w, n).await, "lint").clone();
+    assert_eq!(lint["conclusion"], "failure", "{lint}");
+    assert!(blocker(&w, n, "required_removal").await.is_none());
+    assert_eq!(
+        blocker(&w, n, "head_checks").await.unwrap()["jobs"],
+        json!(["lint"])
+    );
+    let (st, v) = w
+        .server
+        .post(
+            &format!("{at}/merge"),
+            &w.owner,
+            json!({"expected_head": head, "expected_base": main}),
+        )
+        .await;
+    assert_eq!(st, 409, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("head_checks"),
+        "{v}"
+    );
+}
+
+/// A head that leaves an invalid base as it is repairs nothing, whatever was
+/// approved before the base broke.
+#[tokio::test]
+async fn an_approval_does_not_carry_a_head_over_a_base_that_broke_later() {
+    let w = World::new().await;
+    let runner = Runner::new(&w, "broken-runner").await;
+    land(
+        &w,
+        "setup",
+        &[(".guildbotics-ci.toml", &required_pipeline(&["test"]))],
+        Some(&runner),
+    )
+    .await;
+    w.push_change("target", "target.txt", "1\n");
+    let head = w.push_change("behind", "behind.txt", "1\n");
+    let (st, v) = w
+        .server
+        .post(
+            &format!("{}/pulls", w.repo_path()),
+            &w.aiko,
+            json!({"head": "behind", "base": "target", "title": "Behind"}),
+        )
+        .await;
+    assert_eq!(st, 201, "{v}");
+    let n = v["pull"]["number"].as_u64().unwrap();
+    let at = format!("{}/pulls/{n}", w.repo_path());
+    runner.drain("success").await;
+    assert_eq!(
+        crate::pulls::review(&w, &at, &w.owner, "approve", &head).await,
+        201
+    );
+    let broken = w.push_change("target", ".guildbotics-ci.toml", "not toml");
+
+    assert_eq!(checks(&w, n).await["required_names"], json!(["pipeline"]));
+    assert!(blocker(&w, n, "required_removal").await.is_none());
+    let (st, v) = w
+        .server
+        .post(
+            &format!("{at}/merge"),
+            &w.owner,
+            json!({"expected_head": head, "expected_base": broken}),
+        )
+        .await;
+    assert_eq!(st, 409, "{v}");
+}
+
+/// A removal stays the head's own after the base moves on, and what the merge
+/// would leave decides: a clean merge into an invalid file does not land.
+#[tokio::test]
+async fn the_merge_result_decides_what_a_head_removes() {
+    let w = World::new().await;
+    let runner = Runner::new(&w, "merge-runner").await;
+    let main = required_pipeline(&["test", "web"]);
+    land(
+        &w,
+        "setup",
+        &[(".guildbotics-ci.toml", &main)],
+        Some(&runner),
+    )
+    .await;
+
+    // The head drops `web`, then main moves on without touching the pipeline.
+    let dropped = w.push_change(
+        "drop-web",
+        ".guildbotics-ci.toml",
+        &required_pipeline(&["test"]),
+    );
+    let n = w.open_pull("drop-web", json!([])).await["number"]
+        .as_u64()
+        .unwrap();
+    let tip = land(&w, "later", &[("later.txt", "1\n")], Some(&runner)).await;
+    runner.drain("success").await;
+    assert_eq!(checks(&w, n).await["required_names"], json!(["test"]));
+    assert_eq!(
+        blocker(&w, n, "required_removal").await.unwrap()["jobs"],
+        json!(["web"])
+    );
+    let at = format!("{}/pulls/{n}", w.repo_path());
+    assert_eq!(
+        crate::pulls::review(&w, &at, &w.owner, "approve", &dropped).await,
+        201
+    );
+    assert!(blocker(&w, n, "required_removal").await.is_none());
+    let (st, v) = w
+        .server
+        .post(
+            &format!("{at}/merge"),
+            &w.owner,
+            json!({"expected_head": dropped, "expected_base": tip}),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
+
+    // Two heads each add job `dup` at opposite ends of the file: each is valid
+    // and they merge cleanly, into a file that defines it twice.
+    sync_main(&w);
+    let job = required_pipeline(&["dup"]);
+    let current = std::fs::read_to_string(w.work.join(".guildbotics-ci.toml")).unwrap();
+    git_ok(&w.work, &["checkout", "-q", "-b", "prepends"]);
+    let prepends = w.push_change(
+        "prepends",
+        ".guildbotics-ci.toml",
+        &format!("{job}{current}"),
+    );
+    let first = w.open_pull("prepends", json!([])).await;
+    sync_main(&w);
+    land(
+        &w,
+        "appends",
+        &[(".guildbotics-ci.toml", &format!("{current}{job}"))],
+        Some(&runner),
+    )
+    .await;
+    let n = first["number"].as_u64().unwrap();
+    let v = checks(&w, n).await;
+    let pipeline_check = check(&v, "pipeline");
+    assert_eq!(pipeline_check["conclusion"], "failure", "{v}");
+    assert!(
+        pipeline_check["details"]
+            .as_str()
+            .unwrap()
+            .contains("Merging this head would leave an invalid"),
+        "{pipeline_check}"
+    );
+    let main_tip = w
+        .server
+        .ok(&format!("{}/branches/main", w.repo_path()), &w.aiko)
+        .await["sha"]
+        .clone();
+    let (st, v) = w
+        .server
+        .post(
+            &format!("{}/pulls/{n}/merge", w.repo_path()),
+            &w.owner,
+            json!({"expected_head": prepends, "expected_base": main_tip}),
+        )
+        .await;
+    assert_eq!(st, 409, "{v}");
+}
+
+/// A head without a pipeline can still produce an invalid one by merging: here
+/// the base renamed the file the head edits.
+#[tokio::test]
+async fn a_head_without_a_pipeline_cannot_land_an_invalid_merge() {
+    let w = World::new().await;
+    let draft = required_pipeline(&["test"]);
+    land(&w, "draft", &[("ci-draft.toml", &draft)], None).await;
+    let head = w.push_change("edit-draft", "ci-draft.toml", &format!("{draft}not toml\n"));
+    sync_main(&w);
+    git_ok(&w.work, &["checkout", "-q", "-b", "renamed"]);
+    git_ok(&w.work, &["mv", "ci-draft.toml", ".guildbotics-ci.toml"]);
+    let base = w.push_change("renamed", "after.txt", "1\n");
+    let (st, v) = w
+        .server
+        .post(
+            &format!("{}/pulls", w.repo_path()),
+            &w.aiko,
+            json!({"head": "edit-draft", "base": "renamed", "title": "Edit the draft"}),
+        )
+        .await;
+    assert_eq!(st, 201, "{v}");
+    let n = v["pull"]["number"].as_u64().unwrap();
+    let v = checks(&w, n).await;
+    assert_eq!(v["required_names"], json!(["test", "pipeline"]), "{v}");
+    assert!(
+        check(&v, "pipeline")["details"]
+            .as_str()
+            .unwrap()
+            .contains("Merging this head would leave an invalid"),
+        "{v}"
+    );
+    let (st, v) = w
+        .server
+        .post(
+            &format!("{}/pulls/{n}/merge", w.repo_path()),
+            &w.owner,
+            json!({"expected_head": head, "expected_base": base}),
+        )
+        .await;
+    assert_eq!(st, 409, "{v}");
+}
+
 /// Each base decides: a collecting branch that drops a job leaves what main
 /// requires alone, and no head changes the list by editing its own file.
 #[tokio::test]

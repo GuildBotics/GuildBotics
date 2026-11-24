@@ -870,7 +870,8 @@ Landing conditions are computed for each open pull request independently by
 `landing::blockers`: `draft`, `already_in_base` (including an empty head),
 `conflict` (with `files`), `publish_requirements`, `head_checks` (with `jobs` naming
 only unmet required checks), `required_removal` (with `jobs` naming the checks the
-base requires and this head drops, until an owner approves the current head; see
+base requires and merging this head would remove, until an owner approves the
+current head; see
 `docs/ci.md`, "Required checks"), `approvals` (with `count` and `required`, the approval
 counts used by the server),
 `unanswered`, and `host_failed` (with `jobs`). A stale recorded head/base pair
@@ -957,8 +958,8 @@ head directly replaces the host branch after checking the same conditions.
     invalid pipeline, no job of that name) or that the repository runs only
     after merge: `completed`, `failure`;
   - a base whose required checks are unknown (the branch is gone, or an invalid
-    pipeline with a head that cannot replace it): a check named `pipeline`,
-    `completed`, `failure`;
+    pipeline that merging this head would not replace), or a merge that would
+    leave an invalid pipeline: a check named `pipeline`, `completed`, `failure`;
   - an invalid pipeline: a check named `pipeline`, `completed`, `failure`, the
     reason in `details`;
   - a job of a superseded run that never got queued: `completed`, `cancelled`.

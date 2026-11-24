@@ -390,21 +390,25 @@ running attempts.
 A job is required by `required = true` in `.guildbotics-ci.toml`. A pull request
 answers to the pipeline at the current tip of its **base** branch, so a collecting
 branch can drop a job without changing what `main` requires, and a head cannot
-exempt itself by editing its own file. When the base moves, open pull requests
+take a job off the list by editing its own file. The head still runs its own
+definition of each job, so reviews cover changes to a required job's commands.
+When the base moves, open pull requests
 are judged against the new tip.
 
 | Base's pipeline | Head's pipeline | What the pull request needs |
 | --- | --- | --- |
 | none | any | nothing |
-| invalid | valid | its own `required` jobs, and the owner's approval of this head (`required_removal` names `pipeline`) |
-| invalid, or the branch is gone | missing or invalid, or any when the branch is gone | a `pipeline` check that fails: nothing lands |
+| invalid | valid, and the merge leaves a valid pipeline | its own `required` jobs, and the owner's approval of this head (`required_removal` names `pipeline`) |
+| invalid, or the branch is gone | anything else | a `pipeline` check that fails: nothing lands |
 | requires a job | also marks it `required` | that job on the head |
-| requires a job | has no such job, or does not mark it | the owner's approval of this head (`required_removal`) |
+| requires a job | valid, and merging it would remove or unmark the job | the owner's approval of this head (`required_removal`) |
+| requires a job | valid, and the merge keeps the job, which the head has yet to merge | that job: the head merges the base to run it |
 | requires a job | missing or invalid | that job, which fails: such a head removes nothing |
-| any | invalid | also a `pipeline` check that fails: an invalid file does not land |
+| any | invalid, or merging it leaves an invalid file | also a `pipeline` check that fails: an invalid file does not land |
 
-The `required_removal` condition covers deleting, renaming and unmarking a required
-job. An approval counts only from a member of kind owner, on the current head: a
+What the merge would leave decides what a head removes: deleting, renaming or
+unmarking a required job counts, and a job the base gained after the head left it
+does not, so an earlier approval cannot excuse it. An approval counts only from a member of kind owner, on the current head: a
 new push needs a new approval. The approval settles only the names the head drops.
 Its other required checks still have to pass.
 

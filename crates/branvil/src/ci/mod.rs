@@ -52,19 +52,21 @@ use queue::{Attempt, PipelineState, Registration};
 
 /// How many commits of the first-parent history `Ci::estimate` looks at.
 const ESTIMATE_DEPTH: usize = 20;
-/// How many commits' required jobs are remembered.
+/// How many pairs' required jobs are remembered.
 const REQUIRED_CACHE: usize = 4096;
 
 /// What a pull request from a head into a base must pass. The base decides, so
 /// a head cannot exempt itself (`docs/ci.md`, "Required checks").
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PullRequired {
-    /// Required of this head. An unknown base requires the `pipeline` check,
-    /// which no job can satisfy.
+    /// Required of this head. A pipeline that cannot be judged requires the
+    /// `pipeline` check, which no job can satisfy.
     pub names: Vec<String>,
-    /// Required by the base and no longer by the head's own pipeline.
+    /// Required by the base and no longer after merging this head.
     pub removed: Vec<String>,
-    base_unknown: bool,
+    /// Why the `pipeline` check fails for this pair, when the head's own run
+    /// cannot say.
+    pipeline_problem: Option<String>,
 }
 
 /// Where a reused result was actually executed (including its log and artifacts).
@@ -198,8 +200,8 @@ struct Inner {
     settings: settings::Control,
     started: Instant,
     runners: Mutex<BTreeMap<String, RunnerSeen>>,
-    /// What each commit's pipeline requires, which never changes for a commit.
-    required: Mutex<BTreeMap<(String, String), pipeline::RequiredJobs>>,
+    /// What each (head, base) pair requires, which never changes for a pair.
+    required: Mutex<BTreeMap<(String, String, String), PullRequired>>,
     /// Set by `stop`: when the wait for the running jobs ends.
     stopping: OnceLock<String>,
     /// Serializes log appends (one file per attempt, small writes).
@@ -462,18 +464,19 @@ impl Ci {
         })
     }
 
-    /// What the pipeline of commit `sha` requires.
-    pub(crate) async fn required_at(
+    /// What a pull request from `head` into `base` must pass, the same for
+    /// every read of the pair.
+    pub(crate) async fn pull_required(
         &self,
         repo: &Repo,
-        sha: &str,
-    ) -> AppResult<pipeline::RequiredJobs> {
-        let key = (repo.id.clone(), sha.to_string());
+        head: &str,
+        base: &str,
+    ) -> AppResult<PullRequired> {
+        let key = (repo.id.clone(), head.to_string(), base.to_string());
         if let Some(found) = self.inner.required.lock().unwrap().get(&key) {
             return Ok(found.clone());
         }
-        let dir = self.inner.git.repo_dir(&repo.path);
-        let found = pipeline::read_required(&self.inner.git, &dir, sha).await?;
+        let found = self.judge_required(repo, head, base).await?;
         let mut cache = self.inner.required.lock().unwrap();
         if cache.len() >= REQUIRED_CACHE {
             cache.clear();
@@ -482,58 +485,108 @@ impl Ci {
         Ok(found)
     }
 
-    /// What a pull request from `head` into `base` must pass. A head whose
-    /// pipeline is missing or invalid removes nothing: the base's jobs stay
-    /// required of it and cannot succeed, and an invalid one cannot land. Only
-    /// a head with a valid pipeline can repair an invalid base, with the
-    /// owner's approval, since the base can no longer say what it requires.
-    pub(crate) async fn pull_required(
-        &self,
-        repo: &Repo,
-        head: &str,
-        base: &str,
-    ) -> AppResult<PullRequired> {
+    /// The base decides what is required, and the merge result decides what a
+    /// head removes: a job the merge would keep stays required of the head
+    /// even if the head has not merged it yet. A head whose pipeline is missing
+    /// or invalid removes nothing. An invalid base can be repaired only by a
+    /// head whose merge leaves a valid pipeline, with the owner's approval,
+    /// since the base can no longer say what it requires.
+    async fn judge_required(&self, repo: &Repo, head: &str, base: &str) -> AppResult<PullRequired> {
+        use pipeline::RequiredJobs::{Absent, Invalid, Jobs};
         let unknown = || PullRequired {
             names: vec!["pipeline".into()],
             removed: Vec::new(),
-            base_unknown: true,
+            pipeline_problem: Some(format!(
+                "The required checks of the base are unknown: its {} is invalid or the branch is gone.",
+                pipeline::PIPELINE_PATH
+            )),
         };
         if base.is_empty() {
             return Ok(unknown());
         }
+        let (git, dir) = (&self.inner.git, git_dir(self, repo));
         let at_head = if head.is_empty() {
-            pipeline::RequiredJobs::Absent
+            Absent
         } else {
-            self.required_at(repo, head).await?
+            pipeline::read_required(git, &dir, head).await?
         };
-        let mut wanted = match self.required_at(repo, base).await? {
-            pipeline::RequiredJobs::Absent => Vec::new(),
-            pipeline::RequiredJobs::Jobs(names) => names,
-            pipeline::RequiredJobs::Invalid => {
-                return Ok(match at_head {
-                    pipeline::RequiredJobs::Jobs(names) => PullRequired {
+        let merged = if head.is_empty() {
+            None
+        } else {
+            self.required_after_merge(repo, head, base).await?
+        };
+        let mut wanted = match pipeline::read_required(git, &dir, base).await? {
+            Absent => Vec::new(),
+            Jobs(names) => names,
+            Invalid => {
+                return Ok(match (at_head, merged) {
+                    (Jobs(_), Some(Jobs(names))) => PullRequired {
                         names,
                         removed: vec!["pipeline".into()],
-                        base_unknown: false,
+                        pipeline_problem: None,
                     },
                     _ => unknown(),
                 });
             }
         };
-        let kept = match at_head {
-            pipeline::RequiredJobs::Jobs(names) => names,
-            pipeline::RequiredJobs::Absent => wanted.clone(),
-            pipeline::RequiredJobs::Invalid => {
-                wanted.push("pipeline".into());
-                wanted.clone()
+        Ok(match (at_head, merged) {
+            (Jobs(_), Some(Jobs(kept))) => {
+                let (names, removed) = wanted.into_iter().partition(|name| kept.contains(name));
+                PullRequired {
+                    names,
+                    removed,
+                    pipeline_problem: None,
+                }
             }
-        };
-        let (names, removed) = wanted.into_iter().partition(|name| kept.contains(name));
-        Ok(PullRequired {
-            names,
-            removed,
-            base_unknown: false,
+            (Invalid, _) => {
+                wanted.push("pipeline".into());
+                PullRequired {
+                    names: wanted,
+                    ..PullRequired::default()
+                }
+            }
+            (_, Some(Invalid)) => {
+                wanted.push("pipeline".into());
+                PullRequired {
+                    names: wanted,
+                    removed: Vec::new(),
+                    pipeline_problem: Some(format!(
+                        "Merging this head would leave an invalid {}.",
+                        pipeline::PIPELINE_PATH
+                    )),
+                }
+            }
+            _ => PullRequired {
+                names: wanted,
+                ..PullRequired::default()
+            },
         })
+    }
+
+    /// What the result of merging `head` into `base` requires; `None` when
+    /// they do not merge.
+    async fn required_after_merge(
+        &self,
+        repo: &Repo,
+        head: &str,
+        base: &str,
+    ) -> AppResult<Option<pipeline::RequiredJobs>> {
+        let (git, dir) = (&self.inner.git, git_dir(self, repo));
+        let out = git.run(Some(&dir), &["merge-base", base, head]).await?;
+        match out.status {
+            0 => {}
+            1 => return Ok(None),
+            _ => {
+                return Err(AppError::internal(format!(
+                    "finding the merge base of {head} and {base}: {}",
+                    out.stderr.trim()
+                )));
+            }
+        }
+        let Ok(tree) = git.merge_tree(&dir, base, head).await? else {
+            return Ok(None);
+        };
+        Ok(Some(pipeline::read_required(git, &dir, &tree).await?))
     }
 
     /// Makes the checks of `head` answer for `required`: an entry for each
@@ -560,6 +613,17 @@ impl Ci {
                 *check = Check::placeholder(&check.name, "completed", Some("failure"), why);
             }
         }
+        if let Some(why) = &required.pipeline_problem
+            && !report.checks.iter().any(|c| c.name == "pipeline")
+        {
+            report.checks.push(Check::placeholder(
+                "pipeline",
+                "completed",
+                Some("failure"),
+                why.clone(),
+            ));
+            report.checks_expected = true;
+        }
         let missing: Vec<_> = required
             .names
             .iter()
@@ -569,18 +633,6 @@ impl Ci {
             return Ok(());
         }
         report.checks_expected = true;
-        if required.base_unknown {
-            report.checks.push(Check::placeholder(
-                "pipeline",
-                "completed",
-                Some("failure"),
-                format!(
-                    "The required checks of the base are unknown: its {} is invalid or the branch is gone.",
-                    pipeline::PIPELINE_PATH
-                ),
-            ));
-            return Ok(());
-        }
         let (id, sha) = (repo.id.clone(), head.to_string());
         let run = self
             .inner
@@ -1439,6 +1491,10 @@ fn open_pull_heads(r: &impl Rd, repo: &str) -> AppResult<Vec<String>> {
         }
     }
     Ok(heads)
+}
+
+fn git_dir(ci: &Ci, repo: &Repo) -> std::path::PathBuf {
+    ci.inner.git.repo_dir(&repo.path)
 }
 
 /// Build registered checks inside or outside a store transaction using the same rules.
