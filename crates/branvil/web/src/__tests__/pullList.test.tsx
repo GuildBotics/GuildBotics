@@ -13,7 +13,6 @@ const repository = (path: string) => ({
   default_branch: "main",
   upstream: null,
   post_merge_jobs: [],
-  required_checks: [],
   required_approvals: 0,
 });
 const shell = {

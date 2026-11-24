@@ -22,7 +22,6 @@ const REPO = {
   url: "",
   protected_branches: ["main"],
   post_merge_jobs: [],
-  required_checks: [],
   required_approvals: 1,
   auto_land: false,
   hold_while_failing: false,
@@ -210,12 +209,12 @@ describe("settings", () => {
     });
   });
 
-  it("shows the server's reason when post-merge jobs overlap required checks", async () => {
+  it("shows the server's reason when a repository setting is refused", async () => {
     fakeApi({
       ...SHELL,
       "GET /api/v1/repos": page([REPO]),
       "PATCH /api/v1/repos/acme/demo": json(400, {
-        error: { code: "invalid", message: "slow cannot be both required and post-merge only." },
+        error: { code: "invalid", message: "slow is not a valid check name." },
       }),
     });
     const user = userEvent.setup();
@@ -224,9 +223,9 @@ describe("settings", () => {
     await user.click(screen.getByRole("tab", { name: "CI" }));
     await addPills(user, "Post-merge only jobs", ["slow"]);
     await user.click(screen.getAllByRole("button", { name: "Save" })[0] as HTMLElement);
-    expect(
-      (await screen.findAllByText("slow cannot be both required and post-merge only.")).length,
-    ).toBeGreaterThan(0);
+    expect((await screen.findAllByText("slow is not a valid check name.")).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it("saves a repository's branches, CI and approvals, and labels with the revision the form was filled from", async () => {
@@ -236,7 +235,6 @@ describe("settings", () => {
       "PATCH /api/v1/repos/acme/demo": json(200, {
         ...REPO,
         post_merge_jobs: [],
-        required_checks: ["test", "lint"],
         ci_network: true,
         revision: 5,
       }),
@@ -245,7 +243,7 @@ describe("settings", () => {
     renderApp("/-/settings");
     await user.click(await screen.findByRole("button", { name: "Edit" }));
     expect(screen.getByText("http://127.0.0.1:7878/git/acme/demo.git")).toBeInTheDocument();
-    // Required checks and approvals live on the CI tab, with the network for jobs.
+    // Approvals live on the CI tab, with the network for jobs.
     const basics = screen.getByRole("tabpanel", { name: "Basics" });
     expect(
       within(basics).getByLabelText("Protected branches", { selector: "input:not([type=hidden])" }),
@@ -254,13 +252,15 @@ describe("settings", () => {
       within(basics).queryByLabelText("Required checks", { selector: "input:not([type=hidden])" }),
     ).not.toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "CI" }));
+    expect(
+      screen.queryByLabelText("Required checks", { selector: "input:not([type=hidden])" }),
+    ).not.toBeInTheDocument();
     const network = screen.getByRole("switch", { name: /^Network for jobs/ });
     expect(network).not.toBeChecked();
     expect(
       screen.getByText(/public destinations only, never the Branvil machine or private networks/),
     ).toBeInTheDocument();
     await user.click(network);
-    await addPills(user, "Required checks", ["test", "lint"]);
     await addPills(user, "Post-merge only jobs", ["slow"]);
     const approvals = screen.getByRole("textbox", { name: "Required approvals" });
     expect(approvals).toHaveValue("1");
@@ -280,7 +280,6 @@ describe("settings", () => {
       default_branch: "main",
       protected_branches: ["main"],
       post_merge_jobs: ["slow"],
-      required_checks: ["test", "lint"],
       required_approvals: 2,
       auto_land: false,
       hold_while_failing: false,

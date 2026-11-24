@@ -12,6 +12,8 @@
 # every job. test and markdown-links always run, as their inputs span the repo.
 # Add client-linux to the repository CI setting post_merge_jobs before opening
 # a PR containing that job. This keeps release builds out of ordinary PR heads.
+# required = true makes a job required of PRs into this branch: the base's file
+# decides, so a PR that drops a required job needs the owner's approval of its head.
 #
 # The Rust jobs check the whole Cargo workspace, its tests in two jobs:
 # rust-test-branvil tests Branvil and loopback-auth; rust-test tests the rest.

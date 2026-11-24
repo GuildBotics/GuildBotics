@@ -126,7 +126,7 @@ pub struct ReviewState {
 
 impl ReviewState {
     /// An approval of the current head, not asked again since.
-    fn approves(&self) -> bool {
+    pub(crate) fn approves(&self) -> bool {
         !self.requested && !self.outdated && self.verdict.as_deref() == Some("approve")
     }
 }
@@ -994,7 +994,7 @@ async fn patrol_rank(app: &App, repo: &Repo, p: &Pull, me: &str, tips: &Tips) ->
     let head = tips.get(&p.head).cloned().unwrap_or_default();
     let base = tips.get(&p.base).cloned().unwrap_or_default();
     let approved = approvals(&read_review_states(app, p, &head).await?) >= repo.required_approvals;
-    let mut checks = crate::landing::pull_head_checks(app, repo, p, &head).await?;
+    let mut checks = crate::landing::pull_head_checks(app, repo, p, &head, &base).await?;
     let (id, number) = (repo.id.clone(), p.number);
     let conflict = app
         .store
@@ -1895,7 +1895,8 @@ pub async fn checks(
                 .await?,
         )
     };
-    let head = display_checks(app, &repo, &p, &head_sha).await?;
+    let judged_base = base_of(&p, &tips).unwrap_or_default();
+    let head = display_checks(app, &repo, &p, &head_sha, &judged_base).await?;
     let base_checks = if base_sha.is_empty() {
         0
     } else {
@@ -1908,7 +1909,7 @@ pub async fn checks(
             .count()
     };
     let (required_checks, _, required_names) =
-        crate::landing::pull_head_check_details(app, &repo, &p, &head_sha).await?;
+        crate::landing::pull_head_check_details(app, &repo, &p, &head_sha, &judged_base).await?;
     let mut checks = head.checks;
     app.ci.estimate(&repo, &head_sha, &mut checks).await;
     app.ci.order_checks(&mut checks).await?;
@@ -1931,15 +1932,19 @@ async fn display_checks(
     repo: &Repo,
     p: &Pull,
     head_sha: &str,
+    base_sha: &str,
 ) -> AppResult<crate::ci::Checks> {
+    let required = app.ci.pull_required(repo, head_sha, base_sha).await?;
     let mut head = if head_sha.is_empty() {
         crate::ci::Checks {
             run_registered: false,
             checks: Vec::new(),
-            checks_expected: !repo.required_checks.is_empty(),
+            checks_expected: !required.names.is_empty(),
         }
     } else {
-        app.ci.head_checks(repo, head_sha).await?
+        let mut head = app.ci.head_checks(repo, head_sha).await?;
+        app.ci.require(repo, head_sha, &mut head, &required).await?;
+        head
     };
     let checks = &mut head.checks;
     if let Some(published) = &p.upstream

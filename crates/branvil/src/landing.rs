@@ -3,7 +3,7 @@ use crate::app::App;
 use crate::ci::Check;
 use crate::domain::{self, pulls};
 use crate::error::AppResult;
-use crate::model::{Landing, LandingReason, Published, Pull, Repo};
+use crate::model::{Landing, LandingReason, Member, MemberKind, Published, Pull, Repo};
 use crate::store::{self, Rd, Wtx};
 use serde::Serialize;
 
@@ -227,24 +227,36 @@ pub async fn blockers(
             ));
         }
     }
-    let (check_state, jobs, _) = if head.is_empty() {
+    let required = app.ci.pull_required(repo, head, base).await?;
+    let (check_state, jobs, names) = if head.is_empty() {
         (
             HeadChecks::Running,
-            repo.required_checks.clone(),
-            repo.required_checks.clone(),
+            required.names.clone(),
+            required.names.clone(),
         )
     } else {
-        pull_head_check_details(app, repo, p, head).await?
+        pull_head_check_details(app, repo, p, head, base).await?
     };
     if head.is_empty() || check_state != HeadChecks::Passed {
         let mut why = reason(
             "head_checks",
             format!(
                 "Required head checks have not succeeded: {}.",
-                repo.required_checks.join(", ")
+                names.join(", ")
             ),
         );
         why.jobs = jobs;
+        out.push(why);
+    }
+    if !required.removed.is_empty() && !owner_approved(app, p, head).await? {
+        let mut why = reason(
+            "required_removal",
+            format!(
+                "Removing required checks needs the owner's approval of {head}: {}.",
+                required.removed.join(", ")
+            ),
+        );
+        why.jobs = required.removed;
         out.push(why);
     }
     let approved = pulls::approvals(&pulls::read_review_states(app, p, head).await?);
@@ -289,6 +301,7 @@ fn blank(repo: &Repo, number: u64) -> Landing {
         head_sha: String::new(),
         base_sha: String::new(),
         conflicts: vec![],
+        required_jobs: vec![],
         told: vec![],
         notified_at: None,
         error: None,
@@ -320,6 +333,7 @@ pub async fn refresh_locked(
                 .conflicts(&app.git.repo_dir(&repo.path), base, head)
                 .await?
         };
+        e.required_jobs = app.ci.pull_required(repo, head, base).await?.names;
         e.head_sha = head.into();
         e.base_sha = base.into();
     }
@@ -406,8 +420,28 @@ pub(crate) async fn pull_head_checks(
     repo: &Repo,
     p: &Pull,
     head: &str,
+    base: &str,
 ) -> AppResult<HeadChecks> {
-    Ok(pull_head_check_details(app, repo, p, head).await?.0)
+    Ok(pull_head_check_details(app, repo, p, head, base).await?.0)
+}
+
+/// Whether an owner approved exactly this head: only that lets a pull request
+/// remove a check its base requires.
+async fn owner_approved(app: &App, p: &Pull, head: &str) -> AppResult<bool> {
+    let (p, head) = (p.clone(), head.to_string());
+    app.store
+        .read(move |r| {
+            for state in pulls::review_states_in(r, &p, &head)? {
+                if state.approves()
+                    && r.get::<Member>(store::MEMBERS, &Member::key(&state.member))?
+                        .is_some_and(|m| m.kind == MemberKind::Owner)
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })
+        .await
 }
 
 pub(crate) async fn pull_head_check_details(
@@ -415,15 +449,19 @@ pub(crate) async fn pull_head_check_details(
     repo: &Repo,
     p: &Pull,
     head: &str,
+    base: &str,
 ) -> AppResult<(HeadChecks, Vec<String>, Vec<String>)> {
     let p = p.clone();
     let repair = app
         .store
         .read(move |r| crate::repair::is_pull(r, &p))
         .await?;
-    let checks = app.ci.head_checks(repo, head).await?;
-    let mut required = repo.clone();
-    required.required_checks = required_names(repo, &checks.checks, repair);
+    let required = app.ci.pull_required(repo, head, base).await?;
+    let mut checks = app.ci.head_checks(repo, head).await?;
+    if !head.is_empty() {
+        app.ci.require(repo, head, &mut checks, &required).await?;
+    }
+    let names = required_names(&required.names, &checks.checks, repair);
     let mut waiting = repair && !checks.run_registered;
     if repair
         && checks.checks.iter().any(|c| {
@@ -435,29 +473,29 @@ pub(crate) async fn pull_head_check_details(
     {
         waiting = true;
     }
-    let jobs = missing_head_checks(&required, &checks.checks, repair);
+    let jobs = missing_head_checks(&names, &checks.checks, repair);
     Ok((
         if waiting {
             HeadChecks::Running
         } else {
-            head_checks(&required, &checks.checks)
+            head_checks(&names, &checks.checks)
         },
         jobs,
-        required.required_checks,
+        names,
     ))
 }
 
-fn required_names(repo: &Repo, checks: &[Check], repair: bool) -> Vec<String> {
-    let mut names = repo.required_checks.clone();
+fn required_names(required: &[String], checks: &[Check], repair: bool) -> Vec<String> {
+    let mut names = required.to_vec();
     if repair {
         names.extend(checks.iter().map(|c| c.name.clone()));
     }
     names
 }
 
-fn missing_head_checks(repo: &Repo, checks: &[Check], repair: bool) -> Vec<String> {
+fn missing_head_checks(required: &[String], checks: &[Check], repair: bool) -> Vec<String> {
     let mut jobs = vec![];
-    for name in &repo.required_checks {
+    for name in required {
         let check = checks.iter().find(|c| c.name == *name);
         if check.is_none_or(|c| {
             c.status != "completed"
@@ -475,9 +513,9 @@ fn missing_head_checks(repo: &Repo, checks: &[Check], repair: bool) -> Vec<Strin
     jobs
 }
 
-pub(crate) fn head_checks(repo: &Repo, checks: &[Check]) -> HeadChecks {
+pub(crate) fn head_checks(names: &[String], checks: &[Check]) -> HeadChecks {
     let required = || {
-        repo.required_checks
+        names
             .iter()
             .map(|name| checks.iter().find(|c| c.name == *name))
     };
@@ -534,7 +572,7 @@ mod tests {
     fn fixture() -> (Repo, Pull, Landing) {
         let repo = serde_json::from_value(json!({
             "id":"r", "path":"acme/demo", "workspace":"w", "default_branch":"main", "protected_branches":[],
-            "required_checks":[], "post_merge_jobs":[], "required_approvals":0, "auto_land":true,"hold_while_failing":false, "ci_network":false, "labels":[],
+            "post_merge_jobs":[], "required_approvals":0, "auto_land":true,"hold_while_failing":false, "ci_network":false, "labels":[],
             "upstream":null, "revision":1, "created_at":"now"
         })).unwrap();
         let pull = serde_json::from_value(json!({
@@ -544,7 +582,7 @@ mod tests {
             "merged_at":null, "merge_sha":null, "merged_head":null, "merged_base":null, "upstream":null, "revision":1
         })).unwrap();
         let entry = serde_json::from_value(json!({
-            "repo":"r", "number":1, "conflicts":[], "told":[], "base":"main", "queued_at":"now", "sequence":1, "state":"passed", "state_at":"now",
+            "repo":"r", "number":1, "conflicts":[], "required_jobs":[], "told":[], "base":"main", "queued_at":"now", "sequence":1, "state":"passed", "state_at":"now",
             "gate":"head", "base_sha":"base", "head_sha":"head", "reason":null, "notified_at":null,
             "notify":false, "resume_publish":false, "error":null
         })).unwrap();
@@ -561,24 +599,22 @@ mod tests {
 
     #[test]
     fn required_names_keep_configured_jobs_and_add_all_head_jobs_only_for_repairs() {
-        let (mut repo, _, _) = fixture();
-        repo.required_checks = vec!["configured".into()];
+        let required = vec!["configured".to_string()];
         let checks = vec![Check {
             name: "optional".into(),
             ..Check::default()
         }];
-        assert_eq!(required_names(&repo, &checks, false), ["configured"]);
+        assert_eq!(required_names(&required, &checks, false), ["configured"]);
         assert_eq!(
-            required_names(&repo, &checks, true),
+            required_names(&required, &checks, true),
             ["configured", "optional"]
         );
-        assert_eq!(required_names(&repo, &[], true), ["configured"]);
+        assert_eq!(required_names(&required, &[], true), ["configured"]);
     }
 
     #[test]
     fn unmet_jobs_exclude_success_and_service_skips() {
-        let (mut repo, _, _) = fixture();
-        repo.required_checks = [
+        let required = [
             "failed",
             "running",
             "missing",
@@ -612,11 +648,11 @@ mod tests {
             );
         }
         assert_eq!(
-            missing_head_checks(&repo, &checks, false),
+            missing_head_checks(&required, &checks, false),
             ["failed", "running", "missing", "cancelled", "skipped"]
         );
         assert_eq!(
-            missing_head_checks(&repo, &checks, true),
+            missing_head_checks(&required, &checks, true),
             [
                 "failed",
                 "running",
@@ -627,8 +663,7 @@ mod tests {
                 "skipped"
             ]
         );
-        repo.required_checks.clear();
-        assert!(missing_head_checks(&repo, &checks, false).is_empty());
+        assert!(missing_head_checks(&[], &checks, false).is_empty());
     }
 
     #[test]

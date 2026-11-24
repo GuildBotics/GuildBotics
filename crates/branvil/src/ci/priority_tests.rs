@@ -3,7 +3,7 @@ use super::*;
 use crate::ci::priority::{Class, class_of};
 use crate::model::{self, Pull, Repo, Review};
 
-fn repo(w: &Wtx, required: &[&str], approvals: u64) -> AppResult<()> {
+fn repo(w: &Wtx, approvals: u64) -> AppResult<()> {
     w.put(
         store::REPOS,
         &Repo::key("repo_1"),
@@ -13,7 +13,6 @@ fn repo(w: &Wtx, required: &[&str], approvals: u64) -> AppResult<()> {
             workspace: "acme".into(),
             default_branch: "main".into(),
             protected_branches: vec!["release".into()],
-            required_checks: required.iter().map(|s| s.to_string()).collect(),
             post_merge_jobs: Vec::new(),
             required_approvals: approvals,
             auto_land: false,
@@ -24,6 +23,25 @@ fn repo(w: &Wtx, required: &[&str], approvals: u64) -> AppResult<()> {
             upstream: None,
             revision: 1,
             created_at: T0.into(),
+        },
+    )
+}
+
+/// What the base requires of pull 1 at `head`, as the landing sweep records it.
+fn required(w: &Wtx, head: &str, names: &[&str]) -> AppResult<()> {
+    w.put(
+        store::LANDING,
+        &Pull::key("repo_1", 1),
+        &model::Landing {
+            repo: "repo_1".into(),
+            number: 1,
+            head_sha: head.into(),
+            base_sha: "base".into(),
+            conflicts: vec![],
+            required_jobs: names.iter().map(|s| s.to_string()).collect(),
+            told: vec![],
+            notified_at: None,
+            error: None,
         },
     )
 }
@@ -113,7 +131,7 @@ fn protected_registration_replaces_a_queued_pr_retry_with_runner_selection() {
     let (_d, store) = store();
     store
         .write_sync(|w| {
-            repo(w, &[], 1)?;
+            repo(w, 1)?;
             pull(w, 1, "feature", false)?;
             enqueue(w, "head", "feature")?;
             let c = take(w)?;
@@ -155,7 +173,7 @@ fn only_retries_of_failed_main_jobs_run_before_pr_checks() {
         let (_d, store) = store();
         store
             .write_sync(|w| {
-                repo(w, &[], 1)?;
+                repo(w, 1)?;
                 let verification = crate::ci::verify::Verification {
                     sha: "main-sha".into(),
                     base: None,
@@ -214,7 +232,7 @@ fn a_successful_head_loses_its_pending_cache_when_the_pull_leaves_it() {
     for close in [false, true] {
         let (_dir, s) = store();
         s.write_sync(|w| {
-            repo(w, &[], 0)?;
+            repo(w, 0)?;
             let pull = pull(w, 1, "feature", false)?;
             let reference = Key::new().s("repo_1").s("refs/heads/feature").bytes();
             w.put(store::REFS, &reference, &"first")?;
@@ -262,7 +280,7 @@ fn a_successful_head_loses_its_pending_cache_when_the_pull_leaves_it() {
 fn repair_precedes_approved_work_and_refuses_paths_reuse() {
     let (_d, s) = store();
     s.write_sync(|w| {
-        repo(w, &[], 1)?;
+        repo(w, 1)?;
         let ticket: model::Ticket = serde_json::from_value(serde_json::json!({
             "repo":"repo_1", "workspace":"acme", "number":1, "title":"Repair", "body":"", "mentions":[],
             "state":"open", "author":"branvil", "labels":[], "interactive":false, "lane":"ready", "rank":"a",
@@ -310,7 +328,7 @@ fn repair_precedes_approved_work_and_refuses_paths_reuse() {
 fn classes_override_registration_order_and_do_not_cancel_running_work() {
     let (_d, s) = store();
     s.write_sync(|w| {
-        repo(w, &[], 1)?;
+        repo(w, 1)?;
         pull(w, 1, "draft", true)?;
         enqueue(w, "last", "draft")?;
         let running = take(w)?;
@@ -396,7 +414,7 @@ fn classes_override_registration_order_and_do_not_cancel_running_work() {
 fn reviews_drafts_and_answers_are_recomputed_at_claim_time() {
     let (_d, s) = store();
     s.write_sync(|w| {
-        repo(w, &[], 1)?;
+        repo(w, 1)?;
         pull(w, 1, "older", false)?;
         enqueue(w, "older", "older")?;
         let p = pull(w, 2, "newer", false)?;
@@ -419,7 +437,7 @@ fn reviews_drafts_and_answers_are_recomputed_at_claim_time() {
         enqueue(w, "pushed", "newer")?;
         assert_eq!(class(w, "pushed")?, Class::Normal);
         // Sufficient approvals dominate a different reviewer's objection.
-        repo(w, &[], 2)?;
+        repo(w, 2)?;
         review(w, 2, "one", "approve", "", "pushed")?;
         review(w, 2, "two", "approve", "", "pushed")?;
         review(w, 2, "three", "request_changes", "Fix", "pushed")?;
@@ -437,8 +455,9 @@ fn required_failures_missing_jobs_and_manual_retry_share_check_rules() {
     );
     let (_d, s) = store();
     s.write_sync(|w| {
-        repo(w, &["test"], 1)?;
+        repo(w, 1)?;
         pull(w, 1, "feature", false)?;
+        required(w, "sha", &["test"])?;
         register(w, reg("sha", "feature", &["test", "optional"]), 100, T0)?;
         let c = take(w)?;
         assert_eq!(c.attempt.job.name, "test");
@@ -485,7 +504,7 @@ fn required_failures_missing_jobs_and_manual_retry_share_check_rules() {
         assert_eq!(class(w, "sha")?, Class::Normal);
         review(w, 1, "reviewer", "approve", "", "sha")?;
         assert_eq!(class(w, "sha")?, Class::Landing);
-        repo(w, &["missing"], 1)?;
+        required(w, "sha", &["missing"])?;
         assert_eq!(class(w, "sha")?, Class::Deferred);
         Ok(())
     })
@@ -496,7 +515,7 @@ fn required_failures_missing_jobs_and_manual_retry_share_check_rules() {
 fn gate_leaving_closed_pulls_and_multiple_branches_choose_the_best_class() {
     let (_d, s) = store();
     s.write_sync(|w| {
-        repo(w, &[], 1)?;
+        repo(w, 1)?;
         let p = pull(w, 1, "feature", true)?;
         enqueue(w, "sha", "feature")?;
         pull(w, 2, "feature", false)?;
@@ -560,7 +579,7 @@ fn reuse_is_preferred_only_within_class_and_retries_must_execute() {
         assert_eq!(take(w)?.attempt.sha, "older");
         assert!(take(w)?.reuse.is_none());
         // A reusable last-class job cannot overtake a normal job.
-        repo(w, &[], 1)?;
+        repo(w, 1)?;
         pull(w, 1, "normal", false)?;
         enqueue(w, "normal", "normal")?;
         let mut registration = reg("last", "unused", &["test"]);
@@ -597,7 +616,7 @@ fn unconsumed_results_are_last_with_specific_reasons() {
         let mut orphan = a.clone();
         orphan.sha = "absent".into();
         assert_eq!(class_of(w, &orphan)?.reason.as_deref(), Some("no CI run"));
-        repo(w, &[], 1)?;
+        repo(w, 1)?;
         let p = pull(w, 1, "feature", false)?;
         let mut closed = p.clone();
         closed.state = "closed".into();
@@ -623,7 +642,7 @@ fn unconsumed_results_are_last_with_specific_reasons() {
 fn protected_automatic_retries_overtake_older_pull_work_without_reuse() {
     let (_d, s) = store();
     s.write_sync(|w| {
-        repo(w, &["test"], 1)?;
+        repo(w, 1)?;
         pull(w, 1, "feature", false)?;
         enqueue(w, "older", "feature")?;
         enqueue(w, "main", "main")?;
@@ -653,7 +672,7 @@ fn protected_automatic_retries_overtake_older_pull_work_without_reuse() {
 fn admission_reserves_capacity_for_active_classes_and_reports_waiting_drafts() {
     let (_d, s) = store();
     s.write_sync(|w| {
-        repo(w, &[], 1)?;
+        repo(w, 1)?;
         pull(w, 1, "draft", true)?;
         pull(w, 2, "approved", false)?;
         review(w, 2, "reviewer", "approve", "", "approved-sha")?;
@@ -681,7 +700,7 @@ fn admission_reserves_capacity_for_active_classes_and_reports_waiting_drafts() {
 fn waiting_admission_sorts_all_runs_by_class_then_sequence() {
     let (_d, s) = store();
     s.write_sync(|w| {
-        repo(w, &[], 1)?;
+        repo(w, 1)?;
         pull(w, 1, "normal", false)?;
         pull(w, 2, "approved", false)?;
         review(w, 2, "reviewer", "approve", "", "approved-sha")?;
@@ -716,8 +735,9 @@ fn manual_retry_uses_the_class_after_replacing_only_its_own_failure() {
     ] {
         let (_d, s) = store();
         s.write_sync(|w| {
-            repo(w, &["test", "other"], 1)?;
+            repo(w, 1)?;
             pull(w, 1, "feature", draft)?;
+            required(w, "sha", &["test", "other"])?;
             pull(w, 2, "backlog", true)?;
             if approved {
                 review(w, 1, "reviewer", "approve", "", "sha")?;
@@ -788,7 +808,7 @@ fn deferred_details_follow_current_records_and_preserve_retry_explanations() {
         enqueue(w, "sha", "feature")?;
         let mut a = attempts_of(w, "repo_1", "sha")?.remove(0);
         assert_eq!(attempt_details(w, &a)?.unwrap(), NO_REPOSITORY);
-        repo(w, &[], 1)?;
+        repo(w, 1)?;
         let p = pull(w, 1, "feature", false)?;
         assert_eq!(attempt_details(w, &a)?, a.display_details());
         review(w, 1, "reviewer", "request_changes", "Please fix", "sha")?;
@@ -806,7 +826,7 @@ fn deferred_details_follow_current_records_and_preserve_retry_explanations() {
         );
         a.auto_retry = None;
         a.details = None;
-        repo(w, &["missing"], 1)?;
+        required(w, "sha", &["missing"])?;
         assert_eq!(attempt_details(w, &a)?.unwrap(), MISSING_CHECK);
         a.status = "in_progress".into();
         assert_eq!(attempt_details(w, &a)?, a.display_details());
@@ -835,7 +855,7 @@ fn deferred_details_follow_current_records_and_preserve_retry_explanations() {
 fn probe_admission_and_claim_use_class_two_even_on_protected_commits() {
     let (_d, s) = store();
     s.write_sync(|w| {
-        repo(w, &[], 1)?;
+        repo(w, 1)?;
         pull(w, 1, "feature", false)?;
         register(w, reg("normal", "feature", &["test"]), 10, T0)?;
         register(w, reg("base", "main", &["test"]), 10, T0)?;
@@ -864,7 +884,7 @@ fn probe_admission_and_claim_use_class_two_even_on_protected_commits() {
 fn held_approved_work_is_normal_until_main_recovers_or_repair_closes() {
     let (_d, s) = store();
     s.write_sync(|w| {
-        repo(w, &[], 1)?;
+        repo(w, 1)?;
         let mut r: Repo = w.get(store::REPOS, &Repo::key("repo_1"))?.unwrap();
         let mut p = pull(w, 1, "approved", false)?;
         review(w, 1, "reviewer", "approve", "", "approved")?;

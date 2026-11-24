@@ -272,7 +272,6 @@ A workspace holds repositories (`<workspace>/<name>`) and has one board.
   "clone_url": "http://127.0.0.1:7878/git/acme/demo.git",
   "url": "http://127.0.0.1:7878/acme/demo",
   "protected_branches": ["main"],
-  "required_checks": ["test"],
   "post_merge_jobs": [],
   "required_approvals": 1,
   "auto_land": false,
@@ -294,7 +293,7 @@ a code host it follows and publishes to, or `null` (see "Upstream").
 
 - `GET /api/v1/repos` → items (every repository), by path.
 - `POST /api/v1/repos` (owner) `{"path","default_branch"?,"labels"?}` (default `main`, no labels) → repository. `path` is `<workspace>/<name>` of an existing workspace (`404 not_found` otherwise). An empty bare repository is created.
-- `PATCH /api/v1/repos/{repo}` (owner) `{"revision", "default_branch"?, "required_checks"?, "post_merge_jobs"?, "required_approvals"?, "auto_land"?, "hold_while_failing"?, "protected_branches"?, "ci_network"?, "responder"?, "labels"?}` → `409 conflict` when `revision` is stale. Removing a label leaves it on the tickets that carry it. `ci_network` is the network access of CI jobs (`docs/ci.md`; the CI tab of the repository's settings). With an upstream, the default branch follows the upstream's and cannot be changed (`409 conflict`).
+- `PATCH /api/v1/repos/{repo}` (owner) `{"revision", "default_branch"?, "post_merge_jobs"?, "required_approvals"?, "auto_land"?, "hold_while_failing"?, "protected_branches"?, "ci_network"?, "responder"?, "labels"?}` → `409 conflict` when `revision` is stale. Removing a label leaves it on the tickets that carry it. `ci_network` is the network access of CI jobs (`docs/ci.md`; the CI tab of the repository's settings). With an upstream, the default branch follows the upstream's and cannot be changed (`409 conflict`).
 
 ### `GET /api/v1/repos/{repo}/branches/{branch}`
 
@@ -870,7 +869,9 @@ There is no queue-list or resume endpoint; both return 404.
 Landing conditions are computed for each open pull request independently by
 `landing::blockers`: `draft`, `already_in_base` (including an empty head),
 `conflict` (with `files`), `publish_requirements`, `head_checks` (with `jobs` naming
-only unmet required checks), `approvals` (with `count` and `required`, the approval
+only unmet required checks), `required_removal` (with `jobs` naming the checks the
+base requires and this head drops, until an owner approves the current head; see
+`docs/ci.md`, "Required checks"), `approvals` (with `count` and `required`, the approval
 counts used by the server),
 `unanswered`, and `host_failed` (with `jobs`). A stale recorded head/base pair
 adds `checking` until the sweep refreshes it. A behind head can land without
@@ -945,13 +946,19 @@ head directly replaces the host branch after checking the same conditions.
 - `checks` include the latest attempt of every job of the head's run, as the
   run's pipeline defines the job (`docs/ci.md`),
   plus entries without an `attempt_id` that say why something is missing, each
-  with `details`:
+  with `details`. The required checks are those the pull request's base requires
+  (`docs/ci.md`, "Required checks"); the commit checks response has no base and
+  lists only the run's jobs:
   - a required check when the commit has no run yet: `status: "queued"`,
     `conclusion: null` ("No CI run is registered for this commit yet");
   - a job of a run that waits for room in the queue, or that is not queued
     yet (the reconciler queues it): `queued`, `null`;
   - a required check the run cannot have (no pipeline in the commit, an
-    invalid pipeline, no job of that name): `completed`, `failure`;
+    invalid pipeline, no job of that name) or that the repository runs only
+    after merge: `completed`, `failure`;
+  - a base whose required checks are unknown (the branch is gone, or an invalid
+    pipeline with a head that cannot replace it): a check named `pipeline`,
+    `completed`, `failure`;
   - an invalid pipeline: a check named `pipeline`, `completed`, `failure`, the
     reason in `details`;
   - a job of a superseded run that never got queued: `completed`, `cancelled`.
@@ -1003,7 +1010,7 @@ head directly replaces the host branch after checking the same conditions.
   Branvil cannot read whether it has one, or when the repository has required
   checks: a head without checks is then "not
   registered yet", never "no checks".
-- `required_checks` is the landing head-check result (`passed`, `running`, or `failed`); `required_names` identifies required jobs (all head jobs for repair PRs). Upstream checks do not affect this result.
+- `required_checks` is the landing head-check result (`passed`, `running`, or `failed`); `required_names` identifies the jobs required of this head (all head jobs for repair PRs). Upstream checks do not affect this result.
 - `base_checks` counts the checks of the base tip.
 - A published pull request whose head is the commit Branvil pushed also lists
   the upstream host's check runs of it, named `<provider>/<name>`
@@ -1034,10 +1041,10 @@ commit of the repository (the default branch's tip, for instance), `checks`
 and `checks_expected` as for a pull request's head above, without the upstream
 host's check runs. `run_registered` states whether a local CI run exists;
 it distinguishes an unregistered commit from a registered run waiting for
-queue room, including when both expose required-check placeholders. Only a commit that is or was the default branch's tip or
+queue room. Only a commit that is or was the default branch's tip or
 an open pull request's head gets a run (`docs/ci.md`,
 "What registers a run"):
-with a pipeline or required checks, another commit's checks stay "not
+with a pipeline, another commit's checks stay "not
 registered yet". `404 not_found` when `sha`
 is not the full sha of a commit of the repository.
 
@@ -1604,9 +1611,9 @@ change (including automatic retries). Clients refetch verification and history.
 The existing commit and pull request checks responses are unchanged.
 
 Repository `post_merge_jobs` lists job names to execute only in protected-branch
-verification. It defaults to `[]` and has the same name validation as `required_checks`.
-An owner PATCH is atomic: if the resulting lists overlap, it returns 400 without
-changing the record, including when only one list is supplied. Other callers get 403.
+verification. It defaults to `[]`, and each name must be a valid job name. Only the
+owner can change it; other callers get 403. A job that is also `required` in a
+branch's pipeline reads as a failed required check on PR heads into that branch.
 Service skips expose `path_skip.reason` (`paths` or `post_merge`). Both are completed
 `skipped` checks, cannot supply reusable results or duration estimates, and are
 executed by manual retry and protected registration.

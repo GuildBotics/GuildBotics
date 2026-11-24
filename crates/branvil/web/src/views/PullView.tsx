@@ -170,12 +170,7 @@ export function PullView({
         onOpenFile={(path) => setFilesOpen({ focus: path })}
       />
 
-      <ChecksCard
-        repo={repo}
-        pull={pr}
-        requiredChecks={repository.data?.required_checks ?? []}
-        onOpen={(c) => setCheck(drawerTarget(c))}
-      />
+      <ChecksCard repo={repo} pull={pr} onOpen={(c) => setCheck(drawerTarget(c))} />
 
       {pr.state === "open" &&
         (repository.data?.upstream && pr.base === repository.data.default_branch ? (

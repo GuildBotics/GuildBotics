@@ -92,7 +92,6 @@ export const me = () => get<Member>("/me");
 export interface RepoPatch {
   revision: number;
   default_branch?: string;
-  required_checks?: string[];
   post_merge_jobs?: string[];
   required_approvals?: number;
   auto_land?: boolean;

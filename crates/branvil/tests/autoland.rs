@@ -14,7 +14,7 @@ use axum::routing::post;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 
-use crate::ci::{Runner, eventually, pipeline, sync_main};
+use crate::ci::{Runner, eventually, required_pipeline, sync_main};
 use crate::common::github::Refusal;
 use crate::common::*;
 use crate::pulls::review;
@@ -217,11 +217,10 @@ async fn main_failure_notifies_creation_once_and_recovery_sends_nothing() {
     crate::ci::land(
         &w,
         "setup",
-        &[(".guildbotics-ci.toml", &pipeline(&["test"]))],
+        &[(".guildbotics-ci.toml", &required_pipeline(&["test"]))],
         None,
     )
     .await;
-    settings(&w, json!({"required_checks": ["test"]})).await;
     let barrier = other_repo(&w, OTHER, true).await;
     let alternate = Runner::new(&w, "runner2").await;
     let mut last = Value::Null;
@@ -300,13 +299,14 @@ async fn main_failure_notifies_creation_once_and_recovery_sends_nothing() {
 async fn a_pull_request_merges_itself_once_approved_and_its_required_check_succeeded() {
     let w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
-    settings(
+    crate::ci::land(
         &w,
-        json!({"auto_land": true, "required_checks": ["test"], "required_approvals": 1}),
+        "setup",
+        &[(".guildbotics-ci.toml", &required_pipeline(&["test"]))],
+        Some(&runner),
     )
     .await;
-    std::fs::write(w.work.join(".guildbotics-ci.toml"), pipeline(&["test"])).unwrap();
-    git_ok(&w.work, &["add", ".guildbotics-ci.toml"]);
+    settings(&w, json!({"auto_land": true, "required_approvals": 1})).await;
 
     // The approval first, then the check.
     let head = w.push_change("one", "one.txt", "1\n");

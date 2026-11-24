@@ -13,7 +13,7 @@ use std::{
     sync::Arc,
 };
 const REPO: &str = "acme/demo";
-const PIPELINE: &str = "[[jobs]]\nname = \"test\"\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\nartifacts = [{name = \"report\", paths = [\"report.txt\"]}]\n";
+const PIPELINE: &str = "[[jobs]]\nname = \"test\"\nrequired = true\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\nartifacts = [{name = \"report\", paths = [\"report.txt\"]}]\n";
 fn input<T: serde::de::DeserializeOwned>(v: Value) -> T {
     serde_json::from_value(v).unwrap()
 }
@@ -312,14 +312,6 @@ impl Context {
             .unwrap();
         owner
             .repos_create(input(json!({"path":repository,"labels":["bug"]})))
-            .await
-            .unwrap();
-        let revision = owner.repos_get(repository).await.unwrap().revision;
-        owner
-            .repos_update(
-                repository,
-                input(json!({"revision":revision,"required_checks":["test"]})),
-            )
             .await
             .unwrap();
         owner

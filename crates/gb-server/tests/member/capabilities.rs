@@ -377,8 +377,9 @@ async fn completion_revalidates_only_owned_open_prs_and_preserves_read_failures(
         .unwrap();
     assert_eq!(ready.len(), 1);
     assert_eq!(ready[0].target.url, mine);
-    provider.require_checks().await;
-    let incomplete = completion_readiness(&provider, Some(&mine), &[])
+    provider.require_checks();
+    let gated = provider.pull("gated", true, &[]).await;
+    let incomplete = completion_readiness(&provider, Some(&gated), &[])
         .await
         .unwrap_err();
     assert!(matches!(
@@ -391,7 +392,7 @@ async fn completion_revalidates_only_owned_open_prs_and_preserves_read_failures(
     // The key and its blockers argument resolve in both catalogs.
     for language in ["en", "ja"] {
         assert!(
-            localized(&incomplete, language).contains(&format!("{mine}: running")),
+            localized(&incomplete, language).contains(&format!("{gated}: running")),
             "{language}"
         );
     }
@@ -424,7 +425,7 @@ async fn completion_revalidates_only_owned_open_prs_and_preserves_read_failures(
 #[tokio::test]
 async fn wait_notices_keep_the_work_identity_and_do_not_wait_for_ready_prs() {
     let provider = support::Embedded::new().await;
-    provider.require_checks().await;
+    provider.require_checks();
     let pr = provider.pull("feature", true, &[]).await;
     let pending = provider
         .code
@@ -805,7 +806,7 @@ async fn completion_preserves_factory_failure_and_orders_owned_references() {
 #[tokio::test]
 async fn waits_record_each_success_and_retain_all_work_status_fields() {
     let p = support::Embedded::new().await;
-    p.require_checks().await;
+    p.require_checks();
     let a = p.pull("a", true, &[]).await;
     let pending = p
         .code

@@ -167,12 +167,10 @@ export function RunnerRecoveryLink({ repo, recovery }: { repo: string; recovery:
 export function ChecksCard({
   repo,
   pull,
-  requiredChecks,
   onOpen,
 }: {
   repo: string;
   pull: PullRequest;
-  requiredChecks: string[];
   onOpen: (check: Check) => void;
 }) {
   const t = useT();
@@ -184,7 +182,7 @@ export function ChecksCard({
       title={t("pull.checks")}
       query={checks}
       sha={checks.data?.head_sha}
-      requiredChecks={requiredChecks}
+      requiredChecks={checks.data?.required_names}
       onOpen={onOpen}
     >
       {!!checks.data?.conflicts?.length && (

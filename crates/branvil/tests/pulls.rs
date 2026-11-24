@@ -824,46 +824,7 @@ async fn the_owner_merges_the_current_head_and_closes_tickets() {
         .await;
     assert_eq!(v["error"]["code"], "base_moved", "{st} {v}");
 
-    // Required checks without a pipeline on the base: a failing check that
-    // says why, never success; merge refused.
-    let (_, repo) = s.get(&w.repo_path(), &w.owner).await;
-    s.patch(
-        &w.repo_path(),
-        &w.owner,
-        json!({"revision": repo["revision"], "required_checks": ["test"]}),
-    )
-    .await;
-    let checks = s.ok(&format!("{base}/checks"), &w.aiko).await;
-    assert_eq!(checks["checks_expected"], true);
-    assert_eq!(checks["checks"][0]["name"], "test");
-    assert_eq!(checks["checks"][0]["status"], "completed");
-    assert_eq!(checks["checks"][0]["conclusion"], "failure");
-    assert!(
-        checks["checks"][0]["details"]
-            .as_str()
-            .unwrap()
-            .contains(".guildbotics-ci.toml"),
-        "{checks}"
-    );
-    assert!(checks["checks"][0].get("attempt_id").is_none());
-    let (st, v) = s
-        .post(&format!("{base}/merge"), &w.owner, merge2.clone())
-        .await;
-    assert_eq!(st, 409);
-    assert!(
-        v["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("head_checks"),
-        "{v}"
-    );
-    let (_, repo) = s.get(&w.repo_path(), &w.owner).await;
-    s.patch(
-        &w.repo_path(),
-        &w.owner,
-        json!({"revision": repo["revision"], "required_checks": []}),
-    )
-    .await;
+    // A base without a pipeline requires nothing: no checks, and none expected.
     let checks = s.ok(&format!("{base}/checks"), &w.aiko).await;
     assert_eq!(checks["checks"], json!([]));
     assert_eq!(checks["checks_expected"], false);
@@ -1335,7 +1296,7 @@ pub(crate) async fn patrol_walk(w: &World, token: &str, limit: usize) -> Vec<Str
 
 #[tokio::test]
 async fn the_patrol_puts_first_what_waits_for_least_once_the_work_is_done() {
-    use crate::ci::{Runner, eventually, pipeline, sync_main};
+    use crate::ci::{Runner, eventually, required_pipeline, sync_main};
     let w = World::new().await;
     let s = &w.server;
     let runner = Runner::new(&w, "patrol-runner").await;
@@ -1352,7 +1313,11 @@ async fn the_patrol_puts_first_what_waits_for_least_once_the_work_is_done() {
             assert_eq!(st, 200, "{v}");
         }
     };
-    w.push_change("pipeline", ".guildbotics-ci.toml", &pipeline(&["test"]));
+    w.push_change(
+        "pipeline",
+        ".guildbotics-ci.toml",
+        &required_pipeline(&["test"]),
+    );
     w.open_pull("pipeline", json!([])).await;
     runner.drain("success").await;
     land(1).await;
@@ -1369,7 +1334,7 @@ async fn the_patrol_puts_first_what_waits_for_least_once_the_work_is_done() {
         .patch(
             &w.repo_path(),
             &w.owner,
-            json!({"revision": repo["revision"], "required_checks": ["test"], "required_approvals": 1}),
+            json!({"revision": repo["revision"], "required_approvals": 1}),
         )
         .await;
     assert_eq!(st, 200, "{v}");

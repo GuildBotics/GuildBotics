@@ -115,7 +115,6 @@ pub struct Repo {
     /// addition to these.
     pub protected_branches: Vec<String>,
     pub post_merge_jobs: Vec<String>,
-    pub required_checks: Vec<String>,
     /// The approvals a merge or a publish needs (`domain::pulls::check_landable`).
     pub required_approvals: u64,
     /// Its pull requests land by themselves once they can (`autoland`).
@@ -381,6 +380,8 @@ pub struct Landing {
     pub head_sha: String,
     pub base_sha: String,
     pub conflicts: Vec<String>,
+    /// What the base requires of this head (`Ci::pull_required`).
+    pub required_jobs: Vec<String>,
     pub told: Vec<String>,
     pub notified_at: Option<String>,
     pub error: Option<String>,
