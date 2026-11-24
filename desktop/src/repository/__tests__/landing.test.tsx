@@ -74,6 +74,7 @@ function routes(l: Landing | null, extra: Parameters<typeof fakeApi>[0] = {}) {
       checks: [{ name: "test", status: "completed", conclusion: "success" }],
       checks_expected: true,
       base_checks: 1,
+      base_failure: null,
       required_names: [],
     }),
     [`GET ${P}/activity`]: json(200, { comments: [], reviews: [], threads: [] }),

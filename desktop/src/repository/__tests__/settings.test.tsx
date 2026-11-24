@@ -293,22 +293,22 @@ describe("settings", () => {
     {
       lang: "en",
       upstream: false,
-      help: "PRs without a repair ticket are not merged until main verification passes. Both owner merges and automatic merges are held.",
+      help: "During a verification failure, Branvil allows only repair PRs to merge into the affected default or collection branch.",
     },
     {
       lang: "ja",
       upstream: false,
-      help: "修復チケットにつながっていない PR は、main の確認が通るまでマージしません。オーナーのマージも自動のマージも保留します。",
+      help: "確認が失敗している間は、その既定ブランチまたは集約ブランチへの手動・自動マージを修復 PR に限ります。",
     },
     {
       lang: "en",
       upstream: true,
-      help: "PRs without a repair ticket stay unpublished to GitHub until main verification passes. Branvil cannot stop merges on GitHub for PRs already published to GitHub. Those PRs are shown as held.",
+      help: "PRs without a repair ticket stay unpublished to GitHub until main verification passes. Branvil cannot stop merges on GitHub for PRs already published to GitHub. Those PRs are shown as held. Branvil also holds local merges into failing collection branches except for their repair PRs.",
     },
     {
       lang: "ja",
       upstream: true,
-      help: "修復チケットにつながっていない PR は、main の確認が通るまで GitHub に出しません。すでに GitHub に出ている PR は、GitHub でのマージを Branvil は止められません。その PR は保留中と表示します。",
+      help: "修復チケットにつながっていない PR は、main の確認が通るまで GitHub に出しません。すでに GitHub に出ている PR は、GitHub でのマージを Branvil は止められません。その PR は保留中と表示します。確認が失敗している集約ブランチへのマージも、その修復 PR に限ります。",
     },
   ] as const)(
     "explains hold behavior ($lang, upstream=$upstream)",
@@ -393,7 +393,7 @@ describe("settings", () => {
       await user.click(auto);
       await user.click(
         within(ci).getByRole("switch", {
-          name: /^Publish only repair PRs while main verification is failing/,
+          name: /^Hold regular PRs while base verification is failing/,
         }),
       );
       await user.click(within(ci).getByRole("button", { name: "Save" }));

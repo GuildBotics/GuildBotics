@@ -5,16 +5,23 @@ use crate::error::{AppError, AppResult};
 use crate::model::{Member, MemberKind, Pull, Repo};
 use crate::store::{self, Rd};
 pub use hints::{Hint, hint};
-pub use tickets::{failed, open_ticket, passed, sweep};
+#[cfg(test)]
+pub use tickets::passed;
+pub use tickets::{failed, open_ticket, sweep};
+pub(crate) use tickets::{failed_for, open_ticket_for, passed_for};
 
 /// One predicate for API, scheduling, selection and landing.
 pub fn is_pull(r: &impl Rd, p: &Pull) -> AppResult<bool> {
-    Ok(p.state == "open"
-        && open_ticket(r, &p.repo)?.is_some_and(|t| {
-            p.tickets
-                .iter()
-                .any(|l| l.local.as_ref() == Some(&(p.repo.clone(), t.number)))
-        }))
+    if p.state != "open" || p.tickets.is_empty() {
+        return Ok(false);
+    }
+    let repo = crate::domain::repo_by_id(r, &p.repo)?;
+    let branch = (p.base != repo.default_branch).then_some(p.base.as_str());
+    Ok(open_ticket_for(r, &p.repo, branch)?.is_some_and(|t| {
+        p.tickets
+            .iter()
+            .any(|l| l.local.as_ref() == Some(&(p.repo.clone(), t.number)))
+    }))
 }
 
 /// Whether any open repair pull wants this run's commit.

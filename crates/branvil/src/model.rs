@@ -194,6 +194,8 @@ pub struct Assignee {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Repair {
+    /// None identifies verification of the repository default branch.
+    pub branch: Option<String>,
     pub notice: Option<String>,
     pub jobs: Vec<String>,
     pub reported: String,

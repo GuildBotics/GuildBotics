@@ -53,13 +53,17 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
     case "ticket":
       return [
         isCheckList,
-        // Ticket ancestry is not cached with a PR, and interactive ancestors
-        // can clear author actions across repositories. Refresh linked PRs.
-        (q) =>
-          keyOf(q)[0] === "repo" &&
-          keyOf(q)[2] === "pull" &&
-          keyOf(q).length === 4 &&
-          ((q.state.data as PullRequest | undefined)?.tickets?.length ?? 0) > 0,
+        // Linked tickets can clear author actions, and a collection repair
+        // ticket can appear after the checks on that branch have failed.
+        (q) => {
+          if (keyOf(q)[2] !== "pull" || keyOf(q).length !== 4) return false;
+          const pull = q.state.data as PullRequest | undefined;
+          return (
+            (pull?.tickets?.length ?? 0) > 0 ||
+            (isRepo(q, path) &&
+              pull?.landing?.blockers.some((b) => b.code === "base_checks_failed") === true)
+          );
+        },
         (q) => keyOf(q)[0] === "pull-lists",
         (q) => isRepo(q, path) && keyOf(q)[2] === "ticket" && (id === "" || keyOf(q)[3] === id),
         // The board of the repository's workspace may show the ticket (or show
@@ -93,12 +97,16 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
       return [
         isCheckList,
         (q) => isPullList(q, path),
-        // The server's per-pull landing decision changes with head checks.
-        (q) =>
-          isRepo(q, path) &&
-          keyOf(q)[2] === "pull" &&
-          keyOf(q).length === 4 &&
-          (id === "" || (q.state.data as PullRequest | undefined)?.head_sha === id),
+        // Head and base checks can change a pull request's landing decision.
+        (q) => {
+          const pull = q.state.data as PullRequest | undefined;
+          return (
+            isRepo(q, path) &&
+            keyOf(q)[2] === "pull" &&
+            keyOf(q).length === 4 &&
+            (id === "" || pull?.head_sha === id || pull?.base_sha === id)
+          );
+        },
         (q) => {
           if (!isRepo(q, path)) return false;
           const k = keyOf(q);

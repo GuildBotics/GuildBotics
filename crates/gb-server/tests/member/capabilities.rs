@@ -267,6 +267,7 @@ fn readiness_of(url: &str, state: &str) -> Readiness {
             required_names: vec![],
             checks_expected: false,
             base_checks: 0,
+            base_failure: None,
         },
         feedback: Feedback::default(),
         failed_logs: None,

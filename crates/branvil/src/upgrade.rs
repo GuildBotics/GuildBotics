@@ -1,11 +1,11 @@
-//! 43 → 44: tie execution settings to the existing workspace and update stored item URLs.
+//! 44 → 45: tie execution settings to the existing workspace and update stored item URLs.
 use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::config::Layout;
 use crate::model::{Comment, Pull};
 use crate::store::{self, Rd, Store, Tbl, Upgraded, Upgrading, Wtx};
 
-pub const FROM: u64 = 43;
+pub const FROM: u64 = 44;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {

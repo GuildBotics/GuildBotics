@@ -23,6 +23,8 @@ use crate::util::{self, fold};
 #[derive(Serialize, Debug, Clone)]
 pub struct TicketView {
     pub repair: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repair_branch: Option<String>,
     pub url: String,
     pub repository: String,
     pub key: String,
@@ -254,6 +256,7 @@ pub fn ticket_view(r: &impl Rd, base_url: &str, repo: &Repo, t: &Ticket) -> AppR
     let id = id_of(t);
     Ok(TicketView {
         repair: t.repair.is_some(),
+        repair_branch: t.repair.as_ref().and_then(|r| r.branch.clone()),
         url: ticket_url(base_url, repo, t.number),
         repository: repo.path.clone(),
         key: t.number.to_string(),
@@ -1021,7 +1024,7 @@ pub async fn move_ticket(
             if old.upstream_issue.is_some() {
                 return refuse("move_upstream_issue", "it is linked to an upstream issue");
             }
-            // It repairs the checks of its repository's default branch.
+            // It repairs a branch in its own repository.
             if old.repair.is_some() {
                 return refuse("move_repair", "it repairs its repository's failing checks");
             }

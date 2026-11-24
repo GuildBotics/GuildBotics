@@ -149,6 +149,7 @@ export const en = {
   "pull.changes": "Changed files",
   "pull.checks": "Checks",
   "pull.checksOn": "on",
+  "pull.baseFailure": "Required checks failed on {{base}}",
   "pull.behindBy":
     "The base branch ({{base}}) is {{count}} commit(s) ahead of this PR's branch. Update this PR's branch with the latest base branch.",
   "pull.conversation": "Conversation and reviews",
@@ -215,11 +216,11 @@ export const en = {
   "landing.check.success": "Succeeded",
   "landing.check.pathsSkipped": "Skipped by paths",
   "landing.check.postMergeSkipped": "Runs after merge",
-  "settings.holdWhileFailing": "Publish only repair PRs while main verification is failing",
+  "settings.holdWhileFailing": "Hold regular PRs while base verification is failing",
   "settings.holdWhileFailingHelp":
-    "PRs without a repair ticket are not merged until main verification passes. Both owner merges and automatic merges are held.",
+    "During a verification failure, Branvil allows only repair PRs to merge into the affected default or collection branch.",
   "settings.holdWhileFailingHelpUpstream":
-    "PRs without a repair ticket stay unpublished to {{host}} until main verification passes. Branvil cannot stop merges on {{host}} for PRs already published to {{host}}. Those PRs are shown as held.",
+    "PRs without a repair ticket stay unpublished to {{host}} until main verification passes. Branvil cannot stop merges on {{host}} for PRs already published to {{host}}. Those PRs are shown as held. Branvil also holds local merges into failing collection branches except for their repair PRs.",
   "landing.blocker.held": "Held (main failing)",
   "landing.held":
     "Held: main verification is failing (repair #{{number}}, assigned to {{name}}). The hold lifts when main verification passes.",
@@ -231,6 +232,7 @@ export const en = {
   "landing.blocker.already_in_base": "Already in base",
   "landing.blocker.conflict": "Conflicts",
   "landing.blocker.publish_requirements": "Publication requirements",
+  "landing.blocker.base_checks_failed": "Held (base checks failed)",
   "landing.blocker.head_checks": "Required checks",
   "landing.blocker.required_removal": "Required check removal",
   "landing.blocker.approvals": "Approvals",

@@ -237,6 +237,9 @@ impl CodeAgent {
             .tickets_get_ticket(repository, key)
             .await
             .map_err(|e| error(e, "tickets_get_ticket"))?;
+        if ticket.repair {
+            return Ok(ticket.repair_branch.unwrap_or(default));
+        }
         let mut parent = ticket.parent;
         while let Some(t) = parent {
             if t.repository == repository {

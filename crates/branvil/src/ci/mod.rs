@@ -15,6 +15,7 @@
 
 pub mod admin;
 pub mod api;
+pub(crate) mod collection;
 pub mod config;
 pub mod files;
 pub mod images;
