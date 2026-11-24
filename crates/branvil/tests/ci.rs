@@ -1917,7 +1917,7 @@ async fn required_ci_is_never_shown_as_success_or_no_checks() {
     let runner = Runner::new(&w, "runner1").await;
     // A base whose pipeline cannot be read: what it requires is unknown, so a
     // valid head needs the owner's approval to replace it.
-    w.push_change("broken", ".guildbotics-ci.toml", "not toml");
+    let broken = w.push_change("broken", ".guildbotics-ci.toml", "not toml");
     let head = w.push_change("feature", ".guildbotics-ci.toml", &pipeline(&["test"]));
     let (st, v) = w
         .server
@@ -1950,7 +1950,7 @@ async fn required_ci_is_never_shown_as_success_or_no_checks() {
     assert_eq!(v["checks_expected"], true);
     assert_eq!(
         blocker(&w, n, "required_removal").await.unwrap()["jobs"],
-        json!(["pipeline"])
+        json!([format!("pipeline@{}", &broken[..12])])
     );
     let (st, v) = w
         .server
@@ -2299,7 +2299,18 @@ async fn an_invalid_base_is_repaired_only_by_a_valid_head_the_owner_approves() {
     );
     assert_eq!(
         blocker(&w, repair, "required_removal").await.unwrap()["jobs"],
-        json!(["pipeline"])
+        json!([format!("pipeline@{}", &invalid[..12])])
+    );
+    assert_eq!(
+        crate::pulls::review(&w, &at, &w.owner, "approve", &head).await,
+        201
+    );
+    assert!(blocker(&w, repair, "required_removal").await.is_none());
+    // The approval covers that invalid file, not the next one.
+    let moved = w.push_change("invalid", "moved.txt", "1\n");
+    assert_eq!(
+        blocker(&w, repair, "required_removal").await.unwrap()["jobs"],
+        json!([format!("pipeline@{}", &moved[..12])])
     );
     assert_eq!(
         crate::pulls::review(&w, &at, &w.owner, "approve", &head).await,
@@ -2311,7 +2322,7 @@ async fn an_invalid_base_is_repaired_only_by_a_valid_head_the_owner_approves() {
         .post(
             &format!("{at}/merge"),
             &w.owner,
-            json!({"expected_head": head, "expected_base": invalid}),
+            json!({"expected_head": head, "expected_base": moved}),
         )
         .await;
     assert_eq!(st, 200, "{v}");
@@ -2425,6 +2436,151 @@ async fn an_approval_does_not_carry_a_head_over_a_base_that_broke_later() {
     assert_eq!(st, 409, "{v}");
 }
 
+/// An approval accepts what the head was removing when it was given: a base
+/// that later makes the same head remove a required job needs a new one.
+#[tokio::test]
+async fn an_approval_does_not_cover_a_removal_the_base_creates_later() {
+    let w = World::new().await;
+    let runner = Runner::new(&w, "removal-runner").await;
+    let original = mark_required(&pipeline(&["test", "lint"]), &["test"]);
+    land(
+        &w,
+        "setup",
+        &[(".guildbotics-ci.toml", &original)],
+        Some(&runner),
+    )
+    .await;
+    // The head renames a job nothing requires yet, so nothing needs accepting.
+    let head = w.push_change(
+        "rename",
+        ".guildbotics-ci.toml",
+        &original.replace("name = \"lint\"", "name = \"quality\""),
+    );
+    let opened = w.open_pull("rename", json!([])).await;
+    let n = opened["number"].as_u64().unwrap();
+    runner.drain("success").await;
+    let at = format!("{}/pulls/{n}", w.repo_path());
+    assert_eq!(
+        crate::pulls::review(&w, &at, &w.owner, "approve", &head).await,
+        201
+    );
+    assert!(blocker(&w, n, "required_removal").await.is_none());
+
+    // The base starts requiring the old name; the merge would still drop it.
+    let tip = land(
+        &w,
+        "require-lint",
+        &[(
+            ".guildbotics-ci.toml",
+            &original.replace(
+                "commands = [\"echo lint\"]\n",
+                "commands = [\"echo lint\"]\nrequired = true\n",
+            ),
+        )],
+        Some(&runner),
+    )
+    .await;
+    assert_eq!(
+        blocker(&w, n, "required_removal").await.unwrap()["jobs"],
+        json!(["lint"])
+    );
+    let (st, v) = w
+        .server
+        .post(
+            &format!("{at}/merge"),
+            &w.owner,
+            json!({"expected_head": head, "expected_base": tip}),
+        )
+        .await;
+    assert_eq!(st, 409, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("required_removal"),
+        "{v}"
+    );
+
+    // The owner sees it and approves the same head again.
+    assert_eq!(
+        crate::pulls::review(&w, &at, &w.owner, "approve", &head).await,
+        201
+    );
+    assert!(blocker(&w, n, "required_removal").await.is_none());
+}
+
+/// Landing part of a stacked head's history can turn its rename into the removal
+/// of a required job: the approval given before that does not cover it.
+#[tokio::test]
+async fn an_approval_does_not_cover_a_removal_created_by_landing_part_of_the_head() {
+    let w = World::new().await;
+    let runner = Runner::new(&w, "stacked-runner").await;
+    let original = mark_required(&pipeline(&["test", "lint"]), &["test"]);
+    land(
+        &w,
+        "setup",
+        &[(".guildbotics-ci.toml", &original)],
+        Some(&runner),
+    )
+    .await;
+    let marked = original.replace(
+        "commands = [\"echo lint\"]\n",
+        "commands = [\"echo lint\"]\nrequired = true\n",
+    );
+    let lower = w.push_change("mark", ".guildbotics-ci.toml", &marked);
+    let head = w.push_change(
+        "stacked",
+        ".guildbotics-ci.toml",
+        &marked.replace("name = \"lint\"", "name = \"quality\""),
+    );
+    let n = w.open_pull("stacked", json!([])).await["number"]
+        .as_u64()
+        .unwrap();
+    let lower_pull = w.open_pull("mark", json!([])).await;
+    runner.drain("success").await;
+    let at = format!("{}/pulls/{n}", w.repo_path());
+    assert_eq!(
+        crate::pulls::review(&w, &at, &w.owner, "approve", &head).await,
+        201
+    );
+    assert!(blocker(&w, n, "required_removal").await.is_none());
+
+    let (st, v) = w
+        .server
+        .post(
+            &format!("{}/pulls/{}/merge", w.repo_path(), lower_pull["number"]),
+            &w.owner,
+            json!({"expected_head": lower, "expected_base": lower_pull["base_sha"]}),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(
+        blocker(&w, n, "required_removal").await.unwrap()["jobs"],
+        json!(["lint"])
+    );
+    let (st, v) = w
+        .server
+        .post(
+            &format!("{at}/merge"),
+            &w.owner,
+            json!({"expected_head": head, "expected_base": v["merge_sha"]}),
+        )
+        .await;
+    assert_eq!(st, 409, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("required_removal"),
+        "{v}"
+    );
+    assert_eq!(
+        crate::pulls::review(&w, &at, &w.owner, "approve", &head).await,
+        201
+    );
+    assert!(blocker(&w, n, "required_removal").await.is_none());
+}
+
 /// A removal stays the head's own after the base moves on, and what the merge
 /// would leave decides: a clean merge into an invalid file does not land.
 #[tokio::test]
@@ -2449,7 +2605,6 @@ async fn the_merge_result_decides_what_a_head_removes() {
     let n = w.open_pull("drop-web", json!([])).await["number"]
         .as_u64()
         .unwrap();
-    let tip = land(&w, "later", &[("later.txt", "1\n")], Some(&runner)).await;
     runner.drain("success").await;
     assert_eq!(checks(&w, n).await["required_names"], json!(["test"]));
     assert_eq!(
@@ -2461,6 +2616,11 @@ async fn the_merge_result_decides_what_a_head_removes() {
         crate::pulls::review(&w, &at, &w.owner, "approve", &dropped).await,
         201
     );
+    assert!(blocker(&w, n, "required_removal").await.is_none());
+    // An unrelated change to the base keeps the approval.
+    let tip = land(&w, "later", &[("later.txt", "1\n")], Some(&runner)).await;
+    runner.drain("success").await;
+    assert_eq!(checks(&w, n).await["required_names"], json!(["test"]));
     assert!(blocker(&w, n, "required_removal").await.is_none());
     let (st, v) = w
         .server

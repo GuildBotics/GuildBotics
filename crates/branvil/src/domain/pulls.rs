@@ -187,6 +187,20 @@ pub(crate) fn review_states_in(r: &impl Rd, p: &Pull, head: &str) -> AppResult<V
     Ok(review_states(p, &reviews_of(r, &p.repo, p.number)?, head))
 }
 
+/// What `member`'s latest approval of `head` accepted removing.
+pub(crate) fn accepted_removals(
+    r: &impl Rd,
+    p: &Pull,
+    member: &str,
+    head: &str,
+) -> AppResult<Vec<String>> {
+    Ok(reviews_of(r, &p.repo, p.number)?
+        .into_iter()
+        .rfind(|x| fold(&x.author) == fold(member) && x.verdict == "approve" && x.commit == head)
+        .map(|x| x.accepted_removals)
+        .unwrap_or_default())
+}
+
 pub(crate) fn approvals(states: &[ReviewState]) -> u64 {
     states.iter().filter(|s| s.approves()).count() as u64
 }
@@ -1420,6 +1434,16 @@ pub async fn review(
     // The head is read from Git just before the write: a review is recorded
     // only on the head the caller read; a later push does not change it.
     require_head(app, &repo, &p, &input.commit).await?;
+    let accepted_removals =
+        if input.verdict == "approve" && caller.member.kind == model::MemberKind::Owner {
+            let base = tips(app, &repo).await?.remove(&p.base).unwrap_or_default();
+            app.ci
+                .pull_required(&repo, &input.commit, &base)
+                .await?
+                .removed
+        } else {
+            Vec::new()
+        };
     let author = caller.name().to_string();
     let url = app.pull_url(&repo.path, number);
     let r2 = repo.clone();
@@ -1436,6 +1460,7 @@ pub async fn review(
                 body: input.body,
                 commit: input.commit,
                 submitted_at: util::now(),
+                accepted_removals,
                 reactions: Vec::new(),
             };
             let key = model::review_key(&p.repo, p.number, seq);

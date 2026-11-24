@@ -830,6 +830,9 @@ pub fn as_schema_42(db: &Path) {
     edit_records(db, "landing", |v| {
         v.as_object_mut().unwrap().remove("required_jobs");
     });
+    edit_records(db, "reviews", |v| {
+        v.as_object_mut().unwrap().remove("accepted_removals");
+    });
 }
 
 pub fn previous_schema_backup(data: &Path) -> PathBuf {

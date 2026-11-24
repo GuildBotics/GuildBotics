@@ -551,6 +551,9 @@ pub struct Review {
     pub body: String,
     pub commit: String,
     pub submitted_at: String,
+    /// The required checks this head removed when an owner approved it: the
+    /// approval accepts those and no others the base may require later.
+    pub accepted_removals: Vec<String>,
     pub reactions: Vec<Reaction>,
 }
 

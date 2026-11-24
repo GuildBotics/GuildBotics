@@ -43,8 +43,15 @@ pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
             landing.insert("base_sha".into(), Value::String(String::new()));
             Ok(())
         })?;
+        let reviews = update_rows(w, store::REVIEWS, |review| {
+            review
+                .as_object_mut()
+                .context("review record is not an object")?
+                .insert("accepted_removals".into(), Value::Array(Vec::new()));
+            Ok(())
+        })?;
         Ok(format!(
-            "moved required checks out of {repos} repositories and reset {landings} landing records"
+            "moved required checks out of {repos} repositories and reset {landings} landing records and {reviews} reviews"
         ))
     })
     .map(Some)
@@ -229,6 +236,7 @@ mod tests {
                 &json!({"repo": "r", "number": 1, "head_sha": "h", "base_sha": "b",
                         "conflicts": [], "told": ["conflict"], "notified_at": null, "error": null}),
             )?;
+            w.put(store::REVIEWS, b"review", &json!({"verdict": "approve"}))?;
             w.put(store::META, &Key::new().s("schema_version").bytes(), &FROM)
         })
         .unwrap();
@@ -262,6 +270,8 @@ mod tests {
         assert_eq!(landing["base_sha"], "");
         assert_eq!(landing["head_sha"], "h");
         assert_eq!(landing["told"], json!(["conflict"]));
+        let review: Value = r.get(store::REVIEWS, b"review").unwrap().unwrap();
+        assert_eq!(review["accepted_removals"], json!([]));
     }
 
     #[tokio::test]

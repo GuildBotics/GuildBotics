@@ -520,9 +520,10 @@ impl Ci {
             Jobs(names) => names,
             Invalid => {
                 return Ok(match (at_head, merged) {
+                    // Named with the base: an approval covers this invalid file only.
                     (Jobs(_), Some(Jobs(names))) => PullRequired {
                         names,
-                        removed: vec!["pipeline".into()],
+                        removed: vec![format!("pipeline@{}", &base[..base.len().min(12)])],
                         pipeline_problem: None,
                     },
                     _ => unknown(),

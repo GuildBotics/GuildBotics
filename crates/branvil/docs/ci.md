@@ -398,7 +398,7 @@ are judged against the new tip.
 | Base's pipeline | Head's pipeline | What the pull request needs |
 | --- | --- | --- |
 | none | any | nothing |
-| invalid | valid, and the merge leaves a valid pipeline | its own `required` jobs, and the owner's approval of this head (`required_removal` names `pipeline`) |
+| invalid | valid, and the merge leaves a valid pipeline | the `required` jobs of the merge result, and the owner's approval of this head (`required_removal` names `pipeline@<base>`, so a new invalid base needs a new approval) |
 | invalid, or the branch is gone | anything else | a `pipeline` check that fails: nothing lands |
 | requires a job | also marks it `required` | that job on the head |
 | requires a job | valid, and merging it would remove or unmark the job | the owner's approval of this head (`required_removal`) |
@@ -407,10 +407,12 @@ are judged against the new tip.
 | any | invalid, or merging it leaves an invalid file | also a `pipeline` check that fails: an invalid file does not land |
 
 What the merge would leave decides what a head removes: deleting, renaming or
-unmarking a required job counts, and a job the base gained after the head left it
-does not, so an earlier approval cannot excuse it. An approval counts only from a member of kind owner, on the current head: a
-new push needs a new approval. The approval settles only the names the head drops.
-Its other required checks still have to pass.
+unmarking a required job counts, and a job the merge keeps does not.
+
+An approval counts only from a member of kind owner, on the current head, and only
+for the names the head was removing when it was given. A new push, or a base that
+makes the same head remove another job, needs a new approval. The approval settles
+only those names: the other required checks still have to pass.
 
 ### Post-merge only jobs
 

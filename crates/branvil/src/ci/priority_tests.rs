@@ -108,6 +108,7 @@ fn review(
             body: body.into(),
             commit: commit.into(),
             submitted_at: T0.into(),
+            accepted_removals: vec![],
             reactions: vec![],
         },
     )

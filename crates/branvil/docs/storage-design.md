@@ -110,7 +110,7 @@ check did not change stored records or raise the version.
 | `attachments` | `(repo id, attachment id)` | an image of the tickets of the repository's workspace (a moved ticket keeps the ones of its old repository): name, media type read from its bytes, size, uploader, time (the bytes are a file) | upload API, the attachment sweep | delivery, a ticket's attachments, the sweep |
 | `pulls` | `(repo id, n)` | pull request record (links, reviewers, reviewed_by, draft, state, original merged head and base, merge commit, and once published: the host's pull request, what was last sent to it, the host's checks of the pushed head and whether it may still add some, whether Branvil published it) | PR API, merge, publish, the upstream poller, push recording (`updated_at`) | PR reads, patrol, the upstream poller |
 | `landing` | `(repo id, n)` | checked head/base SHA, conflicts, the jobs the base requires of the head, told problems, notified_at, automatic error | sweep, merge/publish, webhook acknowledgment | PR conditions, next action, patrol |
-| `reviews` | `(repo id, n, seq)` | review with reactions | review API | reviews, activity |
+| `reviews` | `(repo id, n, seq)` | review with reactions and, for an owner's approval, the required checks it accepted removing | review API | reviews, activity |
 | `threads` | `(repo id, n, root seq)` | path, line, side, commit, resolved | inline-comment API | threads |
 | `inline_comments` | `(repo id, n, root seq, seq)` | thread comment with reactions | inline/reply API | thread comments (contiguous per thread) |
 | `ref_snapshots` | `(repo id, refname)` | last recorded object | `refs::record_refs` | push recording, startup rescan |

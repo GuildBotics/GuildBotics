@@ -248,15 +248,16 @@ pub async fn blockers(
         why.jobs = jobs;
         out.push(why);
     }
-    if !required.removed.is_empty() && !owner_approved(app, p, head).await? {
+    let unaccepted = unaccepted_removals(app, p, head, required.removed).await?;
+    if !unaccepted.is_empty() {
         let mut why = reason(
             "required_removal",
             format!(
                 "Removing required checks needs the owner's approval of {head}: {}.",
-                required.removed.join(", ")
+                unaccepted.join(", ")
             ),
         );
-        why.jobs = required.removed;
+        why.jobs = unaccepted;
         out.push(why);
     }
     let approved = pulls::approvals(&pulls::read_review_states(app, p, head).await?);
@@ -425,21 +426,34 @@ pub(crate) async fn pull_head_checks(
     Ok(pull_head_check_details(app, repo, p, head, base).await?.0)
 }
 
-/// Whether an owner approved exactly this head: only that lets a pull request
-/// remove a check its base requires.
-async fn owner_approved(app: &App, p: &Pull, head: &str) -> AppResult<bool> {
+/// The removals no owner accepted by approving exactly this head. Only such
+/// an approval lets a pull request remove a check its base requires, and only
+/// the checks it was removing then: the base can make it remove more later.
+async fn unaccepted_removals(
+    app: &App,
+    p: &Pull,
+    head: &str,
+    removed: Vec<String>,
+) -> AppResult<Vec<String>> {
+    if removed.is_empty() {
+        return Ok(removed);
+    }
     let (p, head) = (p.clone(), head.to_string());
     app.store
         .read(move |r| {
+            let mut accepted = Vec::new();
             for state in pulls::review_states_in(r, &p, &head)? {
                 if state.approves()
                     && r.get::<Member>(store::MEMBERS, &Member::key(&state.member))?
                         .is_some_and(|m| m.kind == MemberKind::Owner)
                 {
-                    return Ok(true);
+                    accepted.extend(pulls::accepted_removals(r, &p, &state.member, &head)?);
                 }
             }
-            Ok(false)
+            Ok(removed
+                .into_iter()
+                .filter(|name| !accepted.contains(name))
+                .collect())
         })
         .await
 }
