@@ -16,7 +16,6 @@ const repo = (path: string, labels: string[]) => ({
   clone_url: "",
   url: "",
   protected_branches: ["main"],
-  post_merge_jobs: [],
   labels,
   upstream: null,
   revision: 1,

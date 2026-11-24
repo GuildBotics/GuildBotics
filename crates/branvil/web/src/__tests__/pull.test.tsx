@@ -574,7 +574,6 @@ function pullRoutes(extra: Record<string, Parameters<typeof fakeApi>[0][string]>
       clone_url: "",
       url: "",
       protected_branches: ["main"],
-      post_merge_jobs: [],
       required_approvals: 0,
       revision: 1,
     }),
@@ -1183,7 +1182,6 @@ describe("pull request review", () => {
     clone_url: "",
     url: "",
     protected_branches: ["main"],
-    post_merge_jobs: [],
     required_approvals: 0,
     auto_land: false,
     hold_while_failing: false,
@@ -1285,7 +1283,6 @@ describe("pull request review", () => {
             ...routes,
             "GET /api/v1/repos/acme/demo": json(200, {
               ...repository,
-              post_merge_jobs: [],
             }),
           }),
         );
@@ -1326,7 +1323,6 @@ describe("pull request review", () => {
             [`GET ${P}`]: json(200, pull({ landing: waiting("head_checks") })),
             "GET /api/v1/repos/acme/demo": json(200, {
               ...repository,
-              post_merge_jobs: [],
             }),
             [`GET ${P}/checks`]: json(200, {
               ...CHECKS,
@@ -1393,7 +1389,6 @@ describe("pull request review", () => {
           ],
           "GET /api/v1/repos/acme/demo": json(200, {
             ...repository,
-            post_merge_jobs: [],
           }),
           [`GET ${P}/checks`]: [
             json(200, { ...CHECKS, checks: [] }),

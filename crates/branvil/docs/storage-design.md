@@ -60,7 +60,7 @@ to remain unchanged when the version stays at the verified version. It runs
 only on default-branch verification and skips the comparison when no verified
 commit exists.
 
-`meta["schema_version"]` is written on creation (currently `44`). The current
+`meta["schema_version"]` is written on creation (currently `45`). The current
 format includes per-pull landing conditions, each merged pull request's original
 reviewed head distinct from its merge commit, and per-head notification and
 automatic failure state. Schema 44 stores the required check attempts used for
@@ -274,9 +274,10 @@ scope. `model::ticket_index` maintains it and `admin reindex` rebuilds it.
 The 43 → 44 upgrade sets the branch to null for existing repair tickets and
 pending failures.
 
-Repository records (`repos`) include `post_merge_jobs` (job names). Run selections
-(`ci_runs`) snapshot `post_merge_jobs` alongside bases and skipped jobs, so changing
-the setting invalidates selection. Service skips in `ci_attempts.path_skip` carry
+Run selections (`ci_runs`) record `post_merge_jobs`, the jobs the pipelines of the
+bases and the head run only after merge, alongside bases and skipped jobs, so a change
+of them invalidates selection. The 44 → 45 upgrade removes the repository setting
+`post_merge_jobs` from `repos`: the pipeline marks such jobs. Service skips in `ci_attempts.path_skip` carry
 `reason` (`paths` or `post_merge`), `paths`, and `bases`. Both reasons have the same
 queue, reuse, retention, and landing semantics.
 

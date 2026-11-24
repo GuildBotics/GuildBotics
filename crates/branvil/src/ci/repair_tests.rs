@@ -239,9 +239,8 @@ async fn merged_repair_is_reported_only_after_inclusion_and_only_once() {
 
 #[tokio::test]
 async fn repeated_failures_and_repair_head_selection() {
-    let (temp, ci, mut repo) = setup();
+    let (temp, ci, repo) = setup();
     let app = app(&temp, &ci);
-    repo.post_merge_jobs = vec!["post".into()];
     let dir = app.git.repo_dir(&repo.path);
     app.git.init_bare(&dir, "main").await.unwrap();
     let work = temp.path().join("work");
@@ -249,7 +248,7 @@ async fn repeated_failures_and_repair_head_selection() {
         .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
         .await
         .unwrap();
-    std::fs::write(work.join(".guildbotics-ci.toml"), "version = 1\n[[jobs]]\nname = 'post'\nimage = 'alpine'\ncommands = ['true']\n[[jobs]]\nname = 'test'\nimage = 'alpine'\ncommands = ['true']\npaths = ['src/**']\nrequired = true\n").unwrap();
+    std::fs::write(work.join(".guildbotics-ci.toml"), "version = 1\n[[jobs]]\nname = 'post'\nimage = 'alpine'\ncommands = ['true']\npost_merge = true\n[[jobs]]\nname = 'test'\nimage = 'alpine'\ncommands = ['true']\npaths = ['src/**']\nrequired = true\n").unwrap();
     let base = commit_all(&app.git, &work, "base").await;
     let head = commit_all(&app.git, &work, "head").await;
     app.git

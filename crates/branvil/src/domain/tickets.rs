@@ -2074,7 +2074,6 @@ mod tests {
             workspace: BOARD.into(),
             default_branch: "main".into(),
             protected_branches: Vec::new(),
-            post_merge_jobs: Vec::new(),
             required_approvals: 1,
             auto_land: false,
             hold_while_failing: false,

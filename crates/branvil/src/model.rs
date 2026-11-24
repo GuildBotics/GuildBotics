@@ -114,7 +114,6 @@ pub struct Repo {
     /// Configured protected branches; the default branch is protected in
     /// addition to these.
     pub protected_branches: Vec<String>,
-    pub post_merge_jobs: Vec<String>,
     /// The approvals a merge or a publish needs (`domain::pulls::check_landable`).
     pub required_approvals: u64,
     /// Its pull requests land by themselves once they can (`autoland`).

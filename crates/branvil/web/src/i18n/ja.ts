@@ -314,11 +314,8 @@ export const ja: Record<MessageKey, string> = {
   "ci.conclusion.cancelled": "中断",
   "ci.conclusion.timed_out": "タイムアウト",
   "ci.conclusion.skipped": "スキップ",
-  "settings.postMergeJobs": "マージ後だけ流すジョブ",
-  "settings.postMergeJobsHelp":
-    "ここに入れたジョブは、PR では流さず、マージのあとの main の確認で流します。必須チェックには入れられません。",
   "ci.postMergeReason":
-    "リポジトリの設定でマージ後だけ流すジョブなので、PR では流していません。マージのあとの main の確認で流れます。今すぐ確かめたいときは再実行で流せます。",
+    "マージ後だけ流すジョブなので、PR では流していません。マージのあとの main の確認で流れます。今すぐ確かめたいときは再実行で流せます。",
   "ci.mergeDecision": "マージの判定",
   "ci.mergeDecisionNoRequired": "この head に対する Branvil の必須チェックはありませんでした。",
   "ci.mergeDecisionUnavailable": "この PR のマージ判定に使ったチェックは記録されていません。",
@@ -684,7 +681,6 @@ export const ja: Record<MessageKey, string> = {
     "上流に出す前に、作者以外の何人のメンバーが今の head を承認していなければならないかです（承認のあとのコメントでは承認は消えません）。0 は承認を求めません。",
   "settings.labelsHelp": "チケットに付けられるラベルです。入力して Enter で追加します。",
   "settings.addBranch": "ブランチ名を追加",
-  "settings.addCheck": "チェック名を追加（例: test）",
   "settings.addLabel": "ラベルを追加",
   "settings.saved": "保存しました。",
   "settings.membersHelp":
