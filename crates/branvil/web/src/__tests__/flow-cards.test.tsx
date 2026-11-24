@@ -80,6 +80,7 @@ const CHECKS = {
   ],
   checks_expected: true,
   base_checks: 1,
+  base_failure: null,
   required_names: [],
 };
 

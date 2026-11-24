@@ -906,11 +906,17 @@ failure, `publishing`, `host_checks`, `owner_merge_host`, or (without upstream)
 `held` is the first blocker for a non-repair PR targeting the default branch
 while verification has `failing_since` and an open repair ticket exists.
 Its message names the repair number and assignee; `held: {number, assignee}`
-provides structured display data (other reasons have `held: null`). It prevents
+provides structured display data. It prevents
 publication, local manual/automatic merging and readiness notifications.
 Already published PRs also show the hold, but host merging and head updates
 continue. A verification success or closing the repair ticket removes the hold
 on the next sweep, including a verification event.
+
+For an open PR into a failing collection branch, the same setting adds a
+`base_checks_failed` blocker unless the PR is linked to that branch's repair
+ticket. Its `jobs` name the failed required checks. Its `held` is populated
+when the repair ticket exists. The blocker applies to both manual and automatic
+merging while the checks fail or recovery is still being checked.
 
 ### Landing automatically
 
@@ -937,7 +943,8 @@ head directly replaces the host branch after checking the same conditions.
   "checks_expected": true,
   "required_checks": "passed",
   "required_names": ["test"],
-  "base_checks": 1
+  "base_checks": 1,
+  "base_failure": null
 }
 ```
 
@@ -1017,6 +1024,13 @@ head directly replaces the host branch after checking the same conditions.
   registered yet", never "no checks".
 - `required_checks` is the landing head-check result (`passed`, `running`, or `failed`); `required_names` identifies the jobs required of this head (all head jobs for repair PRs). Upstream checks do not affect this result.
 - `base_checks` counts the checks of the base tip.
+- `base_failure` is `null` unless an open PR targets a collection branch whose
+  required checks are failing. It has `branch`, the failed `sha`, `failed_jobs`
+  (each has `name`, nullable `attempt_id` and `details`), and `repair` (null
+  until the ticket exists, or its `number`, `assignee` and `url`). While a newer
+  tip or retry is being checked, `sha` and `failed_jobs` can describe the previous
+  failure. `repository/pr_checks` returns this field alongside the child's own
+  `required_checks`. Reporting is independent of `hold_while_failing`.
 - A published pull request whose head is the commit Branvil pushed also lists
   the upstream host's check runs of it, named `<provider>/<name>`
   (`github/test-windows`), with `attempt_id` `<provider>-<id>`, `details_url`
@@ -1628,10 +1642,11 @@ save caches, and cannot be manually retried. Their job and log routes are the
 same as other attempts. They are excluded from commit checks and readiness.
 
 PR responses, including patrol lists, expose `repair: true|false`. It is true
-only for open PRs linked locally to the repository's open repair ticket. Closing
-links never close repair tickets on merge; passing main verification or a human
-operation closes them. Repair ticket creation and closure also publish a
-`verification` event so clients refetch the linked ticket.
+only for open PRs linked locally to an open repair ticket for the same repository
+and base branch. Collection repair tickets expose `repair_branch` in the ticket
+response. Passing verification on the repaired branch closes the ticket, as can
+a human operation. Creation and closure publish a ticket event. Updates to default-branch
+verification also publish a `verification` event.
 
 Board cards accept `repair=true` to select repair tickets independently of assignee (with the usual state and lane filters).
 

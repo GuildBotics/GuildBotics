@@ -110,6 +110,8 @@ function useBlockerDetails(pull: PullRequest, load = true) {
               }),
             ]
           : [];
+      case "base_checks_failed":
+        return [b.jobs.join(", ")];
       case "required_removal":
         return b.jobs.map((name) => t("landing.requiredRemoval", { name }));
       case "approvals":
@@ -177,12 +179,12 @@ export function LandingJourney({ pull, repo }: { pull: PullRequest; repo: Reposi
                 {text}
               </Text>
             ))}
-            {b.code === "held" && b.held && (
+            {b.held && (
               <>
                 <Anchor href={`/${pull.repository}/-/tickets/${b.held.number}`} size="sm">
                   {t("landing.repairLink", { number: b.held.number })}
                 </Anchor>
-                {l.host_url && (
+                {b.code === "held" && l.host_url && (
                   <Text size="sm">
                     {t("landing.heldPublished", { host: repo.upstream?.host ?? "" })}
                   </Text>

@@ -390,9 +390,7 @@ async fn previous_schema_upgrade_preserves_records() {
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let indexed_memory = tables(&db)["ix_ci_memory"].clone();
     let prior_runs = records(&db, "ci_runs");
-    as_schema_42(&db);
-    // main's pipeline requires `test`, so the old setting can move there.
-    edit_records(&db, "repos", |r| r["required_checks"] = json!(["test"]));
+    as_schema_43(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
     assert_eq!(before["ix_ci_memory"], indexed_memory);
@@ -403,7 +401,7 @@ async fn previous_schema_upgrade_preserves_records() {
     );
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 42 to 43"), "{output}");
+    assert!(output.contains("from schema version 43 to 44"), "{output}");
     assert_eq!(
         tables(&db).get("ix_repair_unnotified"),
         before.get("ix_repair_unnotified")

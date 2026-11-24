@@ -814,24 +814,22 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
     txn.commit().unwrap();
 }
 
-const PREVIOUS_SCHEMA_VERSION: u64 = 42;
+const PREVIOUS_SCHEMA_VERSION: u64 = 43;
 
-/// Recreates the immediately preceding schema in a stopped database: its
-/// repositories had required checks of their own (none here).
-pub fn as_schema_42(db: &Path) {
+/// Recreates the immediately preceding schema in a stopped database.
+pub fn as_schema_43(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
             *v = json!(PREVIOUS_SCHEMA_VERSION);
         }
     });
-    edit_records(db, "repos", |v| {
-        v["required_checks"] = json!([]);
+    edit_records(db, "tickets", |v| {
+        if let Some(repair) = v["repair"].as_object_mut() {
+            repair.remove("branch");
+        }
     });
-    edit_records(db, "landing", |v| {
-        v.as_object_mut().unwrap().remove("required_jobs");
-    });
-    edit_records(db, "reviews", |v| {
-        v.as_object_mut().unwrap().remove("accepted_removals");
+    edit_records(db, "repair_pending", |v| {
+        v.as_object_mut().unwrap().remove("branch");
     });
 }
 

@@ -11,7 +11,7 @@ pub struct Verified {
     pub at: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailedJob {
     pub name: String,
     pub attempt_id: Option<String>,
@@ -31,7 +31,23 @@ pub struct Verification {
 }
 
 pub fn get(r: &impl Rd, repo: &str) -> AppResult<Option<Verification>> {
-    r.get(store::CI_VERIFICATIONS, &Key::new().s(repo).bytes())
+    get_for(r, repo, None)
+}
+
+pub(super) fn key(repo: &str, branch: Option<&str>) -> Vec<u8> {
+    let key = Key::new().s(repo);
+    match branch {
+        None => key.bytes(),
+        Some(branch) => key.s(branch).bytes(),
+    }
+}
+
+pub(crate) fn get_for(
+    r: &impl Rd,
+    repo: &str,
+    branch: Option<&str>,
+) -> AppResult<Option<Verification>> {
+    r.get(store::CI_VERIFICATIONS, &key(repo, branch))
 }
 
 pub fn latest_verified(r: &impl Rd, repo: &str) -> AppResult<Option<Verified>> {
@@ -65,7 +81,7 @@ pub struct LatestVerified {
     pub verified_at: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct RepairTicket {
     pub number: u64,
     pub assignee: Option<String>,
@@ -305,7 +321,8 @@ impl Ci {
                             .collect();
                     }
                     v.finished_at = Some(now.clone());
-                    let (id, done) = (repo.id.clone(), v.clone());
+                    let (id, branch, done) =
+                        (repo.id.clone(), repo.default_branch.clone(), v.clone());
                     let closed = self
                         .inner
                         .store
@@ -313,11 +330,8 @@ impl Ci {
                             w.put(store::CI_VERIFICATIONS, &Key::new().s(&id).bytes(), &done)?;
                             let mut closed = Vec::new();
                             if done.state == "passed" {
-                                closed = w.prefix_keys(
-                                    store::IX_OPEN_REPAIRS,
-                                    &Key::new().s(&id).bytes(),
-                                )?;
-                                crate::repair::passed(w, &id, &done.sha)?;
+                                closed =
+                                    crate::repair::passed_for(w, &id, None, &branch, &done.sha)?;
                                 super::narrow::abandon(w, &id, &now)?;
                             } else {
                                 crate::repair::failed(w, &id, &done.sha, &done.failed_jobs)?;
@@ -326,20 +340,7 @@ impl Ci {
                             Ok(closed)
                         })
                         .await?;
-                    for key in closed {
-                        if let Some(parts) = store::decode_key(&key, "su") {
-                            self.inner.events.publish(
-                                "ticket",
-                                &repo.path,
-                                parts[1].u().to_string(),
-                            );
-                        }
-                        self.inner.events.publish(
-                            "board",
-                            crate::domain::tickets::workspace_of(&repo.path),
-                            "",
-                        );
-                    }
+                    publish_closed(&self.inner.events, repo, closed);
                     self.inner.events.publish("verification", &repo.path, "");
                 }
             }
@@ -387,6 +388,19 @@ impl Ci {
             self.publish(&[(repo.path.clone(), sha)]);
         }
         Ok(changed)
+    }
+}
+
+pub(super) fn publish_closed(events: &crate::events::Events, repo: &Repo, closed: Vec<u64>) {
+    if !closed.is_empty() {
+        for number in closed {
+            events.publish("ticket", &repo.path, number.to_string());
+        }
+        events.publish(
+            "board",
+            crate::domain::tickets::workspace_of(&repo.path),
+            "",
+        );
     }
 }
 

@@ -1911,6 +1911,7 @@ pub struct ChecksView {
     pub required_names: Vec<String>,
     pub checks_expected: bool,
     pub base_checks: usize,
+    pub base_failure: Option<crate::ci::collection::BaseFailure>,
 }
 
 pub async fn checks(
@@ -1959,6 +1960,18 @@ pub async fn checks(
     let mut checks = head.checks;
     app.ci.estimate(&repo, &head_sha, &mut checks).await;
     app.ci.order_checks(&mut checks).await?;
+    let base_failure = if p.state == "open" {
+        crate::ci::collection::base_failure(
+            app,
+            &repo,
+            &p.base,
+            &base_sha,
+            tips.get(&repo.default_branch).map_or("", String::as_str),
+        )
+        .await?
+    } else {
+        None
+    };
     Ok(ChecksView {
         head_sha,
         base_sha,
@@ -1969,6 +1982,7 @@ pub async fn checks(
         required_names,
         checks_expected: head.checks_expected,
         base_checks,
+        base_failure,
     })
 }
 
