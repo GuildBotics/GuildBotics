@@ -35,6 +35,20 @@ pub struct RamWorkspace {
 }
 
 impl RamWorkspace {
+    /// Whether the configured VM and host can support a RAM workspace.
+    pub fn memory_capacity_allows(
+        &self,
+        tmpfs_mib: Option<u32>,
+        vm_mib: u64,
+        limits: JobLimits,
+        total_mib: u64,
+    ) -> bool {
+        let guest = u64::from(self.max_mib) + u64::from(tmpfs_mib.unwrap_or_default());
+        guest + COMMAND_HEADROOM_MIB <= vm_mib
+            && vm_mib.saturating_mul(u64::from(limits.max_jobs))
+                <= total_mib.saturating_sub(limits.memory_reserve_mib(total_mib))
+    }
+
     /// The memory gate shared by admission (reported capacity) and VM startup
     /// (live capacity). Cache restore and guest support are separate checks.
     pub fn memory_allows(
@@ -44,11 +58,8 @@ impl RamWorkspace {
         limits: JobLimits,
         machine: &Machine,
     ) -> bool {
-        let guest = u64::from(self.max_mib) + u64::from(tmpfs_mib.unwrap_or_default());
         let reserve = limits.memory_reserve_mib(machine.total_memory_mib);
-        guest + COMMAND_HEADROOM_MIB <= vm_mib
-            && vm_mib.saturating_mul(u64::from(limits.max_jobs))
-                <= machine.total_memory_mib.saturating_sub(reserve)
+        self.memory_capacity_allows(tmpfs_mib, vm_mib, limits, machine.total_memory_mib)
             && vm_mib <= machine.available_memory_mib.saturating_sub(reserve)
             && machine
                 .commit
