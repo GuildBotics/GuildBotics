@@ -8,6 +8,8 @@ type Source = { repo: string; items: ListedPull[]; cursor: string | null | undef
 
 /** Same order as each repository's API; repository paths break cross-repo ties. */
 function compare(a: ListedPull, b: ListedPull) {
+  const verification = Number(Boolean(b.post_merge_status)) - Number(Boolean(a.post_merge_status));
+  if (verification) return verification;
   for (let i = 0; i < a.merge_order.length; i++) {
     const difference = a.merge_order[i]! - b.merge_order[i]!;
     if (difference) return difference;
@@ -28,7 +30,12 @@ async function nextPage(sources: Source[], state: "open" | "closed" | "all") {
     await Promise.all(
       remaining.map(async (s) => {
         if (s.items.length === 0 && s.cursor !== null) {
-          const page = await api.repos.pulls(s.repo, state, s.cursor);
+          const page = await api.repos.pulls(
+            s.repo,
+            state,
+            s.cursor,
+            state === "open" ? "active" : undefined,
+          );
           s.items = page.items;
           s.cursor = page.next_cursor;
         }

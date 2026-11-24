@@ -154,6 +154,7 @@ describe.each(["en", "ja"] as const)("merged check evidence (%s)", (language) =>
             ],
           },
           post_merge_checks: {
+            status: "pending",
             sha: NEW_HEAD,
             branch: target.branch,
             pulls: target.pullNumbers,
@@ -180,7 +181,9 @@ describe.each(["en", "ja"] as const)("merged check evidence (%s)", (language) =>
         }),
       ),
     ).not.toBeInTheDocument();
-    const follow = within(screen.getByRole("region", { name: words["ci.postMergeConfirmation"] }));
+    const region = screen.getByRole("region", { name: words["ci.postMergeConfirmation"] });
+    expect(region).toHaveAttribute("id", "post-merge-checks");
+    const follow = within(region);
     expect(follow.getByRole("link", { name: target.destination })).toHaveAttribute(
       "href",
       target.path,
@@ -193,6 +196,32 @@ describe.each(["en", "ja"] as const)("merged check evidence (%s)", (language) =>
     expect(follow.getByText(words["ci.status.in_progress"])).toBeInTheDocument();
     expect(follow.getByText("#2")).toBeInTheDocument();
     expect(follow.queryByText(words["ci.required"])).not.toBeInTheDocument();
+  });
+
+  it("keeps the cancelled attempt of a previous tip without a failing summary", async () => {
+    fakeApi(
+      pullRoutes({
+        [`GET ${P}`]: json(200, pull({ state: "closed", merged: true, base: "ticket/10" })),
+        [`GET ${P}/checks`]: json(200, {
+          ...CHECKS,
+          checks: [],
+          post_merge_checks: {
+            status: null,
+            sha: NEW_HEAD,
+            branch: "ticket/10",
+            pulls: [289],
+            checks: [{ name: "rust", status: "completed", conclusion: "cancelled" }],
+            checks_expected: true,
+          },
+        }),
+      }),
+    );
+    renderApp("/workspaces/acme/repos/demo/pulls/3", language);
+    const follow = within(
+      await screen.findByRole("region", { name: words["ci.postMergeConfirmation"] }),
+    );
+    expect(await follow.findByText(words["ci.conclusion.cancelled"])).toBeInTheDocument();
+    expect(follow.queryByText(words["ci.failing"])).not.toBeInTheDocument();
   });
 
   it.each([

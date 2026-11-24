@@ -1,9 +1,11 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { Card } from "../api/types";
+import type { Card, PostMergeStatus } from "../api/types";
+import { applyChange } from "../query/events";
 import { apiError, fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 import { choose, pickFromMenu } from "../test/mantine";
+import { ciUrlsOf } from "../views/board/CardView";
 import { card } from "./fixtures";
 
 const WORKSPACE = { name: "acme", lanes: ["new", "ready", "in_progress", "done"] };
@@ -99,6 +101,86 @@ it.each([true, false])("shows repair badge only on repair cards (%s)", async (re
 });
 
 describe("task flow cards", () => {
+  it("loads open PR checks before spending the remaining budget on merged PRs", () => {
+    const pull = (number: number, merged: boolean) => ({
+      url: `${window.location.origin}/workspaces/acme/repos/demo/pulls/${number}`,
+      label: `!${number}`,
+      title: "Change",
+      state: merged ? ("closed" as const) : ("open" as const),
+      merged,
+      updated_at: "",
+    });
+    const merged = Array.from({ length: 31 }, (_, index) => pull(index + 1, true));
+    const open = pull(32, false);
+    const closed = { ...pull(33, false), state: "closed" as const };
+    const urls = ciUrlsOf([
+      card("1", "done", { pull_requests: [closed, ...merged] }),
+      card("2", "in_progress", { pull_requests: [open] }),
+      card("3", "ready", { pull_requests: [open] }),
+    ]);
+    expect([...urls]).toEqual([open.url, ...merged.slice(0, 29).map((p) => p.url)]);
+  });
+
+  it("replaces cached head checks with live post-merge verification", async () => {
+    let merged = false;
+    let status: PostMergeStatus | null = "pending";
+    fakeApi(
+      flowRoutes({
+        "GET /api/v1/workspaces/acme/board/cards": () =>
+          json(200, {
+            items: [
+              card("1", "done", {
+                pull_requests: [
+                  {
+                    url: `${window.location.origin}/workspaces/acme/repos/demo/pulls/3`,
+                    label: "!3",
+                    title: "Fix",
+                    state: merged ? "closed" : "open",
+                    merged,
+                    updated_at: "",
+                  },
+                ],
+              }),
+            ],
+            next_cursor: null,
+          }),
+        "GET /api/v1/repos/acme/demo/pulls/3/checks": () =>
+          json(
+            200,
+            merged
+              ? {
+                  ...CHECKS,
+                  checks: [],
+                  post_merge_checks: { status, sha: "merge-commit" },
+                }
+              : CHECKS,
+          ),
+      }),
+    );
+    const { client } = renderApp("/workspaces/acme/task-flow");
+    expect(await screen.findByText("CI: failing")).toBeInTheDocument();
+    merged = true;
+    act(() => applyChange({ kind: "pull", path: "acme/demo", id: "3" }, client));
+    expect(
+      await screen.findByRole("link", { name: "Post-merge verification: pending" }),
+    ).toHaveAttribute("href", "/workspaces/acme/repos/demo/pulls/3#post-merge-checks");
+    expect(screen.queryByText("CI: failing")).not.toBeInTheDocument();
+    const checkChanged = () =>
+      act(() => applyChange({ kind: "check", path: "acme/demo", id: "merge-commit" }, client));
+    status = "failing";
+    checkChanged();
+    expect(await screen.findByText("Post-merge verification: failing")).toBeInTheDocument();
+    status = "passing";
+    checkChanged();
+    expect(await screen.findByText("Post-merge verification: passing")).toBeInTheDocument();
+    expect(screen.queryByText("Post-merge verification: pending")).not.toBeInTheDocument();
+    status = null;
+    checkChanged();
+    await waitFor(() =>
+      expect(screen.queryByText(/Post-merge verification:/)).not.toBeInTheDocument(),
+    );
+  });
+
   it("renders cards from every page with their lane and PR checks", async () => {
     const fake = fakeApi(flowRoutes());
     renderApp("/workspaces/acme/task-flow");

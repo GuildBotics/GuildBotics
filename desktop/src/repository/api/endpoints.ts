@@ -115,10 +115,16 @@ export const repos = {
     create<Repository>("/repos", body),
   update: (repo: string, body: RepoPatch) =>
     request<Repository>("PATCH", `/repos/${enc(repo)}`, { body }),
-  pulls: (repo: string, state: "open" | "closed" | "all", cursor?: string | null) =>
+  pulls: (
+    repo: string,
+    state: "open" | "closed" | "all",
+    cursor?: string | null,
+    postMerge?: "active",
+  ) =>
     get<Page<ListedPull>>(`/repos/${enc(repo)}/pulls`, {
       state,
       sort: "readiness",
+      post_merge: postMerge,
       cursor,
       limit: 30,
     }),

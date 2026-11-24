@@ -278,7 +278,10 @@ export interface PullRequest {
 }
 
 /** The readiness-sorted list carries its server-computed comparison key. */
-export type ListedPull = PullRequest & { merge_order: [number, number, number] };
+export type ListedPull = PullRequest & {
+  merge_order: [number, number, number];
+  post_merge_status?: "pending" | "failing";
+};
 
 export type LandingNext =
   | "conditions"
@@ -487,7 +490,10 @@ export interface MergeChecks {
   checks: Pick<Check, "name" | "status" | "conclusion" | "attempt_id" | "attempt" | "path_skip">[];
 }
 
+export type PostMergeStatus = "pending" | "failing" | "passing";
+
 export interface PostMergeChecks extends CheckSet {
+  status: PostMergeStatus | null;
   sha: string;
   branch: string;
   pulls: number[];

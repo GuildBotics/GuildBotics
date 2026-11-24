@@ -67,6 +67,8 @@ export function repositoryPath(path: string): string {
   return `${workspacePath(workspace)}/repos/${encodeURIComponent(name)}`;
 }
 
+export const POST_MERGE_FRAGMENT = "post-merge-checks";
+
 export const href = {
   home: () => "/workspaces",
   settings: (section?: string) =>
@@ -76,6 +78,8 @@ export const href = {
   pulls: (workspace: string) => `${workspacePath(workspace)}/pulls`,
   ticket: (repo: string, key: string) => `${repositoryPath(repo)}/tickets/${key}`,
   pull: (repo: string, number: number) => `${repositoryPath(repo)}/pulls/${number}`,
+  pullVerification: (repo: string, number: number): string =>
+    `${href.pull(repo, number)}#${POST_MERGE_FRAGMENT}`,
   commit: (repo: string, sha: string) =>
     `${repositoryPath(repo)}/commits/${encodeURIComponent(sha)}`,
   job: (repo: string, id: string) => `${repositoryPath(repo)}/jobs/${encodeURIComponent(id)}`,
