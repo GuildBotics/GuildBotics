@@ -183,6 +183,32 @@ describe.each(["en", "ja"] as const)("merged check evidence (%s)", (language) =>
     expect(follow.queryByText(words["ci.required"])).not.toBeInTheDocument();
   });
 
+  it("keeps the cancelled attempt of a previous tip without a failing summary", async () => {
+    fakeApi(
+      pullRoutes({
+        [`GET ${P}`]: json(200, pull({ state: "closed", merged: true, base: "ticket/10" })),
+        [`GET ${P}/checks`]: json(200, {
+          ...CHECKS,
+          checks: [],
+          post_merge_checks: {
+            status: null,
+            sha: NEW_HEAD,
+            branch: "ticket/10",
+            pulls: [289],
+            checks: [{ name: "rust", status: "completed", conclusion: "cancelled" }],
+            checks_expected: true,
+          },
+        }),
+      }),
+    );
+    renderApp("/acme/demo/-/pulls/3", language);
+    const follow = within(
+      await screen.findByRole("region", { name: words["ci.postMergeConfirmation"] }),
+    );
+    expect(await follow.findByText(words["ci.conclusion.cancelled"])).toBeInTheDocument();
+    expect(follow.queryByText(words["ci.failing"])).not.toBeInTheDocument();
+  });
+
   it.each([
     ["main", "ci.postMergeDefaultReason"],
     ["ticket/10", "ci.postMergeCollectingReason"],

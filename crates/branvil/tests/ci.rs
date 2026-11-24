@@ -371,6 +371,95 @@ async fn merged_checks_keep_the_decision_when_the_receiving_branch_reselects_job
 }
 
 #[tokio::test]
+async fn a_new_collection_merge_retires_the_previous_merge_status() {
+    let w = World::new().await;
+    let runner = Runner::new(&w, "collection-checks-runner").await;
+    let config = format!("{}paths=['src/**']\n", required_pipeline(&["rust"]));
+    land(
+        &w,
+        "setup",
+        &[(".guildbotics-ci.toml", &config)],
+        Some(&runner),
+    )
+    .await;
+    runner.drain("success").await;
+    std::fs::create_dir_all(w.work.join("src")).unwrap();
+    let base = w.push_change("ticket/10", "src/code.txt", "parent change");
+    w.open_pull("ticket/10", json!([])).await;
+
+    let merge_child = |branch: &'static str, base: String| {
+        let w = &w;
+        async move {
+            let head = w.push_change(branch, "notes.md", branch);
+            let pulls = format!("{}/pulls", w.repo_path());
+            let (status, child) = w
+                .server
+                .post(
+                    &pulls,
+                    &w.aiko,
+                    json!({"head": branch, "base": "ticket/10", "title": branch}),
+                )
+                .await;
+            assert_eq!(status, 201, "{child}");
+            let n = child["pull"]["number"].as_u64().unwrap();
+            let (status, result) = w
+                .server
+                .post(
+                    &format!("{pulls}/{n}/merge"),
+                    &w.owner,
+                    json!({"expected_head": head, "expected_base": base}),
+                )
+                .await;
+            assert_eq!(status, 200, "{result}");
+            (n, head)
+        }
+    };
+    let (first, head) = merge_child("ticket/11", base).await;
+    let running = runner.next_claim().await;
+    assert_eq!(running["sha"], head);
+    assert_eq!(
+        checks(&w, first).await["post_merge_checks"]["status"],
+        "pending"
+    );
+    let (second, _) = merge_child("ticket/12", head).await;
+
+    let (status, heartbeat) = runner.heartbeat(&running).await;
+    assert_eq!(status, 200, "{heartbeat}");
+    assert_eq!(heartbeat["cancel"], true);
+    let (status, stopped) = runner.finish(&running, "success").await;
+    assert_eq!(status, 200, "{stopped}");
+    assert_eq!(stopped["conclusion"], "cancelled");
+    let old = checks(&w, first).await;
+    assert_eq!(
+        check(&old["post_merge_checks"], "rust")["conclusion"],
+        "cancelled"
+    );
+    assert!(old["post_merge_checks"]["status"].is_null(), "{old}");
+    assert_eq!(
+        checks(&w, second).await["post_merge_checks"]["status"],
+        "pending"
+    );
+    let list = w
+        .server
+        .ok(
+            &format!(
+                "{}/pulls?state=open&post_merge=active&sort=readiness",
+                w.repo_path()
+            ),
+            &w.owner,
+        )
+        .await;
+    assert_eq!(list["items"][0]["number"], second);
+    assert!(
+        !list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["number"] == first)
+    );
+}
+
+#[tokio::test]
 async fn job_and_check_responses_identify_the_runner_that_claimed_each_attempt() {
     let w = World::new().await;
     let head = w.push_change(

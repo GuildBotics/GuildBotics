@@ -249,6 +249,7 @@ export function ChecksCard({
           query={checks}
           data={confirmation ?? undefined}
           sha={confirmation?.sha}
+          state={confirmation?.status ?? null}
           empty={confirmation ? undefined : t("ci.postMergeUnavailable")}
           context={context}
           onOpen={onOpen}
@@ -375,7 +376,7 @@ function CheckList({
   embedded?: boolean;
   requiredChecks?: string[];
   empty?: string;
-  state?: CiRollup;
+  state?: CiRollup | null;
   context?: PullCheckContext;
   onOpen: (check: Check) => void;
   children?: React.ReactNode;

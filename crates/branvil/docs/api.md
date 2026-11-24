@@ -1058,9 +1058,10 @@ head directly replaces the host branch after checking the same conditions.
   numbers of the PRs checking that commit as the head of the receiving
   branch, as with a collecting branch. An empty `pulls` list means branch
   verification, such as on the default branch. `status` is `pending`,
-  `failing`, `passing`, or null when there are no checks. Results in this
-  field can change as jobs run or are retried. They carry no merge-gate
-  designation.
+  `failing` or `passing` for checks of the current receiving branch tip.
+  It is null when there are no checks or the merge commit is no longer
+  the tip. Individual results are still available for the merge commit
+  and can change as jobs run or are retried. They carry no merge-gate designation.
 - An unmerged published pull request whose head is the commit Branvil pushed also lists
   the upstream host's check runs of it, named `<provider>/<name>`
   (`github/test-windows`), with `attempt_id` `<provider>-<id>`, `details_url`

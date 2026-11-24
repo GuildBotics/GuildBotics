@@ -24,15 +24,20 @@ const CI_BUDGET = 30;
 /** How long a menu keeps "copied" on screen before it closes. */
 const COPIED_MS = 1500;
 
-/** The first CI_BUDGET distinct local PRs with head or post-merge checks. */
+/** Keep head checks within the budget first, then load post-merge checks. */
 export function ciUrlsOf(cards: Card[]): Set<string> {
   const urls = new Set<string>();
-  for (const c of cards)
-    for (const p of c.pull_requests)
-      if ((p.state === "open" || p.merged) && routeOfUrl(p.url)?.name === "pull") {
-        urls.add(p.url);
-        if (urls.size === CI_BUDGET) return urls;
+  for (const state of ["open", "merged"]) {
+    for (const card of cards) {
+      for (const pull of card.pull_requests) {
+        const actual = pull.merged ? "merged" : pull.state;
+        if (actual === state && routeOfUrl(pull.url)?.name === "pull") {
+          urls.add(pull.url);
+          if (urls.size === CI_BUDGET) return urls;
+        }
       }
+    }
+  }
   return urls;
 }
 

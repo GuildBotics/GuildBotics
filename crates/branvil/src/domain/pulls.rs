@@ -636,10 +636,7 @@ pub async fn list(
         let status = if include_verification && p.merged {
             // A previous tip can have cancelled checks because the receiving
             // branch advanced. The open view follows its current verification.
-            if p.merge_sha
-                .as_ref()
-                .is_none_or(|sha| tips.get(&p.base) != Some(sha))
-            {
+            if !merge_is_current(&p, &tips) {
                 continue;
             }
             let Some((sha, _)) = post_merge_target(app, &repo, &p).await? else {
@@ -1990,6 +1987,12 @@ impl PostMergeStatus {
     }
 }
 
+fn merge_is_current(p: &Pull, tips: &Tips) -> bool {
+    p.merge_sha
+        .as_ref()
+        .is_some_and(|sha| tips.get(&p.base) == Some(sha))
+}
+
 async fn post_merge_target(
     app: &App,
     repo: &Repo,
@@ -2029,18 +2032,28 @@ async fn post_merge_target(
     Ok(targets.map(|pulls| (sha, pulls)))
 }
 
-async fn post_merge_checks(app: &App, repo: &Repo, p: &Pull) -> AppResult<Option<PostMergeChecks>> {
+async fn post_merge_checks(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    tips: &Tips,
+) -> AppResult<Option<PostMergeChecks>> {
     let Some((sha, pulls)) = post_merge_target(app, repo, p).await? else {
         return Ok(None);
     };
     let mut report = app.ci.head_checks(repo, &sha).await?;
     app.ci.estimate(repo, &sha, &mut report.checks).await;
     app.ci.order_checks(&mut report.checks).await?;
+    let status = if merge_is_current(p, tips) {
+        PostMergeStatus::of(&report.checks)
+    } else {
+        None
+    };
     Ok(Some(PostMergeChecks {
         sha,
         branch: p.base.clone(),
         pulls,
-        status: PostMergeStatus::of(&report.checks),
+        status,
         checks: report.checks,
         checks_expected: report.checks_expected,
     }))
@@ -2114,7 +2127,7 @@ pub async fn checks(
     };
     if p.merged {
         view.merge_checks = p.merge_checks.clone();
-        view.post_merge_checks = post_merge_checks(app, &repo, &p).await?;
+        view.post_merge_checks = post_merge_checks(app, &repo, &p, &tips).await?;
     } else {
         let head = display_checks(app, &repo, &p, &view.head_sha, &judged_base).await?;
         let (required_checks, _, required_names) =
