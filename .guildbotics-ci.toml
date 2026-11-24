@@ -10,8 +10,9 @@
 # `uv sync` builds dependencies without a wheel for this Python with Cargo.
 # PR heads select jobs by paths; default-branch verification runs execute
 # every job. test and markdown-links always run, as their inputs span the repo.
-# Add client-linux to the repository CI setting post_merge_jobs before opening
-# a PR containing that job. This keeps release builds out of ordinary PR heads.
+# post_merge = true keeps a job, such as the release builds, off PR heads: it
+# runs after merge. Branvil still selects jobs by the repository CI setting
+# post_merge_jobs, so a post_merge job must be listed there too.
 # required = true makes a job required of PRs into this branch: the base's file
 # decides, so a PR that drops a required job needs the owner's approval of its head.
 #
@@ -60,6 +61,7 @@ cache = { paths = [".ci/uv"], key_files = ["uv.lock"] }
 # Read GB_CI_VERIFIED_SHA to keep successive verified builds one schema step apart.
 [[jobs]]
 name = "schema-raise"
+post_merge = true
 image = "guildbotics/agent-environment:dev"
 verified_sha = true
 commands = ["python3 scripts/check-schema-raise.py"]
@@ -214,6 +216,7 @@ cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.loc
 # Drive the public command line and its HTTP server with the same Rust binary.
 [[jobs]]
 name = "rust-cli-blackbox"
+post_merge = true
 paths = ["crates/**", "guildbotics/**", "skills/guildbotics/**", "tests/blackbox/**", "tests/integration/**", "tests/conftest.py", "docs/cli_reference.md", "pyproject.toml", "uv.lock", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**"]
 image = "guildbotics/agent-environment:dev"
 commands = ['''
@@ -268,6 +271,7 @@ cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.loc
 
 [[jobs]]
 name = "client-linux"
+post_merge = true
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu
