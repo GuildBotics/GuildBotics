@@ -319,8 +319,9 @@ export const en = {
   "ci.mergeDecisionUnavailable": "No merge decision checks were recorded for this pull request.",
   "ci.mergeDecisionAtPublication":
     "Branvil’s required checks when it published this head to the upstream host.",
-  "ci.mergeDecisionAtForwarding":
-    "Branvil observed these checks before sending this revision upstream. The upstream host made the merge decision.",
+  "ci.upstreamMergeHeadChecks": "Upstream PR head checks",
+  "ci.upstreamMergeHeadChecksReason":
+    "Branvil records the PR head’s checks at import using the results from before any verification of the same commit on the receiving branch. The upstream PR shows the host’s merge decision.",
   "ci.mergeDecisionNoResults": "No required check results were available at that time.",
   "ci.postMergeConfirmation": "Post-merge verification",
   "ci.postMergePullReason":

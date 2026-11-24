@@ -321,8 +321,9 @@ export const ja: Record<MessageKey, string> = {
   "ci.mergeDecisionNoRequired": "この head に対する Branvil の必須チェックはありませんでした。",
   "ci.mergeDecisionUnavailable": "この PR のマージ判定に使ったチェックは記録されていません。",
   "ci.mergeDecisionAtPublication": "Branvil がこの head を上流に公開した時点の必須チェックです。",
-  "ci.mergeDecisionAtForwarding":
-    "Branvil がこの修正版を上流へ送る前に確認したチェックです。マージの判定は上流ホストが行いました。",
+  "ci.upstreamMergeHeadChecks": "上流 PR の head チェック",
+  "ci.upstreamMergeHeadChecksReason":
+    "上流マージの取り込み時点で確認した、受け入れブランチの検証より前の PR 側のチェックです。上流ホストのマージ判定は上流 PR にあります。",
   "ci.mergeDecisionNoResults": "この時点で参照できる必須チェックの結果はありませんでした。",
   "ci.postMergeConfirmation": "マージ後の確認",
   "ci.postMergePullReason":

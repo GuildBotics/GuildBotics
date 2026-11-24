@@ -480,7 +480,7 @@ export interface CheckSet {
 }
 
 export interface MergeChecks {
-  source: "merge" | "publication" | "forwarding";
+  source: "merge" | "publication" | "upstream_merge";
   required_checks: "passed" | "running" | "failed";
   head_sha: string;
   base_sha: string;

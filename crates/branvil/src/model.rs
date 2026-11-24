@@ -390,7 +390,15 @@ pub struct MergeChecks {
 pub enum MergeChecksSource {
     Merge,
     Publication,
-    Forwarding,
+    UpstreamMerge,
+}
+
+/// Branvil's evidence of how the currently pushed head reached the host.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum PushedChecks {
+    Publication { snapshot: MergeChecks },
+    Forwarded { base_sha: String },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -459,9 +467,9 @@ pub struct Published {
     pub state: String,
     /// The commit Branvil last pushed to the host's branch.
     pub pushed: Option<String>,
-    /// Checks of the exact pair used to publish or forward the pushed head.
+    /// The publication gate or the base used when sending a revised head.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pushed_checks: Option<MergeChecks>,
+    pub pushed_checks: Option<PushedChecks>,
     pub sent_title: String,
     pub sent_body: String,
     /// `open` or `closed`, as last sent or read.
@@ -518,19 +526,14 @@ impl Published {
 
     /// Records that the host's branch is at `head`; the checks of another
     /// head are not its own.
-    pub fn record_push(
-        &mut self,
-        head: String,
-        checks: Option<MergeChecks>,
-        registration_secs: u64,
-    ) {
+    pub fn record_push(&mut self, head: String, checks: PushedChecks, registration_secs: u64) {
         if self.pushed.as_ref() != Some(&head) {
             self.checks.clear();
             self.checks_settled = false;
             self.await_checks(registration_secs);
         }
         self.pushed = Some(head);
-        self.pushed_checks = checks;
+        self.pushed_checks = Some(checks);
     }
 
     /// Records the host's checks of `pushed` and whether the runs that have

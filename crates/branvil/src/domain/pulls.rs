@@ -2025,14 +2025,7 @@ pub async fn checks(
         post_merge_checks: None,
     };
     if p.merged {
-        view.merge_checks = p.merge_checks.clone().or_else(|| {
-            let published = p.upstream.as_ref().filter(|x| x.state == "merged")?;
-            published
-                .pushed_checks
-                .as_ref()
-                .filter(|snapshot| snapshot.head_sha == view.head_sha)
-                .cloned()
-        });
+        view.merge_checks = p.merge_checks.clone();
         view.post_merge_checks = post_merge_checks(app, &repo, &p).await?;
     } else {
         let head = display_checks(app, &repo, &p, &view.head_sha, &judged_base).await?;

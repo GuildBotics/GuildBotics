@@ -4,8 +4,8 @@ use crate::ci::{Check, PullRequired};
 use crate::domain::{self, pulls};
 use crate::error::AppResult;
 use crate::model::{
-    Landing, LandingReason, Member, MemberKind, MergeCheck, MergeChecks, MergeChecksSource,
-    Published, Pull, Repo,
+    Landing, LandingReason, Member, MemberKind, MergeChecks, MergeChecksSource, Published, Pull,
+    Repo,
 };
 use crate::store::{self, Rd, Wtx};
 use serde::Serialize;
@@ -485,23 +485,26 @@ pub(crate) async fn pull_head_check_details(
     Ok((state, jobs, names))
 }
 
-/// Records what Branvil saw before forwarding an already published pull's new head.
-pub(crate) async fn forwarding_checks(
+/// Captures the forwarded head's Branvil checks when importing its upstream merge.
+pub(crate) async fn imported_merge_checks(
     app: &App,
     repo: &Repo,
     p: &Pull,
     head: &str,
     base: &str,
-) -> AppResult<MergeChecks> {
+) -> AppResult<Option<MergeChecks>> {
+    let Some(checks) = app.ci.head_checks_before_verification(repo, head).await? else {
+        return Ok(None);
+    };
     let required = app.ci.pull_required(repo, head, base).await?;
-    let (state, _, _, checks) = evaluate_head_checks(app, repo, p, head, &required).await?;
-    Ok(check_snapshot(
-        MergeChecksSource::Forwarding,
+    let (state, _, _, checks) = evaluate_checks(app, repo, p, head, &required, checks).await?;
+    Ok(Some(check_snapshot(
+        MergeChecksSource::UpstreamMerge,
         head.to_string(),
         base.to_string(),
         state,
         checks,
-    ))
+    )))
 }
 
 pub(crate) fn check_snapshot(
@@ -516,17 +519,7 @@ pub(crate) fn check_snapshot(
         head_sha,
         base_sha,
         required_checks,
-        checks: checks
-            .into_iter()
-            .map(|c| MergeCheck {
-                name: c.name,
-                status: c.status,
-                conclusion: c.conclusion,
-                attempt_id: c.attempt_id,
-                attempt: c.attempt,
-                path_skip: c.path_skip,
-            })
-            .collect(),
+        checks: checks.into_iter().map(Into::into).collect(),
     }
 }
 
@@ -537,12 +530,23 @@ async fn evaluate_head_checks(
     head: &str,
     required: &PullRequired,
 ) -> AppResult<(HeadChecks, Vec<String>, Vec<String>, Vec<Check>)> {
+    let checks = app.ci.head_checks(repo, head).await?;
+    evaluate_checks(app, repo, p, head, required, checks).await
+}
+
+async fn evaluate_checks(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    head: &str,
+    required: &PullRequired,
+    mut checks: crate::ci::Checks,
+) -> AppResult<(HeadChecks, Vec<String>, Vec<String>, Vec<Check>)> {
     let p = p.clone();
     let repair = app
         .store
         .read(move |r| crate::repair::is_pull(r, &p))
         .await?;
-    let mut checks = app.ci.head_checks(repo, head).await?;
     if !head.is_empty() {
         app.ci.require(repo, head, &mut checks, required).await?;
     }

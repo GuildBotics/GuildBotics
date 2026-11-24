@@ -570,7 +570,7 @@ async fn publish_op(
         };
         x.record_push(
             head,
-            previous.or(Some(checks)),
+            previous.unwrap_or(crate::model::PushedChecks::Publication { snapshot: checks }),
             app.upstream.config.checks_registration_secs,
         );
         if x.number.is_none() {

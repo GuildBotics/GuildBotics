@@ -501,8 +501,8 @@ async fn previous_schema_upgrade_preserves_records() {
     let repos = records(&db, "repos");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let indexed_memory = tables(&db)["ix_ci_memory"].clone();
-    let prior_runs = records(&db, "ci_runs");
     as_schema_43(&db);
+    let prior_runs = records(&db, "ci_runs");
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
     assert_eq!(before["ix_ci_memory"], indexed_memory);

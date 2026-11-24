@@ -121,6 +121,19 @@ pub struct Check {
     pub expected_secs: Option<u64>,
 }
 
+impl From<Check> for crate::model::MergeCheck {
+    fn from(check: Check) -> Self {
+        Self {
+            name: check.name,
+            status: check.status,
+            conclusion: check.conclusion,
+            attempt_id: check.attempt_id,
+            attempt: check.attempt,
+            path_skip: check.path_skip,
+        }
+    }
+}
+
 impl Check {
     /// A check that has a recorded attempt (as opposed to a placeholder for a
     /// required check the run does not have yet).
@@ -444,6 +457,54 @@ impl Ci {
             }
         }
         Ok(report)
+    }
+
+    /// A followed ref can start verification before the host reports a PR as
+    /// merged. For a shared SHA, use the report saved before that registration.
+    /// The caller holds the repository lock across this read and the import.
+    pub(crate) async fn head_checks_before_verification(
+        &self,
+        repo: &Repo,
+        sha: &str,
+    ) -> AppResult<Option<Checks>> {
+        let (id, head) = (repo.id.clone(), sha.to_string());
+        let run = self
+            .inner
+            .store
+            .read(move |r| queue::get_run(r, &id, &head))
+            .await?;
+        let Some(run) = run.filter(|r| !r.protected_branches.is_empty()) else {
+            return self.head_checks(repo, sha).await.map(Some);
+        };
+        let Some(prior) = run.before_verification else {
+            return Ok(None);
+        };
+        let checks = prior
+            .into_iter()
+            .map(|prior| {
+                let result = prior.result;
+                Check {
+                    name: result.name,
+                    status: result.status,
+                    conclusion: result.conclusion,
+                    attempt_id: result.attempt_id,
+                    attempt: result.attempt,
+                    path_skip: result.path_skip,
+                    reused_from: prior.reuse.map(|reuse| ReusedFrom {
+                        url: self.job_url(&repo.path, &reuse.attempt_id),
+                        attempt_id: reuse.attempt_id,
+                        sha: reuse.sha,
+                        basis: reuse.basis,
+                    }),
+                    ..Check::default()
+                }
+            })
+            .collect();
+        Ok(Some(Checks {
+            checks,
+            run_registered: true,
+            checks_expected: !matches!(run.pipeline, PipelineState::Absent),
+        }))
     }
 
     /// Checks of a registered run, shared with required-failure notification.

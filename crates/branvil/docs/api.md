@@ -1026,10 +1026,11 @@ head directly replaces the host branch after checking the same conditions.
   `source: "merge"`, it records the exact Branvil checks that satisfied
   the local merge gate, including service skips and the attempt number and
   ID. With `source: "publication"`, it records the Branvil gate at publication
-  for the head that merged upstream. With `source: "forwarding"`, it shows
-  the status and attempts that Branvil observed before sending a revised
-  head of an already published PR. That observation can include queued,
-  running, failed, or skipped checks. The upstream host makes its own merge
+  for the head that merged upstream. With `source: "upstream_merge"`, it
+  shows Branvil's observation at import for a revised head, using the base
+  recorded when that head was sent. If the same SHA has already been
+  registered for protected-branch verification, Branvil uses the attempts
+  and results from before that registration. The upstream host makes its own merge
   decision. The commit page shows the current checks of the head. A null
   value means there is no snapshot for this head, including merges made
   before recording began or heads pushed directly on the upstream host.

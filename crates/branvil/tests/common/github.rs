@@ -957,7 +957,7 @@ impl FakeGitHub {
         parent
     }
 
-    fn mark_merged(&self, repo: &str, number: u64, sha: &str) {
+    pub fn mark_merged(&self, repo: &str, number: u64, sha: &str) {
         let mut st = self.state.lock().unwrap();
         let q = st
             .pulls

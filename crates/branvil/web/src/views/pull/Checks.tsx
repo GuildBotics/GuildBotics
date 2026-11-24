@@ -213,7 +213,11 @@ export function ChecksCard({
       <>
         <CheckList
           repo={repo}
-          title={t("ci.mergeDecision")}
+          title={t(
+            decision?.source === "upstream_merge"
+              ? "ci.upstreamMergeHeadChecks"
+              : "ci.mergeDecision",
+          )}
           query={checks}
           data={decision ? { checks: judged, checks_expected: false } : undefined}
           sha={decision?.head_sha}
@@ -234,9 +238,9 @@ export function ChecksCard({
               {t("ci.mergeDecisionAtPublication")}
             </Text>
           )}
-          {decision?.source === "forwarding" && (
+          {decision?.source === "upstream_merge" && (
             <Text size="sm" c="dimmed" mb="xs">
-              {t("ci.mergeDecisionAtForwarding")}
+              {t("ci.upstreamMergeHeadChecksReason")}
             </Text>
           )}
           {pull.upstream?.state === "merged" && pull.upstream.url && (

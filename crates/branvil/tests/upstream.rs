@@ -529,7 +529,7 @@ async fn a_pull_request_is_published_as_its_author_and_follows_the_host_to_the_m
     assert_eq!(
         checks["merge_checks"],
         json!({
-            "source": "forwarding",
+            "source": "upstream_merge",
             "required_checks": "passed",
             "head_sha": fixed,
             "base_sha": p["base_sha"],
@@ -1319,7 +1319,7 @@ async fn a_pull_request_is_published_only_once_its_required_checks_succeed() {
         .unwrap();
     assert_eq!(attempt["status"], "queued");
 
-    // Completion after forwarding does not change the recorded observation.
+    // The host can merge immediately after success, before the next poll.
     assert_eq!(runner.drain("success").await, 1);
     let merged = gh.squash_merge(GH, v["upstream"]["number"].as_u64().unwrap());
     refresh(&w).await;
@@ -1327,14 +1327,14 @@ async fn a_pull_request_is_published_only_once_its_required_checks_succeed() {
     assert_eq!(
         checks["merge_checks"],
         json!({
-            "source": "forwarding",
-            "required_checks": "running",
+            "source": "upstream_merge",
+            "required_checks": "passed",
             "head_sha": fixed,
             "base_sha": p["base_sha"],
             "checks": [{
                 "name": "test",
-                "status": "queued",
-                "conclusion": null,
+                "status": "completed",
+                "conclusion": "success",
                 "attempt_id": attempt["attempt_id"],
                 "attempt": attempt["attempt"],
             }],
@@ -1342,6 +1342,74 @@ async fn a_pull_request_is_published_only_once_its_required_checks_succeed() {
     );
     assert_eq!(checks["post_merge_checks"]["branch"], "main");
     assert_eq!(checks["post_merge_checks"]["sha"], merged);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_imported_fast_forward_keeps_the_pr_attempts_before_main_verification() {
+    let (w, gh) = followed().await;
+    with_aiko_account(&w).await;
+    let runner = crate::ci::Runner::new(&w, "publish-runner").await;
+    let pipeline = format!(
+        "{}paths = ['src/**']\n",
+        crate::ci::required_pipeline(&["rust"])
+    );
+    std::fs::write(w.work.join(".guildbotics-ci.toml"), pipeline).unwrap();
+    git_ok(&w.work, &["add", ".guildbotics-ci.toml"]);
+    git_ok(&w.work, &["commit", "-qm", "require rust"]);
+    git_ok(
+        &w.work,
+        &[
+            "push",
+            "-q",
+            gh.dir(GH).to_str().unwrap(),
+            "HEAD:refs/heads/main",
+        ],
+    );
+    refresh(&w).await;
+    runner.drain("success").await;
+    w.push_change("feat", "notes.md", "original");
+    let p = w.open_pull("feat", json!([])).await;
+    let n = p["number"].as_u64().unwrap();
+    let (status, published) = publish(&w, n).await;
+    assert_eq!(status, StatusCode::OK, "{published}");
+
+    let fixed = w.push_change("feat", "notes.md", "revised");
+    refresh(&w).await;
+    let path = format!("{}/pulls/{n}/checks", w.repo_path());
+    let prior = w.server.ok(&path, &w.aiko).await;
+    let rust = &prior["checks"][0];
+    assert_eq!(rust["name"], "rust");
+    assert_eq!(rust["conclusion"], "skipped");
+    assert_eq!(rust["path_skip"]["reason"], "paths");
+
+    // The followed ref can arrive before the host reports the PR as merged.
+    let upstream = gh.dir(GH);
+    git_ok(&upstream, &["update-ref", "refs/heads/main", &fixed]);
+    refresh(&w).await;
+    let verification = runner.next_claim().await;
+    assert_eq!(verification["sha"], fixed);
+    assert_eq!(verification["job"]["name"], "rust");
+    assert_eq!(runner.finish(&verification, "success").await.0, 200);
+    gh.mark_merged(
+        GH,
+        published["upstream"]["number"].as_u64().unwrap(),
+        &fixed,
+    );
+    refresh(&w).await;
+    let report = w.server.ok(&path, &w.aiko).await;
+    let evidence = &report["merge_checks"];
+    assert_eq!(evidence["source"], "upstream_merge");
+    assert_eq!(evidence["required_checks"], "passed");
+    assert_eq!(evidence["checks"][0]["attempt_id"], rust["attempt_id"]);
+    assert_eq!(evidence["checks"][0]["conclusion"], "skipped");
+    let confirmation = &report["post_merge_checks"];
+    assert_eq!(confirmation["sha"], fixed);
+    assert_eq!(confirmation["branch"], "main");
+    assert_eq!(
+        confirmation["checks"][0]["attempt_id"],
+        verification["attempt_id"]
+    );
+    assert_eq!(confirmation["checks"][0]["conclusion"], "success");
 }
 
 #[tokio::test(flavor = "multi_thread")]

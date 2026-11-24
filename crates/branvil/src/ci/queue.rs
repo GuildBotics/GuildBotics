@@ -109,10 +109,27 @@ impl PathSkip {
     }
 }
 
+/// The head report before a protected branch started verifying the same SHA.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PriorCheck {
+    pub result: crate::model::MergeCheck,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reuse: Option<PriorReuse>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PriorReuse {
+    pub attempt_id: String,
+    pub sha: String,
+    pub basis: Basis,
+}
+
 /// The CI of one commit of one repository.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Run {
     pub selection: Option<JobSelection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_verification: Option<Vec<PriorCheck>>,
     pub repo: String,
     pub repo_path: String,
     pub sha: String,
@@ -862,6 +879,49 @@ pub struct Registration {
     pub inputs: BTreeMap<String, String>,
 }
 
+fn before_verification(r: &impl Rd, run: &Run, queue_max: usize) -> AppResult<Vec<PriorCheck>> {
+    let attempts = match &run.pipeline {
+        PipelineState::Jobs { jobs } => current_attempts(r, &run.repo, &run.sha, jobs)?,
+        _ => Vec::new(),
+    };
+    let mut reuse = BTreeMap::new();
+    for a in &attempts {
+        let source = source_of(r, a)?;
+        if let Some(basis) = source.basis {
+            reuse.insert(
+                a.id.clone(),
+                PriorReuse {
+                    attempt_id: source.attempt.id,
+                    sha: source.attempt.sha,
+                    basis,
+                },
+            );
+        }
+    }
+    let report = super::run_checks(
+        run,
+        attempts.into_iter().map(|a| (a, ())).collect(),
+        queue_max,
+        |a, _| super::Check {
+            name: a.job.name.clone(),
+            status: a.status.clone(),
+            conclusion: a.conclusion.clone(),
+            attempt_id: Some(a.id.clone()),
+            attempt: Some(a.number),
+            path_skip: a.path_skip.clone(),
+            ..super::Check::default()
+        },
+    )?;
+    Ok(report
+        .checks
+        .into_iter()
+        .map(|check| PriorCheck {
+            reuse: check.attempt_id.as_ref().and_then(|id| reuse.remove(id)),
+            result: check.into(),
+        })
+        .collect())
+}
+
 /// Records that `branch` wants CI of `sha`. Creates the run or adds the
 /// branch to the existing run, and queues (when they fit) the jobs without a
 /// current attempt: all of a new run's, the replaced ones of a superseded run
@@ -880,6 +940,9 @@ pub fn register(w: &Wtx, reg: Registration, queue_max: usize, now: &str) -> AppR
                 run.branches.push(reg.branch.clone());
             }
             if reg.protected {
+                if old.protected_branches.is_empty() {
+                    run.before_verification = Some(before_verification(w, old, queue_max)?);
+                }
                 run.cache_scope = scope;
                 run.cache_landed_at.get_or_insert_with(|| now.to_owned());
                 if !run.protected_branches.contains(&reg.branch) {
@@ -903,6 +966,7 @@ pub fn register(w: &Wtx, reg: Registration, queue_max: usize, now: &str) -> AppR
         }
         None => Run {
             selection: None,
+            before_verification: None,
             repo: reg.repo,
             repo_path: reg.repo_path,
             sha: reg.sha,
@@ -3877,6 +3941,36 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn first_verification_records_the_effective_selection_before_replacing_it() {
+        let (_d, s) = store();
+        s.write_sync(|w| {
+            register(w, reg("busy", "other", &["busy"]), 1, T0)?;
+            register(w, selected("s1", &["rust"]), 1, T0)?;
+            // Reselection invalidates the skip, but the queue cannot admit its replacement yet.
+            register(w, selected("s1", &[]), 1, T1)?;
+            let mut protected = selected("s1", &[]);
+            protected.branch = "main".into();
+            protected.protected = true;
+            register(w, protected, 1, T2)?;
+            Ok(())
+        })
+        .unwrap();
+
+        let run = s
+            .read_sync(|r| get_run(r, "repo_1", "s1"))
+            .unwrap()
+            .unwrap();
+        let before = run.before_verification.unwrap();
+        let rust = before
+            .iter()
+            .find(|prior| prior.result.name == "rust")
+            .unwrap();
+        assert_eq!(rust.result.status, "queued");
+        assert_eq!(rust.result.attempt_id, None);
+        assert_eq!(rust.result.conclusion, None);
     }
 
     #[test]

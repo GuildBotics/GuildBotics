@@ -855,10 +855,6 @@ async fn sync_pull(
                         _ => false,
                     };
                     if landed {
-                        // A direct update on the host can merge a revision Branvil never sent.
-                        if hp.head_sha.is_none() || hp.head_sha != x.pushed {
-                            x.pushed_checks = None;
-                        }
                         // Under the lock, so a backup has the merge together
                         // with the ref that keeps its head.
                         let _guard = app.lock_repo(&repo.id).await;
@@ -873,12 +869,14 @@ async fn sync_pull(
                             }
                             None => None,
                         };
+                        let checks =
+                            merged_checks(app, repo, &p, &mut x, hp.head_sha.as_deref()).await?;
                         let (r2, x2) = (repo.clone(), x.clone());
                         let merged = app
                             .store
                             .write(move |w| {
                                 pulls::store_published(w, &r2, number, x2, None)?;
-                                pulls::mark_merged(w, &r2, number, &merge_sha, merged_base, None)
+                                pulls::mark_merged(w, &r2, number, &merge_sha, merged_base, checks)
                             })
                             .await?;
                         app.events.publish("pull", &repo.path, number.to_string());
@@ -951,6 +949,31 @@ async fn sync_pull(
     Ok(())
 }
 
+/// Reads Branvil's evidence using the head the host says it merged.
+async fn merged_checks(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    published: &mut Published,
+    merged_head: Option<&str>,
+) -> AppResult<Option<crate::model::MergeChecks>> {
+    use crate::model::PushedChecks;
+    let (Some(evidence), Some(head)) = (
+        published.pushed_checks.take(),
+        merged_head.filter(|head| Some(*head) == published.pushed.as_deref()),
+    ) else {
+        return Ok(None);
+    };
+    match evidence {
+        PushedChecks::Publication { snapshot } => {
+            Ok((snapshot.head_sha == head).then_some(snapshot))
+        }
+        PushedChecks::Forwarded { base_sha } => {
+            crate::landing::imported_merge_checks(app, repo, p, head, &base_sha).await
+        }
+    }
+}
+
 /// Whether the host's merge commit is on Branvil's default branch (following
 /// the host first when it is not): a commit only fetched into the hidden ref,
 /// while following is stopped, is not merged here.
@@ -991,24 +1014,12 @@ async fn send_changes(
             && x.stopped.is_none()
             && x.pushed.as_deref() != Some(head.as_str())
         {
-            let base = tips.get(&p.base).map(String::as_str).unwrap_or_default();
-            let checks =
-                match crate::landing::forwarding_checks(at.app, at.repo, p, head, base).await {
-                    Ok(checks) => Some(checks),
-                    Err(e) => {
-                        tracing::warn!(
-                            "upstream: {} !{} forwarding checks: {e}",
-                            at.repo.path,
-                            p.number
-                        );
-                        None
-                    }
-                };
+            let base_sha = tips.get(&p.base).cloned().unwrap_or_default();
             let lease = x.pushed.clone().unwrap_or_default();
             match push_branch(at, w, &p.head, head, &lease).await {
                 Pushed::Done => x.record_push(
                     head.clone(),
-                    checks,
+                    crate::model::PushedChecks::Forwarded { base_sha },
                     at.app.upstream.config.checks_registration_secs,
                 ),
                 Pushed::Refused(why) => x.stopped = Some(why),

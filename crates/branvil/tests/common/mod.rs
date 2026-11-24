@@ -829,6 +829,9 @@ pub fn as_schema_43(db: &Path) {
             upstream.remove("pushed_checks");
         }
     });
+    edit_records(db, "ci_runs", |v| {
+        v.as_object_mut().unwrap().remove("before_verification");
+    });
 }
 
 pub fn previous_schema_backup(data: &Path) -> PathBuf {

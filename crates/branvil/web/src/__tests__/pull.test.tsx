@@ -179,7 +179,7 @@ it("shows the observed Branvil checks for an upstream revision that was still ru
         ...CHECKS,
         checks: [],
         merge_checks: {
-          source: "forwarding",
+          source: "upstream_merge",
           required_checks: "running",
           head_sha: HEAD,
           base_sha: BASE,
@@ -189,8 +189,11 @@ it("shows the observed Branvil checks for an upstream revision that was still ru
     }),
   );
   renderApp("/acme/demo/-/pulls/3", "en");
-  const decision = within(await screen.findByRole("region", { name: words["ci.mergeDecision"] }));
-  expect(await decision.findByText(words["ci.mergeDecisionAtForwarding"])).toBeInTheDocument();
+  const decision = within(
+    await screen.findByRole("region", { name: words["ci.upstreamMergeHeadChecks"] }),
+  );
+  expect(screen.queryByRole("region", { name: words["ci.mergeDecision"] })).not.toBeInTheDocument();
+  expect(await decision.findByText(words["ci.upstreamMergeHeadChecksReason"])).toBeInTheDocument();
   expect(decision.getByText(words["ci.status.in_progress"])).toBeInTheDocument();
   expect(decision.getByText(words["ci.pending"])).toBeInTheDocument();
   expect(decision.getByText("#2")).toBeInTheDocument();
