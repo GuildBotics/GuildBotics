@@ -17,7 +17,6 @@ const REPO = {
   url: "",
   protected_branches: [],
   post_merge_jobs: [],
-  required_checks: [],
   labels: ["bug", "docs"],
   upstream: null,
   revision: 1,

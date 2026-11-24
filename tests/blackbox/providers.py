@@ -3,7 +3,6 @@
 import base64
 import time
 from dataclasses import dataclass
-from urllib.parse import quote
 
 import httpx
 
@@ -48,11 +47,6 @@ class BranvilProvider:
             time.sleep(0.05)
         self.post("workspaces", {"name": "acme"})
         repo = self.post("repos", {"path": self.repository})
-        required = self.api.patch(
-            f"repos/{quote(self.repository, safe='')}",
-            json={"revision": repo["revision"], "required_checks": ["test"]},
-        )
-        assert required.is_success, required.text
         self.clone_url = repo["clone_url"]
         owner = self.api.get("me").json()["name"]
         token = self.post(f"members/{owner}/tokens", {"label": "blackbox seed"})[

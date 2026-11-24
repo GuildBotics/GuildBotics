@@ -269,7 +269,7 @@ export function Conversation({
   const review = useMutation({
     // `commit` is the head the user is looking at; the service refuses it if the head moved.
     mutationFn: ({ verdict, body }: { verdict: Verdict; body: string }) =>
-      api.pulls.review(repo, number, verdict, body, pull.head_sha),
+      api.pulls.review(repo, number, verdict, body, pull.head_sha, pull.base_sha),
     onMutate: () => setHeadMoved(null),
     onError: (err) => {
       if (isApiError(err, "head_moved")) setHeadMoved(pull.head_sha);

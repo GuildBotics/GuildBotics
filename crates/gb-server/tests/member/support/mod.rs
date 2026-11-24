@@ -39,6 +39,7 @@ pub const OPERATIONS: &[&str] = &[
 ];
 const PIPELINE: &str =
     "[[jobs]]\nname = \"test\"\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\n";
+const REQUIRED_PIPELINE: &str = "[[jobs]]\nname = \"test\"\nrequired = true\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\n";
 pub const WORKSPACE: &str = "acme";
 pub const REPO: &str = "acme/repo";
 /// A repository of another workspace: readable, outside the write scope.
@@ -109,10 +110,11 @@ impl Embedded {
             .await
             .unwrap();
     }
-    /// A pull request from a new branch of main, by aiko or by the owner.
+    /// A pull request from a new branch of main's tip, by aiko or by the owner.
     pub async fn pull(&self, branch: &str, by_aiko: bool, tickets: &[&str]) -> String {
+        let main = self.fixture.git(REPO, &["rev-parse", "refs/heads/main"]);
         self.fixture
-            .commit(REPO, branch, Some(&self.main), "readme", branch);
+            .commit(REPO, branch, Some(&main), "readme", branch);
         if by_aiko {
             self.code
                 .create_pull_request(CreatePullRequest {
@@ -166,17 +168,17 @@ impl Embedded {
             .await
             .unwrap();
     }
-    /// Required checks make a head without a finished `test` check running.
-    pub async fn require_checks(&self) {
-        let owner = &self.fixture.owner;
-        let revision = owner.repos_get(REPO).await.unwrap().revision;
-        owner
-            .repos_update(
-                REPO,
-                input(json!({"revision":revision,"required_checks":["test"]})),
-            )
-            .await
-            .unwrap();
+    /// main starts requiring `test`, so a later head of it without a finished
+    /// `test` check is running.
+    pub fn require_checks(&self) {
+        let main = self.fixture.git(REPO, &["rev-parse", "refs/heads/main"]);
+        self.fixture.commit(
+            REPO,
+            "main",
+            Some(&main),
+            ".guildbotics-ci.toml",
+            REQUIRED_PIPELINE,
+        );
     }
     /// Main's verification fails each automatic retry, so the service opens
     /// its repair ticket.

@@ -98,7 +98,6 @@ export const me = () => get<Member>("/me");
 export interface RepoPatch {
   revision: number;
   default_branch?: string;
-  required_checks?: string[];
   post_merge_jobs?: string[];
   required_approvals?: number;
   auto_land?: boolean;
@@ -247,8 +246,14 @@ export const pulls = {
   checks: (repo: string, number: number) => get<Checks>(`${pullPath(repo, number)}/checks`),
   comment: (repo: string, number: number, body: string) =>
     create<Comment>(`${pullPath(repo, number)}/comments`, { body }),
-  review: (repo: string, number: number, verdict: Verdict, body: string, commit: string) =>
-    create<Review>(`${pullPath(repo, number)}/reviews`, { verdict, body, commit }),
+  review: (
+    repo: string,
+    number: number,
+    verdict: Verdict,
+    body: string,
+    commit: string,
+    base: string,
+  ) => create<Review>(`${pullPath(repo, number)}/reviews`, { verdict, body, commit, base }),
   reply: (repo: string, number: number, threadId: string, body: string) =>
     create<ThreadComment>(`${pullPath(repo, number)}/threads/${enc(threadId)}/replies`, { body }),
   resolve: (repo: string, number: number, threadId: string, resolved: boolean) =>

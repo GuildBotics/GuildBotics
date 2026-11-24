@@ -19,6 +19,7 @@ const CHECKS: Checks = {
   checks: [SUCCESS],
   checks_expected: true,
   base_checks: 1,
+  required_names: [],
 };
 
 it("keeps the server's queue order and reloads it when another PR changes priority", async () => {
@@ -373,7 +374,6 @@ function pullRoutes(extra: Record<string, Parameters<typeof fakeApi>[0][string]>
       url: "",
       protected_branches: ["main"],
       post_merge_jobs: [],
-      required_checks: ["test"],
       required_approvals: 0,
       revision: 1,
     }),
@@ -449,6 +449,7 @@ function pullRoutes(extra: Record<string, Parameters<typeof fakeApi>[0][string]>
       ],
       checks_expected: true,
       base_checks: 1,
+      required_names: [],
     }),
     "GET /api/v1/repos/acme/demo/jobs/att_1": json(200, {
       id: "att_1",
@@ -874,7 +875,7 @@ describe("pull request review", () => {
         `/workspaces/acme/repos/demo/commits/${HEAD}`,
       );
       const review = fake.calls("POST", `${P}/reviews`)[0];
-      expect(review?.body).toEqual({ verdict: "approve", body: "", commit: HEAD });
+      expect(review?.body).toEqual({ verdict: "approve", body: "", commit: HEAD, base: BASE });
       expect(review?.headers["X-GuildBotics-CSRF"]).toBe("csrf-123");
       // The pull request is reloaded and now shows the new head.
       await waitFor(() => expect(fake.calls("GET", P).length).toBeGreaterThanOrEqual(2));
@@ -983,7 +984,6 @@ describe("pull request review", () => {
     url: "",
     protected_branches: ["main"],
     post_merge_jobs: [],
-    required_checks: ["test"],
     required_approvals: 0,
     auto_land: false,
     hold_while_failing: false,
@@ -1008,7 +1008,6 @@ describe("pull request review", () => {
         ),
         "GET /api/v1/repos/acme/demo": json(200, {
           ...UPSTREAM_REPOSITORY,
-          required_checks: [],
           required_approvals: 0,
         }),
         [`POST ${P}/merge`]: json(
@@ -1042,6 +1041,7 @@ describe("pull request review", () => {
         pullRoutes({
           [`GET ${P}/checks`]: json(200, {
             ...CHECKS,
+            required_names: ["test"],
             checks: [SUCCESS, { ...SUCCESS, name: "test-optional" }],
           }),
         }),
@@ -1086,7 +1086,6 @@ describe("pull request review", () => {
             "GET /api/v1/repos/acme/demo": json(200, {
               ...repository,
               post_merge_jobs: [],
-              required_checks: [],
             }),
           }),
         );
@@ -1128,7 +1127,6 @@ describe("pull request review", () => {
             "GET /api/v1/repos/acme/demo": json(200, {
               ...repository,
               post_merge_jobs: [],
-              required_checks: ["test", "lint"],
             }),
             [`GET ${P}/checks`]: json(200, {
               ...CHECKS,
@@ -1196,7 +1194,6 @@ describe("pull request review", () => {
           "GET /api/v1/repos/acme/demo": json(200, {
             ...repository,
             post_merge_jobs: [],
-            required_checks: ["test", "lint"],
           }),
           [`GET ${P}/checks`]: [
             json(200, { ...CHECKS, checks: [] }),
@@ -1428,6 +1425,7 @@ describe("pull request review", () => {
           ],
           checks_expected: true,
           base_checks: 1,
+          required_names: [],
         }),
         "GET /api/v1/repos/acme/demo/jobs/github-41/log": json(200, {
           log: "boom on Windows",

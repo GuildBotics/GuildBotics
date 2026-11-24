@@ -1243,7 +1243,7 @@ async fn prepare_dispatch_resolves_ticket_and_fork_heads_and_rejects_invalid_anc
 #[tokio::test]
 async fn push_reports_readiness_for_open_prs_without_waiting_for_checks() {
     let f = Fixture::new().await;
-    f.services.require_checks().await;
+    f.services.require_checks();
     let pr = f.services.pull("topic", true, &[]).await;
     let path = f.prepare("one", "topic").await;
     f.stage(&path, "ours");

@@ -624,7 +624,7 @@ async fn awaiting_checks_returns_pending_and_ready_prs_and_retains_the_chat_gate
     let redactor = Redactor::default();
     seed(&writes, &workspace, &redactor);
     let services = support::Embedded::new().await;
-    services.require_checks().await;
+    services.require_checks();
     let pending = services.pull("pending", true, &[]).await;
     let ready = services.pull("ready", true, &[]).await;
     let ready_head = services.code.pull_view(&ready).await.unwrap().head_sha;

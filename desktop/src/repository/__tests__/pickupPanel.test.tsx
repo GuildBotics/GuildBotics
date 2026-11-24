@@ -499,7 +499,6 @@ describe("pickup order", () => {
         url: "",
         protected_branches: [],
         post_merge_jobs: [],
-        required_checks: [],
         labels: [],
         upstream: null,
         revision: 1,

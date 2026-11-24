@@ -32,6 +32,30 @@ const MAX_TMPFS_MIB: u32 = 4096;
 /// failure (a missing commit, an unreadable tree or blob) is an error, never a
 /// pipeline (the service's registration is retried by the reconciler).
 pub async fn read(git: &Git, dir: &Path, sha: &str) -> AppResult<PipelineState> {
+    Ok(read_file(git, dir, sha).await?.0)
+}
+
+/// What the pipeline of commit `sha` requires of the pull requests into its
+/// branch, under the same rules as `read`.
+pub async fn read_required(git: &Git, dir: &Path, sha: &str) -> AppResult<RequiredJobs> {
+    Ok(read_file(git, dir, sha).await?.1)
+}
+
+/// The jobs a commit's pipeline marks `required`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RequiredJobs {
+    /// The commit has no pipeline, so it requires nothing.
+    Absent,
+    Jobs(Vec<String>),
+    /// What it requires cannot be known, so nothing may land on it.
+    Invalid,
+}
+
+fn invalid(message: String) -> (PipelineState, RequiredJobs) {
+    (PipelineState::Invalid { message }, RequiredJobs::Invalid)
+}
+
+async fn read_file(git: &Git, dir: &Path, sha: &str) -> AppResult<(PipelineState, RequiredJobs)> {
     let failed = |what: &str, stderr: &str| {
         AppError::internal(format!(
             "{what} {PIPELINE_PATH} of {sha}: {}",
@@ -48,35 +72,31 @@ pub async fn read(git: &Git, dir: &Path, sha: &str) -> AppResult<PipelineState> 
     let entry = out.text();
     let mut fields = entry.trim_end_matches('\0').split(['\t', ' ']);
     let (kind, object) = match (fields.next(), fields.next(), fields.next()) {
-        (None | Some(""), ..) => return Ok(PipelineState::Absent),
+        (None | Some(""), ..) => return Ok((PipelineState::Absent, RequiredJobs::Absent)),
         (Some(_), Some(kind), Some(object)) => (kind, object.to_string()),
         _ => return Err(failed("listing", &format!("unexpected entry {entry:?}"))),
     };
     if kind != "blob" {
-        return Ok(PipelineState::Invalid {
-            message: format!("{} is not a file.", PIPELINE_PATH),
-        });
+        return Ok(invalid(format!("{PIPELINE_PATH} is not a file.")));
     }
     let out = git.run(Some(dir), &["cat-file", "blob", &object]).await?;
     if !out.ok() {
         return Err(failed("reading", &out.stderr));
     }
     if out.stdout.len() > MAX_PIPELINE_BYTES {
-        return Ok(PipelineState::Invalid {
-            message: format!(
-                "{} is larger than {} bytes.",
-                PIPELINE_PATH, MAX_PIPELINE_BYTES
-            ),
-        });
+        return Ok(invalid(format!(
+            "{PIPELINE_PATH} is larger than {MAX_PIPELINE_BYTES} bytes."
+        )));
     }
     Ok(match String::from_utf8(out.stdout) {
-        Ok(text) => match parse(&text) {
-            Ok(jobs) => PipelineState::Jobs { jobs },
-            Err(message) => PipelineState::Invalid { message },
+        Ok(text) => match parse_file(&text) {
+            Ok(file) => (
+                PipelineState::Jobs { jobs: file.jobs },
+                RequiredJobs::Jobs(file.required),
+            ),
+            Err(message) => invalid(message),
         },
-        Err(_) => PipelineState::Invalid {
-            message: format!("{} is not UTF-8.", PIPELINE_PATH),
-        },
+        Err(_) => invalid(format!("{PIPELINE_PATH} is not UTF-8.")),
     })
 }
 
@@ -104,10 +124,6 @@ struct JobSchema {
     /// What the branch demands of a PR, not how the job runs: it stays out of
     /// `JobDef`, so stored runs, reuse and the runner's messages do not change.
     #[serde(default)]
-    #[expect(
-        dead_code,
-        reason = "validated now; landing reads it once required checks move here (#437)"
-    )]
     required: bool,
     name: String,
     image: String,
@@ -125,9 +141,19 @@ struct JobSchema {
     memory_mib: Option<IgnoredAny>,
 }
 
+#[cfg(test)]
+pub fn parse(text: &str) -> Result<Vec<JobDef>, String> {
+    Ok(parse_file(text)?.jobs)
+}
+
+struct ParsedFile {
+    jobs: Vec<JobDef>,
+    required: Vec<String>,
+}
+
 /// Parses and validates a pipeline. `Err` is the message shown on the
 /// failing `pipeline` check.
-pub fn parse(text: &str) -> Result<Vec<JobDef>, String> {
+fn parse_file(text: &str) -> Result<ParsedFile, String> {
     let file: FileSchema =
         toml::from_str(text).map_err(|e| format!("{PIPELINE_PATH} is not valid: {e}"))?;
     if file.version != 1 {
@@ -144,8 +170,9 @@ pub fn parse(text: &str) -> Result<Vec<JobDef>, String> {
             "{PIPELINE_PATH} defines more than {MAX_JOBS} jobs."
         ));
     }
-    let mut jobs = Vec::new();
+    let (mut jobs, mut required) = (Vec::new(), Vec::new());
     for j in file.jobs {
+        let is_required = j.required;
         let job = validate_job(j)?;
         if jobs
             .iter()
@@ -153,9 +180,12 @@ pub fn parse(text: &str) -> Result<Vec<JobDef>, String> {
         {
             return Err(format!("Two jobs are named {}.", job.name));
         }
+        if is_required {
+            required.push(job.name.clone());
+        }
         jobs.push(job);
     }
-    Ok(jobs)
+    Ok(ParsedFile { jobs, required })
 }
 
 fn validate_job(j: JobSchema) -> Result<JobDef, String> {
@@ -466,12 +496,11 @@ mod tests {
     #[test]
     fn required_is_an_optional_boolean_that_leaves_the_job_definition_alone() {
         let job = "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n";
-        for value in ["true", "false"] {
-            assert_eq!(
-                parse(&format!("{job}required={value}\n")).unwrap(),
-                parse(job).unwrap(),
-                "{value}"
-            );
+        assert!(parse_file(job).unwrap().required.is_empty());
+        for (value, required) in [("true", vec!["test"]), ("false", vec![])] {
+            let file = parse_file(&format!("{job}required={value}\n")).unwrap();
+            assert_eq!(file.required, required, "{value}");
+            assert_eq!(file.jobs, parse(job).unwrap(), "{value}");
         }
         for value in ["'yes'", "1"] {
             let error = parse(&format!("{job}required={value}\n")).unwrap_err();

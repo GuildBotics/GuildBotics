@@ -12,6 +12,8 @@
 # every job. test and markdown-links always run, as their inputs span the repo.
 # Add client-linux to the repository CI setting post_merge_jobs before opening
 # a PR containing that job. This keeps release builds out of ordinary PR heads.
+# required = true makes a job required of PRs into this branch: the base's file
+# decides, so a PR that drops a required job needs the owner's approval of its head.
 #
 # The Rust jobs check the whole Cargo workspace, its tests in two jobs:
 # rust-test-branvil tests Branvil and loopback-auth; rust-test tests the rest.
@@ -32,7 +34,8 @@
 # Cargo.lock selects the exact Rust cache generation. On a miss, use the
 # latest published generation of that job. Cargo rebuilds changed dependencies.
 # Cache publication happens after the head is merged into a protected branch.
-# After successful verification, remove the workspace artifacts Cargo will rebuild.
+# After successful verification, remove workspace artifacts, unused dependency
+# units across all Cargo builds in the job, and crates absent from Cargo.lock.
 
 [[jobs]]
 name = "test"
@@ -123,13 +126,16 @@ paths = [
   "rustfmt.toml",
 ]
 image = "guildbotics/agent-environment:dev"
-commands = [
-  "find crates -exec touch -c {} +",
-  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo clippy --locked --workspace --all-targets -- -D warnings",
-  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo clippy --locked -p guildbotics --no-default-features --target x86_64-pc-windows-gnu -- -D warnings",
-  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= cargo clean --workspace --offline --locked --target x86_64-pc-windows-gnu",
-  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= cargo clean --workspace --offline --locked",
-]
+commands = ['''
+set -eu
+export CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0
+find crates -exec touch -c {} +
+python3 .cargo/ci-cache.py run cargo clippy --locked --workspace --all-targets -- -D warnings
+python3 .cargo/ci-cache.py run cargo clippy --locked -p guildbotics --no-default-features --target x86_64-pc-windows-gnu -- -D warnings
+cargo clean --workspace --offline --locked --target x86_64-pc-windows-gnu
+cargo clean --workspace --offline --locked
+python3 .cargo/ci-cache.py prune
+''']
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
 
@@ -163,12 +169,15 @@ paths = [
   "rustfmt.toml",
 ]
 image = "guildbotics/agent-environment:dev"
-commands = [
-  "find crates -exec touch -c {} +",
-  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked --profile ci --workspace --exclude branvil --exclude loopback-auth",
-  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked -p guildbotics --no-default-features --test main",
-  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= cargo clean --workspace --offline --locked",
-]
+commands = ['''
+set -eu
+export CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0
+find crates -exec touch -c {} +
+python3 .cargo/ci-cache.py run cargo nextest run --locked --profile ci --workspace --exclude branvil --exclude loopback-auth
+python3 .cargo/ci-cache.py run cargo nextest run --locked -p guildbotics --no-default-features --test main
+cargo clean --workspace --offline --locked
+python3 .cargo/ci-cache.py prune
+''']
 artifacts = [{ name = "rust-test-results", paths = ["target/nextest/ci/junit.xml"] }]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
@@ -190,11 +199,14 @@ paths = [
   ".config/nextest.toml",
 ]
 image = "guildbotics/agent-environment:dev"
-commands = [
-  "find crates -exec touch -c {} +",
-  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0 cargo nextest run --locked --profile ci -p branvil -p loopback-auth --features branvil/test-support",
-  "CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= cargo clean --workspace --offline --locked",
-]
+commands = ['''
+set -eu
+export CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0
+find crates -exec touch -c {} +
+python3 .cargo/ci-cache.py run cargo nextest run --locked --profile ci -p branvil -p loopback-auth --features branvil/test-support
+cargo clean --workspace --offline --locked
+python3 .cargo/ci-cache.py prune
+''']
 artifacts = [{ name = "test-results", paths = ["target/nextest/ci/junit.xml"] }]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
@@ -209,15 +221,16 @@ set -eu
 export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1 CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0
 uv sync --extra test
 find crates -exec touch -c {} +
-cargo build --locked -p gb-server --example browser-test-server
-cargo build --locked -p gb-environment --example worktree-transfer
-cargo build --locked -p guildbotics
+python3 .cargo/ci-cache.py run cargo build --locked -p gb-server --example browser-test-server
+python3 .cargo/ci-cache.py run cargo build --locked -p gb-environment --example worktree-transfer
+python3 .cargo/ci-cache.py run cargo build --locked -p guildbotics
 target/debug/guildbotics generate-cli-reference --check
 export GUILDBOTICS_BLACKBOX_CLI="$PWD/target/debug/guildbotics"
 export GUILDBOTICS_BLACKBOX_MEMBER_CLI="$PWD/target/debug/examples/browser-test-server"
 export GUILDBOTICS_BLACKBOX_SERVER="$PWD/target/debug/examples/browser-test-server"
 uv run --no-sync python -m pytest -rP --junitxml=.ci/blackbox-junit.xml -o junit_logging=system-err tests/blackbox/test_member.py tests/blackbox/test_code_host.py tests/blackbox/test_current_git.py tests/blackbox/test_config_service.py tests/blackbox/test_harness.py tests/blackbox/test_golden.py tests/integration/test_worktree_transfer.py
 cargo clean --workspace --offline --locked
+python3 .cargo/ci-cache.py prune
 ''']
 artifacts = [{ name = "test-results", paths = [".ci/blackbox-junit.xml"] }]
 timeout_secs = 1800
@@ -241,12 +254,13 @@ commands = ['''
 set -eu
 export CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0
 find crates -exec touch -c {} +
-cargo build --locked -p guildbotics --no-default-features --target x86_64-pc-windows-gnu --release
+python3 .cargo/ci-cache.py run cargo build --locked -p guildbotics --no-default-features --target x86_64-pc-windows-gnu --release
 mkdir -p client-release
 cp target/x86_64-pc-windows-gnu/release/guildbotics.exe client-release/guildbotics.exe
 sha256sum client-release/guildbotics.exe | cut -d ' ' -f 1 > client-release/sha256
 git rev-parse HEAD > client-release/commit
 cargo clean --workspace --offline --locked --target x86_64-pc-windows-gnu --release
+python3 .cargo/ci-cache.py prune
 ''']
 artifacts = [{ name = "client-windows", paths = ["client-release/guildbotics.exe", "client-release/sha256", "client-release/commit"] }]
 timeout_secs = 1800
@@ -262,12 +276,13 @@ if [ "$(uname -m)" != x86_64 ]; then
     export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc
 fi
 find crates -exec touch -c {} +
-cargo build --locked -p guildbotics --no-default-features --target x86_64-unknown-linux-gnu --release
+python3 .cargo/ci-cache.py run cargo build --locked -p guildbotics --no-default-features --target x86_64-unknown-linux-gnu --release
 mkdir -p client-release
 cp target/x86_64-unknown-linux-gnu/release/guildbotics client-release/guildbotics
 sha256sum client-release/guildbotics | cut -d ' ' -f 1 > client-release/sha256
 git rev-parse HEAD > client-release/commit
 cargo clean --workspace --offline --locked --target x86_64-unknown-linux-gnu --release
+python3 .cargo/ci-cache.py prune
 ''']
 artifacts = [{ name = "client-linux", paths = ["client-release/guildbotics", "client-release/sha256", "client-release/commit"] }]
 timeout_secs = 1800

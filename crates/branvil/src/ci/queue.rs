@@ -3315,7 +3315,6 @@ mod tests {
             default_branch: "main".into(),
             protected_branches: vec![],
             post_merge_jobs: Vec::new(),
-            required_checks: vec!["test".into()],
             required_approvals: 0,
             auto_land: false,
             hold_while_failing: false,

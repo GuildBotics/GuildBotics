@@ -524,6 +524,59 @@ def test_ticket_prompt_requires_current_pr_readiness_in_both_languages():
 
 
 @pytest.mark.parametrize(
+    ("language", "heading", "conditions", "reporting"),
+    [
+        (
+            "en",
+            "Preparing a collecting draft PR",
+            (
+                "agreed",
+                "write access",
+                "Reuse an open draft",
+                "The owner marks the collecting PR ready after all child tickets are closed.",
+            ),
+            ("originating ticket", "has yet to be shared", "exceptions in step 5"),
+        ),
+        (
+            "ja",
+            "集約用 Draft PR の準備",
+            (
+                "合意",
+                "書き込み権限",
+                "Draft PR があれば再利用",
+                "子チケットがすべて閉じた後、オーナーが集約用 PR を Ready にします。",
+            ),
+            ("依頼元のチケット", "未共有なら", "手順 5 のコメント投稿の例外"),
+        ),
+    ],
+)
+def test_ticket_workflow_points_to_collecting_draft_setup(
+    language, heading, conditions, reporting
+):
+    body = _prompt_body("handle_ticket", language)
+    preparation = body.split("\n3. ", 1)[1].split("\n4. ", 1)[0]
+    for phrase in (heading, *reporting, "URL", "member ticket comment"):
+        assert phrase in preparation
+
+    section = (
+        capability_reference_text()
+        .split(f"#### {heading}\n", 1)[1]
+        .split("\n#### ", 1)[0]
+    )
+    for phrase in (
+        *conditions,
+        "git switch -c ticket/<parent-key> origin/<default-branch>",
+        "member git push",
+        "--head ticket/<parent-key>",
+        "--base <default-branch>",
+        "--draft true",
+        "member pr create",
+        "git prepare --issue-url",
+    ):
+        assert phrase in section
+
+
+@pytest.mark.parametrize(
     ("language", "resumed", "waits", "volume"),
     [
         (

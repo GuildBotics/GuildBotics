@@ -165,12 +165,22 @@ async fn approvals_and_checks_are_reported_by_the_shared_condition_function() {
     w.open_pull("feature", json!([])).await;
     for (fields, code) in [
         (json!({"required_approvals":1}), "approvals"),
-        (
-            json!({"required_approvals":0,"required_checks":["test"]}),
-            "head_checks",
-        ),
+        (json!({"required_approvals":0}), "head_checks"),
     ] {
         settings(&w, fields).await;
+        if code == "head_checks" {
+            // The base now requires a job this head's commit has no run of.
+            crate::ci::land(
+                &w,
+                "require",
+                &[(
+                    ".guildbotics-ci.toml",
+                    &crate::ci::required_pipeline(&["test"]),
+                )],
+                None,
+            )
+            .await;
+        }
         let pull = ready(&w, 1).await;
         let blocker = pull["landing"]["blockers"]
             .as_array()
@@ -193,17 +203,20 @@ async fn approvals_and_checks_are_reported_by_the_shared_condition_function() {
 async fn head_check_blocker_jobs_only_list_unmet_required_checks() {
     let w = World::new().await;
     let runner = crate::ci::Runner::new(&w, "landing-runner").await;
-    settings(
+    crate::ci::land(
         &w,
-        json!({"required_checks": ["failed", "running", "passed"]}),
+        "setup",
+        &[(
+            ".guildbotics-ci.toml",
+            &crate::ci::required_pipeline(&["failed", "running", "passed"]),
+        )],
+        Some(&runner),
     )
     .await;
-    w.push_change(
-        "feature",
-        ".guildbotics-ci.toml",
-        &crate::ci::pipeline(&["failed", "running", "passed"]),
-    );
-    w.open_pull("feature", json!([])).await;
+    w.push_change("feature", "f.txt", "feature");
+    let n = w.open_pull("feature", json!([])).await["number"]
+        .as_u64()
+        .unwrap();
     for name in ["failed", "running", "passed"] {
         let claim = runner.next_claim().await;
         assert_eq!(claim["job"]["name"], name);
@@ -224,7 +237,7 @@ async fn head_check_blocker_jobs_only_list_unmet_required_checks() {
             );
         }
     }
-    let p = ready(&w, 1).await;
+    let p = ready(&w, n).await;
     let blocker = p["landing"]["blockers"]
         .as_array()
         .unwrap()
@@ -309,7 +322,7 @@ async fn upgrade_preserves_landing_conflicts_and_notice_history() {
     .await;
     w.server.stop();
     let db = w.server.data.join("branvil.redb");
-    as_schema_42(&db);
+    as_schema_43(&db);
     let out = branvil_command()
         .args(["admin", "upgrade", "--data-dir"])
         .arg(&w.server.data)
@@ -355,7 +368,7 @@ async fn upgrade_preserves_landing_conflicts_and_notice_history() {
             .any(|b| b["code"] == "conflict")
     );
     w.server.stop();
-    as_schema_42(&db);
+    as_schema_43(&db);
     let out = branvil_command()
         .args(["admin", "upgrade", "--data-dir"])
         .arg(&w.server.data)

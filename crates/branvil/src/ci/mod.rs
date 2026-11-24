@@ -52,6 +52,22 @@ use queue::{Attempt, PipelineState, Registration};
 
 /// How many commits of the first-parent history `Ci::estimate` looks at.
 const ESTIMATE_DEPTH: usize = 20;
+/// How many pairs' required jobs are remembered.
+const REQUIRED_CACHE: usize = 4096;
+
+/// What a pull request from a head into a base must pass. The base decides, so
+/// a head cannot exempt itself (`docs/ci.md`, "Required checks").
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PullRequired {
+    /// Required of this head. A pipeline that cannot be judged requires the
+    /// `pipeline` check, which no job can satisfy.
+    pub names: Vec<String>,
+    /// Required by the base and no longer after merging this head.
+    pub removed: Vec<String>,
+    /// Why the `pipeline` check fails for this pair, when the head's own run
+    /// cannot say.
+    pipeline_problem: Option<String>,
+}
 
 /// Where a reused result was actually executed (including its log and artifacts).
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -184,6 +200,8 @@ struct Inner {
     settings: settings::Control,
     started: Instant,
     runners: Mutex<BTreeMap<String, RunnerSeen>>,
+    /// What each (head, base) pair requires, which never changes for a pair.
+    required: Mutex<BTreeMap<(String, String, String), PullRequired>>,
     /// Set by `stop`: when the wait for the running jobs ends.
     stopping: OnceLock<String>,
     /// Serializes log appends (one file per attempt, small writes).
@@ -213,6 +231,7 @@ impl Ci {
                 config,
                 started: Instant::now(),
                 runners: Mutex::new(BTreeMap::new()),
+                required: Mutex::new(BTreeMap::new()),
                 stopping: OnceLock::new(),
                 log_lock: tokio::sync::Mutex::new(()),
             }),
@@ -330,9 +349,8 @@ impl Ci {
     }
 
     /// The checks of `sha` in `repo`: the latest attempt of every job of the
-    /// commit's run, plus an entry for each required check the run does not
-    /// have (see `docs/api.md`, "Checks"). Only attempts of the run's current
-    /// job definitions count. Nothing here ever reports success without a
+    /// commit's run (see `docs/api.md`, "Checks"). Only attempts of the run's
+    /// current job definitions count. Nothing here ever reports success without a
     /// successful attempt of that commit.
     pub async fn head_checks(&self, repo: &Repo, sha: &str) -> AppResult<Checks> {
         let (id, s) = (repo.id.clone(), sha.to_string());
@@ -383,29 +401,19 @@ impl Ci {
                 Ok((run, latest, priority, recoveries, queued_details))
             })
             .await?;
-        let mut checks = Vec::new();
         let Some(run) = run else {
-            for name in &repo.required_checks {
-                checks.push(Check::placeholder(
-                    name,
-                    "queued",
-                    None,
-                    "No CI run is registered for this commit yet.".into(),
-                ));
-            }
             // An unreadable pipeline is expected rather than "no checks".
-            let expected = !repo.required_checks.is_empty()
-                || !matches!(
-                    self.read_pipeline(repo, sha).await,
-                    Ok(PipelineState::Absent)
-                );
+            let expected = !matches!(
+                self.read_pipeline(repo, sha).await,
+                Ok(PipelineState::Absent)
+            );
             return Ok(Checks {
-                checks,
+                checks: Vec::new(),
                 run_registered: false,
                 checks_expected: expected,
             });
         };
-        let mut report = self.run_checks(repo, &run, latest)?;
+        let mut report = self.run_checks(&run, latest)?;
         for check in &mut report.checks {
             check.runner_recovery = check
                 .attempt_id
@@ -441,7 +449,6 @@ impl Ci {
     /// Checks of a registered run, shared with required-failure notification.
     fn run_checks(
         &self,
-        repo: &Repo,
         run: &queue::Run,
         latest: Vec<(Attempt, queue::Source)>,
     ) -> AppResult<Checks> {
@@ -452,13 +459,217 @@ impl Ci {
             .into_iter()
             .filter(|(_, s)| !protected || s.basis != Some(queue::Basis::Paths))
             .collect();
-        run_checks(
-            repo,
-            run,
-            latest,
-            self.inner.config.queue_max,
-            |a, source| self.check_of(a, source),
-        )
+        run_checks(run, latest, self.inner.config.queue_max, |a, source| {
+            self.check_of(a, source)
+        })
+    }
+
+    /// What a pull request from `head` into `base` must pass, the same for
+    /// every read of the pair.
+    pub(crate) async fn pull_required(
+        &self,
+        repo: &Repo,
+        head: &str,
+        base: &str,
+    ) -> AppResult<PullRequired> {
+        let key = (repo.id.clone(), head.to_string(), base.to_string());
+        if let Some(found) = self.inner.required.lock().unwrap().get(&key) {
+            return Ok(found.clone());
+        }
+        let found = self.judge_required(repo, head, base).await?;
+        let mut cache = self.inner.required.lock().unwrap();
+        if cache.len() >= REQUIRED_CACHE {
+            cache.clear();
+        }
+        cache.insert(key, found.clone());
+        Ok(found)
+    }
+
+    /// The base decides what is required, and the merge result decides what a
+    /// head removes: a job the merge would keep stays required of the head
+    /// even if the head has not merged it yet. A head whose pipeline is missing
+    /// or invalid removes nothing. An invalid base can be repaired only by a
+    /// head whose merge leaves a valid pipeline, with the owner's approval,
+    /// since the base can no longer say what it requires.
+    async fn judge_required(&self, repo: &Repo, head: &str, base: &str) -> AppResult<PullRequired> {
+        use pipeline::RequiredJobs::{Absent, Invalid, Jobs};
+        let unknown = || PullRequired {
+            names: vec!["pipeline".into()],
+            removed: Vec::new(),
+            pipeline_problem: Some(format!(
+                "The required checks of the base are unknown: its {} is invalid or the branch is gone.",
+                pipeline::PIPELINE_PATH
+            )),
+        };
+        if base.is_empty() {
+            return Ok(unknown());
+        }
+        let (git, dir) = (&self.inner.git, git_dir(self, repo));
+        let at_head = if head.is_empty() {
+            Absent
+        } else {
+            pipeline::read_required(git, &dir, head).await?
+        };
+        let merged = if head.is_empty() {
+            None
+        } else {
+            self.required_after_merge(repo, head, base).await?
+        };
+        let mut wanted = match pipeline::read_required(git, &dir, base).await? {
+            Absent => Vec::new(),
+            Jobs(names) => names,
+            Invalid => {
+                return Ok(match (at_head, merged) {
+                    // Named with the base: an approval covers this invalid file only.
+                    (Jobs(_), Some(Jobs(names))) => PullRequired {
+                        names,
+                        removed: vec![format!("pipeline@{}", &base[..base.len().min(12)])],
+                        pipeline_problem: None,
+                    },
+                    _ => unknown(),
+                });
+            }
+        };
+        Ok(match (at_head, merged) {
+            (Jobs(_), Some(Jobs(kept))) => {
+                let (names, removed) = wanted.into_iter().partition(|name| kept.contains(name));
+                PullRequired {
+                    names,
+                    removed,
+                    pipeline_problem: None,
+                }
+            }
+            (Invalid, _) => {
+                wanted.push("pipeline".into());
+                PullRequired {
+                    names: wanted,
+                    ..PullRequired::default()
+                }
+            }
+            (_, Some(Invalid)) => {
+                wanted.push("pipeline".into());
+                PullRequired {
+                    names: wanted,
+                    removed: Vec::new(),
+                    pipeline_problem: Some(format!(
+                        "Merging this head would leave an invalid {}.",
+                        pipeline::PIPELINE_PATH
+                    )),
+                }
+            }
+            _ => PullRequired {
+                names: wanted,
+                ..PullRequired::default()
+            },
+        })
+    }
+
+    /// What the result of merging `head` into `base` requires; `None` when
+    /// they do not merge.
+    async fn required_after_merge(
+        &self,
+        repo: &Repo,
+        head: &str,
+        base: &str,
+    ) -> AppResult<Option<pipeline::RequiredJobs>> {
+        let (git, dir) = (&self.inner.git, git_dir(self, repo));
+        let out = git.run(Some(&dir), &["merge-base", base, head]).await?;
+        match out.status {
+            0 => {}
+            1 => return Ok(None),
+            _ => {
+                return Err(AppError::internal(format!(
+                    "finding the merge base of {head} and {base}: {}",
+                    out.stderr.trim()
+                )));
+            }
+        }
+        let Ok(tree) = git.merge_tree(&dir, base, head).await? else {
+            return Ok(None);
+        };
+        Ok(Some(pipeline::read_required(git, &dir, &tree).await?))
+    }
+
+    /// Makes the checks of `head` answer for `required`: an entry for each
+    /// required check the head does not have, and a failure for a required job
+    /// the repository runs only after merge. The run's record does not change.
+    pub(crate) async fn require(
+        &self,
+        repo: &Repo,
+        head: &str,
+        report: &mut Checks,
+        required: &PullRequired,
+    ) -> AppResult<()> {
+        for check in &mut report.checks {
+            if required.names.contains(&check.name)
+                && check
+                    .path_skip
+                    .as_ref()
+                    .is_some_and(|skip| skip.reason == queue::SkipReason::PostMerge)
+            {
+                let why = format!(
+                    "{} cannot be both required and post-merge only.",
+                    check.name
+                );
+                *check = Check::placeholder(&check.name, "completed", Some("failure"), why);
+            }
+        }
+        if let Some(why) = &required.pipeline_problem
+            && !report.checks.iter().any(|c| c.name == "pipeline")
+        {
+            report.checks.push(Check::placeholder(
+                "pipeline",
+                "completed",
+                Some("failure"),
+                why.clone(),
+            ));
+            report.checks_expected = true;
+        }
+        let missing: Vec<_> = required
+            .names
+            .iter()
+            .filter(|name| !report.checks.iter().any(|c| &c.name == *name))
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        report.checks_expected = true;
+        let (id, sha) = (repo.id.clone(), head.to_string());
+        let run = self
+            .inner
+            .store
+            .read(move |r| queue::get_run(r, &id, &sha))
+            .await?;
+        let Some(state) = run.map(|run| run.pipeline) else {
+            for name in missing {
+                report.checks.push(Check::placeholder(
+                    name,
+                    "queued",
+                    None,
+                    "No CI run is registered for this commit yet.".into(),
+                ));
+            }
+            return Ok(());
+        };
+        for name in missing {
+            let why = match &state {
+                PipelineState::Absent => format!(
+                    "{head} has no {}, so the required check {name} cannot run.",
+                    pipeline::PIPELINE_PATH
+                ),
+                PipelineState::Invalid { .. } => {
+                    format!("The pipeline is invalid, so the required check {name} cannot run.")
+                }
+                PipelineState::Jobs { .. } => format!(
+                    "The {} of {head} defines no job named {name}.",
+                    pipeline::PIPELINE_PATH
+                ),
+            };
+            report
+                .checks
+                .push(Check::placeholder(name, "completed", Some("failure"), why));
+        }
+        Ok(())
     }
 
     /// Reads the pipeline of commit `sha` (`pipeline::read`).
@@ -1283,9 +1494,12 @@ fn open_pull_heads(r: &impl Rd, repo: &str) -> AppResult<Vec<String>> {
     Ok(heads)
 }
 
+fn git_dir(ci: &Ci, repo: &Repo) -> std::path::PathBuf {
+    ci.inner.git.repo_dir(&repo.path)
+}
+
 /// Build registered checks inside or outside a store transaction using the same rules.
 fn run_checks<S>(
-    repo: &Repo,
     run: &queue::Run,
     latest: Vec<(Attempt, S)>,
     queue_max: usize,
@@ -1343,31 +1557,10 @@ fn run_checks<S>(
             });
         }
     }
-    for name in &repo.required_checks {
-        if checks.iter().any(|c| &c.name == name) {
-            continue;
-        }
-        let why = match &run.pipeline {
-            PipelineState::Absent => format!(
-                "{} has no {}, so the required check {name} cannot run.",
-                run.sha,
-                pipeline::PIPELINE_PATH
-            ),
-            PipelineState::Invalid { .. } => {
-                format!("The pipeline is invalid, so the required check {name} cannot run.")
-            }
-            PipelineState::Jobs { .. } => format!(
-                "The {} of {} defines no job named {name}.",
-                pipeline::PIPELINE_PATH,
-                run.sha
-            ),
-        };
-        checks.push(Check::placeholder(name, "completed", Some("failure"), why));
-    }
     Ok(Checks {
         run_registered: true,
         checks,
-        checks_expected: run.pipeline != PipelineState::Absent || !repo.required_checks.is_empty(),
+        checks_expected: run.pipeline != PipelineState::Absent,
     })
 }
 
@@ -1405,7 +1598,6 @@ mod tests {
             default_branch: "main".into(),
             protected_branches: vec![],
             post_merge_jobs: Vec::new(),
-            required_checks: vec!["test".into()],
             required_approvals: 1,
             auto_land: false,
             hold_while_failing: false,
@@ -1596,8 +1788,7 @@ mod tests {
 
     #[tokio::test]
     async fn displayed_checks_follow_execution_time_and_current_claim_order() {
-        let (_d, ci, mut repo) = setup();
-        repo.required_checks.clear();
+        let (_d, ci, repo) = setup();
         let id = repo.id.clone();
         ci.inner
             .store
@@ -1724,8 +1915,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_reselected_skip_is_pending_while_waiting_and_never_a_protected_failure() {
-        let (_d, ci, mut repo) = setup();
-        repo.required_checks = vec!["test".into()];
+        let (_d, ci, repo) = setup();
         let (id, path) = (repo.id.clone(), repo.path.clone());
         let saved = repo.clone();
         ci.inner
@@ -2120,9 +2310,15 @@ mod tests {
 
     #[tokio::test]
     async fn a_commit_without_a_run_is_pending_never_no_checks() {
-        let (_d, ci, mut repo) = setup();
-        let c = ci.head_checks(&repo, "s1").await.unwrap();
-        assert!(c.checks_expected);
+        let (_d, ci, repo) = setup();
+        // A commit Git cannot read (there is no repository here) is still
+        // expected, never "no checks" (a commit without a pipeline:
+        // `tests/pulls.rs`).
+        let mut c = ci.head_checks(&repo, "s1").await.unwrap();
+        assert!(c.checks_expected && c.checks.is_empty());
+        ci.require(&repo, "s1", &mut c, &required(&["test"]))
+            .await
+            .unwrap();
         assert_eq!(c.checks.len(), 1);
         assert_eq!(c.checks[0].status, "queued");
         assert!(!c.checks[0].recorded() && !c.checks[0].succeeded());
@@ -2133,12 +2329,13 @@ mod tests {
                 .unwrap()
                 .contains("No CI run")
         );
-        // Without required checks, a commit Git cannot read (there is no
-        // repository here) is still expected, never "no checks" (a commit
-        // without a pipeline: `tests/pulls.rs`).
-        repo.required_checks.clear();
-        let c = ci.head_checks(&repo, "s1").await.unwrap();
-        assert!(c.checks_expected && c.checks.is_empty());
+    }
+
+    fn required(names: &[&str]) -> PullRequired {
+        PullRequired {
+            names: names.iter().map(|name| name.to_string()).collect(),
+            ..PullRequired::default()
+        }
     }
 
     #[tokio::test]
@@ -2185,7 +2382,11 @@ mod tests {
         assert!(test(&ci.head_checks(&repo, "s1").await.unwrap()).succeeded());
         // The commit's own pipeline has no test: the old success is not a check.
         assert!(run(reg(vec![job("lint")])).await.unwrap());
-        let c = ci.head_checks(&repo, "s1").await.unwrap();
+        let mut c = ci.head_checks(&repo, "s1").await.unwrap();
+        assert!(c.checks.iter().all(|x| x.name != "test"));
+        ci.require(&repo, "s1", &mut c, &required(&["test"]))
+            .await
+            .unwrap();
         let t = test(&c);
         assert_eq!(t.conclusion.as_deref(), Some("failure"));
         assert!(!t.recorded(), "{t:?}");
@@ -2239,7 +2440,10 @@ mod tests {
                 .contains("Waiting for room")
         );
         // s1's pipeline has no job named like the required check.
-        let c = ci.head_checks(&repo, "s1").await.unwrap();
+        let mut c = ci.head_checks(&repo, "s1").await.unwrap();
+        ci.require(&repo, "s1", &mut c, &required(&["test"]))
+            .await
+            .unwrap();
         let test = c.checks.iter().find(|x| x.name == "test").unwrap();
         assert_eq!(test.conclusion.as_deref(), Some("failure"));
         assert!(
@@ -2353,8 +2557,7 @@ mod tests {
 
     #[tokio::test]
     async fn verification_batches_main_and_marks_only_completed_success() {
-        let (temp, ci, mut repo) = setup();
-        repo.required_checks.clear();
+        let (temp, ci, repo) = setup();
         let app = app(&temp, &ci);
         let saved = repo.clone();
         app.store
@@ -2535,12 +2738,9 @@ mod tests {
         assert_eq!(ci.advance_verification(&repo, true).await.unwrap(), 0);
     }
     #[tokio::test]
-    async fn verification_finishes_invalid_missing_empty_and_exhausted_failures() {
-        for kind in ["absent", "invalid", "missing", "failed", "recovered"] {
-            let (temp, ci, mut repo) = setup();
-            if kind != "missing" {
-                repo.required_checks.clear();
-            }
+    async fn verification_finishes_invalid_empty_and_exhausted_failures() {
+        for kind in ["absent", "invalid", "failed", "recovered"] {
+            let (temp, ci, repo) = setup();
             let app = app(&temp, &ci);
             let saved = repo.clone();
             app.store
@@ -2587,7 +2787,7 @@ mod tests {
                         .await
                         .unwrap()
                         .unwrap();
-                    let conclusion = if kind == "missing" || (kind == "recovered" && n == 1) {
+                    let conclusion = if kind == "recovered" && n == 1 {
                         "success"
                     } else {
                         "failure"

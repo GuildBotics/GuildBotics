@@ -62,7 +62,6 @@ export interface Repository {
   clone_url: string;
   url: string;
   protected_branches: string[];
-  required_checks: string[];
   post_merge_jobs: string[];
   /** The approvals a merge or a publish needs; 0 needs none. */
   required_approvals: number;
@@ -487,6 +486,8 @@ export interface Checks extends CheckSet {
   /** null when a branch is gone. */
   behind_by: number | null;
   base_checks: number;
+  /** What the pull request's base requires of this head. */
+  required_names: string[];
 }
 
 export interface CommitChecks extends CheckSet {

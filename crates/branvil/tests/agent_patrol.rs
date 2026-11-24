@@ -405,20 +405,28 @@ impl AwaitedFixture {
         Self::new_as(false).await
     }
     async fn new_as(other: bool) -> Self {
+        Self::build(other, true).await
+    }
+    /// The same waiting run, on a base that does not require its `test`.
+    async fn optional() -> Self {
+        Self::build(false, false).await
+    }
+    async fn build(other: bool, required: bool) -> Self {
         let fixture = Fixture::new("owner").await;
         fixture.workspace("acme").await;
         fixture.repository("acme/repo").await;
-        let revision = fixture.owner.repos_get("acme/repo").await.unwrap().revision;
-        fixture
-            .owner
-            .repos_update(
-                "acme/repo",
-                input(json!({"revision":revision,"required_checks":["test"]})),
-            )
-            .await
-            .unwrap();
         let actor = fixture.member(ME).await;
-        let base = fixture.commit_check_pipeline("acme/repo", "main", None);
+        let base = if required {
+            fixture.commit(
+                "acme/repo",
+                "main",
+                None,
+                ".guildbotics-ci.toml",
+                "[[jobs]]\nname = \"test\"\nrequired = true\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\n",
+            )
+        } else {
+            fixture.commit_check_pipeline("acme/repo", "main", None)
+        };
         let head = fixture.commit("acme/repo", "feature", Some(&base), "a.txt", "feature");
         let code: Arc<CodeAgent> = Arc::new(branvil::agent::CodeAgent::new(
             fixture.data(),
@@ -502,22 +510,7 @@ async fn no_work_while_checks_pending() {
 }
 #[tokio::test]
 async fn optional_failure_does_not_hold_a_waiting_run() {
-    let f = AwaitedFixture::new().await;
-    let revision = f
-        .fixture
-        .owner
-        .repos_get("acme/repo")
-        .await
-        .unwrap()
-        .revision;
-    f.fixture
-        .owner
-        .repos_update(
-            "acme/repo",
-            input(json!({"revision":revision,"required_checks":[]})),
-        )
-        .await
-        .unwrap();
+    let f = AwaitedFixture::optional().await;
     f.conclude("failure").await;
     let checks = f
         .code

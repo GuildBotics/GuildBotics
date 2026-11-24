@@ -1182,11 +1182,29 @@ async fn a_rebase_merge_on_the_host_keeps_the_whole_change() {
 async fn a_pull_request_is_published_only_once_its_required_checks_succeed() {
     let (w, gh) = followed().await;
     with_aiko_account(&w).await;
+    let runner = crate::ci::Runner::new(&w, "publish-runner").await;
+    // main's requirement arrives from GitHub, like any change of the followed branch.
+    std::fs::write(
+        w.work.join(".guildbotics-ci.toml"),
+        crate::ci::required_pipeline(&["test"]),
+    )
+    .unwrap();
+    git_ok(&w.work, &["add", ".guildbotics-ci.toml"]);
+    git_ok(&w.work, &["commit", "-qm", "require test"]);
+    git_ok(
+        &w.work,
+        &[
+            "push",
+            "-q",
+            gh.dir(GH).to_str().unwrap(),
+            "HEAD:refs/heads/main",
+        ],
+    );
+    refresh(&w).await;
     w.push_change("feat", "f.txt", "one\n");
     let p = w.open_pull("feat", json!([])).await;
     let n = p["number"].as_u64().unwrap();
-    // `test` never ran (no pipeline), so it did not succeed: nothing goes out.
-    set_required_checks(&w, json!(["test"])).await;
+    // `test` has not run, so it did not succeed: nothing goes out.
     let (st, v) = publish(&w, n).await;
     assert_eq!(st, StatusCode::CONFLICT, "{v}");
     assert_eq!(v["error"]["code"], "not_mergeable");
@@ -1197,8 +1215,8 @@ async fn a_pull_request_is_published_only_once_its_required_checks_succeed() {
     assert_eq!(gh.tip(GH, "feat"), None);
     assert!(gh.pulls(GH).is_empty());
 
-    // Without the requirement the same head is published.
-    set_required_checks(&w, json!([])).await;
+    // Once it succeeded, the same head is published.
+    assert!(runner.drain("success").await >= 1);
     let (st, v) = publish(&w, n).await;
     assert_eq!(st, StatusCode::OK, "{v}");
     assert!(gh.tip(GH, "feat").is_some());
@@ -1236,19 +1254,6 @@ async fn a_workflow_run_that_failed_without_a_job_is_a_failed_check() {
         failed[0]["details_url"],
         "https://github.test/actions/runs/6"
     );
-}
-
-async fn set_required_checks(w: &World, checks: Value) {
-    let (_, repo) = w.server.get(&w.repo_path(), &w.owner).await;
-    let (st, v) = w
-        .server
-        .patch(
-            &w.repo_path(),
-            &w.owner,
-            json!({"revision": repo["revision"], "required_checks": checks}),
-        )
-        .await;
-    assert_eq!(st, StatusCode::OK, "{v}");
 }
 
 async fn set_account(w: &World, name: &str, token: &str) {
