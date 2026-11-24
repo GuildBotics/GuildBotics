@@ -17,6 +17,7 @@ const CHECKS: Checks = {
   checks: [SUCCESS],
   checks_expected: true,
   base_checks: 1,
+  base_failure: null,
   required_names: [],
 };
 
@@ -69,6 +70,40 @@ describe.each(["en", "ja"] as const)("base branch guidance (%s)", (language) => 
     },
   );
 });
+
+it.each(["en", "ja"] as const)(
+  "shows failed checks on the base and links its repair (%s)",
+  async (language) => {
+    const branch = "ticket/42";
+    fakeApi(
+      pullRoutes({
+        [`GET ${P}`]: json(200, pull({ base: branch })),
+        [`GET ${P}/checks`]: json(200, {
+          ...CHECKS,
+          base_failure: {
+            branch,
+            sha: BASE,
+            failed_jobs: [{ name: "rust", attempt_id: "att_failed", details: null }],
+            repair: { number: 17, assignee: "agent", url: "/acme/demo/-/tickets/17" },
+          },
+        }),
+      }),
+    );
+    renderApp("/acme/demo/-/pulls/3", language);
+    const title = format(dictionaries[language]["pull.baseFailure"], { base: branch });
+    const report = await screen.findByRole("status", { name: title });
+    expect(within(report).getByText(title)).toBeInTheDocument();
+    expect(within(report).getByRole("link", { name: "rust" })).toHaveAttribute(
+      "href",
+      "/acme/demo/-/jobs/att_failed",
+    );
+    expect(
+      within(report).getByRole("link", {
+        name: format(dictionaries[language]["landing.repairLink"], { number: 17 }),
+      }),
+    ).toHaveAttribute("href", "/acme/demo/-/tickets/17");
+  },
+);
 
 describe.each(["en", "ja"] as const)("merged check evidence (%s)", (language) => {
   const words = dictionaries[language];
@@ -586,6 +621,7 @@ function pullRoutes(extra: Record<string, Parameters<typeof fakeApi>[0][string]>
       ],
       checks_expected: true,
       base_checks: 1,
+      base_failure: null,
       required_names: [],
     }),
     "GET /api/v1/repos/acme/demo/jobs/att_1": json(200, {
@@ -1560,6 +1596,7 @@ describe("pull request review", () => {
           ],
           checks_expected: true,
           base_checks: 1,
+          base_failure: null,
           required_names: [],
         }),
         "GET /api/v1/repos/acme/demo/jobs/github-41/log": json(200, {

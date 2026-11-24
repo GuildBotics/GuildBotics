@@ -328,7 +328,7 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("enabled recording of merge decision checks"),
+        text(&out).contains("pending failures to the default branch"),
         "{}",
         text(&out)
     );

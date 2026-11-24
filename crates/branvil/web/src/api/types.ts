@@ -500,6 +500,12 @@ export interface Checks extends CheckSet {
   /** null when a branch is gone. */
   behind_by: number | null;
   base_checks: number;
+  base_failure: {
+    branch: string;
+    sha: string;
+    failed_jobs: { name: string; attempt_id: string | null; details: string | null }[];
+    repair: { number: number; assignee: string | null; url: string } | null;
+  } | null;
   /** What the pull request's base requires of this head. */
   required_names: string[];
   merge_checks?: MergeChecks | null;

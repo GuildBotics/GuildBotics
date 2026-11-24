@@ -128,6 +128,16 @@ async fn sweep(app: &App, dirty: &Dirty) {
         Ok(r) => r,
         Err(e) => return tracing::error!("autoland: {e}"),
     };
+    let affected = || {
+        repos
+            .iter()
+            .filter(|r| dirty.all || dirty.paths.contains(&r.path))
+    };
+    for repo in affected() {
+        if let Err(e) = crate::ci::collection::advance(app, repo).await {
+            tracing::warn!("collection verification of {}: {e}", repo.path);
+        }
+    }
     if let Err(e) = crate::repair::sweep(app).await {
         tracing::warn!("repair tickets: {e}");
     }
@@ -136,10 +146,7 @@ async fn sweep(app: &App, dirty: &Dirty) {
     }
     // There is one webhook: once a send to it fails, this sweep sends no more.
     let mut webhook_ok = true;
-    for repo in repos
-        .iter()
-        .filter(|r| dirty.all || dirty.paths.contains(&r.path))
-    {
+    for repo in affected() {
         if let Err(e) = sweep_repo(app, repo, &mut webhook_ok).await {
             tracing::warn!("autoland: {}: {e}", repo.path);
         }

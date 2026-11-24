@@ -1026,3 +1026,322 @@ async fn ticket_base_uses_nearest_draft_ancestor_and_create_reports_it() {
     );
     context.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn collecting_branch_failure_runs_repair_and_holds_only_its_children() {
+    let context = Context::new().await;
+    let Context {
+        owner,
+        t,
+        c,
+        base,
+        runner,
+        owner_token,
+        temp,
+        ..
+    } = &context;
+    let git = Git::new(&temp.path().join("collection-repair"));
+    let remote = c.clone_url(REPO).await.unwrap();
+    let main = git.commit(
+        "",
+        ".guildbotics-ci.toml",
+        "[[jobs]]\nname='rust'\nrequired=true\nimage='docker.io/library/alpine:3.22'\ncommands=['true']\npaths=['src/**']\n",
+    );
+    git.push(&remote, &main, "main", "owner", owner_token.trim());
+    finish(base, runner, &main, "success").await;
+
+    let parent = create(t, "Collection").await;
+    owner
+        .tickets_create_ticket(
+            REPO,
+            input(json!({
+                "title": "Ordinary task", "parent": parent, "assignee": "aiko", "lane": "ready",
+            })),
+        )
+        .await
+        .unwrap();
+    let collecting = format!("ticket/{}", parent.rsplit('/').next().unwrap());
+
+    let broken = git.commit(&main, "src/broken.txt", "broken");
+    git.push(&remote, &broken, &collecting, "owner", owner_token.trim());
+    let draft = owner
+        .pulls_create(
+            REPO,
+            input(json!({
+                "head": collecting, "base": "main", "title": "Collect", "draft": true,
+            })),
+        )
+        .await
+        .unwrap()
+        .pull;
+    assert!(draft.draft);
+    finish(base, runner, &broken, "failure").await;
+
+    let repair = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            let tasks = t.candidates().await.unwrap();
+            if let Some(first) = tasks.first().filter(|task| task.repair) {
+                assert_eq!(first.assignee.as_deref(), Some("aiko"));
+                assert_eq!(first.status, "ready");
+                assert_eq!(first.trigger_reason.as_deref(), Some("ready_lane"));
+                return first.url.clone().unwrap();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .expect("the patrol should select the repair ahead of ordinary work");
+    let repair_key = repair.rsplit('/').next().unwrap();
+    let repair_view = t.ticket_view(&repair).await.unwrap();
+    assert_eq!(
+        repair_view.repair_branch.as_deref(),
+        Some(collecting.as_str())
+    );
+    assert_eq!(c.ticket_base(REPO, repair_key).await.unwrap(), collecting);
+
+    let child = git.commit(&broken, "notes.txt", "documentation");
+    git.push(&remote, &child, "ordinary", "owner", owner_token.trim());
+    let ordinary = owner
+        .pulls_create(
+            REPO,
+            input(json!({
+                "head": "ordinary", "base": collecting, "title": "Change documentation",
+            })),
+        )
+        .await
+        .unwrap()
+        .pull;
+    let readiness = c
+        .read(Resource::PullRequestReadiness, &ordinary.url, None, "")
+        .await
+        .unwrap();
+    let report = &readiness.items()[0];
+    assert_eq!(report["required_checks"], "passed", "{report}");
+    assert_eq!(report["base_failure"]["sha"], broken);
+    assert_eq!(report["base_failure"]["failed_jobs"][0]["name"], "rust");
+    assert!(report["base_failure"]["failed_jobs"][0]["attempt_id"].is_string());
+    assert_eq!(report["base_failure"]["repair"]["url"], repair);
+
+    let repo = owner.repos_get(REPO).await.unwrap();
+    let before = owner.pulls_get(REPO, ordinary.number).await.unwrap();
+    assert!(
+        before
+            .landing
+            .unwrap()
+            .blockers
+            .iter()
+            .all(|b| b.code != "base_checks_failed")
+    );
+    owner
+        .repos_update(
+            REPO,
+            input(json!({
+                "revision": repo.revision, "hold_while_failing": true, "required_approvals": 0,
+            })),
+        )
+        .await
+        .unwrap();
+    let view = owner.pulls_get(REPO, ordinary.number).await.unwrap();
+    let blockers = view.landing.unwrap().blockers;
+    assert!(
+        blockers
+            .iter()
+            .any(|b| b.code == "base_checks_failed" && b.jobs == ["rust"])
+    );
+    let error = owner
+        .pulls_merge(
+            REPO,
+            ordinary.number,
+            input(json!({
+                "expected_head": child, "expected_base": broken,
+            })),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "not_mergeable");
+    assert!(error.message.contains("base_checks_failed"));
+
+    let main_child = git.commit(&main, "unrelated.txt", "unrelated");
+    git.push(
+        &remote,
+        &main_child,
+        "unrelated",
+        "owner",
+        owner_token.trim(),
+    );
+    let unrelated = owner
+        .pulls_create(
+            REPO,
+            input(json!({
+                "head": "unrelated", "base": "main", "title": "Unrelated",
+            })),
+        )
+        .await
+        .unwrap()
+        .pull;
+    assert!(
+        owner
+            .pulls_checks(REPO, unrelated.number)
+            .await
+            .unwrap()
+            .base_failure
+            .is_none()
+    );
+    git.push(
+        &remote,
+        &main_child,
+        "watch-main",
+        "owner",
+        owner_token.trim(),
+    );
+    let watch = owner
+        .pulls_create(
+            REPO,
+            input(json!({
+                "head": "watch-main", "base": "main", "title": "Watch main advance",
+            })),
+        )
+        .await
+        .unwrap()
+        .pull;
+    let advanced = owner
+        .pulls_merge(
+            REPO,
+            unrelated.number,
+            input(json!({
+                "expected_head": main_child, "expected_base": main,
+            })),
+        )
+        .await
+        .unwrap()
+        .merge_sha
+        .unwrap();
+
+    let wait_for_landing = |head: String| {
+        let advanced = &advanced;
+        async move {
+            tokio::time::timeout(std::time::Duration::from_secs(15), async {
+                loop {
+                    let view = owner.pulls_get(REPO, watch.number).await.unwrap();
+                    if view.landing.is_some_and(|landing| {
+                        landing.entry.head_sha == head && landing.entry.base_sha == *advanced
+                    }) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                }
+            })
+            .await
+            .expect("landing should refresh the watch pull");
+        }
+    };
+    let mut watch_head = main_child;
+    wait_for_landing(watch_head.clone()).await;
+    // Autoland can refresh landing twice in a sweep even with auto-land off.
+    // Two further refreshes ensure a later sweep saw the new main tip.
+    for marker in ["first", "second"] {
+        watch_head = git.commit(&watch_head, "watch.txt", marker);
+        git.push(
+            &remote,
+            &watch_head,
+            "watch-main",
+            "owner",
+            owner_token.trim(),
+        );
+        wait_for_landing(watch_head.clone()).await;
+    }
+    let comments = t
+        .read(Resource::TicketComments, &repair, None, "")
+        .await
+        .unwrap();
+    assert!(
+        comments.items().is_empty(),
+        "moving main did not change the collection failure: {:?}",
+        comments.items()
+    );
+
+    let attempt = report["base_failure"]["failed_jobs"][0]["attempt_id"]
+        .as_str()
+        .unwrap();
+    let retry = owner
+        .job_retry(REPO, attempt, Default::default())
+        .await
+        .unwrap();
+    assert_ne!(retry.id, attempt);
+    finish(base, runner, &broken, "failure").await;
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            let comments = t
+                .read(Resource::TicketComments, &repair, None, "")
+                .await
+                .unwrap();
+            if let Some(comment) = comments.items().first() {
+                assert_eq!(comments.items().len(), 1, "{:?}", comments.items());
+                let body = comment["body"].as_str().unwrap();
+                assert!(body.contains("Still failing at this commit"), "{body}");
+                assert!(body.contains(&retry.id), "{body}");
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .expect("a new failed attempt on the same commit should be reported");
+
+    let fix = format!("ticket/{repair_key}");
+    let fixed = git.commit(&broken, "src/broken.txt", "fixed");
+    git.push(&remote, &fixed, &fix, "owner", owner_token.trim());
+    let pr = c
+        .create_pull_request(CreatePullRequest {
+            repository: REPO.into(),
+            head: fix,
+            base: String::new(),
+            title: "Repair the collection branch".into(),
+            body: String::new(),
+            draft: false,
+            tickets: vec![TicketLink {
+                url: repair.clone(),
+                closes: false,
+            }],
+        })
+        .await
+        .unwrap()
+        .written
+        .view;
+    assert_eq!(pr.base, collecting);
+    finish(base, runner, &fixed, "success").await;
+    assert_eq!(t.ticket_view(&repair).await.unwrap().state, "open");
+    owner
+        .pulls_merge(
+            REPO,
+            pr.number,
+            input(json!({
+                "expected_head": fixed, "expected_base": broken,
+            })),
+        )
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            let ticket = t.ticket_view(&repair).await.unwrap();
+            if ticket.state == "closed" {
+                assert_eq!(ticket.state_reason.as_deref(), Some("completed"));
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .expect("passing checks of the collection tip should close the repair");
+    assert!(
+        owner
+            .pulls_checks(REPO, ordinary.number)
+            .await
+            .unwrap()
+            .base_failure
+            .is_none()
+    );
+
+    context.stop().await;
+}

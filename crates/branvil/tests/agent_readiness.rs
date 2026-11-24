@@ -17,6 +17,7 @@ fn run(input: &Value) -> Result<Readiness, ServiceError> {
             base_checks: 0,
             merge_checks: None,
             post_merge_checks: None,
+            base_failure: None,
         },
         feedback: Feedback::default(),
         failed_logs: serde_json::from_value(input["failed_logs"].clone()).unwrap(),

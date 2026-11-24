@@ -1909,6 +1909,7 @@ pub struct ChecksView {
     pub required_names: Vec<String>,
     pub checks_expected: bool,
     pub base_checks: usize,
+    pub base_failure: Option<crate::ci::collection::BaseFailure>,
     pub merge_checks: Option<MergeChecks>,
     pub post_merge_checks: Option<PostMergeChecks>,
 }
@@ -2011,6 +2012,18 @@ pub async fn checks(
             .filter(|c| c.recorded())
             .count()
     };
+    let base_failure = if p.state == "open" {
+        crate::ci::collection::base_failure(
+            app,
+            &repo,
+            &p.base,
+            &base_sha,
+            tips.get(&repo.default_branch).map_or("", String::as_str),
+        )
+        .await?
+    } else {
+        None
+    };
     let mut view = ChecksView {
         head_sha,
         base_sha,
@@ -2021,6 +2034,7 @@ pub async fn checks(
         required_names: Vec::new(),
         checks_expected: false,
         base_checks,
+        base_failure,
         merge_checks: None,
         post_merge_checks: None,
     };

@@ -2,6 +2,7 @@
 // check's details, actions, and log in a drawer.
 
 import {
+  Alert,
   Anchor,
   Box,
   Button,
@@ -281,6 +282,8 @@ export function ChecksCard({
       </>
     );
   }
+  const failure = checks.data?.base_failure;
+  const failureTitle = failure ? t("pull.baseFailure", { base: failure.branch }) : undefined;
   return (
     <CheckList
       repo={repo}
@@ -292,6 +295,27 @@ export function ChecksCard({
       context={context}
       onOpen={onOpen}
     >
+      {failure && (
+        <Alert color="red" role="status" mb="xs" aria-label={failureTitle} title={failureTitle}>
+          <Sha repo={repo} value={failure.sha} />
+          <ul>
+            {failure.failed_jobs.map((job) => (
+              <li key={job.name}>
+                {job.attempt_id ? (
+                  <Link to={href.job(repo, job.attempt_id)}>{job.name}</Link>
+                ) : (
+                  job.name
+                )}
+              </li>
+            ))}
+          </ul>
+          {failure.repair && (
+            <Link to={href.ticket(repo, String(failure.repair.number))}>
+              {t("landing.repairLink", { number: failure.repair.number })}
+            </Link>
+          )}
+        </Alert>
+      )}
       {!!checks.data?.conflicts?.length && (
         <Text size="sm" c="var(--color-danger-text)" mb="xs">
           {t("pull.conflicts", { files: checks.data.conflicts.join(", ") })}

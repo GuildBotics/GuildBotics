@@ -269,6 +269,7 @@ fn readiness_of(url: &str, state: &str) -> Readiness {
             base_checks: 0,
             merge_checks: None,
             post_merge_checks: None,
+            base_failure: None,
         },
         feedback: Feedback::default(),
         failed_logs: None,

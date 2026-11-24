@@ -1267,6 +1267,7 @@ fn typed_card(v: &Value) -> tickets::CardView {
     };
     tickets::CardView {
         ticket: tickets::TicketView {
+            repair_branch: None,
             repair: v["repair"] == true,
             url: strv("url"),
             repository: strv("repository"),
