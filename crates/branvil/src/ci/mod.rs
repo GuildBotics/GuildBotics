@@ -194,7 +194,7 @@ impl RunnerSeen {
 }
 
 // Runners poll every two seconds; leave room for an inventory refresh, but
-// stop preferring RAM well before an unresponsive runner is considered absent.
+// stop relying on free memory samples well before a runner is considered absent.
 const RAM_REPORT_MAX_AGE: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
@@ -1216,7 +1216,7 @@ impl Ci {
         Ok(runners)
     }
 
-    fn ready_alternatives(&self, r: &impl Rd, runner: &str) -> AppResult<Vec<queue::ClaimRunner>> {
+    fn online_alternatives(&self, r: &impl Rd, runner: &str) -> AppResult<Vec<queue::ClaimRunner>> {
         let settings = self.settings();
         let absent = Duration::from_secs(self.inner.config.runner_absent_secs);
         let own = util::fold(runner);
@@ -1225,15 +1225,13 @@ impl Ci {
             .into_iter()
             .filter_map(|seen| {
                 let (limits, _) = settings.runner_limits(&seen.name);
-                (util::fold(&seen.name) != own
-                    && seen.online(absent)
-                    && seen.report.accept
-                    && seen.report.running_jobs < limits.max_jobs as usize)
+                (util::fold(&seen.name) != own && seen.online(absent) && seen.report.accept)
                     .then_some(queue::ClaimRunner {
                         name: seen.name,
                         images: seen.report.images,
                         limits,
                         machine: seen.report.machine,
+                        has_free_slot: seen.report.running_jobs < limits.max_jobs as usize,
                         ram_fresh: seen.seen.elapsed() <= RAM_REPORT_MAX_AGE,
                         cache_groups: seen.report.cache_groups,
                         ram_unsupported_images: seen.report.ram_unsupported_images,
@@ -1737,7 +1735,7 @@ mod tests {
         assert_eq!(view["runners"][0]["name"], "expired");
         assert_eq!(view["runners"][0]["connection"], "offline");
         assert!(view["runners"][0]["last_seen_at"].is_string());
-        ci.report_runner("ready", report);
+        ci.report_runner("ready", report.clone());
         ci.inner
             .runners
             .lock()
@@ -1748,7 +1746,7 @@ mod tests {
         ci.inner
             .store
             .read_sync(|r| {
-                let alternatives = ci.ready_alternatives(r, "another")?;
+                let alternatives = ci.online_alternatives(r, "another")?;
                 assert_eq!(alternatives.len(), 1);
                 assert_eq!(alternatives[0].name, "ready");
                 assert!(!alternatives[0].ram_fresh);
@@ -1760,6 +1758,23 @@ mod tests {
         assert_eq!(view["runners"][0]["connection"], "offline");
         assert_eq!(view["runners"][1]["connection"], "online");
         assert_eq!(view["runners"][2]["connection"], "never_seen");
+
+        ci.report_runner(
+            "ready",
+            RunnerReport {
+                running_jobs: ci.settings().runner_limits("ready").0.max_jobs as usize,
+                ..report
+            },
+        );
+        ci.inner
+            .store
+            .read_sync(|r| {
+                let alternatives = ci.online_alternatives(r, "another")?;
+                assert_eq!(alternatives.len(), 1);
+                assert!(!alternatives[0].has_free_slot);
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[tokio::test]

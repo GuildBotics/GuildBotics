@@ -108,6 +108,9 @@ timeout_secs = 300
 [[jobs]]
 name = "rust-clippy"
 required = true
+# Leaves room above the 2.02 GiB restored target for dependency rebuilds.
+# With 1024 MiB of command headroom, it fits the Hub's 6144 MiB VM.
+ram_workspace = { paths = ["target"], max_mib = 3072 }
 paths = [
   "crates/*/src/**",
   "crates/*/tests/**",
@@ -215,6 +218,10 @@ cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.loc
 [[jobs]]
 name = "rust-cli-blackbox"
 post_merge = true
+# The restored target is 3.16 GiB and rebuilds need room to grow. With
+# 1024 MiB of command headroom, this requires an 8224 MiB VM, so only the
+# Linux runner uses RAM. The black-box tests already peak near 6 GiB on disk.
+ram_workspace = { paths = ["target"], max_mib = 7200 }
 paths = ["crates/**", "guildbotics/**", "skills/guildbotics/**", "tests/blackbox/**", "tests/integration/**", "tests/conftest.py", "docs/cli_reference.md", "pyproject.toml", "uv.lock", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**"]
 image = "guildbotics/agent-environment:dev"
 commands = ['''
@@ -267,6 +274,9 @@ artifacts = [{ name = "web-tests", paths = ["crates/branvil/web/test-results/tim
 [[jobs]]
 name = "client-windows"
 required = true
+# Leaves room above the 1.56 GiB restored target for dependency rebuilds.
+# With 1024 MiB of command headroom, it fits the Hub's 6144 MiB VM.
+ram_workspace = { paths = ["target"], max_mib = 3072 }
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu
@@ -287,6 +297,9 @@ cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.loc
 [[jobs]]
 name = "client-linux"
 post_merge = true
+# Leaves room above the 1.12 GiB restored target for dependency rebuilds.
+# With 1024 MiB of command headroom, it fits the Hub's 6144 MiB VM.
+ram_workspace = { paths = ["target"], max_mib = 3072 }
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu

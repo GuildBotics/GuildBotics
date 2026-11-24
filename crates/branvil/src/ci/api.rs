@@ -555,13 +555,14 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
                     images,
                     limits,
                     machine,
+                    has_free_slot: true,
                     ram_fresh: reported_at.elapsed() <= super::RAM_REPORT_MAX_AGE,
                     cache_groups,
                     ram_unsupported_images,
                 },
                 lease_secs,
                 &at,
-                || ci.ready_alternatives(w, &runner),
+                || ci.online_alternatives(w, &runner),
             )?;
             let cache_write = match claimed.as_ref() {
                 Some(claim) if limits.cache_max_mib > 0 => queue::keeps_cache(w, &claim.attempt)?,
