@@ -125,6 +125,10 @@ struct JobSchema {
     /// `JobDef`, so stored runs, reuse and the runner's messages do not change.
     #[serde(default)]
     required: bool,
+    /// Kept out of `JobDef` for the same reason as `required`. Validated now;
+    /// selection still reads the repository setting until it moves here (#449).
+    #[serde(default)]
+    post_merge: bool,
     name: String,
     image: String,
     commands: Vec<String>,
@@ -194,6 +198,11 @@ fn validate_job(j: JobSchema) -> Result<JobDef, String> {
     if !valid_name(&name) || name == "pipeline" {
         return Err(format!(
             "'{name}' is not a valid job name ([A-Za-z0-9_.-], at most 64, not 'pipeline')."
+        ));
+    }
+    if j.required && j.post_merge {
+        return Err(at(
+            "required and post_merge cannot both be true: a post-merge job does not run on the pull requests that must pass it.",
         ));
     }
     if !valid_image(&j.image) {
@@ -506,6 +515,26 @@ mod tests {
             let error = parse(&format!("{job}required={value}\n")).unwrap_err();
             assert!(error.contains("required"), "{value}: {error}");
         }
+    }
+    #[test]
+    fn post_merge_is_an_optional_boolean_that_cannot_be_required() {
+        let job = "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n";
+        for value in ["true", "false"] {
+            let file = parse_file(&format!("{job}post_merge={value}\n")).unwrap();
+            assert_eq!(file.jobs, parse(job).unwrap(), "{value}");
+            assert!(file.required.is_empty(), "{value}");
+        }
+        for value in ["'yes'", "1"] {
+            let error = parse(&format!("{job}post_merge={value}\n")).unwrap_err();
+            assert!(error.contains("post_merge"), "{value}: {error}");
+        }
+        let error = parse(&format!("{job}required=true\npost_merge=true\n")).unwrap_err();
+        assert!(
+            error.starts_with("Job test: required and post_merge"),
+            "{error}"
+        );
+        let file = parse_file(&format!("{job}required=true\npost_merge=false\n")).unwrap();
+        assert_eq!(file.required, ["test"]);
     }
 
     #[test]
