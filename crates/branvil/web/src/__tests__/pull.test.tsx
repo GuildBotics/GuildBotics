@@ -144,6 +144,7 @@ describe.each(["en", "ja"] as const)("merged check evidence (%s)", (language) =>
             ],
           },
           post_merge_checks: {
+            status: "pending",
             sha: NEW_HEAD,
             branch: target.branch,
             pulls: target.pullNumbers,
@@ -165,7 +166,9 @@ describe.each(["en", "ja"] as const)("merged check evidence (%s)", (language) =>
     expect(
       decision.queryByText(format(words["pull.behindBy"], { base: target.branch, count: 3 })),
     ).not.toBeInTheDocument();
-    const follow = within(screen.getByRole("region", { name: words["ci.postMergeConfirmation"] }));
+    const region = screen.getByRole("region", { name: words["ci.postMergeConfirmation"] });
+    expect(region).toHaveAttribute("id", "post-merge-checks");
+    const follow = within(region);
     expect(follow.getByRole("link", { name: target.destination })).toHaveAttribute(
       "href",
       target.path,

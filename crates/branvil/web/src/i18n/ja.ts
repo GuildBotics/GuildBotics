@@ -328,6 +328,7 @@ export const ja: Record<MessageKey, string> = {
     "上流マージの取り込み時点で確認した、受け入れブランチの検証より前の PR 側のチェックです。上流ホストのマージ判定は上流 PR にあります。",
   "ci.mergeDecisionNoResults": "この時点で参照できる必須チェックの結果はありませんでした。",
   "ci.postMergeConfirmation": "マージ後の確認",
+  "ci.postMergeStatus": "マージ後の確認：{status}",
   "ci.postMergePullReason":
     "マージで次の PR の head が進んだため、その PR の base に対してチェックします。",
   "ci.postMergeBranchReason": "マージで入ったコミットを次のブランチの確認として実行します。",
@@ -649,6 +650,7 @@ export const ja: Record<MessageKey, string> = {
   "pulls.state": "状態",
   "pulls.updated": "更新",
   "pulls.noneOpen": "オープンな PR はありません。",
+  "pulls.openAndVerifying": "オープン・マージ後の確認",
   "pulls.none": "PR はありません。",
   "pulls.noLoadedMatches":
     "読み込んだ PR には一致するものがありません。さらに表示して検索を続けられます。",

@@ -1,6 +1,15 @@
 import { ticketRef, type Card, type Check, type CheckSet } from "../../api/types";
+import type { Tone } from "../../components/common";
 
 export type CiRollup = "passing" | "failing" | "pending" | "not_registered" | "none";
+
+export const CI_TONE: Record<CiRollup, Tone> = {
+  passing: "success",
+  failing: "danger",
+  pending: "warning",
+  not_registered: "warning",
+  none: "neutral",
+};
 
 const FAILED = new Set<Check["conclusion"]>([
   "failure",

@@ -78,6 +78,8 @@ export function parseRoute(pathname: string): Route {
 
 const joinPath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
 
+export const POST_MERGE_FRAGMENT = "post-merge-checks";
+
 export const href = {
   home: () => "/",
   settings: (section?: string) =>
@@ -87,6 +89,8 @@ export const href = {
   pulls: (workspace: string) => `/${encodeURIComponent(workspace)}/-/pulls`,
   ticket: (repo: string, key: string) => `/${joinPath(repo)}/-/tickets/${key}`,
   pull: (repo: string, number: number) => `/${joinPath(repo)}/-/pulls/${number}`,
+  pullVerification: (repo: string, number: number): string =>
+    `${href.pull(repo, number)}#${POST_MERGE_FRAGMENT}`,
   commit: (repo: string, sha: string) => `/${joinPath(repo)}/-/commits/${encodeURIComponent(sha)}`,
   job: (repo: string, id: string) => `/${joinPath(repo)}/-/jobs/${encodeURIComponent(id)}`,
   repo: (repo: string) => `/${joinPath(repo)}`,

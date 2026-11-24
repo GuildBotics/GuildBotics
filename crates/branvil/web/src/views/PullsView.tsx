@@ -2,22 +2,16 @@ import { Button, Card, Group, Select, Stack, Text, TextInput } from "@mantine/co
 import { Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { PullRequest } from "../api/types";
-import {
-  ErrorMessage,
-  Loading,
-  MemberAvatar,
-  StateBadge,
-  Time,
-  type Tone,
-} from "../components/common";
+import { ErrorMessage, Loading, MemberAvatar, StateBadge, Time } from "../components/common";
 import { PageHeader } from "../components/PageHeader";
 import { useT } from "../i18n";
 import { useChecks, useMemberKinds, useRepos } from "../query/hooks";
 import { usePullList } from "../query/pullList";
 import { Link, navigate } from "../router/Router";
 import { href } from "../router/routes";
-import { rollup, type CiRollup } from "./board/ordering";
+import { CI_TONE, rollup } from "./board/ordering";
 import { JourneyBadge } from "./pull/LandingStatus";
+import { PostMergeStatusBadge } from "./pull/PostMergeStatus";
 import { TipChecks } from "./pulls/TipChecks";
 import { ReviewersCell } from "./pulls/ReviewersCell";
 
@@ -27,21 +21,12 @@ const ALL_REPOS = "*";
 /** The most rows whose checks are read (one request each), as the board limits them. */
 const CI_BUDGET = 30;
 
-const CI_TONE: Record<CiRollup, Tone> = {
-  passing: "success",
-  failing: "danger",
-  pending: "warning",
-  not_registered: "warning",
-  none: "neutral",
-};
-
 function CiCell({ pull, load }: { pull: PullRequest; load: boolean }) {
   const t = useT();
   const checks = useChecks(pull.repository, pull.number, load);
   if (!checks.data) return null;
-  return (
-    <StateBadge tone={CI_TONE[rollup(checks.data)]}>{t(`ci.${rollup(checks.data)}`)}</StateBadge>
-  );
+  const status = rollup(checks.data);
+  return <StateBadge tone={CI_TONE[status]}>{t(`ci.${status}`)}</StateBadge>;
 }
 
 /**
@@ -120,7 +105,7 @@ export function PullsView({ workspace, repo }: { workspace: string; repo: string
             allowDeselect={false}
             onChange={(v) => v && setState(v as State)}
             data={[
-              { value: "open", label: `${t("pulls.state")}: ${t("pull.state.open")}` },
+              { value: "open", label: `${t("pulls.state")}: ${t("pulls.openAndVerifying")}` },
               { value: "closed", label: `${t("pulls.state")}: ${t("pull.state.closed")}` },
               { value: "all", label: `${t("pulls.state")}: ${t("board.any")}` },
             ]}
@@ -152,7 +137,11 @@ export function PullsView({ workspace, repo }: { workspace: string; repo: string
                 return (
                   <Link
                     key={p.url}
-                    to={href.pull(p.repository, p.number)}
+                    to={
+                      p.post_merge_status
+                        ? href.pullVerification(p.repository, p.number)
+                        : href.pull(p.repository, p.number)
+                    }
                     className="list-row pull-cols"
                     role="row"
                     aria-label={`${p.repository} ${p.label} ${p.title}`}
@@ -173,7 +162,13 @@ export function PullsView({ workspace, repo }: { workspace: string; repo: string
                         repository && <JourneyBadge pull={p} repo={repository} load={load} />
                       )}
                     </span>
-                    <span role="cell">{p.state === "open" && <CiCell pull={p} load={load} />}</span>
+                    <span role="cell">
+                      {p.post_merge_status ? (
+                        <PostMergeStatusBadge status={p.post_merge_status} />
+                      ) : (
+                        s === "open" && <CiCell pull={p} load={load} />
+                      )}
+                    </span>
                     <Group gap={6} role="cell" wrap="nowrap">
                       <MemberAvatar name={p.author} kind={kindOf(p.author)} size={24} />
                       <Text span size="sm" truncate style={{ minWidth: 0 }} title={p.author}>

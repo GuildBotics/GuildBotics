@@ -255,6 +255,18 @@ async fn merged_checks_keep_the_decision_when_the_receiving_branch_reselects_job
         .await;
     assert_eq!(status, 201, "{child}");
     let child_n = child["pull"]["number"].as_u64().unwrap();
+    let listed = |number| {
+        let path = format!(
+            "{}/pulls?state=open&post_merge=active&sort=readiness&limit=1",
+            w.repo_path()
+        );
+        let w = &w;
+        async move {
+            let list = w.server.ok(&path, &w.owner).await;
+            assert_eq!(list["items"][0]["number"], number);
+            list["items"][0]["post_merge_status"].clone()
+        }
+    };
 
     let merge = |number, head: String, base: Value| {
         let path = format!("{}/pulls/{number}/merge", w.repo_path());
@@ -286,6 +298,7 @@ async fn merged_checks_keep_the_decision_when_the_receiving_branch_reselects_job
     assert_eq!(rust["attempt"], 1);
     assert_eq!(rust["attempt_id"], skipped["attempt_id"]);
     let confirmation = &after["post_merge_checks"];
+    assert_eq!(confirmation["status"], "pending");
     assert_eq!(confirmation["branch"], "ticket/10");
     assert_eq!(confirmation["pulls"], json!([collecting_n]));
     assert_eq!(confirmation["sha"], child_head);
@@ -294,7 +307,39 @@ async fn merged_checks_keep_the_decision_when_the_receiving_branch_reselects_job
     assert_eq!(rust["attempt"], 2);
     assert_eq!(rust["attempt_id"], new_rust["attempt_id"]);
 
+    assert_eq!(listed(child_n).await, "pending");
+    let normal_open = w
+        .server
+        .ok(&format!("{}/pulls?state=open", w.repo_path()), &w.owner)
+        .await;
+    assert_eq!(normal_open["items"].as_array().unwrap().len(), 1);
+    assert_eq!(normal_open["items"][0]["number"], collecting_n);
+    assert_eq!(runner.finish(&new_rust, "failure").await.0, 200);
+    assert_eq!(listed(child_n).await, "failing");
+    assert_eq!(
+        checks(&w, child_n).await["post_merge_checks"]["status"],
+        "failing"
+    );
+    let (status, result) = w
+        .server
+        .post(
+            &format!(
+                "{}/jobs/{}/retry",
+                w.repo_path(),
+                new_rust["attempt_id"].as_str().unwrap()
+            ),
+            &w.owner,
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200, "{result}");
+    let new_rust = runner.next_claim().await;
     assert_eq!(runner.finish(&new_rust, "success").await.0, 200);
+    assert!(listed(collecting_n).await.is_null());
+    assert_eq!(
+        checks(&w, child_n).await["post_merge_checks"]["status"],
+        "passing"
+    );
     merge(
         collecting_n,
         child_head.clone(),
@@ -318,6 +363,7 @@ async fn merged_checks_keep_the_decision_when_the_receiving_branch_reselects_job
     let release_check = check(confirmation, "release");
     assert_eq!(release_check["status"], "in_progress");
     assert_eq!(release_check["attempt_id"], release["attempt_id"]);
+    assert_eq!(listed(collecting_n).await, "pending");
     assert_eq!(
         checks(&w, child_n).await["merge_checks"]["checks"][0]["attempt_id"],
         skipped["attempt_id"]

@@ -33,9 +33,9 @@ import { useT } from "../../i18n";
 import { resourceShortfallText } from "../../i18n/resourceShortfall";
 import { useChecks, useCommitChecks, useJob, useJobLog } from "../../query/hooks";
 import { keys } from "../../query/keys";
-import { Link } from "../../router/Router";
-import { href } from "../../router/routes";
-import { rollup, type CiRollup } from "../board/ordering";
+import { Link, useFragmentTarget } from "../../router/Router";
+import { href, POST_MERGE_FRAGMENT } from "../../router/routes";
+import { CI_TONE, rollup, type CiRollup } from "../board/ordering";
 
 export const TAIL_SIZES = [16 * 1024, 64 * 1024, 256 * 1024];
 
@@ -56,14 +56,6 @@ const DECISION_ROLLUP = {
   failed: "failing",
   running: "pending",
 } as const;
-
-const ROLLUP_TONE: Record<CiRollup, Tone> = {
-  passing: "success",
-  failing: "danger",
-  pending: "warning",
-  not_registered: "warning",
-  none: "neutral",
-};
 
 export function CheckStatusBadge({
   status,
@@ -253,6 +245,7 @@ export function ChecksCard({
         <CheckList
           repo={repo}
           title={t("ci.postMergeConfirmation")}
+          fragment={POST_MERGE_FRAGMENT}
           query={checks}
           data={confirmation ?? undefined}
           sha={confirmation?.sha}
@@ -361,6 +354,7 @@ export function CommitChecksCard({
 function CheckList({
   repo,
   title,
+  fragment,
   query,
   data,
   sha,
@@ -374,6 +368,7 @@ function CheckList({
 }: {
   repo: string;
   title: string;
+  fragment?: string;
   query: Pick<UseQueryResult<CheckSet>, "isPending" | "error">;
   data?: CheckSet;
   sha: string | undefined;
@@ -386,14 +381,19 @@ function CheckList({
   children?: React.ReactNode;
 }) {
   const t = useT();
+  const target = useFragmentTarget(fragment ?? "");
   const Container = embedded ? Box : Card;
   return (
-    <Container p={embedded ? 0 : "lg"} component="section" aria-label={title}>
+    <Container
+      p={embedded ? 0 : "lg"}
+      component="section"
+      aria-label={title}
+      id={fragment}
+      {...(fragment ? target : undefined)}
+    >
       <Group gap="xs" mb="xs">
         <Text fw={700}>{title}</Text>
-        {state && !query.error && (
-          <StateBadge tone={ROLLUP_TONE[state]}>{t(`ci.${state}`)}</StateBadge>
-        )}
+        {state && !query.error && <StateBadge tone={CI_TONE[state]}>{t(`ci.${state}`)}</StateBadge>}
         {sha !== undefined && (
           <Text size="xs" c="dimmed" ml="auto">
             {t("pull.checksOn")} <Sha repo={repo} value={sha} />

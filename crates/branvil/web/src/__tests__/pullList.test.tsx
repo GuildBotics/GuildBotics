@@ -38,6 +38,59 @@ const rows = () =>
     .slice(1);
 
 describe("pull request pagination", () => {
+  it.each([
+    ["en", "Post-merge verification: pending", "Post-merge verification: failing"],
+    ["ja", "マージ後の確認：実行待ち・実行中", "マージ後の確認：失敗"],
+  ] as const)(
+    "surfaces the merge that started collection checks (%s)",
+    async (language, pending, failed) => {
+      const collecting = {
+        ...row("acme/demo", 289, 1),
+        state: "open",
+        head: "ticket/311",
+        draft: true,
+        merge_order: [6, 0, 0],
+      };
+      const child = {
+        ...row("acme/demo", 293, 2),
+        merged: true,
+        base: collecting.head,
+        merge_order: [7, 0, 0],
+      };
+      let status: "pending" | "failing" | null = "pending";
+      fakeApi({
+        ...shell,
+        "GET /api/v1/repos": page([repository("acme/demo")]),
+        "GET /api/v1/repos/acme/demo/pulls": (req) => {
+          const q = new URLSearchParams(req.search);
+          return page(
+            q.get("state") === "open" && q.get("post_merge") === "active" && status
+              ? [{ ...child, post_merge_status: status }, collecting]
+              : [collecting],
+          );
+        },
+        "GET /api/v1/repos/acme/demo/pulls/289/checks": json(200, { checks: [] }),
+      });
+      const { client } = renderApp("/acme/-/pulls", language);
+      const childName = "acme/demo !293 Change 293";
+      const childRow = await screen.findByRole("row", { name: childName });
+      expect(within(childRow).getByText(pending)).toBeInTheDocument();
+      expect(childRow).toHaveAttribute("href", "/acme/demo/-/pulls/293#post-merge-checks");
+      const update = () =>
+        act(() => applyChange({ kind: "check", path: "acme/demo", id: "merge-commit" }, client));
+      status = "failing";
+      update();
+      expect(await within(childRow).findByText(failed)).toBeInTheDocument();
+      expect(within(childRow).queryByText(pending)).not.toBeInTheDocument();
+      status = null;
+      update();
+      await waitFor(() =>
+        expect(screen.queryByRole("row", { name: childName })).not.toBeInTheDocument(),
+      );
+      expect(screen.getByText("Change 289")).toBeInTheDocument();
+    },
+  );
+
   it("merges repository pages by server readiness and reorders on a CI event", async () => {
     const ready = { ...row("acme/demo", 1, 1), merge_order: [0, 0, 0] };
     const review = { ...row("acme/demo", 2, 3), merge_order: [6, 0, 0] };
