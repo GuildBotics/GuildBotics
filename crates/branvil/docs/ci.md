@@ -644,6 +644,13 @@ If preparation successfully uses the exact key for `/work`, the runner
 skips saving on that attempt. A miss, a fallback generation, or an unusable
 exact-key image still allows saving on a successful eligible attempt.
 
+Rust jobs keep dependency artifacts reported by any of their successful Cargo
+builds, including fresh units and build script outputs. After
+`cargo clean --workspace`, they remove old dependency units and their fingerprints
+from `target`. In the Cargo registry cache, they remove downloaded archives and
+unpacked source directories for versions absent from `Cargo.lock`, and keep the
+registry indexes for dependency resolution.
+
 A successful execution on the head of a PR targeting a protected branch
 can keep a pending disk image on its runner. When the Hub records that exact
 head as merged into a protected branch, the runner publishes it after the
