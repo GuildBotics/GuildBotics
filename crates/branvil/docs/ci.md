@@ -38,10 +38,10 @@ one verification at the then-current tip, batching intervening merges. The minut
 reconciler restores registration from the durable running record after a crash.
 Check events and ref-change batches advance verification under the repository lock.
 
-All checks must complete, including missing-required-job and invalid-pipeline
-markers. All must succeed; no pipeline and no required checks also passes.
-Required checks govern publication and merging on PR heads; in main verification
-they require that those names exist, while *all* pipeline jobs determine success.
+All checks must complete, including invalid-pipeline markers. All must succeed;
+a commit without a pipeline also passes. Required checks govern publication and
+merging on PR heads. Main verification runs *all* of the commit's own jobs, so
+every job its pipeline marks `required` exists there and must succeed.
 Only the default branch is verified: merging into another base branch does not
 start verification of that base.
 
@@ -84,7 +84,7 @@ image = "docker.io/library/alpine:3.22"   # [registry/]name[:tag], no digest
 commands = ["./scripts/test.sh", "make lint"]   # 1-64 commands, each run by /bin/sh -c
 paths = ["src/**", "tests/*.rs", "Cargo.lock"]  # optional; empty/omitted runs every change
 verified_sha = false             # optional; declares GB_CI_VERIFIED_SHA as an input
-required = true                   # optional; the repository setting still decides required checks
+required = true                   # optional; PRs into this branch must pass it
 timeout_secs = 600                # optional, 1-86400; default the runner's time limit
 tmpfs_mib = 2048                   # optional, 1-4096; /tmp uses a 4 GiB disk by default
 # ram_workspace = { paths = ["out/cache"], max_mib = 4608 }  # optional, see below
@@ -385,6 +385,35 @@ Same-tree reuse remains available. Linking a repair ticket reselects the current
 head, replaces service skips and paths reuses with real attempts, and preserves
 running attempts.
 
+### Required checks
+
+A job is required by `required = true` in `.guildbotics-ci.toml`. A pull request
+answers to the pipeline at the current tip of its **base** branch, so a collecting
+branch can drop a job without changing what `main` requires, and a head cannot
+take a job off the list by editing its own file. The head still runs its own
+definition of each job, so reviews cover changes to a required job's commands.
+When the base moves, open pull requests
+are judged against the new tip.
+
+| Base's pipeline | Head's pipeline | What the pull request needs |
+| --- | --- | --- |
+| none | any | nothing |
+| invalid | valid, and the merge leaves a valid pipeline | the `required` jobs of the merge result, and the owner's approval of this head (`required_removal` names `pipeline@<base>`, so a new invalid base needs a new approval) |
+| invalid, or the branch is gone | anything else | a `pipeline` check that fails: nothing lands |
+| requires a job | also marks it `required` | that job on the head |
+| requires a job | valid, and merging it would remove or unmark the job | the owner's approval of this head (`required_removal`) |
+| requires a job | valid, and the merge keeps the job, which the head has yet to merge | that job: the head merges the base to run it |
+| requires a job | missing or invalid | that job, which fails: such a head removes nothing |
+| any | invalid, or merging it leaves an invalid file | also a `pipeline` check that fails: an invalid file does not land |
+
+What the merge would leave decides what a head removes: deleting, renaming or
+unmarking a required job counts, and a job the merge keeps does not.
+
+An approval counts only from a member of kind owner, on the current head, and only
+for the names the head was removing when it was given. A new push, or a base that
+makes the same head remove another job, needs a new approval. The approval settles
+only those names: the other required checks still have to pass.
+
 ### Post-merge only jobs
 
 The repository CI settings expose `post_merge_jobs`, a list of job names (empty by
@@ -394,7 +423,9 @@ them before merge too, regardless of paths.
 Manual retries also execute them and their skips cannot supply reusable results.
 
 The owner controls this in repository settings rather than `.guildbotics-ci.toml` so a
-PR cannot exempt its own jobs. Required checks and post-merge jobs cannot overlap.
+PR cannot exempt its own jobs. A required job cannot be post-merge only: on a PR
+head its post-merge skip reads as a failed required check, and the run's records
+stay as they are, so removing either setting restores the job.
 Selection records include the setting; reconciliation reselects open heads when
 it changes. Newly excluded queued jobs complete as `skipped`, not `cancelled`;
 running jobs finish and manual retries remain executable. Removing a name restores
@@ -403,7 +434,7 @@ The log for this decision is `[branvil] skipped: post-merge only (repository set
 
 Repair PR landing requires success of every head job as well as all required
 checks. A pending, skipped, or failed optional job blocks publication and merging.
-Ordinary PRs continue to require only their configured required checks.
+Ordinary PRs require only the required checks of their base.
 
 Head jobs skipped by paths or reusing success by paths are not executed before
 landing. Main verification runs them after merge and verifies the combination.

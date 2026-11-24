@@ -85,7 +85,7 @@ def checkout(stack, tmp_path: Path):
     setup.git("init", "-q", "-b", "main")
     setup.commit(
         ".guildbotics-ci.toml",
-        '[[jobs]]\nname = "test"\nimage = "docker.io/library/alpine:3.22"\ncommands = ["true"]\n',
+        '[[jobs]]\nname = "test"\nrequired = true\nimage = "docker.io/library/alpine:3.22"\ncommands = ["true"]\n',
     )
     setup.commit("README.md", "base\n")
     stack.provider.provision_repository(setup)

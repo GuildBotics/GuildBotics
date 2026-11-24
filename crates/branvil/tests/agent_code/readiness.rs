@@ -52,20 +52,13 @@ async fn fixture(
         .repos_create(input(json!({"path":repo})))
         .await
         .unwrap();
-    let revision = owner.repos_get(&repo).await.unwrap().revision;
-    owner
-        .repos_update(
-            &repo,
-            input(json!({"revision":revision,"required_checks":jobs})),
-        )
-        .await
-        .unwrap();
     let git = Git::new(&root.join(name));
-    let main = git.commit("", "README.md", "base\n");
+    git.commit("", "README.md", "base\n");
+    let pipeline = jobs.iter().map(|job| format!("[[jobs]]\nname = \"{job}\"\nrequired = true\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\nartifacts = [{{name = \"report\", paths = [\"report.txt\"]}}]\n")).collect::<String>();
+    let main = git.commit("", ".guildbotics-ci.toml", &pipeline);
     let remote = code.clone_url(&repo).await.unwrap();
     git.push(&remote, &main, "main", "owner", owner_token);
-    let pipeline = jobs.iter().map(|job| format!("[[jobs]]\nname = \"{job}\"\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\nartifacts = [{{name = \"report\", paths = [\"report.txt\"]}}]\n")).collect::<String>();
-    let head = git.commit(&main, ".guildbotics-ci.toml", &pipeline);
+    let head = git.commit(&main, "feature.txt", "feature\n");
     let credential = code.git_credential().await.unwrap().unwrap();
     git.push(
         &remote,

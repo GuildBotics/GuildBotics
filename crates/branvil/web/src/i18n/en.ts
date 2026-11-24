@@ -232,6 +232,7 @@ export const en = {
   "landing.detail.head_checks": "Waiting for required checks.",
   "landing.detail.conflict": "Conflicting files: {files}",
   "landing.detail.host_failed": "Failed host jobs: {jobs}",
+  "landing.requiredRemoval": "{name} · Waiting for the owner's approval",
   "landing.check.checking": "Checking",
   "landing.check.missing": "Not run",
   "landing.check.running": "Running",
@@ -256,6 +257,7 @@ export const en = {
   "landing.blocker.conflict": "Conflicts",
   "landing.blocker.publish_requirements": "Publication requirements",
   "landing.blocker.head_checks": "Required checks",
+  "landing.blocker.required_removal": "Required check removal",
   "landing.blocker.approvals": "Approvals",
   "landing.blocker.unanswered": "Awaiting answer",
   "landing.blocker.host_failed": "Host checks failed",
@@ -364,7 +366,6 @@ export const en = {
   "repo.cloneUrl": "Clone URL",
   "repo.defaultBranch": "Default branch",
   "repo.protectedBranches": "Protected branches",
-  "repo.requiredChecks": "Required checks",
   "repo.requiredApprovals": "Required approvals",
   "repo.labels": "Ticket labels",
   "repo.create": "Create repository",
@@ -651,9 +652,6 @@ export const en = {
   "settings.tabBasic": "Basics",
   "settings.protectedHelp":
     "Branches that refuse direct pushes and deletion. Type one and press Enter.",
-  "settings.requiredHelp": "Checks that must succeed before a merge.",
-  "settings.requiredHelpUpstream":
-    "Checks that must succeed before publishing to the upstream host.",
   "settings.approvalsHelp":
     "How many members other than the author must have approved the current head before a merge (a later comment keeps an approval); 0 needs none.",
   "settings.approvalsHelpUpstream":

@@ -11,8 +11,7 @@ struct Fixture {
 
 impl Fixture {
     async fn new(names: &[&str]) -> Self {
-        let (temp, ci, mut repo) = tests::setup();
-        repo.required_checks.clear();
+        let (temp, ci, repo) = tests::setup();
         ci.inner.layout.create().unwrap();
         ci.inner
             .store

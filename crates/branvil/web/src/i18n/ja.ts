@@ -234,6 +234,7 @@ export const ja: Record<MessageKey, string> = {
   "landing.detail.head_checks": "必須チェックを待っています。",
   "landing.detail.conflict": "衝突したファイル：{files}",
   "landing.detail.host_failed": "失敗したホストのジョブ：{jobs}",
+  "landing.requiredRemoval": "{name} · オーナーの承認待ち",
   "landing.check.checking": "確認中",
   "landing.check.missing": "未実行",
   "landing.check.running": "実行中",
@@ -258,6 +259,7 @@ export const ja: Record<MessageKey, string> = {
   "landing.blocker.conflict": "衝突",
   "landing.blocker.publish_requirements": "公開条件",
   "landing.blocker.head_checks": "必須チェック",
+  "landing.blocker.required_removal": "必須チェックの削除",
   "landing.blocker.approvals": "承認",
   "landing.blocker.unanswered": "返答待ち",
   "landing.blocker.host_failed": "ホストのチェック失敗",
@@ -368,7 +370,6 @@ export const ja: Record<MessageKey, string> = {
   "repo.cloneUrl": "クローンURL",
   "repo.defaultBranch": "既定ブランチ",
   "repo.protectedBranches": "保護ブランチ",
-  "repo.requiredChecks": "必須チェック",
   "repo.requiredApprovals": "必要な承認の数",
   "repo.labels": "チケットのラベル",
   "repo.create": "リポジトリを作成",
@@ -656,8 +657,6 @@ export const ja: Record<MessageKey, string> = {
   "settings.tagsHelp": "入力して Enter で追加します。",
   "settings.tabBasic": "基本",
   "settings.protectedHelp": "直接の push と削除を断るブランチです。入力して Enter で追加します。",
-  "settings.requiredHelp": "マージの前に成功していなければならないチェックの名前です。",
-  "settings.requiredHelpUpstream": "上流に出す前に成功していなければならないチェックの名前です。",
   "settings.approvalsHelp":
     "マージの前に、作者以外の何人のメンバーが今の head を承認していなければならないかです（承認のあとのコメントでは承認は消えません）。0 は承認を求めません。",
   "settings.approvalsHelpUpstream":

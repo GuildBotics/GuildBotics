@@ -50,7 +50,6 @@ pub(crate) struct Snapshot {
 #[derive(Default)]
 struct Classifier {
     pulls: BTreeMap<(String, u64, String), Priority>,
-    failed: BTreeMap<(String, String), Option<String>>,
     retry_id: Option<String>,
 }
 
@@ -150,13 +149,7 @@ impl Classifier {
                     let priority = if p.draft {
                         Priority::reason(Class::Last, "draft pull request")
                     } else {
-                        let run_key = (repo.id.clone(), run.sha.clone());
-                        let failed = match self.failed.entry(run_key) {
-                            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-                            std::collections::btree_map::Entry::Vacant(entry) => {
-                                entry.insert(failed_check(r, repo, run, self.retry_id.as_deref())?)
-                            }
-                        };
+                        let failed = failed_check(r, repo, run, &p, self.retry_id.as_deref())?;
                         pull_class(r, repo, run, &p, failed.as_deref())?
                     };
                     self.pulls.insert(key, priority.clone());
@@ -171,15 +164,20 @@ impl Classifier {
     }
 }
 
+/// The first required check of `p` that failed on this commit. The landing
+/// record holds what the pull's base requires of this head.
 fn failed_check(
     r: &impl Rd,
     repo: &Repo,
     run: &queue::Run,
+    p: &Pull,
     retry_id: Option<&str>,
 ) -> AppResult<Option<String>> {
-    if repo.required_checks.is_empty() {
+    let Some(landing) = crate::landing::current(r, &repo.id, p.number)?
+        .filter(|e| e.head_sha == run.sha && !e.required_jobs.is_empty())
+    else {
         return Ok(None);
-    }
+    };
     let jobs = match &run.pipeline {
         queue::PipelineState::Jobs { jobs } => jobs.as_slice(),
         _ => &[],
@@ -194,7 +192,7 @@ fn failed_check(
             (a, ())
         })
         .collect();
-    let checks = super::run_checks(repo, run, latest, 0, |a, _| Check {
+    let checks = super::run_checks(run, latest, 0, |a, _| Check {
         name: a.job.name.clone(),
         status: a.status.clone(),
         conclusion: a.conclusion.clone(),
@@ -202,16 +200,14 @@ fn failed_check(
         ..Check::default()
     })?;
     let inherited = crate::repair::failing_jobs(r, &repo.id)?;
-    Ok(checks
-        .checks
-        .into_iter()
-        .find(|c| {
-            repo.required_checks.contains(&c.name)
-                && !inherited.contains(&c.name)
-                && c.status == "completed"
-                && !c.head_satisfied()
-        })
-        .map(|c| c.name))
+    Ok(landing.required_jobs.into_iter().find(|name| {
+        !inherited.contains(name)
+            && checks
+                .checks
+                .iter()
+                .find(|c| &c.name == name)
+                .is_none_or(|c| c.status == "completed" && !c.head_satisfied())
+    }))
 }
 
 fn pull_class(

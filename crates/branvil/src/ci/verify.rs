@@ -260,7 +260,7 @@ impl Ci {
                 })
                 .await?;
             if let Some((run, latest)) = snapshot {
-                let checks = self.run_checks(repo, &run, latest)?.checks;
+                let checks = self.run_checks(&run, latest)?.checks;
                 if checks.iter().all(|c| c.status == "completed") {
                     let now = crate::util::now();
                     let passed = checks.iter().all(|c| c.succeeded());

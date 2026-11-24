@@ -20,7 +20,6 @@ const REPO: Repository = {
   protected_branches: ["main"],
   responder: { member: "aiko", chosen: false, automatic: "aiko" },
   post_merge_jobs: [],
-  required_checks: ["test"],
   required_approvals: 1,
   auto_land: false,
   hold_while_failing: false,
@@ -74,6 +73,7 @@ function routes(l: Landing | null, extra: Parameters<typeof fakeApi>[0] = {}) {
       checks: [{ name: "test", status: "completed", conclusion: "success" }],
       checks_expected: true,
       base_checks: 1,
+      required_names: [],
     }),
     [`GET ${P}/activity`]: json(200, { comments: [], reviews: [], threads: [] }),
     [`GET ${P}/threads`]: json(200, { items: [], next_cursor: null }),
@@ -231,6 +231,12 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
         jobs: [],
         files: [],
       },
+      {
+        code: "required_removal",
+        message: "Server removal",
+        jobs: ["branvil-web"],
+        files: [],
+      },
       { code: "unanswered", message: "Server unanswered", jobs: [], files: [] },
       { code: "conflict", message: "Server conflict", jobs: [], files: ["README.md"] },
       { code: "host_failed", message: "Server host", jobs: ["build"], files: [] },
@@ -246,6 +252,7 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
       `test · ${words["landing.check.running"]}`,
       `missing · ${words["landing.check.missing"]}`,
       lang === "ja" ? "承認：0 / 1" : "Approvals: 0 / 1",
+      words["landing.requiredRemoval"].replace("{name}", "branvil-web"),
       words["landing.unanswered"],
       words["landing.detail.conflict"].replace("{files}", "README.md"),
       words["landing.detail.host_failed"].replace("{jobs}", "build"),
@@ -266,7 +273,7 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
     journey.unmount();
     component("conditions", blockers);
     expect(
-      screen.getByText(`${words["landing.blocker.head_checks"]} +8`).closest(".mantine-Badge-root"),
+      screen.getByText(`${words["landing.blocker.head_checks"]} +9`).closest(".mantine-Badge-root"),
     ).toHaveAttribute("title", expected.join(" / "));
   });
   it.each([true, false])(

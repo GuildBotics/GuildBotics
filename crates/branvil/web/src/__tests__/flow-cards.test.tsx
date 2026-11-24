@@ -15,7 +15,6 @@ const repo = (path: string, labels: string[]) => ({
   url: "",
   protected_branches: ["main"],
   post_merge_jobs: [],
-  required_checks: [],
   labels,
   upstream: null,
   revision: 1,
@@ -81,6 +80,7 @@ const CHECKS = {
   ],
   checks_expected: true,
   base_checks: 1,
+  required_names: [],
 };
 
 it.each([true, false])("shows repair badge only on repair cards (%s)", async (repair) => {

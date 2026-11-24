@@ -6,8 +6,10 @@ pub(super) async fn rank(app: &App, repo: &Repo, p: &Pull, tips: &Tips) -> AppRe
         return Ok([7, 0, 0]);
     }
     let head = head_of(p, tips).unwrap_or_default();
-    let checks = display_checks(app, repo, p, &head).await?;
-    let required = crate::landing::head_checks(repo, &checks.checks);
+    let base = base_of(p, tips).unwrap_or_default();
+    let checks = display_checks(app, repo, p, &head, &base).await?;
+    let names = app.ci.pull_required(repo, &head, &base).await?.names;
+    let required = crate::landing::head_checks(&names, &checks.checks);
     let l = crate::landing::view(app, repo, p.number, tips).await?;
     let Some(l) = l else {
         return Ok([7, 0, 0]);
@@ -39,7 +41,7 @@ fn order(
                     || required == HeadChecks::Failed
                 {
                     5
-                } else if has("approvals") {
+                } else if has("approvals") || has("required_removal") {
                     4
                 } else if has("head_checks") {
                     3

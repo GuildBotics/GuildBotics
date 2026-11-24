@@ -29,18 +29,10 @@ pub(super) async fn reused_and_gates(
             .repos_create(input(json!({"path":repo})))
             .await
             .unwrap();
-        let rev = owner.repos_get(&repo).await.unwrap().revision;
-        owner
-            .repos_update(
-                &repo,
-                input(json!({"revision":rev,"required_checks":["test"]})),
-            )
-            .await
-            .unwrap();
         let git = Git::new(&root.join(conclusion));
         let remote = c.clone_url(&repo).await.unwrap();
         // Artifact jobs must execute for every commit; this fixture exercises reuse.
-        git.commit("", ".guildbotics-ci.toml", "[[jobs]]\nname = \"test\"\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\n");
+        git.commit("", ".guildbotics-ci.toml", "[[jobs]]\nname = \"test\"\nrequired = true\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\n");
         let main = git.commit("", "a.py", "base\n");
         git.push(&remote, &main, "main", "owner", owner_token);
         let head = git.commit(&main, "a.py", "feature\n");

@@ -27,6 +27,11 @@ async fn failure_fixture() -> (
         .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
         .await
         .unwrap();
+    std::fs::write(
+        work.join(".guildbotics-ci.toml"),
+        "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\nrequired=true\n",
+    )
+    .unwrap();
     let base = commit_all(&app.git, &work, "base").await;
     app.git
         .run_ok(
@@ -244,7 +249,7 @@ async fn repeated_failures_and_repair_head_selection() {
         .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
         .await
         .unwrap();
-    std::fs::write(work.join(".guildbotics-ci.toml"), "version = 1\n[[jobs]]\nname = 'post'\nimage = 'alpine'\ncommands = ['true']\n[[jobs]]\nname = 'test'\nimage = 'alpine'\ncommands = ['true']\npaths = ['src/**']\n").unwrap();
+    std::fs::write(work.join(".guildbotics-ci.toml"), "version = 1\n[[jobs]]\nname = 'post'\nimage = 'alpine'\ncommands = ['true']\n[[jobs]]\nname = 'test'\nimage = 'alpine'\ncommands = ['true']\npaths = ['src/**']\nrequired = true\n").unwrap();
     let base = commit_all(&app.git, &work, "base").await;
     let head = commit_all(&app.git, &work, "head").await;
     app.git
@@ -455,7 +460,7 @@ async fn repeated_failures_and_repair_head_selection() {
         .await
         .unwrap();
     assert_eq!(
-        crate::landing::pull_head_checks(&app, &repo, &p, &head)
+        crate::landing::pull_head_checks(&app, &repo, &p, &head, &base)
             .await
             .unwrap(),
         crate::landing::HeadChecks::Failed
@@ -476,7 +481,7 @@ async fn repeated_failures_and_repair_head_selection() {
             .repair
     );
     assert_eq!(
-        crate::landing::pull_head_checks(&app, &repo, &ordinary, &head)
+        crate::landing::pull_head_checks(&app, &repo, &ordinary, &head, &base)
             .await
             .unwrap(),
         crate::landing::HeadChecks::Passed
@@ -504,11 +509,14 @@ async fn repeated_failures_and_repair_head_selection() {
         .await
         .unwrap();
     assert_eq!(
-        crate::landing::pull_head_checks(&app, &repo, &p, &head)
+        crate::landing::pull_head_checks(&app, &repo, &p, &head, &base)
             .await
             .unwrap(),
         crate::landing::HeadChecks::Passed
     );
+    crate::landing::refresh_locked(&app, &repo, &p, &head, &base, false)
+        .await
+        .unwrap();
     let (id, sha) = (repo.id.clone(), head.clone());
     app.store
         .write(move |w| {

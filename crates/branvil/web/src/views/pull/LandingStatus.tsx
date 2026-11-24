@@ -110,6 +110,8 @@ function useBlockerDetails(pull: PullRequest, load = true) {
               }),
             ]
           : [];
+      case "required_removal":
+        return b.jobs.map((name) => t("landing.requiredRemoval", { name }));
       case "approvals":
         return [t("merge.approvals", { count: b.count!, required: b.required! })];
       case "unanswered":

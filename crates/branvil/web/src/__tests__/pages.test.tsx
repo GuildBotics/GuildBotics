@@ -14,7 +14,6 @@ const repo = (path: string) => ({
   url: "",
   protected_branches: [],
   post_merge_jobs: [],
-  required_checks: [],
   required_approvals: 0,
   labels: [],
   upstream: null,
@@ -210,6 +209,7 @@ describe("pages", () => {
         checks: [],
         checks_expected: false,
         base_checks: 0,
+        required_names: [],
       }),
       "GET /api/v1/repos/acme/web/pulls/1/checks": json(200, {
         head_sha: "a",
@@ -218,6 +218,7 @@ describe("pages", () => {
         checks: [],
         checks_expected: false,
         base_checks: 0,
+        required_names: [],
       }),
     });
     const user = userEvent.setup();

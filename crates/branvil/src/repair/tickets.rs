@@ -665,7 +665,7 @@ mod tests {
     use serde_json::json;
 
     fn repo() -> Repo {
-        serde_json::from_value(json!({"id":"repo","path":"acme/demo","workspace":"ws","default_branch":"main","protected_branches":[],"required_checks":[],"post_merge_jobs":[],"required_approvals":0,"auto_land":false,"hold_while_failing":false,"ci_network":false,"labels":[],"revision":1,"created_at":"0"})).unwrap()
+        serde_json::from_value(json!({"id":"repo","path":"acme/demo","workspace":"ws","default_branch":"main","protected_branches":[],"post_merge_jobs":[],"required_approvals":0,"auto_land":false,"hold_while_failing":false,"ci_network":false,"labels":[],"revision":1,"created_at":"0"})).unwrap()
     }
     fn conclusion(state: &str) -> Narrowing {
         serde_json::from_value(json!({"repo":"repo","base":"aaaaaaa0","job":"test","failed_sha":"fffffff0","commits":["aaaaaaa0","bbbbbbb0"],"history_ready":true,"results":[[{"attempt":"pass","outcome":"success","probe":true}],[{"attempt":"fail","outcome":"failure","probe":true}]],"conclusion":state,"boundary":["aaaaaaa0","bbbbbbb0"],"started_at":"0"})).unwrap()
@@ -871,7 +871,7 @@ mod tests {
     async fn creation_delivery_retry_restart_and_closure_keep_one_notice() {
         let dir = tempfile::tempdir().unwrap();
         let app = app(dir.path());
-        let repo: Repo = serde_json::from_value(json!({"id":"repo","path":"acme/demo","workspace":"ws","default_branch":"main","protected_branches":[],"required_checks":["test"],"post_merge_jobs":[],"required_approvals":0,"auto_land":false,"hold_while_failing":false,"ci_network":false,"responder":null,"labels":[],"upstream":null,"revision":1,"created_at":"0"})).unwrap();
+        let repo: Repo = serde_json::from_value(json!({"id":"repo","path":"acme/demo","workspace":"ws","default_branch":"main","protected_branches":[],"post_merge_jobs":[],"required_approvals":0,"auto_land":false,"hold_while_failing":false,"ci_network":false,"responder":null,"labels":[],"upstream":null,"revision":1,"created_at":"0"})).unwrap();
         app.store.write_sync(|w| {
             w.put(store::REPOS, &Repo::key(&repo.id), &repo)?;
             let m: model::Member = serde_json::from_value(json!({"name":"agent","display_name":"Agent","kind":"agent","accounts":[],"reviewers":[],"created_at":"0","avatar":null})).unwrap();
