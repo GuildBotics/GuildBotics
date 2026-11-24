@@ -36,6 +36,7 @@
 
 [[jobs]]
 name = "test"
+required = true
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu
@@ -63,12 +64,14 @@ timeout_secs = 300
 
 [[jobs]]
 name = "markdown-links"
+required = true
 image = "guildbotics/agent-environment:dev"
 commands = ["lychee --no-progress --scheme file --include-fragments --extensions md './*.md' docs desktop skills crates"]
 timeout_secs = 300
 
 [[jobs]]
 name = "desktop-quality"
+required = true
 paths = ["desktop/**", "crates/branvil/tests/fixtures/**", "package.json", "package-lock.json", ".prettierrc.json", "jscpd.config.json"]
 image = "guildbotics/agent-environment:dev"
 commands = [
@@ -81,6 +84,7 @@ artifacts = [{ name = "web-tests", paths = ["desktop/test-results/timing.json"] 
 
 [[jobs]]
 name = "rust-fmt"
+required = true
 paths = [
   "crates/*/src/**",
   "crates/*/tests/**",
@@ -100,6 +104,7 @@ timeout_secs = 300
 
 [[jobs]]
 name = "rust-clippy"
+required = true
 paths = [
   "crates/*/src/**",
   "crates/*/tests/**",
@@ -130,6 +135,7 @@ cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.loc
 
 [[jobs]]
 name = "rust-test"
+required = true
 tmpfs_mib = 2048
 ram_workspace = { paths = ["target"], max_mib = 4608 }
 paths = [
@@ -169,6 +175,7 @@ cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.loc
 
 [[jobs]]
 name = "rust-test-branvil"
+required = true
 tmpfs_mib = 2048
 ram_workspace = { paths = ["target"], max_mib = 4608 }
 paths = [
@@ -219,6 +226,7 @@ cache = { paths = [".ci/cargo-home/registry", "target", ".ci/uv"], key_files = [
 # Duplicated Rust code, by the same jscpd as desktop's `npm run duplicates`.
 [[jobs]]
 name = "rust-duplicates"
+required = true
 paths = ["crates/**/*.rs", "jscpd.rust.json"]
 image = "guildbotics/agent-environment:dev"
 commands = ["npm_config_cache=/work/.ci/npm npx --yes jscpd@5.0.14 --config jscpd.rust.json"]
@@ -227,6 +235,7 @@ cache = { paths = [".ci/npm"], key_files = ["jscpd.rust.json"] }
 
 [[jobs]]
 name = "client-windows"
+required = true
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu

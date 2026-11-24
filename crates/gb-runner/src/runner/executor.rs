@@ -6,6 +6,7 @@
 mod ram_workspace;
 #[cfg(feature = "host")]
 mod sdk;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -165,6 +166,7 @@ pub enum Outcome {
 #[derive(Default)]
 pub struct ImageLock {
     _file: Option<std::fs::File>,
+    digest: Option<String>,
 }
 
 pub struct Inventory {
@@ -176,6 +178,9 @@ pub trait Executor: Send + Sync {
     fn name(&self) -> &'static str;
     fn machine(&self) -> Option<crate::ci::api::Machine> {
         None
+    }
+    fn ram_unsupported_images(&self, _images: &[crate::ci::images::Image]) -> BTreeSet<String> {
+        BTreeSet::new()
     }
     fn inventory(
         &self,
@@ -283,7 +288,8 @@ pub struct Microsandbox {
     /// Label value that marks this runner's sandboxes.
     runner: String,
     health: tokio::sync::Mutex<Option<(Instant, Health)>>,
-    started: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    started: std::sync::Mutex<BTreeSet<String>>,
+    ram_unsupported: std::sync::Mutex<BTreeMap<String, Instant>>,
     #[cfg(all(test, unix))]
     test_machine: Option<crate::ci::api::Machine>,
     #[cfg(feature = "host")]
@@ -298,6 +304,7 @@ impl Microsandbox {
             runner: runner.to_string(),
             health: tokio::sync::Mutex::new(None),
             started: std::sync::Mutex::new(Default::default()),
+            ram_unsupported: std::sync::Mutex::new(BTreeMap::new()),
             #[cfg(all(test, unix))]
             test_machine: None,
             #[cfg(feature = "host")]
@@ -562,7 +569,12 @@ impl Microsandbox {
                 file.try_lock_shared()
             };
             match locked {
-                Ok(()) => return Ok(ImageLock { _file: Some(file) }),
+                Ok(()) => {
+                    return Ok(ImageLock {
+                        _file: Some(file),
+                        digest: None,
+                    });
+                }
                 Err(std::fs::TryLockError::WouldBlock) => {
                     if let Some(w) = waiting.take() {
                         w();
@@ -885,7 +897,7 @@ pub fn plain_path(
 
 /// The uid and gid of the fixed non-root user a job's commands run as. The
 /// work and log directories are presented to the VM as this user's.
-pub const JOB_USER_ID: u32 = 1000;
+pub use crate::ci::pipeline::JOB_USER_ID;
 
 /// The size of the disk a job's `/tmp` is on: the size of the root disk msb
 /// gives a VM by default, which Branvil keeps.
@@ -1018,6 +1030,29 @@ fn keep_script(disk: &str, io: &str, cached: &[&str]) -> String {
         "{pick}rm -f {packed}\nif [ $# -gt 0 ]; then\n  {{ tar -cf - \"$@\" && : >{packed}; }} | tar -xpf - -C {disk}\n  [ -f {packed} ]\nfi\nsync\nused=$(df -Pk {disk} | awk 'NR == 2 {{print $3}}')\n[ -n \"$used\" ]\necho \"$used\" >{io}/{CACHE_KEPT}\n",
         packed = format_args!("{io}/{CACHE_KEPT}.packed"),
     )
+}
+
+/// Retain a new cache image only after the guest completed and flushed it.
+async fn keep_cache_disk(disk: PathBuf, returned: &Path, output: &Path) -> Result<u64, String> {
+    let marker = returned.join(CACHE_KEPT);
+    let bytes = crate::runner::workspace::open_returned(&marker, 64)
+        .ok()
+        .flatten()
+        .and_then(|mut file| {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut file, &mut text).ok()?;
+            text.trim().parse::<u64>().ok()?.checked_mul(1024)
+        });
+    let _ = std::fs::remove_file(marker);
+    let bytes = bytes.ok_or("copying the cached paths in the VM failed")?;
+    let output = output.to_path_buf();
+    super::blocking(move || {
+        super::disk::flush(&disk)?;
+        std::fs::hard_link(disk, output)
+    })
+    .await
+    .map_err(|e| format!("keeping the cache image failed: {e}"))?;
+    Ok(bytes)
 }
 
 /// Selects paths relative to the working directory without following links.
@@ -1234,6 +1269,16 @@ impl Executor for Microsandbox {
         super::machine::sample(|| started.iter().cloned().collect())
     }
 
+    fn ram_unsupported_images(&self, images: &[crate::ci::images::Image]) -> BTreeSet<String> {
+        let mut unsupported = self.ram_unsupported.lock().unwrap();
+        unsupported.retain(|digest, tested| {
+            // A failed probe can be transient even when the image is unchanged.
+            tested.elapsed() <= Duration::from_secs(300)
+                && images.iter().any(|image| &image.digest == digest)
+        });
+        unsupported.keys().cloned().collect()
+    }
+
     fn needs_resolution(&self) -> bool {
         matches!(self.msb, Msb::Missing(_))
     }
@@ -1290,7 +1335,7 @@ impl Executor for Microsandbox {
         image: &str,
         log: &mpsc::Sender<Vec<u8>>,
     ) -> Result<(Option<String>, ImageLock), String> {
-        let lock = self
+        let mut lock = self
             .lock_images(false, || {
                 let note = "[branvil] waiting for an image pull or load to finish\n";
                 let _ = log.try_send(note.as_bytes().to_vec());
@@ -1302,7 +1347,10 @@ impl Executor for Microsandbox {
                 "msb image inspect reports '{}' as the configuration digest of {image}, not sha256:<64 hex>",
                 i.config_digest
             )),
-            held => Ok((held.map(|i| i.config_digest), lock)),
+            held => {
+                lock.digest = held.map(|i| i.config_digest);
+                Ok((lock.digest.clone(), lock))
+            }
         }
     }
 
@@ -1359,6 +1407,7 @@ impl Executor for Microsandbox {
         // over an entry would write through it, so this run neither uses
         // nor keeps one.
         let linked = job.tree.link_on(cached_paths.iter().copied());
+        let save_cache = job.save_cache && linked.is_none() && !cached_paths.is_empty();
         if let Some(p) = linked {
             say(format!("the cached path {p} goes through a symbolic link of the commit, which unpacking the checkout over the cache entry would write through; the job runs without the cache")).await;
         }
@@ -1435,8 +1484,8 @@ impl Executor for Microsandbox {
         let image_lock = std::mem::take(&mut job.image_lock);
         let preparing = Instant::now();
         let mut prep_script = prepare_script("/work", IO_MOUNT, restore.as_ref());
-        if job.job.ram_workspace.is_some() && job.exact_cache && restore.is_some() {
-            ram_workspace::probe(&mut prep_script);
+        if job.job.ram_workspace.is_some() && restore.is_some() {
+            ram_workspace::probe(&mut prep_script, save_cache && !job.exact_cache);
         }
         let mut prepared = self
             .helper(
@@ -1500,7 +1549,25 @@ impl Executor for Microsandbox {
             let fs = restore.as_ref().map_or(0, |r| r.fs_mib);
             say(format!("the image has no resize2fs: /work keeps the cache entry's file system, {fs} MiB rather than {disk_mib} MiB")).await;
         }
-        let used_exact_cache = job.exact_cache && restore.is_some() && !dropped && prepared.is_ok();
+        let restored = restore.is_some() && !dropped && prepared.is_ok();
+        let used_exact_cache = job.exact_cache && restored;
+        let cache_name = self.cache_volume(job.attempt_id);
+        let make_cache = || async {
+            match self.create_disk(&cache_name, disk_mib).await {
+                Ok(path) => Some(JobDisk {
+                    name: cache_name.clone(),
+                    mib: disk_mib,
+                    path,
+                }),
+                Err(e) => {
+                    say(format!(
+                        "cache save skipped: creating the cache volume failed: {e}"
+                    ))
+                    .await;
+                    None
+                }
+            }
+        };
         let mut ram = None;
         let mut outcome = match prepared {
             Err(e) => {
@@ -1516,12 +1583,24 @@ impl Executor for Microsandbox {
                     preparing.elapsed().as_millis()
                 ))
                 .await;
-                if let Some(config) = &job.job.ram_workspace {
+                if let Some(config) = &job.job.ram_workspace
+                    && restored
+                {
+                    let tools = ram_workspace::take_probe(&job);
+                    if let Some(digest) = &image_lock.digest {
+                        let mut unsupported = self.ram_unsupported.lock().unwrap();
+                        if tools {
+                            unsupported.remove(digest);
+                        } else {
+                            unsupported.insert(digest.clone(), Instant::now());
+                        }
+                    }
                     match ram_workspace::RamWorkspace::select(
                         config,
                         &job,
-                        used_exact_cache,
                         collect_mib,
+                        save_cache && !used_exact_cache,
+                        tools,
                         || self.machine(),
                     ) {
                         Ok(selected) => ram = Some(selected),
@@ -1529,32 +1608,50 @@ impl Executor for Microsandbox {
                             say(format!("RAM workspace disabled: {reason}; using disk")).await
                         }
                     }
+                } else if job.job.ram_workspace.is_some() {
+                    say("RAM workspace disabled: no cache was restored; using disk".into()).await;
                 }
-                match output {
-                    Some(output) => {
-                        self.run_job(
-                            &mut job,
-                            (disk, &log_dir, ram.as_ref()),
-                            output,
-                            image_lock,
-                            &log,
-                            &mut cancel,
-                        )
-                        .await
+                // Both executors have large futures in debug builds. Keep
+                // the job future out of the cache provisioning state machine.
+                let running = Box::pin(async {
+                    match output {
+                        Some(output) => {
+                            self.run_job(
+                                &mut job,
+                                (disk, &log_dir, ram.as_ref()),
+                                output,
+                                image_lock,
+                                &log,
+                                &mut cancel,
+                            )
+                            .await
+                        }
+                        #[cfg(feature = "host")]
+                        None => {
+                            self.sdk_job(
+                                &mut job,
+                                (disk, ram.as_ref()),
+                                image_lock,
+                                &log,
+                                &mut cancel,
+                            )
+                            .await
+                        }
+                        #[cfg(not(feature = "host"))]
+                        None => unreachable!("the client always uses the CLI executor"),
                     }
-                    #[cfg(feature = "host")]
-                    None => {
-                        self.sdk_job(
-                            &mut job,
-                            (disk, ram.as_ref()),
-                            image_lock,
-                            &log,
-                            &mut cancel,
-                        )
-                        .await
+                });
+                if let Some(ram) = ram.as_ref().filter(|ram| ram.saving_cache()) {
+                    let (outcome, provisioned) = ram.run_with_cache(running, make_cache()).await;
+                    if let Err(error) = provisioned {
+                        say(format!(
+                            "cache save skipped: preparing the cache image failed: {error}"
+                        ))
+                        .await;
                     }
-                    #[cfg(not(feature = "host"))]
-                    None => unreachable!("the client always uses the CLI executor"),
+                    outcome
+                } else {
+                    running.await
                 }
             }
         };
@@ -1586,31 +1683,12 @@ impl Executor for Microsandbox {
             .as_ref()
             .filter(|ram| !ram.used_disk())
             .map(|ram| ram.returned.join(ARTIFACTS));
-        let cache_name = self.cache_volume(job.attempt_id);
-        let cache = if outcome == Outcome::Exited(0)
-            && job.save_cache
-            && linked.is_none()
-            && !cached_paths.is_empty()
-        {
-            if used_exact_cache {
-                say("cache save skipped: /work used the exact key".into()).await;
-                None
-            } else {
-                match self.create_disk(&cache_name, disk_mib).await {
-                    Ok(path) => Some(JobDisk {
-                        name: cache_name.clone(),
-                        mib: disk_mib,
-                        path,
-                    }),
-                    Err(e) => {
-                        say(format!(
-                            "cache save skipped: creating the cache volume failed: {e}"
-                        ))
-                        .await;
-                        None
-                    }
-                }
-            }
+        let saving = outcome == Outcome::Exited(0) && save_cache && !used_exact_cache;
+        if outcome == Outcome::Exited(0) && save_cache && used_exact_cache {
+            say("cache save skipped: /work used the exact key".into()).await;
+        }
+        let cache = if saving && ram_archive.is_none() {
+            make_cache().await
         } else {
             None
         };
@@ -1662,35 +1740,6 @@ impl Executor for Microsandbox {
                         collecting.elapsed().as_millis()
                     ))
                     .await;
-                    // Keep the new cache disk by its link after the
-                    // collecting VM has ended.
-                    // The mark, read as what a VM returned: a regular file,
-                    // a few bytes.
-                    let kept =
-                        crate::runner::workspace::open_returned(&job.io.join(CACHE_KEPT), 64)
-                            .ok()
-                            .flatten()
-                            .and_then(|mut f| {
-                                let mut text = String::new();
-                                std::io::Read::read_to_string(&mut f, &mut text).ok()?;
-                                text.trim().parse::<u64>().ok()
-                            });
-                    let _ = std::fs::remove_file(job.io.join(CACHE_KEPT));
-                    match (cache, kept) {
-                        (Some(disk), Some(kib)) => {
-                            let to = job.cache_disk.to_path_buf();
-                            let linked = super::blocking(move || {
-                                super::disk::flush(&disk.path)?;
-                                std::fs::hard_link(&disk.path, &to)
-                            }).await;
-                            match linked {
-                                Ok(()) => *job.kept_data = Some(kib << 10),
-                                Err(e) => say(format!("cache save skipped: keeping the cache image failed: {e}")).await,
-                            }
-                        }
-                        (Some(_), None) => say("cache save skipped: copying the cached paths in the collecting VM failed".into()).await,
-                        (None, _) => {}
-                    }
                     true
                 }
                 Err(e) => {
@@ -1713,6 +1762,24 @@ impl Executor for Microsandbox {
         } else {
             ram_archive.is_some()
         };
+        let kept = if ram_archive.is_some() && saving && !*cancel.borrow() {
+            ram.as_ref()
+                .filter(|ram| ram.saving_cache())
+                .and_then(|ram| {
+                    let disk = ram.returned.join(ram_workspace::CACHE_IMAGE);
+                    disk.is_file().then_some((disk, ram.returned.as_path()))
+                })
+        } else {
+            cache.map(|disk| (disk.path, job.io))
+        };
+        if let Some((disk, returned)) = kept
+            && check_archive
+        {
+            match keep_cache_disk(disk, returned, job.cache_disk).await {
+                Ok(bytes) => *job.kept_data = Some(bytes),
+                Err(e) => say(format!("cache save skipped: {e}")).await,
+            }
+        }
         // By label and from the list: one that never came to be is not an
         // error.
         let label = format!("branvil.job={}", job.attempt_id);
@@ -1852,7 +1919,10 @@ impl Microsandbox {
             ])
             .args(["--workdir", "/work"])
             // Backstop: the VM itself ends shortly after the job's timeout.
-            .args(["--max-duration", &format!("{}s", job.timeout_secs + 60)]);
+            .args([
+                "--max-duration",
+                &format!("{}s", ram_workspace::vm_timeout_secs(job.timeout_secs, ram)),
+            ]);
         if job.network {
             // Admin-approved: public destinations only (never the host or
             // private networks). Hostname rules are best effort.
@@ -1904,6 +1974,7 @@ impl Microsandbox {
         let mut out_open = true;
         let mut err_open = true;
         let mut stop: Option<Outcome> = None;
+        let has_artifacts = !j.artifacts.is_empty();
         while out_open || err_open {
             tokio::select! {
                 _ = tail.tick() => {
@@ -1944,7 +2015,7 @@ impl Microsandbox {
                 }
                 _ = cancel.changed() => {
                     if *cancel.borrow() {
-                        stop = Some(Outcome::Cancelled);
+                        stop = Some(ram_workspace::cancelled_outcome(ram, has_artifacts));
                         break;
                     }
                 }
@@ -1960,10 +2031,11 @@ impl Microsandbox {
         let mut unflushed = false;
         let outcome = match stop {
             Some(o) => {
-                let o = if o == Outcome::TimedOut && !j.artifacts.is_empty() {
-                    // Its artifacts are collected: flush what it wrote,
-                    // which the kill would lose (the job's own flush runs
-                    // only when its script exits). A stop does not wait.
+                let o = if o == Outcome::TimedOut
+                    && let Some(timeout) = ram_workspace::timeout_flush(ram, has_artifacts)
+                {
+                    // The kill would lose what the guest still needs to return.
+                    // A cancellation does not wait for the guest to flush.
                     let mut flush = vec!["exec"];
                     let flush_script = ram.map(|_| ram_workspace::RamWorkspace::flush_script());
                     if let Some(script) = &flush_script {
@@ -1972,7 +2044,7 @@ impl Microsandbox {
                         flush.extend([&name, "--", "sync"]);
                     }
                     let flushed = tokio::select! {
-                        out = self.output_within(&flush, TIMEOUT_FLUSH) => {
+                        out = self.output_within(&flush, timeout) => {
                             Some(out.is_ok_and(|out| out.status.success()))
                         }
                         Ok(_) = cancel.wait_for(|stop| *stop) => None,
@@ -1982,7 +2054,7 @@ impl Microsandbox {
                             unflushed = !ok;
                             o
                         }
-                        None => Outcome::Cancelled,
+                        None => ram_workspace::cancelled_outcome(ram, has_artifacts),
                     }
                 } else {
                     o
@@ -2016,7 +2088,7 @@ impl Microsandbox {
         job_log.read_from(&mut output).await;
         job_log.flush().await;
         if unflushed {
-            let note = "[branvil] flushing the job at its timeout failed: its artifacts may miss what it wrote last\n";
+            let note = "[branvil] flushing the job at its timeout failed: returned files may be incomplete\n";
             let _ = log.send(note.into()).await;
         }
         err_reader.abort();
@@ -2768,6 +2840,13 @@ esac
             artifacts: vec![],
             ..job.clone()
         };
+        let ram = JobDef {
+            ram_workspace: Some(crate::ci::pipeline::RamWorkspace {
+                paths: vec!["target".into()],
+                max_mib: 64,
+            }),
+            ..job.clone()
+        };
         for (ending, collected, created_cache, mounted_cache, kept) in [
             ("fallback", true, true, true, true),
             ("miss", true, true, true, true),
@@ -2902,8 +2981,19 @@ esac
             } else {
                 None
             };
-            let runner = Microsandbox::new(Msb::Found(msb.clone()), home.clone(), "t");
-            let job = if ending.ends_with("bare") {
+            let mut runner = Microsandbox::new(Msb::Found(msb.clone()), home.clone(), "t");
+            let ram_limits = (ending == "restore-link-fails").then(|| {
+                runner.test_machine = Some(crate::ci::api::Machine {
+                    logical_cpus: 4,
+                    total_memory_mib: 8192,
+                    available_memory_mib: 8192,
+                    commit: None,
+                });
+                crate::ci::config::JobLimits::from(&crate::ci::config::ExecutorConfig::default())
+            });
+            let job = if ram_limits.is_some() {
+                &ram
+            } else if ending.ends_with("bare") {
                 &bare
             } else {
                 &job
@@ -2920,8 +3010,8 @@ esac
                             job,
                             image_lock: ImageLock::default(),
                             cpus: 1,
-                            memory_mib: 256,
-                            ram_limits: None,
+                            memory_mib: if ram_limits.is_some() { 1536 } else { 256 },
+                            ram_limits,
                             work_quota_mib: 2048,
                             timeout_secs: if ending.starts_with("timeout")
                                 || ending == "stop-while-flushing"
@@ -3007,6 +3097,12 @@ esac
                 ending == "timeout-unflushed",
                 "{ending}: {text}"
             );
+            if ram_limits.is_some() {
+                assert!(
+                    text.contains("RAM workspace disabled: no cache was restored; using disk"),
+                    "{text}"
+                );
+            }
             // Preparation, the job and collection share the overlay. On
             // misses and dropped entries, the job and collection use a volume.
             let args = |phase: &str| {
@@ -3405,7 +3501,9 @@ esac
         for (ram, case) in [false, true]
             .into_iter()
             .flat_map(|ram| ["file", "empty", "link", "missing", "timeout"].map(|case| (ram, case)))
+            .chain([(true, "loop-unavailable")])
         {
+            let loop_unavailable = case == "loop-unavailable";
             let _ = std::fs::remove_file(state.join("archive-links"));
             let expected = if case == "timeout" {
                 std::fs::remove_file(state.join("done")).unwrap();
@@ -3415,7 +3513,7 @@ esac
                 Outcome::Exited(0)
             };
             match case {
-                "file" => std::fs::write(&returned, &full_archive).unwrap(),
+                "file" | "loop-unavailable" => std::fs::write(&returned, &full_archive).unwrap(),
                 "empty" => std::fs::write(
                     &returned,
                     tar::Builder::new(Vec::new()).into_inner().unwrap(),
@@ -3435,6 +3533,8 @@ esac
             let (log, mut logs) = mpsc::channel(64);
             let (_stop, cancel) = watch::channel(false);
             let cache_base = at.join("cache-base.raw");
+            let cache_disk = at.join("cache-disk.raw");
+            let mut kept_data = None;
             let mut runner = Microsandbox::new(Msb::Found(msb.clone()), home.clone(), "t");
             if ram {
                 std::fs::write(state.join("ram-probe"), "").unwrap();
@@ -3455,6 +3555,10 @@ esac
                     max_mib: 64,
                 });
             }
+            if loop_unavailable {
+                ext4_image(&state.join("cache-image"), 128, b"collected");
+                std::fs::write(state.join("returned").join(CACHE_KEPT), "1\n").unwrap();
+            }
             let _ = std::fs::remove_file(state.join("args-bv-collect-a1"));
             let outcome = runner
                 .run(
@@ -3474,11 +3578,11 @@ esac
                         timeout_secs: if case == "timeout" { 1 } else { 60 },
                         io: &io,
                         cache_base: ram.then_some(cache_base.as_path()),
-                        cache_disk: &at.join("cache-disk.raw"),
+                        cache_disk: &cache_disk,
                         tree: &Default::default(),
                         cache_data: ram.then_some(1024),
-                        exact_cache: ram,
-                        kept_data: &mut None,
+                        exact_cache: ram && !loop_unavailable,
+                        kept_data: &mut kept_data,
                         save_cache: true,
                         work: &work,
                         log_dir: &log_dir,
@@ -3490,10 +3594,26 @@ esac
                 )
                 .await;
             assert_eq!(outcome, expected, "{ram} {case}");
-            assert_eq!(state.join("args-bv-collect-a1").exists(), !ram, "{case}");
+            assert_eq!(
+                state.join("args-bv-collect-a1").exists(),
+                !ram || loop_unavailable,
+                "{case}"
+            );
             let mut text = String::new();
             while let Ok(bytes) = logs.try_recv() {
                 text.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            if ram {
+                let prep = std::fs::read_to_string(state.join("args-bv-prep-a1")).unwrap();
+                assert_eq!(prep.contains("--probe-cache"), loop_unavailable, "{case}");
+            }
+            if loop_unavailable {
+                assert!(text.contains("ext4 loop-mount probe failed"), "{text}");
+                assert!(text.contains("; using disk"), "{text}");
+                let args = std::fs::read_to_string(state.join("args-bv-job-a1")).unwrap();
+                assert!(!args.contains(ram_workspace::RETURN_MOUNT), "{args}");
+                assert_eq!(kept_data, Some(1024));
+                assert_eq!(&head(&cache_disk)[..9], b"collected");
             }
             let line = format!("[branvil] packing {ARTIFACTS} failed\n");
             assert_eq!(
@@ -3507,7 +3627,7 @@ esac
                 "{ram} {case}: {text}",
             );
             let report = work.join("out/report.txt");
-            if case == "file" {
+            if matches!(case, "file" | "loop-unavailable") {
                 assert_eq!(std::fs::read_to_string(report).unwrap(), "ok");
             } else {
                 assert!(!report.exists());

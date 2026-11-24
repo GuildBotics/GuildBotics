@@ -323,6 +323,36 @@ pub fn load_pull(r: &impl Rd, repo: &Repo, number: u64) -> AppResult<Pull> {
         })
 }
 
+pub(crate) fn open_pull(
+    r: &impl Rd,
+    repo: &Repo,
+    head: &str,
+    base: &str,
+) -> AppResult<Option<Pull>> {
+    let key = Pull::open_key(&repo.id, head, base);
+    let Some(number) = r.get_raw(store::IX_OPEN_PULLS, &key)? else {
+        return Ok(None);
+    };
+    let number = String::from_utf8_lossy(&number)
+        .parse()
+        .map_err(AppError::internal)?;
+    load_pull(r, repo, number).map(Some)
+}
+
+pub(crate) fn collects_child_tickets(r: &impl Rd, repo: &Repo, pull: &Pull) -> AppResult<bool> {
+    if !pull.draft || pull.base != repo.default_branch {
+        return Ok(false);
+    }
+    let Some(number) = pull
+        .head
+        .strip_prefix("ticket/")
+        .and_then(tickets::parse_number)
+    else {
+        return Ok(false);
+    };
+    tickets::has_children(r, &(repo.id.clone(), number))
+}
+
 /// Open pull requests from the repository's maintained index.
 pub fn open_pulls(r: &impl Rd, repo: &Repo) -> AppResult<Vec<Pull>> {
     let prefix = Key::new().s(&repo.id).bytes();
@@ -483,12 +513,8 @@ pub async fn create(
             // The open (head, base) lookup and the insert share one write
             // transaction, and redb has one writer: concurrent creates of the
             // same head and base produce one pull request.
-            let open = Pull::open_key(&r2.id, &input.head, &base);
-            if let Some(n) = w.get_raw(store::IX_OPEN_PULLS, &open)? {
-                let n: u64 = String::from_utf8_lossy(&n)
-                    .parse()
-                    .map_err(AppError::internal)?;
-                return Ok((false, load_pull(w, &r2, n)?));
+            if let Some(p) = open_pull(w, &r2, &input.head, &base)? {
+                return Ok((false, p));
             }
             let links = resolve_links(w, &base_url, &r2, &input.tickets)?;
             let number = w.next(&format!("pull:{}", r2.id))?;
@@ -2261,7 +2287,7 @@ pub fn mark_merged(
     let mut left: Vec<_> = p
         .tickets
         .iter()
-        .filter(|l| l.closes && p.base == repo.default_branch)
+        .filter(|l| l.closes)
         .filter_map(|l| l.local.clone())
         .collect();
     loop {

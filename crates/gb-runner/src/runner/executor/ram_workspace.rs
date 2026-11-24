@@ -1,65 +1,99 @@
 use super::*;
-use crate::ci::{api::Machine, config::JobLimits, pipeline};
+use crate::ci::{api::Machine, pipeline};
 
 pub(super) const RETURN_MOUNT: &str = "/.branvil-ram-return";
 const PROBED: &str = "ram-workspace.probed";
-const COMMAND_HEADROOM_MIB: u64 = 1024;
+const CACHE_PROBED: &str = "ram-cache.probed";
+pub(super) const CACHE_IMAGE: &str = "cache.raw";
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+pub(super) fn vm_timeout_secs(commands: u64, ram: Option<&RamWorkspace<'_>>) -> u64 {
+    let collection = ram.filter(|ram| ram.cache).map_or(0, |_| HELPER_SECS);
+    commands + collection + 60
+}
+
+/// A completed command has the same cache collection budget as a disk job.
+/// A command still running at the deadline only gets the usual flush window.
+pub(super) fn timeout_flush(
+    ram: Option<&RamWorkspace<'_>>,
+    has_artifacts: bool,
+) -> Option<Duration> {
+    if let Some(ram) = ram.filter(|ram| ram.cache) {
+        return Some(if ram.exit_code() == Some(0) {
+            Duration::from_secs(HELPER_SECS)
+        } else {
+            TIMEOUT_FLUSH
+        });
+    }
+    has_artifacts.then_some(TIMEOUT_FLUSH)
+}
+
+/// Stopping cache-only collection preserves a successful command outcome.
+pub(super) fn cancelled_outcome(ram: Option<&RamWorkspace<'_>>, has_artifacts: bool) -> Outcome {
+    if !has_artifacts && ram.is_some_and(|ram| ram.cache && ram.exit_code() == Some(0)) {
+        Outcome::Exited(0)
+    } else {
+        Outcome::Cancelled
+    }
+}
 
 /// The preparation VM uses the same image and guest kernel as the job.
-pub(super) fn probe(script: &mut String) {
+pub(super) fn probe(script: &mut String, save_cache: bool) {
     script.push_str(&format!(
         "if command -v mount >/dev/null && command -v umount >/dev/null && \
          python3 -I -S -c 'import ctypes, sys, tarfile; assert sys.version_info >= (3, 8)' >/dev/null 2>&1 && \
          unshare --pid --fork --kill-child --mount-proc setpriv --no-new-privs \
          --pdeathsig=keep --reuid={JOB_USER_ID} --regid={JOB_USER_ID} --clear-groups /bin/true >/dev/null 2>&1; then\n  \
-         : >{IO_MOUNT}/{PROBED}\nfi\nsync\n"
+         : >{IO_MOUNT}/{PROBED}\n"
     ));
-}
-
-fn memory_allows(
-    ram: &pipeline::RamWorkspace,
-    tmp_mib: Option<u32>,
-    vm_mib: u64,
-    limits: JobLimits,
-    machine: &Machine,
-) -> bool {
-    let guest = u64::from(ram.max_mib) + u64::from(tmp_mib.unwrap_or_default());
-    let reserve = limits.memory_reserve_mib(machine.total_memory_mib);
-    guest + COMMAND_HEADROOM_MIB <= vm_mib
-        && vm_mib.saturating_mul(u64::from(limits.max_jobs))
-            <= machine.total_memory_mib.saturating_sub(reserve)
-        && vm_mib <= machine.available_memory_mib.saturating_sub(reserve)
-        && machine
-            .commit
-            .as_ref()
-            .is_none_or(|commit| vm_mib <= commit.available_mib.saturating_sub(reserve))
+    if save_cache {
+        let supervisor = shell_quote(include_str!("ram_workspace.py"));
+        script.push_str(&format!(
+            "  if python3 -I -S -c {supervisor} --probe-cache >/dev/null 2>&1; then\n    \
+             : >{IO_MOUNT}/{CACHE_PROBED}\n  fi\n"
+        ));
+    }
+    script.push_str("fi\nsync\n");
 }
 
 pub(super) struct RamWorkspace<'a> {
     config: &'a pipeline::RamWorkspace,
     pub(super) returned: PathBuf,
     pub(super) quota_mib: u64,
+    cache: bool,
+}
+
+pub(super) fn take_probe(job: &JobRun<'_>) -> bool {
+    std::fs::remove_file(job.io.join(PROBED)).is_ok()
 }
 
 impl<'a> RamWorkspace<'a> {
     pub(super) fn select(
         config: &'a pipeline::RamWorkspace,
         job: &JobRun<'_>,
-        used_exact_cache: bool,
         quota_mib: u64,
+        cache: bool,
+        tools: bool,
         machine: impl FnOnce() -> Option<Machine>,
     ) -> Result<Self, String> {
         config.validate()?;
-        if !used_exact_cache {
-            return Err("no exact cache was restored".into());
-        }
-        if std::fs::remove_file(job.io.join(PROBED)).is_err() {
+        if !tools {
             return Err("the guest image or kernel lacks the RAM workspace tools".into());
+        }
+        let loop_supported = std::fs::remove_file(job.io.join(CACHE_PROBED)).is_ok();
+        if cache && !loop_supported {
+            return Err(
+                "the guest ext4 loop-mount probe failed (requires mkfs.ext4 and mount -o loop)"
+                    .into(),
+            );
         }
         let (Some(limits), Some(machine)) = (job.ram_limits, machine()) else {
             return Err("runner memory is unknown".into());
         };
-        if !memory_allows(config, job.job.tmpfs_mib, job.memory_mib, limits, &machine) {
+        if !config.memory_allows(job.job.tmpfs_mib, job.memory_mib, limits, &machine) {
             return Err(format!(
                 "insufficient memory (VM {} MiB, available {} MiB, {} slots, {}% reserve)",
                 job.memory_mib,
@@ -74,8 +108,57 @@ impl<'a> RamWorkspace<'a> {
         Ok(Self {
             config,
             returned,
-            quota_mib,
+            // The late raw image is sparse but the return mount can account
+            // for its full length. Keep room for artifacts and control files.
+            quota_mib: if cache { quota_mib * 2 } else { quota_mib },
+            cache,
         })
+    }
+
+    pub(super) fn saving_cache(&self) -> bool {
+        self.cache && !self.used_disk()
+    }
+
+    /// Once provisioning starts, let it finish even if the VM stops. An
+    /// interrupted volume create may leave an image the runtime cannot list.
+    pub(super) async fn run_with_cache<T>(
+        &self,
+        run: impl Future<Output = T>,
+        create: impl Future<Output = Option<JobDisk>>,
+    ) -> (T, std::io::Result<()>) {
+        tokio::pin!(run);
+        tokio::select! {
+            biased;
+            outcome = &mut run => (outcome, Ok(())),
+            () = self.wait_for_cache_request() => {
+                let (prepared, outcome) = tokio::join!(self.provide_cache(create), run);
+                (outcome, prepared)
+            }
+        }
+    }
+
+    async fn wait_for_cache_request(&self) {
+        let mut poll = tokio::time::interval(Duration::from_millis(50));
+        while !self.marked("cache.requested") || self.exit_code() != Some(0) {
+            poll.tick().await;
+        }
+    }
+
+    async fn provide_cache(
+        &self,
+        create: impl Future<Output = Option<JobDisk>>,
+    ) -> std::io::Result<()> {
+        let ready = self.returned.join(CACHE_IMAGE);
+        let result = match create.await {
+            Some(disk) => {
+                super::super::blocking(move || std::fs::hard_link(disk.path, ready)).await
+            }
+            None => Err(std::io::Error::other("creating the cache volume failed")),
+        };
+        if result.is_err() {
+            let _ = std::fs::write(self.returned.join("cache.unavailable"), []);
+        }
+        result
     }
 
     pub(super) fn script(&self, job: &JobDef, log_file: bool) -> String {
@@ -91,14 +174,22 @@ impl<'a> RamWorkspace<'a> {
             .flat_map(|a| a.paths.iter())
             .map(|p| p.trim_end_matches('/'))
             .collect();
-        let args = serde_json::to_string(&(self.config.max_mib, paths, artifacts, JOB_USER_ID))
-            .expect("serializing the RAM workspace configuration");
-        let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+        let keep = job.cache.as_ref().filter(|_| self.cache).map(|cache| {
+            let cached: Vec<_> = cache.paths.iter().map(String::as_str).collect();
+            keep_script(
+                CACHE_MOUNT,
+                &format!("{RETURN_MOUNT}/cache-result"),
+                &cached,
+            )
+        });
+        let args =
+            serde_json::to_string(&(self.config.max_mib, paths, artifacts, JOB_USER_ID, keep))
+                .expect("serializing the RAM workspace configuration");
         format!(
             "exec python3 -I -S -c {} {} {}",
-            quote(include_str!("ram_workspace.py")),
-            quote(&args),
-            quote(&job_script(&job.commands, log_file)),
+            shell_quote(include_str!("ram_workspace.py")),
+            shell_quote(&args),
+            shell_quote(&job_script(&job.commands, log_file)),
         )
     }
 
@@ -135,7 +226,68 @@ impl<'a> RamWorkspace<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ci::{api::CommitMemory, config::ExecutorConfig};
+    use crate::ci::{
+        api::CommitMemory,
+        config::{ExecutorConfig, JobLimits},
+    };
+
+    #[tokio::test]
+    async fn cache_volume_is_requested_only_after_the_guest_asks_for_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = pipeline::RamWorkspace {
+            paths: vec!["target".into()],
+            max_mib: 64,
+        };
+        let ram = RamWorkspace {
+            config: &config,
+            returned: dir.path().to_path_buf(),
+            quota_mib: 128,
+            cache: true,
+        };
+        let path = dir.path().join("volume.raw");
+        let create = || async {
+            std::fs::write(&path, b"cache image").unwrap();
+            Some(JobDisk {
+                name: "cache".into(),
+                mib: 64,
+                path: path.clone(),
+            })
+        };
+        let (outcome, result) = ram
+            .run_with_cache(async { Outcome::Exited(7) }, create())
+            .await;
+        assert_eq!(outcome, Outcome::Exited(7));
+        result.unwrap();
+        assert!(!path.exists());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), ram.wait_for_cache_request())
+                .await
+                .is_err()
+        );
+        assert!(!path.exists());
+        assert!(!dir.path().join(CACHE_IMAGE).exists());
+        std::fs::write(dir.path().join("cache.requested"), []).unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), ram.wait_for_cache_request())
+                .await
+                .is_err()
+        );
+        assert!(!path.exists());
+        std::fs::write(dir.path().join("exit"), "0").unwrap();
+        let (starting, started) = tokio::sync::oneshot::channel();
+        let job = async { started.await.unwrap() };
+        let prepare = async {
+            starting.send(()).unwrap();
+            tokio::task::yield_now().await;
+            create().await
+        };
+        let (_, result) = ram.run_with_cache(job, prepare).await;
+        result.unwrap();
+        assert_eq!(
+            std::fs::read(dir.path().join(CACHE_IMAGE)).unwrap(),
+            b"cache image"
+        );
+    }
 
     #[test]
     fn ram_fits_inside_the_vm_and_the_runner_budget() {
@@ -152,8 +304,10 @@ mod tests {
         let mut limits = JobLimits::from(&ExecutorConfig::default());
         limits.max_jobs = 2;
         let allows =
-            |machine: &Machine, limits, vm| memory_allows(&ram, Some(2048), vm, limits, machine);
+            |machine: &Machine, limits, vm| ram.memory_allows(Some(2048), vm, limits, machine);
         assert!(allows(&machine, limits, 8192));
+        assert!(allows(&machine, limits, 7680));
+        assert!(!allows(&machine, limits, 7679));
         assert!(!allows(&machine, limits, 6144));
         limits.max_jobs = 3;
         assert!(!allows(&machine, limits, 8192));
@@ -167,6 +321,77 @@ mod tests {
             started_attempts: vec![],
         });
         assert!(!allows(&machine, limits, 8192));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_probe_and_save_use_mount_without_losetup() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut preparation = String::from("set -e\n");
+        probe(&mut preparation, true);
+        let preparation =
+            preparation.replace(IO_MOUNT, &shell_quote(&dir.path().to_string_lossy()));
+        let code = r##"
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+tools = root / "bin"
+tools.mkdir()
+(tools / "python3").symlink_to(sys.executable)
+
+def tool(name, body):
+    path = tools / name
+    path.write_text("#!/bin/sh\nset -eu\n" + body)
+    path.chmod(0o755)
+
+for name in ["unshare", "umount", "sync"]:
+    tool(name, "exit 0\n")
+tool("mkfs.ext4", ': >"$3"\n')
+env = {"PATH": str(tools), "TMPDIR": str(root)}
+supported = 'test "$1 $2 $3 $4" = "-t ext4 -o loop" && test -f "$5" && test -d "$6"\n'
+for case in ["standard", "without-losetup", "without-loop-mount"]:
+    tool("mount", supported if case != "without-loop-mount" else "exit 1\n")
+    if case == "standard":
+        tool("losetup", "exit 99\n")
+    else:
+        (tools / "losetup").unlink(missing_ok=True)
+    subprocess.run(["/bin/sh", "-c", sys.argv[2]], env=env, check=True)
+    assert (root / "ram-workspace.probed").is_file(), case
+    marker = root / "ram-cache.probed"
+    assert marker.is_file() == (case != "without-loop-mount"), case
+    if marker.is_file():
+        marker.unlink()
+        work, returned, cache = (root / (case + suffix) for suffix in [".work", ".return", ".cache"])
+        work.mkdir()
+        returned.mkdir()
+        (work / "output").write_text(case)
+        (returned / "cache.raw").touch()
+        os.environ.update(env)
+        guest = {"__name__": "fixture"}
+        exec(sys.argv[3], guest)
+        guest.update(WORK=work, RETURN=returned, CACHE=cache)
+        guest["save_cache"](
+            f'IFS= read -r data <output || :; printf "%s" "$data" >"{cache}/output"; '
+            f'printf "1\\n" >"{returned}/cache-result/cache.kept"'
+        )
+        assert (cache / "output").read_text() == case
+        assert (returned / "cache.kept").read_text() == "1\n"
+"##;
+        let result = std::process::Command::new("python3")
+            .args(["-I", "-S", "-c", code])
+            .arg(dir.path())
+            .arg(preparation)
+            .arg(include_str!("ram_workspace.py"))
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 
     #[cfg(unix)]
@@ -189,6 +414,7 @@ for directory in [WORK / "out/cache", RETURN, upper]:
 (WORK / "out/report").write_text("old")
 (WORK / "out/unchanged").write_text("old")
 (WORK / "out/link").symlink_to(root)
+from unittest.mock import patch
 paths = ["out", "out/cache/current", "out/link/work/out/report"]
 layers = {WORK / "out/cache": upper}
 before = {path: identity(path) for path in files(paths) if produced(path, layers) is None}
@@ -201,6 +427,16 @@ with tarfile.open(RETURN / "artifacts.tar") as tar:
     assert set(tar.getnames()) == {"out/cache/current", "out/report"}, tar.getnames()
     assert tar.extractfile("out/cache/current").read() == b"new"
     assert tar.extractfile("out/report").read() == b"new report"
+with patch("time.monotonic", side_effect=[0, 60]), patch("__main__.run") as mount:
+    try:
+        save_cache("true")
+    except TimeoutError:
+        pass
+    else:
+        raise AssertionError("a missing cache provisioning response must stop the wait")
+    assert (RETURN / "cache.requested").is_file()
+    assert not (RETURN / "cache.kept").exists()
+    mount.assert_not_called()
 "#,
         );
         let result = Command::new("python3")
@@ -257,10 +493,13 @@ with tarfile.open(RETURN / "artifacts.tar") as tar:
         let mut disk_identity = None;
         let mut ram_identity = None;
         let limits = JobLimits::from(&ExecutorConfig::default());
+        let no_losetup = std::env::var("GUILDBOTICS_RAM_TEST_IMAGE_NO_LOSETUP").ok();
+        let no_loop = std::env::var("GUILDBOTICS_RAM_TEST_IMAGE_NO_LOOP").ok();
         let verify_and_write = r#"
             set -eu
             test "$(id -u):$(id -g)" = 1000:1000
             test ! -x /.branvil-ram-return
+            test ! -x /.branvil-cache
             grep -q ' /work/demo .* - overlay ' /proc/self/mountinfo
             grep -q ' /tmp .* - tmpfs ' /proc/self/mountinfo
             test "$(cat demo/input)" = original
@@ -282,25 +521,68 @@ with tarfile.open(RETURN / "artifacts.tar") as tar:
             ("failure", "exit 7", Outcome::Exited(7)),
             ("timeout", "sleep 600 & wait", Outcome::TimedOut),
             ("cancel", "sleep 600 & wait", Outcome::Cancelled),
+            ("miss", verify_and_write, Outcome::Exited(0)),
             (
-                "miss",
-                "test \"$(cat demo/input)\" = original; echo disk > demo/current",
+                "miss-restore",
+                "set -e; test \"$(cat demo/input)\" = updated; test ! -e demo/deleted; test \"$(cat demo/current)\" = current",
+                Outcome::Exited(0),
+            ),
+            (
+                "cold",
+                "set -e; test ! -e demo; mkdir demo; echo current > demo/current",
+                Outcome::Exited(0),
+            ),
+            (
+                "cold-restore",
+                "set -e; test \"$(cat demo/current)\" = current; test ! -e demo/input",
                 Outcome::Exited(0),
             ),
             (
                 "unsupported",
-                "test \"$(cat demo/input)\" = original; echo disk > demo/current",
+                "set -e; test \"$(cat demo/input)\" = original; echo disk > demo/current",
+                Outcome::Exited(0),
+            ),
+            ("no-losetup", verify_and_write, Outcome::Exited(0)),
+            (
+                "no-loop",
+                "set -e; test \"$(cat demo/input)\" = original; echo disk > demo/current",
                 Outcome::Exited(0),
             ),
         ] {
+            let image = match case {
+                "no-losetup" => no_losetup.as_deref(),
+                "no-loop" => no_loop.as_deref(),
+                _ => Some("guildbotics/agent-environment:dev"),
+            };
+            let Some(image) = image else { continue };
             let seed = case == "seed";
-            let active = matches!(case, "success" | "failure" | "timeout" | "cancel");
+            let active = !matches!(case, "seed" | "unsupported" | "cold" | "no-loop");
+            let returns_changes = matches!(
+                case,
+                "success" | "failure" | "timeout" | "miss" | "no-losetup"
+            );
+            let save_cache = matches!(
+                case,
+                "seed"
+                    | "failure"
+                    | "timeout"
+                    | "cancel"
+                    | "miss"
+                    | "cold"
+                    | "miss-restore"
+                    | "cold-restore"
+                    | "no-losetup"
+                    | "no-loop"
+            );
             let mut commands = vec![
                 r#"printf 'fixture identity HOME=%s USER=%s LOGNAME=%s\n' "${HOME-<unset>}" "${USER-<unset>}" "${LOGNAME-<unset>}""#
                     .to_string(),
             ];
-            if active && case != "success" {
+            if matches!(case, "failure" | "timeout" | "cancel") {
                 commands.push(verify_and_write.to_string());
+            }
+            if case == "no-losetup" {
+                commands.push("! command -v losetup".into());
             }
             commands.push(command.to_string());
             let attempt = root.join(case);
@@ -316,20 +598,25 @@ with tarfile.open(RETURN / "artifacts.tar") as tar:
                 .finish()
                 .unwrap();
             let base = attempt.join("base.raw");
-            if !seed {
-                std::fs::hard_link(&published, &base).unwrap();
+            if !matches!(case, "seed" | "cold") {
+                let source = match case {
+                    "miss-restore" => root.join("miss/cache.raw"),
+                    "cold-restore" => root.join("cold/cache.raw"),
+                    _ => published.clone(),
+                };
+                std::fs::hard_link(source, &base).unwrap();
             }
             let job = JobDef {
                 verified_sha: false,
                 name: "ram-test".into(),
-                image: "guildbotics/agent-environment:dev".into(),
+                image: image.into(),
                 commands,
                 paths: vec![],
                 timeout_secs: None,
                 tmpfs_mib: Some(64),
-                ram_workspace: Some(pipeline::RamWorkspace {
+                ram_workspace: (!seed).then(|| pipeline::RamWorkspace {
                     paths: if case == "unsupported" {
-                        vec!["demo".into(), "missing".into()]
+                        vec!["demo/input".into()]
                     } else {
                         vec!["demo".into()]
                     },
@@ -377,13 +664,16 @@ with tarfile.open(RETURN / "artifacts.tar") as tar:
                         work_quota_mib: 64,
                         timeout_secs: if case == "timeout" { 15 } else { 30 },
                         io: &io,
-                        cache_base: (!seed).then_some(base.as_path()),
+                        cache_base: base.is_file().then_some(base.as_path()),
                         cache_disk: &cache_disk,
                         tree: &tree,
                         cache_data,
-                        exact_cache: !seed && case != "miss",
+                        exact_cache: matches!(
+                            case,
+                            "success" | "unsupported" | "miss-restore" | "cold-restore"
+                        ),
                         kept_data: &mut kept,
-                        save_cache: seed,
+                        save_cache,
                         work: &work,
                         log_dir: &logs,
                         network: false,
@@ -400,6 +690,12 @@ with tarfile.open(RETURN / "artifacts.tar") as tar:
                 active,
                 "{case}: {log}"
             );
+            if case == "no-loop" {
+                assert!(
+                    log.contains("ext4 loop-mount probe failed"),
+                    "{case}: {log}"
+                );
+            }
             if matches!(case, "seed" | "success") {
                 let identity = log
                     .lines()
@@ -414,7 +710,7 @@ with tarfile.open(RETURN / "artifacts.tar") as tar:
             }
             if seed {
                 cache_data = Some(kept.expect(&log));
-            } else if active && case != "cancel" {
+            } else if returns_changes {
                 assert_eq!(
                     std::fs::read_to_string(work.join("demo/current")).unwrap(),
                     "current\n"
@@ -425,20 +721,63 @@ with tarfile.open(RETURN / "artifacts.tar") as tar:
                 );
                 assert!(!work.join("demo/deleted").exists());
                 assert!(!work.join("demo/old.xml").exists());
-                assert!(!cache_disk.exists());
+            } else if case == "cold" {
+                assert!(log.contains("no cache was restored"), "{log}");
+                assert_eq!(
+                    std::fs::read_to_string(work.join("demo/current")).unwrap(),
+                    "current\n"
+                );
             } else if case == "cancel" {
                 assert!(!work.join("demo/current").exists());
-            } else {
+            } else if matches!(case, "unsupported" | "no-loop") {
                 assert!(log.contains("using disk"), "{case}: {log}");
                 assert_eq!(
                     std::fs::read_to_string(work.join("demo/current")).unwrap(),
                     "disk\n"
                 );
             }
+            assert_eq!(
+                kept.is_some(),
+                matches!(case, "seed" | "miss" | "cold" | "no-losetup" | "no-loop"),
+                "{case}: {log}"
+            );
+            if !seed {
+                assert_eq!(cache_disk.is_file(), kept.is_some(), "{case}: {log}");
+            }
         }
         assert_eq!(
             disk_identity, ram_identity,
             "job identity changed with RAM workspace"
         );
+    }
+
+    #[test]
+    fn successful_ram_cache_collection_can_finish_after_the_command_deadline() {
+        let returned = tempfile::tempdir().unwrap();
+        let config = pipeline::RamWorkspace {
+            paths: vec!["target".into()],
+            max_mib: 64,
+        };
+        let ram = RamWorkspace {
+            config: &config,
+            returned: returned.path().to_path_buf(),
+            quota_mib: 128,
+            cache: true,
+        };
+        assert_eq!(timeout_flush(None, false), None);
+        assert_eq!(timeout_flush(Some(&ram), false), Some(TIMEOUT_FLUSH));
+        assert_eq!(cancelled_outcome(Some(&ram), false), Outcome::Cancelled);
+        std::fs::write(returned.path().join("exit"), "7").unwrap();
+        assert_eq!(timeout_flush(Some(&ram), false), Some(TIMEOUT_FLUSH));
+        assert_eq!(cancelled_outcome(Some(&ram), false), Outcome::Cancelled);
+        std::fs::write(returned.path().join("exit"), "0").unwrap();
+        assert_eq!(
+            timeout_flush(Some(&ram), false),
+            Some(Duration::from_secs(HELPER_SECS)),
+        );
+        assert_eq!(vm_timeout_secs(30, Some(&ram)), 30 + HELPER_SECS + 60);
+        assert_eq!(vm_timeout_secs(30, None), 90);
+        assert_eq!(cancelled_outcome(Some(&ram), false), Outcome::Exited(0));
+        assert_eq!(cancelled_outcome(Some(&ram), true), Outcome::Cancelled);
     }
 }

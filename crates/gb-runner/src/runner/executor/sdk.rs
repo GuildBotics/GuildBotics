@@ -185,7 +185,7 @@ impl Microsandbox {
             .cpus(job.cpus as u8)
             .memory(job.memory_mib as u32)
             .workdir("/work")
-            .max_duration(job.timeout_secs + 60);
+            .max_duration(ram_workspace::vm_timeout_secs(job.timeout_secs, ram));
         let builder = if let Some(ram) = ram {
             builder
                 .user("0:0")
@@ -224,11 +224,13 @@ impl Microsandbox {
             tokio::pin!(stream);
             let mut outcome = tokio::select! {
                 biased;
-                _ = async { let _ = cancel.wait_for(|stop| *stop).await; } => Outcome::Cancelled,
+                _ = async { let _ = cancel.wait_for(|stop| *stop).await; } => ram_workspace::cancelled_outcome(ram, has_artifacts),
                 result = &mut stream => result,
                 _ = tokio::time::sleep_until(deadline) => Outcome::TimedOut,
             };
-            if outcome == Outcome::TimedOut && has_artifacts {
+            if outcome == Outcome::TimedOut
+                && let Some(timeout) = ram_workspace::timeout_flush(ram, has_artifacts)
+            {
                 let flush = async {
                     if ram.is_some() {
                         vm.exec(
@@ -242,10 +244,10 @@ impl Microsandbox {
                 };
                 outcome = tokio::select! {
                     biased;
-                    _ = async { let _ = cancel.wait_for(|stop| *stop).await; } => Outcome::Cancelled,
-                    flushed = tokio::time::timeout(TIMEOUT_FLUSH, flush) => {
+                    _ = async { let _ = cancel.wait_for(|stop| *stop).await; } => ram_workspace::cancelled_outcome(ram, has_artifacts),
+                    flushed = tokio::time::timeout(timeout, flush) => {
                         if !flushed.is_ok_and(|result| result.is_ok_and(|out| out.status().success)) {
-                            let _ = log.send(b"[branvil] flushing the job at its timeout failed: its artifacts may miss what it wrote last\n".to_vec()).await;
+                            let _ = log.send(b"[branvil] flushing the job at its timeout failed: returned files may be incomplete\n".to_vec()).await;
                         }
                         Outcome::TimedOut
                     }

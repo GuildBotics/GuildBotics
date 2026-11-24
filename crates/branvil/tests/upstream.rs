@@ -2008,12 +2008,30 @@ async fn a_failed_read_of_dependency_alerts_is_never_an_empty_list() {
 async fn feature_collection(auto: bool) {
     let (w, gh) = followed().await;
     let s = &w.server;
+    let parent_ticket = w.ticket("parent").await;
+    let parent_ticket_path = format!(
+        "{}/tickets/{}",
+        w.repo_path(),
+        parent_ticket["key"].as_str().unwrap()
+    );
     let parent_head = w.push_change("ticket/parent", "parent.txt", "parent");
-    let parent = w.open_pull("ticket/parent", json!([])).await;
+    let parent = w
+        .open_pull(
+            "ticket/parent",
+            json!([{"url":parent_ticket["url"],"closes":true}]),
+        )
+        .await;
     let parent_url = format!("{}/pulls/{}", w.repo_path(), parent["number"]);
     let (st, v) = s.patch(&parent_url, &w.owner, json!({"draft":true})).await;
     assert_eq!(st, StatusCode::OK, "{v}");
-    let ticket = w.ticket("child").await;
+    let (st, ticket) = s
+        .post(
+            &format!("{}/tickets", w.repo_path()),
+            &w.aiko,
+            json!({"title":"child","parent":parent_ticket["url"]}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::CREATED, "{ticket}");
     let child_head = w.push_change("child", "child.txt", "child");
     let (st, made) = s.post(&format!("{}/pulls", w.repo_path()), &w.aiko,
         json!({"head":"child","base":"ticket/parent","title":"child","tickets":[{"url":ticket["url"],"closes":true}]})).await;
@@ -2055,7 +2073,10 @@ async fn feature_collection(auto: bool) {
             &w.owner,
         )
         .await;
-    assert_eq!(ticket["state"], "open");
+    assert_eq!(ticket["state"], "closed");
+    assert_eq!(ticket["state_reason"], "completed");
+    assert_eq!(ticket["lane"], "done");
+    assert_eq!(s.ok(&parent_ticket_path, &w.owner).await["state"], "open");
     with_aiko_account(&w).await;
     let pause = auto.then(|| gh.pause_answer("POST", &format!("/repos/{GH}/pulls")));
     let (st, v) = s.patch(&parent_url, &w.owner, json!({"draft":false})).await;
@@ -2079,10 +2100,12 @@ async fn feature_collection(auto: bool) {
         s.ok(&parent_url, &w.owner).await["upstream"]["number"].is_u64()
     })
     .await;
+    assert_eq!(s.ok(&parent_ticket_path, &w.owner).await["state"], "open");
     let p = s.ok(&parent_url, &w.owner).await;
     gh.squash_merge(GH, p["upstream"]["number"].as_u64().unwrap());
     refresh(&w).await;
     assert_eq!(s.ok(&parent_url, &w.owner).await["merged"], true);
+    assert_eq!(s.ok(&parent_ticket_path, &w.owner).await["state"], "closed");
     assert_eq!(
         git_ok(
             &w.server.data.join("repos/acme/demo.git"),

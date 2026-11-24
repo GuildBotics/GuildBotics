@@ -163,6 +163,10 @@ impl RunnerSeen {
     }
 }
 
+// Runners poll every two seconds; leave room for an inventory refresh, but
+// stop preferring RAM well before an unresponsive runner is considered absent.
+const RAM_REPORT_MAX_AGE: Duration = Duration::from_secs(15);
+
 #[derive(Clone)]
 pub struct Ci {
     inner: Arc<Inner>,
@@ -955,6 +959,9 @@ impl Ci {
                         images: seen.report.images,
                         limits,
                         machine: seen.report.machine,
+                        ram_fresh: seen.seen.elapsed() <= RAM_REPORT_MAX_AGE,
+                        cache_groups: seen.report.cache_groups,
+                        ram_unsupported_images: seen.report.ram_unsupported_images,
                     })
             })
             .collect())
@@ -1456,9 +1463,11 @@ mod tests {
             images: Vec::new(),
             version: gb_base::BUILD_VERSION.into(),
             max_jobs: 2,
-            accept: false,
+            accept: true,
             running_jobs: 0,
             machine: None,
+            cache_groups: None,
+            ram_unsupported_images: Default::default(),
         };
         ci.report_runner("expired", report.clone());
         ci.inner
@@ -1474,6 +1483,23 @@ mod tests {
         assert_eq!(view["runners"][0]["connection"], "offline");
         assert!(view["runners"][0]["last_seen_at"].is_string());
         ci.report_runner("ready", report);
+        ci.inner
+            .runners
+            .lock()
+            .unwrap()
+            .get_mut("ready")
+            .unwrap()
+            .seen -= RAM_REPORT_MAX_AGE + Duration::from_secs(1);
+        ci.inner
+            .store
+            .read_sync(|r| {
+                let alternatives = ci.ready_alternatives(r, "another")?;
+                assert_eq!(alternatives.len(), 1);
+                assert_eq!(alternatives[0].name, "ready");
+                assert!(!alternatives[0].ram_fresh);
+                Ok(())
+            })
+            .unwrap();
         let view = ci.diagnostics().await;
         assert_eq!(view["state"], "ready");
         assert_eq!(view["runners"][0]["connection"], "offline");
@@ -1536,6 +1562,8 @@ mod tests {
                         digest: "sha256:test".into(),
                     }],
                     version: gb_base::BUILD_VERSION.into(),
+                    cache_groups: None,
+                    ram_unsupported_images: Default::default(),
                     max_jobs: 1,
                     accept: true,
                     running_jobs: 0,
@@ -2230,6 +2258,99 @@ mod tests {
             )
         );
     }
+    #[tokio::test]
+    async fn a_post_merge_round_trip_on_a_required_job_keeps_the_head_s_other_attempts() {
+        async fn latest(ci: &Ci, repo: &str, sha: &str, job: &str) -> Attempt {
+            let (repo, sha, job) = (repo.to_string(), sha.to_string(), job.to_string());
+            ci.inner
+                .store
+                .read(move |r| {
+                    Ok(queue::attempts_of(r, &repo, &sha)?
+                        .into_iter()
+                        .rfind(|a| a.job.name == job)
+                        .unwrap())
+                })
+                .await
+                .unwrap()
+        }
+        async fn set_post_merge(ci: &Ci, repo: &mut Repo, jobs: &[&str]) {
+            repo.post_merge_jobs = jobs.iter().map(|job| job.to_string()).collect();
+            let saved = repo.clone();
+            ci.inner
+                .store
+                .write(move |w| w.put(store::REPOS, &Repo::key(&saved.id), &saved))
+                .await
+                .unwrap();
+            ci.reconcile_locked(repo).await.unwrap();
+        }
+
+        let (temp, ci, mut repo) = setup();
+        let app = app(&temp, &ci);
+        let dir = app.git.repo_dir(&repo.path);
+        app.git.init_bare(&dir, "main").await.unwrap();
+        let work = temp.path().join("work");
+        app.git
+            .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
+            .await
+            .unwrap();
+        std::fs::write(
+            work.join(".guildbotics-ci.toml"),
+            "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n\n\
+             [[jobs]]\nname='lint'\nimage='alpine'\ncommands=['true']\nrequired=true\n",
+        )
+        .unwrap();
+        let base = commit_all(&app.git, &work, "base").await;
+        let head = commit_all(&app.git, &work, "head").await;
+        app.git
+            .run_ok(
+                None,
+                &[
+                    "-C",
+                    work.to_str().unwrap(),
+                    "push",
+                    "-q",
+                    dir.to_str().unwrap(),
+                    &format!("{base}:refs/heads/main"),
+                    &format!("{head}:refs/heads/fix"),
+                ],
+            )
+            .await
+            .unwrap();
+        let saved = repo.clone();
+        app.store
+            .write(move |w| {
+                w.put(store::REPOS, &Repo::key(&saved.id), &saved)?;
+                let pull = open_pull(&saved.id, 1, "fix", "main");
+                crate::model::put_indexed(
+                    w,
+                    store::PULLS,
+                    &crate::model::Pull::key(&saved.id, 1),
+                    None,
+                    &pull,
+                    crate::model::pull_index(&pull),
+                )
+            })
+            .await
+            .unwrap();
+        ci.on_pull_opened(&app, &repo, "fix").await;
+        let test = latest(&ci, &repo.id, &head, "test").await;
+        assert_eq!(test.status, "queued");
+
+        set_post_merge(&app.ci, &mut repo, &["lint"]).await;
+        let during = latest(&ci, &repo.id, &head, "test").await;
+        assert_eq!((&during.id, during.status.as_str()), (&test.id, "queued"));
+        let lint = latest(&ci, &repo.id, &head, "lint").await;
+        assert_eq!(lint.conclusion.as_deref(), Some("skipped"));
+        assert_eq!(lint.path_skip.unwrap().reason, queue::SkipReason::PostMerge);
+
+        set_post_merge(&app.ci, &mut repo, &[]).await;
+        let after = latest(&ci, &repo.id, &head, "test").await;
+        assert_eq!((&after.id, after.status.as_str()), (&test.id, "queued"));
+        let lint = latest(&ci, &repo.id, &head, "lint").await;
+        assert_eq!(lint.status, "queued");
+        assert!(lint.path_skip.is_none());
+    }
+
     #[tokio::test]
     async fn verification_batches_main_and_marks_only_completed_success() {
         let (temp, ci, mut repo) = setup();

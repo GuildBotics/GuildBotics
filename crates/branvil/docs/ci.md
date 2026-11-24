@@ -84,6 +84,7 @@ image = "docker.io/library/alpine:3.22"   # [registry/]name[:tag], no digest
 commands = ["./scripts/test.sh", "make lint"]   # 1-64 commands, each run by /bin/sh -c
 paths = ["src/**", "tests/*.rs", "Cargo.lock"]  # optional; empty/omitted runs every change
 verified_sha = false             # optional; declares GB_CI_VERIFIED_SHA as an input
+required = true                   # optional; the repository setting still decides required checks
 timeout_secs = 600                # optional, 1-86400; default the runner's time limit
 tmpfs_mib = 2048                   # optional, 1-4096; /tmp uses a 4 GiB disk by default
 # ram_workspace = { paths = ["out/cache"], max_mib = 4608 }  # optional, see below
@@ -284,19 +285,37 @@ What a job's commands find, as on common CI services:
 
 Set `ram_workspace = { paths = ["out/cache"], max_mib = 4608 }` on a job to
 keep changes to the selected directories in RAM. Specify one to eight distinct,
-non-overlapping paths relative to `/work`. Each path must name an existing
-directory after checkout and cache restore, without symbolic links. The
-directories remain at their usual paths and serve as mount points for the job.
-Changes within them, including deletions, disappear when the VM shuts down.
+non-overlapping paths relative to `/work`. Each path must name a directory
+that exists after checkout and cache restore, without symbolic links. The
+directories keep their usual paths. The RAM changes disappear when the VM shuts down, after any
+required cache and artifact data have been collected.
 The selected directories share one tmpfs of 1–65536 MiB. The job's separate
 `tmpfs_mib` continues to control `/tmp`.
 
 The Hub SDK and remote `msb` CLI use the same Linux guest implementation.
 The image needs Python 3.8 or later and the `mount`, `umount`, `setpriv`,
 and `unshare` tools. The guest kernel must support OverlayFS, tmpfs, and a PID
-namespace for the job processes. The runner uses RAM only after it restores an
-exact cache hit whose changes do not need to be saved. It keeps 1024 MiB of
-VM memory beyond the sum of both tmpfs limits for commands. It also checks
+namespace for the job processes. RAM can be used with an exact hit or a
+restored compatible older cache. Jobs with no restored cache use disk, which
+allows clean builds to remove and recreate the entire work directories.
+
+For RAM jobs that need to save a new cache, the guest image also needs
+`mkfs.ext4` (from e2fsprogs) to create a temporary ext4 image during preparation.
+The preparation VM uses that image to verify that `mount -t ext4 -o loop` and
+`umount` work with the guest kernel. `mount` sets up the loop device itself.
+If the ext4 probe fails, including when `mkfs.ext4` is missing, the runner
+logs an ext4 loop-mount probe failure and runs the job on disk. Jobs known in
+advance to need no new cache skip the probe.
+
+When saving a new cache from RAM, the runner creates the cache volume only
+after the commands succeed. The job VM loop-mounts the preformatted ext4
+image and copies the declared paths from the merged workspace to that volume
+while it still holds the RAM changes. Files pass through memory on their way
+to the volume.
+Collection can finish after the command deadline. The published cache is
+reusable on subsequent jobs. With an exact hit the runner skips saving a new
+cache. The runner keeps 1024 MiB of VM memory beyond the sum of both tmpfs
+limits for commands. It also checks
 that the host's usable physical memory can cover a full VM for each configured
 slot and that current available memory can cover this VM, retaining the runner's
 configured reserve in both checks. On Windows it also checks available commit.
@@ -322,7 +341,12 @@ GUILDBOTICS_REAL_EXECUTOR=1 GUILDBOTICS_REAL_EXECUTOR_DATA=/absolute/test-data \
 ```
 
 Set `GUILDBOTICS_RAM_TEST_EXECUTOR=cli` to exercise the remote CLI path against
-the same fixture.
+the same fixture. To cover customized guests, set
+`GUILDBOTICS_RAM_TEST_IMAGE_NO_LOSETUP` to a loaded image with `losetup` removed
+and `GUILDBOTICS_RAM_TEST_IMAGE_NO_LOOP` to a loaded image where `mount -o loop`
+fails. Both images must still provide the other preparation tools. The fixture
+checks that the first image saves a cache from RAM and that the second saves
+it through the disk collector.
 
 ## Trust: where the pipeline comes from
 
@@ -586,10 +610,11 @@ belong to no attempt are removed at start (orphan collection). An artifact of
 a commit is downloaded with `GET …/commits/{sha}/artifacts/{name}` (the newest
 check attempt of the commit that has it, resolving reuse to its source).
 
-A VM packs the artifacts' paths of `/work` once the job's VM ended, by exit
-or by timeout ("The runner"), leaving out a path that goes through a
-symbolic link, and the runner unpacks that archive into the emptied work
-directory: directories, regular files, and hard links between them, each
+For a disk job, a separate VM packs the artifacts' paths of `/work` after the
+job's VM exits or times out, leaving out paths that go through symbolic links.
+With a [RAM workspace](#ram-workspace), the job VM packs the artifacts. The runner
+unpacks the archive into the emptied work directory: directories, regular
+files, and hard links between them, each
 inside the directory (an absolute name lands inside too); a symbolic link is
 skipped and noted in the log, and anything else (a FIFO, a sparse file) is
 skipped. The job's modes are not kept (files get 0644, directories 0755). It
@@ -807,9 +832,10 @@ Per job the runner:
    for at most 30 s, `commands ran for` includes it, a flush that fails is
    logged, and a cancel stops it at once; killing `msb run`
    ends the VM through its parent watchdog, so every process in it stops),
-   keeps what the job wrote up to then, and removes its sandbox. Once the
-   job's VM ended by exit or timeout, and the job declares artifacts or
-   is eligible to save a new cache image, a VM like the one
+   keeps what the job wrote up to then, and removes its sandbox. A job using a
+   [RAM workspace](#ram-workspace) collects artifacts and saves a new cache
+   when needed before that VM ends. For a disk job that exits or times out and
+   declares artifacts or is eligible to save a new cache image, a VM like the one
    that prepared `/work` (`bv-collect-<attempt>`, started under the shared
    image lock as the job's VM is, a cancel ending the wait for it, `io`
    mounted with `quota=S`) packs the artifacts' paths into
@@ -871,7 +897,8 @@ the job's user no home it can write. For a cache, it also needs `df` and
 entry's file system is kept as it is only when it still leaves the quota
 (the log says so), and the job runs without the cache otherwise.
 Without `sync`, preparing `/work` fails for every job, so an image that ran
-jobs before needs it too.
+jobs before needs it too. See [RAM workspace](#ram-workspace) for the
+additional image and kernel requirements for RAM jobs.
 
 The log says how long each step took, so the time of a job can be read off
 it: how long the attempt waited in the queue (`queued for … s`, from its

@@ -96,9 +96,10 @@ fn reference_includes_standard_work_procedure() {
     assert!(text.contains("feature branch to the default branch closes the parent ticket"));
     assert!(text.contains("tickets that the merge does not complete"));
     assert!(text.contains(
-        "A merge into a branch other than the default branch closes no ticket automatically"
+        "A child PR with a closing link closes its ticket on merge into the collecting branch."
     ));
-    assert!(text.contains("follow the manual-close rule below"));
+    assert!(text.contains("Humans mark the collecting PR ready after all children are closed."));
+    assert!(!text.contains("manual-close rule"));
     assert!(text.contains("does not by itself authorize closing the ticket"));
     assert!(text.contains("files[].commentable_lines"));
     assert!(text.contains("`line`, `side`"));
@@ -168,14 +169,11 @@ fn reference_states_cross_cutting_rules() {
 fn reference_states_which_code_host_writes_stay_human_decisions() {
     let text = help();
     assert!(text.contains("--human-approved"));
+    assert!(text.contains("opening a ticket and closing or reopening one stay human decisions"));
+    assert!(text.contains(
+        "when a human in the originating conversation asked for or approved that specific ticket"
+    ));
     assert!(text.contains("never on the member's own judgment"));
-    assert!(text.contains("inspect the current PR and ticket"));
-    assert!(text.contains("verify that the merge completed the ticket's whole scope"));
-    assert!(text.contains("post a completion comment and close the ticket"));
-    assert!(
-        text.contains("ticket update --state closed --state-reason completed --human-approved")
-    );
-    assert!(text.contains("leave the ticket open and comment on what remains"));
     assert!(text.contains("Priority is a human triage decision"));
     assert!(
         text.contains(

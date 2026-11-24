@@ -254,7 +254,10 @@ protected there, pull requests are approved and merged there by people, its CI
 (Windows included) and releases run there, and people outside see the finished
 pull requests there. Branvil never pushes the default branch; it follows it.
 
-Pull requests targeting other branches merge inside Branvil and leave linked tickets open. After an automatic child merge, a human verifies the child’s whole scope and closes the child ticket before marking the collecting PR ready.
+Pull requests targeting other branches merge inside Branvil. A merge into a
+collecting branch closes child tickets linked with `closes`. The collecting
+pull request closes its linked parent ticket when it merges into the default
+branch, after all children are closed.
 
 What the owner sees (GitHub as the example):
 

@@ -1249,8 +1249,9 @@ hosts, or write files on the service's machine.
 
 Pull requests targeting a nondefault branch merge inside Branvil, including in
 repositories with an upstream. They need no upstream author account and are
-not published automatically. A `closes` link closes tickets only on a merge
-into the default branch; feature-branch merges leave tickets open.
+not published automatically. Merging a pull request closes the tickets linked
+with `closes`, including when it targets a feature branch. A parent ticket
+can close only after all its children are closed.
 
 A repository may follow a repository on a code host (GitHub today), which
 stays the place of record: Branvil's default branch moves only to the host's,
