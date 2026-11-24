@@ -15,8 +15,8 @@ use crate::domain::{
 use crate::error::{AppError, AppResult};
 use crate::git::{CommitSummary, FileChange, ZERO_SHA};
 use crate::model::{
-    self, InlineComment, JournalEntry, JournalOp, Published, Pull, Repo, Review, Target, Thread,
-    TicketLink,
+    self, InlineComment, JournalEntry, JournalOp, MergeChecks, MergeChecksSource, Published, Pull,
+    Repo, Review, Target, Thread, TicketLink,
 };
 use crate::refs;
 use crate::store::{self, Key, Rd, Wtx};
@@ -219,10 +219,7 @@ pub(crate) fn head_of(p: &Pull, tips: &Tips) -> Option<String> {
     if !p.merged {
         return tips.get(&p.head).cloned();
     }
-    match p.upstream.as_ref().filter(|x| x.state == "merged") {
-        Some(x) => x.pushed.clone(),
-        None => p.merged_head.clone(),
-    }
+    p.merged_head.clone()
 }
 
 /// Where a pull request's changes start: its base branch's tip until it is
@@ -558,6 +555,7 @@ pub async fn create(
                 merge_sha: None,
                 merged_head: None,
                 merged_base: None,
+                merge_checks: None,
                 upstream: None,
                 revision: 1,
             };
@@ -1907,11 +1905,71 @@ pub struct ChecksView {
     /// Sorted conflict paths, or None for closed pulls or missing branches.
     pub conflicts: Option<Vec<String>>,
     pub checks: Vec<Check>,
-    pub required_checks: crate::agent::port::RequiredChecks,
+    pub required_checks: Option<crate::agent::port::RequiredChecks>,
     pub required_names: Vec<String>,
     pub checks_expected: bool,
     pub base_checks: usize,
     pub base_failure: Option<crate::ci::collection::BaseFailure>,
+    pub merge_checks: Option<MergeChecks>,
+    pub post_merge_checks: Option<PostMergeChecks>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct PostMergeChecks {
+    pub sha: String,
+    pub branch: String,
+    /// Pull requests whose heads were registered on the receiving branch.
+    /// Empty for a branch's own verification.
+    pub pulls: Vec<u64>,
+    pub checks: Vec<Check>,
+    pub checks_expected: bool,
+}
+
+async fn post_merge_checks(app: &App, repo: &Repo, p: &Pull) -> AppResult<Option<PostMergeChecks>> {
+    let Some(sha) = p.merge_sha.clone() else {
+        return Ok(None);
+    };
+    let (r2, base, commit) = (repo.clone(), p.base.clone(), sha.clone());
+    let targets = app
+        .store
+        .read(move |r| {
+            let Some(run) = crate::ci::queue::get_run(r, &r2.id, &commit)? else {
+                return Ok(None);
+            };
+            if run.protected_branches.contains(&base) {
+                return Ok(Some(Vec::new()));
+            }
+            let mut pulls = Vec::new();
+            if let Some(selection) = &run.selection {
+                for selected in &selection.bases {
+                    if load_pull(r, &r2, selected.pull)?.head == base {
+                        pulls.push(selected.pull);
+                    }
+                }
+            } else if run.branches.contains(&base) {
+                pulls.extend(
+                    open_pulls(r, &r2)?
+                        .into_iter()
+                        .filter(|p| p.head == base)
+                        .map(|p| p.number),
+                );
+            }
+            Ok((!pulls.is_empty()).then_some(pulls))
+        })
+        .await?;
+    let Some(pulls) = targets else {
+        return Ok(None);
+    };
+    let mut report = app.ci.head_checks(repo, &sha).await?;
+    app.ci.estimate(repo, &sha, &mut report.checks).await;
+    app.ci.order_checks(&mut report.checks).await?;
+    Ok(Some(PostMergeChecks {
+        sha,
+        branch: p.base.clone(),
+        pulls,
+        checks: report.checks,
+        checks_expected: report.checks_expected,
+    }))
 }
 
 pub async fn checks(
@@ -1943,7 +2001,6 @@ pub async fn checks(
         )
     };
     let judged_base = base_of(&p, &tips).unwrap_or_default();
-    let head = display_checks(app, &repo, &p, &head_sha, &judged_base).await?;
     let base_checks = if base_sha.is_empty() {
         0
     } else {
@@ -1955,11 +2012,6 @@ pub async fn checks(
             .filter(|c| c.recorded())
             .count()
     };
-    let (required_checks, _, required_names) =
-        crate::landing::pull_head_check_details(app, &repo, &p, &head_sha, &judged_base).await?;
-    let mut checks = head.checks;
-    app.ci.estimate(&repo, &head_sha, &mut checks).await;
-    app.ci.order_checks(&mut checks).await?;
     let base_failure = if p.state == "open" {
         crate::ci::collection::base_failure(
             app,
@@ -1972,18 +2024,38 @@ pub async fn checks(
     } else {
         None
     };
-    Ok(ChecksView {
+    let mut view = ChecksView {
         head_sha,
         base_sha,
         behind_by,
         conflicts,
-        checks,
-        required_checks,
-        required_names,
-        checks_expected: head.checks_expected,
+        checks: Vec::new(),
+        required_checks: None,
+        required_names: Vec::new(),
+        checks_expected: false,
         base_checks,
         base_failure,
-    })
+        merge_checks: None,
+        post_merge_checks: None,
+    };
+    if p.merged {
+        view.merge_checks = p.merge_checks.clone();
+        view.post_merge_checks = post_merge_checks(app, &repo, &p).await?;
+    } else {
+        let head = display_checks(app, &repo, &p, &view.head_sha, &judged_base).await?;
+        let (required_checks, _, required_names) =
+            crate::landing::pull_head_check_details(app, &repo, &p, &view.head_sha, &judged_base)
+                .await?;
+        view.checks = head.checks;
+        view.required_checks = Some(required_checks);
+        view.required_names = required_names;
+        view.checks_expected = head.checks_expected;
+        app.ci
+            .estimate(&repo, &view.head_sha, &mut view.checks)
+            .await;
+        app.ci.order_checks(&mut view.checks).await?;
+    }
+    Ok(view)
 }
 
 /// The exact checks shown by the PR and used to order its CI cell.
@@ -2049,14 +2121,15 @@ fn not_mergeable(message: impl Into<String>) -> AppError {
 }
 
 /// Rechecks landing conditions and the expected tips under the repository lock.
-/// Returns the head and base validated for this operation.
+/// Returns the exact required check results that allowed the operation.
 pub async fn check_landable(
     app: &App,
     repo: &Repo,
     p: &Pull,
     input: &MergeInput,
     auto: bool,
-) -> AppResult<(String, String)> {
+    source: MergeChecksSource,
+) -> AppResult<MergeChecks> {
     let number = p.number;
     if auto && !repo.auto_land {
         return Err(not_mergeable(format!(
@@ -2092,7 +2165,7 @@ pub async fn check_landable(
         ));
     }
     let e = crate::landing::refresh_locked(app, repo, p, &head, &base, true).await?;
-    let blockers = crate::landing::blockers(app, repo, p, &head, &base, &e).await?;
+    let (blockers, checks) = crate::landing::conditions(app, repo, p, &head, &base, &e).await?;
     if !blockers.is_empty() {
         return Err(not_mergeable(
             blockers
@@ -2102,7 +2175,13 @@ pub async fn check_landable(
                 .join("; "),
         ));
     }
-    Ok((head, base))
+    Ok(crate::landing::check_snapshot(
+        source,
+        head,
+        base,
+        crate::landing::HeadChecks::Passed,
+        checks,
+    ))
 }
 
 pub async fn merge(
@@ -2161,21 +2240,25 @@ async fn merge_locked(
             app.upstream.host_name(&up.provider)
         )));
     }
-    let (head, base) = check_landable(app, &repo, &p, &input, auto).await?;
+    let checks = check_landable(app, &repo, &p, &input, auto, MergeChecksSource::Merge).await?;
+    let (head, base) = (&checks.head_sha, &checks.base_sha);
     let dir = app.git.repo_dir(&repo.path);
     let commit = app
         .git
-        .merge_commit(&dir, &base, &head, &format!("Merge !{number}: {}", p.title))
+        .merge_commit(&dir, base, head, &format!("Merge !{number}: {}", p.title))
         .await?;
     let merge_sha = local_merge_sha(commit)?;
-    keep_merged(app, &repo, number, &head).await?;
+    keep_merged(app, &repo, number, head).await?;
     let entry = JournalEntry {
         id: util::new_id("jnl"),
         repo: repo.id.clone(),
         refname: format!("refs/heads/{}", p.base),
         old: base.clone(),
         new: merge_sha.clone(),
-        op: JournalOp::Merge { number },
+        op: JournalOp::Merge {
+            number,
+            checks: Some(checks),
+        },
         created_at: util::now(),
     };
     let e = entry.clone();
@@ -2189,7 +2272,7 @@ async fn merge_locked(
             &dir,
             &entry.refname,
             &merge_sha,
-            &base,
+            &entry.old,
             &format!("branvil: merge !{number}"),
         )
         .await?
@@ -2301,9 +2384,16 @@ pub async fn retire_merged_head(app: &App, repo: &Repo, p: &Pull) -> AppResult<(
 /// done. Idempotent: a merge already applied is left as it is.
 pub fn apply_journal(w: &Wtx, entry: &JournalEntry) -> AppResult<Pull> {
     match &entry.op {
-        JournalOp::Merge { number, .. } => {
+        JournalOp::Merge { number, checks } => {
             let repo = repo_by_id(w, &entry.repo)?;
-            mark_merged(w, &repo, *number, &entry.new, Some(entry.old.clone()))
+            mark_merged(
+                w,
+                &repo,
+                *number,
+                &entry.new,
+                Some(entry.old.clone()),
+                checks.clone(),
+            )
         }
     }
 }
@@ -2316,6 +2406,7 @@ pub fn mark_merged(
     number: u64,
     merge_sha: &str,
     merged_base: Option<String>,
+    merge_checks: Option<MergeChecks>,
 ) -> AppResult<Pull> {
     let old = load_pull(w, repo, number)?;
     if old.merged {
@@ -2328,8 +2419,10 @@ pub fn mark_merged(
     p.merged_at = Some(now.clone());
     p.closed_at = Some(now.clone());
     p.merge_sha = Some(merge_sha.to_string());
-    p.merged_head = if p.upstream.as_ref().is_some_and(|x| x.state == "merged") {
-        p.upstream.as_ref().and_then(|x| x.pushed.clone())
+    p.merged_head = if let Some(checks) = &merge_checks {
+        Some(checks.head_sha.clone())
+    } else if let Some(published) = p.upstream.as_ref().filter(|x| x.state == "merged") {
+        published.pushed.clone()
     } else {
         crate::landing::current(w, &repo.id, number)?.map(|e| e.head_sha)
     }
@@ -2343,6 +2436,7 @@ pub fn mark_merged(
     }
     crate::landing::mark_merged(w, &repo.id, number)?;
     p.merged_base = merged_base;
+    p.merge_checks = merge_checks;
     p.updated_at = now.clone();
     p.revision += 1;
     write_pull(w, Some(&old), &p)?;
@@ -2461,6 +2555,7 @@ mod tests {
             merge_sha: None,
             merged_head: None,
             merged_base: None,
+            merge_checks: None,
             upstream: None,
             revision: 1,
         };

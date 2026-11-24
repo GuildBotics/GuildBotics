@@ -86,7 +86,7 @@ pub(super) async fn reused_and_gates(
                     .unwrap()
                     .report
                     .required_checks,
-                RequiredChecks::Passed
+                Some(RequiredChecks::Passed)
             );
         }
         let file = if conclusion == "conflict" {
@@ -134,7 +134,10 @@ pub(super) async fn reused_and_gates(
                 .readiness(&feature.written.target.url, false, MAX_LOG_TAIL_BYTES)
                 .await
                 .unwrap();
-            assert_eq!(before_review.report.required_checks, RequiredChecks::Passed);
+            assert_eq!(
+                before_review.report.required_checks,
+                Some(RequiredChecks::Passed)
+            );
             assert!(before_review.report.checks.iter().all(|c| c.name != "gate"));
         }
         owner
@@ -151,7 +154,7 @@ pub(super) async fn reused_and_gates(
             .unwrap();
         assert_eq!(result.report.head_sha, head);
         if conclusion == "conflict" {
-            assert_eq!(result.report.required_checks, RequiredChecks::Passed);
+            assert_eq!(result.report.required_checks, Some(RequiredChecks::Passed));
             let page = c
                 .read(
                     Resource::PullRequestReadiness,
@@ -170,7 +173,7 @@ pub(super) async fn reused_and_gates(
                     .iter()
                     .all(|c| !c.name.starts_with("gate/"))
             );
-            assert_eq!(result.report.required_checks, RequiredChecks::Passed);
+            assert_eq!(result.report.required_checks, Some(RequiredChecks::Passed));
         }
     }
 }

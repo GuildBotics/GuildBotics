@@ -295,7 +295,7 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         }
     });
     let mut old = manifest.clone();
-    old["schema_version"] = json!(44);
+    old["schema_version"] = json!(PREVIOUS_SCHEMA_VERSION);
     // Refresh the checksum of the database rewritten by the fixture.
     for f in old["files"].as_array_mut().unwrap() {
         if f["path"] == "branvil.redb" {

@@ -147,7 +147,10 @@ pub(super) async fn primary_failure_logs_and_cancelled_fallback(
             .readiness(&pull.written.target.url, true, MAX_LOG_TAIL_BYTES)
             .await
             .unwrap();
-        assert_eq!(readiness.report.required_checks, RequiredChecks::Failed);
+        assert_eq!(
+            readiness.report.required_checks,
+            Some(RequiredChecks::Failed)
+        );
         let logs = readiness.failed_logs.unwrap();
         assert_eq!(logs.len(), 1);
         let log = &logs[0];
@@ -236,7 +239,10 @@ pub(super) async fn pending_closed_and_advanced_heads(
         .await
         .unwrap();
     assert_eq!(pending.report.head_sha, head);
-    assert_eq!(pending.report.required_checks, RequiredChecks::Running);
+    assert_eq!(
+        pending.report.required_checks,
+        Some(RequiredChecks::Running)
+    );
     let attempt = claim_head(base, runner, &head).await;
     finish_claim(base, runner, &attempt, "success").await;
     assert_eq!(
@@ -245,7 +251,7 @@ pub(super) async fn pending_closed_and_advanced_heads(
             .unwrap()
             .report
             .required_checks,
-        RequiredChecks::Passed
+        Some(RequiredChecks::Passed)
     );
     let advanced = git.commit(&head, "next.txt", "new head\n");
     let credential = code.git_credential().await.unwrap().unwrap();
@@ -261,7 +267,7 @@ pub(super) async fn pending_closed_and_advanced_heads(
         .await
         .unwrap();
     assert_eq!(moved.report.head_sha, advanced);
-    assert_ne!(moved.report.required_checks, RequiredChecks::Passed);
+    assert_ne!(moved.report.required_checks, Some(RequiredChecks::Passed));
     let number = pull
         .written
         .target

@@ -57,6 +57,8 @@ pub struct HostPull {
     /// The login that opened it.
     pub author: String,
     pub state: PullState,
+    /// The head the host reports for this pull request.
+    pub head_sha: Option<String>,
     /// The commit the merge made, once merged.
     pub merge_sha: Option<String>,
 }

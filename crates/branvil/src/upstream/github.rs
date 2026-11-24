@@ -450,6 +450,7 @@ impl GitHub {
             } else {
                 PullState::Open
             },
+            head_sha: v["head"]["sha"].as_str().map(str::to_string),
             merge_sha: merged
                 .then(|| v["merge_commit_sha"].as_str().map(str::to_string))
                 .flatten(),

@@ -944,7 +944,9 @@ head directly replaces the host branch after checking the same conditions.
   "required_checks": "passed",
   "required_names": ["test"],
   "base_checks": 1,
-  "base_failure": null
+  "base_failure": null,
+  "merge_checks": null,
+  "post_merge_checks": null
 }
 ```
 
@@ -1031,7 +1033,29 @@ head directly replaces the host branch after checking the same conditions.
   tip or retry is being checked, `sha` and `failed_jobs` can describe the previous
   failure. `repository/pr_checks` returns this field alongside the child's own
   `required_checks`. Reporting is independent of `hold_while_failing`.
-- A published pull request whose head is the commit Branvil pushed also lists
+- For a merged pull request, the live head fields `checks` and
+  `required_names` are empty, `checks_expected` is false, and
+  `required_checks` is null. The two merge fields describe its checks.
+- `merge_checks` is `{source, head_sha, base_sha, required_checks, checks}`. With
+  `source: "merge"`, it records the exact Branvil checks that satisfied
+  the local merge gate, including service skips and the attempt number and
+  ID. With `source: "publication"`, it records the Branvil gate at publication
+  for the head that merged upstream. With `source: "upstream_merge"`, it
+  shows Branvil's observation at import for a revised head, using the base
+  recorded when that head was sent. If the same SHA has already been
+  registered for protected-branch verification, Branvil uses the attempts
+  and results from before that registration. The upstream host makes its own merge
+  decision. The commit page shows the current checks of the head. A null
+  value means there is no snapshot for this head, including merges made
+  before recording began or heads pushed directly on the upstream host.
+- `post_merge_checks` is `{sha, branch, pulls, checks, checks_expected}`,
+  or null if no follow-up CI run is known. It lists the current check
+  results for the merge commit on the receiving branch. `pulls` lists the
+  numbers of the PRs checking that commit as the head of the receiving
+  branch, as with a collecting branch. An empty `pulls` list means branch
+  verification, such as on the default branch. Results in this field can
+  change as jobs run or are retried. They carry no merge-gate designation.
+- An unmerged published pull request whose head is the commit Branvil pushed also lists
   the upstream host's check runs of it, named `<provider>/<name>`
   (`github/test-windows`), with `attempt_id` `<provider>-<id>`, `details_url`
   the host's page, and `details` the host's summary. Their log is read through

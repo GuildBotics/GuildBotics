@@ -51,6 +51,12 @@ function toneOf(c: Pick<Check, "status" | "conclusion">): Tone {
 /** A paths reuse ran on a commit whose files outside the job's `paths` differ, so it is labeled apart. */
 const reusedLabel = (r: ReusedFrom) => (r.basis === "paths" ? "ci.reusedPaths" : "ci.reused");
 
+const DECISION_ROLLUP = {
+  passed: "passing",
+  failed: "failing",
+  running: "pending",
+} as const;
+
 const ROLLUP_TONE: Record<CiRollup, Tone> = {
   passing: "success",
   failing: "danger",
@@ -74,12 +80,29 @@ export function CheckStatusBadge({
   return <StateBadge tone={toneOf({ status, conclusion })}>{label}</StateBadge>;
 }
 
-function PathSkipReason({ repo, skip }: { repo: string; skip: PathSkip }) {
+type PullCheckContext = { base: string; defaultBranch: string };
+
+function PathSkipReason({
+  repo,
+  skip,
+  context,
+}: {
+  repo: string;
+  skip: PathSkip;
+  context?: PullCheckContext;
+}) {
   const t = useT();
   if (skip.reason === "post_merge")
     return (
       <Text size="xs" c="dimmed">
-        {t("ci.postMergeReason")}
+        {context
+          ? t(
+              context.base === context.defaultBranch
+                ? "ci.postMergeDefaultReason"
+                : "ci.postMergeCollectingReason",
+              { branch: context.defaultBranch },
+            )
+          : t("ci.postMergeReason")}
       </Text>
     );
   return (
@@ -168,15 +191,97 @@ export function RunnerRecoveryLink({ repo, recovery }: { repo: string; recovery:
 export function ChecksCard({
   repo,
   pull,
+  context,
   onOpen,
 }: {
   repo: string;
   pull: PullRequest;
+  context?: PullCheckContext;
   onOpen: (check: Check) => void;
 }) {
   const t = useT();
   const checks = useChecks(repo, pull.number);
   const behind = checks.data?.behind_by ?? 0;
+  if (pull.merged) {
+    const decision = checks.data?.merge_checks;
+    const confirmation = checks.data?.post_merge_checks;
+    const judged: Check[] =
+      decision?.checks.map((check) => ({
+        ...check,
+        runner: null,
+      })) ?? [];
+    return (
+      <>
+        <CheckList
+          repo={repo}
+          title={t(
+            decision?.source === "upstream_merge"
+              ? "ci.upstreamMergeHeadChecks"
+              : "ci.mergeDecision",
+          )}
+          query={checks}
+          data={decision ? { checks: judged, checks_expected: false } : undefined}
+          sha={decision?.head_sha}
+          state={decision ? DECISION_ROLLUP[decision.required_checks] : undefined}
+          empty={t(
+            !decision
+              ? "ci.mergeDecisionUnavailable"
+              : decision.required_checks === "passed"
+                ? "ci.mergeDecisionNoRequired"
+                : "ci.mergeDecisionNoResults",
+          )}
+          requiredChecks={judged.map((check) => check.name)}
+          context={context}
+          onOpen={onOpen}
+        >
+          {decision?.source === "publication" && (
+            <Text size="sm" c="dimmed" mb="xs">
+              {t("ci.mergeDecisionAtPublication")}
+            </Text>
+          )}
+          {decision?.source === "upstream_merge" && (
+            <Text size="sm" c="dimmed" mb="xs">
+              {t("ci.upstreamMergeHeadChecksReason")}
+            </Text>
+          )}
+          {pull.upstream?.state === "merged" && pull.upstream.url && (
+            <Anchor href={pull.upstream.url} target="_blank" rel="noopener noreferrer" size="sm">
+              {t("ci.openOnHost")}
+            </Anchor>
+          )}
+        </CheckList>
+        <CheckList
+          repo={repo}
+          title={t("ci.postMergeConfirmation")}
+          query={checks}
+          data={confirmation ?? undefined}
+          sha={confirmation?.sha}
+          empty={confirmation ? undefined : t("ci.postMergeUnavailable")}
+          context={context}
+          onOpen={onOpen}
+        >
+          {confirmation && (
+            <Group gap="xs" mb="xs">
+              <Text size="sm" c="dimmed">
+                {t(
+                  confirmation.pulls.length ? "ci.postMergePullReason" : "ci.postMergeBranchReason",
+                )}
+              </Text>
+              {confirmation.pulls.length ? (
+                confirmation.pulls.map((number) => (
+                  <Link key={number} to={href.pull(repo, number)}>
+                    !{number}
+                  </Link>
+                ))
+              ) : (
+                <Link to={href.commit(repo, confirmation.sha)}>{confirmation.branch}</Link>
+              )}
+            </Group>
+          )}
+        </CheckList>
+      </>
+    );
+  }
   const failure = checks.data?.base_failure;
   const failureTitle = failure ? t("pull.baseFailure", { base: failure.branch }) : undefined;
   return (
@@ -184,8 +289,10 @@ export function ChecksCard({
       repo={repo}
       title={t("pull.checks")}
       query={checks}
+      data={checks.data}
       sha={checks.data?.head_sha}
       requiredChecks={checks.data?.required_names}
+      context={context}
       onOpen={onOpen}
     >
       {failure && (
@@ -243,6 +350,7 @@ export function CommitChecksCard({
       repo={repo}
       title={title}
       query={checks}
+      data={checks.data}
       sha={checks.data?.sha}
       embedded={embedded}
       onOpen={onOpen}
@@ -254,18 +362,26 @@ function CheckList({
   repo,
   title,
   query,
+  data,
   sha,
   embedded,
   requiredChecks = [],
+  empty,
+  state = data ? rollup(data) : undefined,
+  context,
   onOpen,
   children,
 }: {
   repo: string;
   title: string;
-  query: UseQueryResult<CheckSet>;
+  query: Pick<UseQueryResult<CheckSet>, "isPending" | "error">;
+  data?: CheckSet;
   sha: string | undefined;
   embedded?: boolean;
   requiredChecks?: string[];
+  empty?: string;
+  state?: CiRollup;
+  context?: PullCheckContext;
   onOpen: (check: Check) => void;
   children?: React.ReactNode;
 }) {
@@ -275,10 +391,8 @@ function CheckList({
     <Container p={embedded ? 0 : "lg"} component="section" aria-label={title}>
       <Group gap="xs" mb="xs">
         <Text fw={700}>{title}</Text>
-        {query.data && !query.isError && (
-          <StateBadge tone={ROLLUP_TONE[rollup(query.data)]}>
-            {t(`ci.${rollup(query.data)}`)}
-          </StateBadge>
+        {state && !query.error && (
+          <StateBadge tone={ROLLUP_TONE[state]}>{t(`ci.${state}`)}</StateBadge>
         )}
         {sha !== undefined && (
           <Text size="xs" c="dimmed" ml="auto">
@@ -288,18 +402,18 @@ function CheckList({
       </Group>
       {query.isPending ? (
         <Loading />
-      ) : query.isError ? (
+      ) : query.error ? (
         <ErrorMessage error={query.error} />
       ) : (
         <>
           {children}
-          {query.data.checks.length === 0 ? (
+          {!data?.checks.length ? (
             <Text size="sm" c="dimmed">
-              {query.data.checks_expected ? t("ci.notRegisteredHelp") : t("ci.noneHelp")}
+              {empty ?? t(data?.checks_expected ? "ci.notRegisteredHelp" : "ci.noneHelp")}
             </Text>
           ) : (
             <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-              {query.data.checks.map((c) => (
+              {data.checks.map((c) => (
                 <li key={`${c.name}#${c.attempt_id ?? "pending"}`}>
                   <CheckRow
                     check={c}
@@ -308,6 +422,7 @@ function CheckList({
                       requiredChecks.includes(c.name) ||
                       (c.name.startsWith("gate/") && requiredChecks.includes(c.name.slice(5)))
                     }
+                    context={context}
                     onOpen={onOpen}
                   />
                 </li>
@@ -324,11 +439,13 @@ function CheckRow({
   check,
   repo,
   required,
+  context,
   onOpen,
 }: {
   check: Check;
   repo: string;
   required: boolean;
+  context?: PullCheckContext;
   onOpen: (check: Check) => void;
 }) {
   const t = useT();
@@ -409,7 +526,7 @@ function CheckRow({
       )}
       {check.path_skip && (
         <Box ml={24} mb={4}>
-          <PathSkipReason repo={repo} skip={check.path_skip} />
+          <PathSkipReason repo={repo} skip={check.path_skip} context={context} />
         </Box>
       )}
     </>
@@ -571,10 +688,12 @@ function RetryControls({
 function JobDetails({
   repo,
   attemptId,
+  context,
   onAttempt,
 }: {
   repo: string;
   attemptId: string;
+  context?: PullCheckContext;
   onAttempt: (id: string) => void;
 }) {
   const t = useT();
@@ -600,7 +719,7 @@ function JobDetails({
   const j = job.data;
   return (
     <Stack gap="md">
-      {j.path_skip && <PathSkipReason repo={repo} skip={j.path_skip} />}
+      {j.path_skip && <PathSkipReason repo={repo} skip={j.path_skip} context={context} />}
       <dl>
         <dt>{t("ci.commit")}</dt>
         <dd>
@@ -702,9 +821,11 @@ function JobDetails({
 export function CheckDrawer({
   repo,
   check,
+  context,
   onClose,
 }: {
   repo: string;
+  context?: PullCheckContext;
   check: { attemptId: string; hosted: Check | null } | null;
   onClose: () => void;
 }) {
@@ -775,7 +896,7 @@ export function CheckDrawer({
             />
           </Stack>
         ) : (
-          <JobDetails repo={repo} attemptId={attemptId} onAttempt={setAttempt} />
+          <JobDetails repo={repo} attemptId={attemptId} context={context} onAttempt={setAttempt} />
         ))}
     </Drawer>
   );

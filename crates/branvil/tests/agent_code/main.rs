@@ -457,13 +457,16 @@ async fn merge_closes_ticket() {
         .await
         .unwrap();
     assert_eq!(pending.report.head_sha, head);
-    assert_eq!(pending.report.required_checks, RequiredChecks::Running);
+    assert_eq!(
+        pending.report.required_checks,
+        Some(RequiredChecks::Running)
+    );
     finish(base, runner, &head, "success").await;
     let ready = c
         .readiness(&pr.written.target.url, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
-    assert_eq!(ready.report.required_checks, RequiredChecks::Passed);
+    assert_eq!(ready.report.required_checks, Some(RequiredChecks::Passed));
     let number = pr
         .written
         .target
@@ -568,7 +571,7 @@ async fn artifacts_and_stale_head() {
         .await
         .unwrap();
     assert_eq!(again.report.head_sha, moved);
-    assert_eq!(again.report.required_checks, RequiredChecks::Running);
+    assert_eq!(again.report.required_checks, Some(RequiredChecks::Running));
     let artifact = b"PK\x03\x04synthetic test artifact";
     finish_artifact(base, runner, &moved, "success", Some(artifact)).await;
     let too_large = c
@@ -594,7 +597,7 @@ async fn artifacts_and_stale_head() {
             .unwrap()
             .report
             .required_checks,
-        RequiredChecks::Passed
+        Some(RequiredChecks::Passed)
     );
     let advanced = git.commit(&moved, "advance.txt", "advanced\n");
     git.push(
@@ -609,7 +612,10 @@ async fn artifacts_and_stale_head() {
         .await
         .unwrap();
     assert_eq!(changed.report.head_sha, advanced);
-    assert_eq!(changed.report.required_checks, RequiredChecks::Running);
+    assert_eq!(
+        changed.report.required_checks,
+        Some(RequiredChecks::Running)
+    );
     contracts::code_stale_head_contract(c.as_ref(), &next.written.target.url, &moved).await;
     contracts::code_old_artifact_contract(c.as_ref(), &next.written.target.url).await;
     finish(base, runner, &advanced, "failure").await;
@@ -619,7 +625,7 @@ async fn artifacts_and_stale_head() {
             .unwrap()
             .report
             .required_checks,
-        RequiredChecks::Failed
+        Some(RequiredChecks::Failed)
     );
 
     f.stop().await;
@@ -777,7 +783,7 @@ async fn code_links() {
             .unwrap()
             .report
             .required_checks
-            == RequiredChecks::Running
+            == Some(RequiredChecks::Running)
         {
             finish(base, runner, &current_head, "success").await;
         }

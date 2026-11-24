@@ -60,10 +60,17 @@ to remain unchanged when the version stays at the verified version. It runs
 only on default-branch verification and skips the comparison when no verified
 commit exists.
 
-`meta["schema_version"]` is written on creation (currently `39`). The current
+`meta["schema_version"]` is written on creation (currently `44`). The current
 format includes per-pull landing conditions, each merged pull request's original
 reviewed head distinct from its merge commit, and per-head notification and
-automatic failure state. CI runs hold their commit's pipeline and tree;
+automatic failure state. Schema 44 stores the required check attempts used for
+a local merge in its ref journal and then on the pull request. An upstream
+publication stores the Branvil decision on the published head. Forwarding a
+new head records its base. The merge import stores observations of that
+head's required checks on the pull request. When a protected branch begins
+verifying a SHA with an existing head run, the registration transaction saves
+the head's current checks before changing its selection. These optional records
+are populated for new decisions. CI runs hold their commit's pipeline and tree;
 attempts hold reuse sources and cache keys. Runs retain the protected branches that
 requested them. Repair tickets retain their undelivered creation notice.
 Runs also hold the input digest of each job with `paths`, and attempts the one
@@ -112,7 +119,7 @@ check did not change stored records or raise the version.
 | `ticket_moves` | `(repo id, n)` of a ticket moved to another repository | the `(repo id, n)` it moved to | ticket move | ticket lookups by number or URL, which follow each move (numbers are never reused, so the chain ends) |
 | `comments` | `("ticket", repo id, n, seq)` / `("pull", repo id, n, seq)` | comment with its reactions | comment and reaction API, landing conflicts and failed host checks | comments, cards, activity |
 | `attachments` | `(repo id, attachment id)` | an image of the tickets of the repository's workspace (a moved ticket keeps the ones of its old repository): name, media type read from its bytes, size, uploader, time (the bytes are a file) | upload API, the attachment sweep | delivery, a ticket's attachments, the sweep |
-| `pulls` | `(repo id, n)` | pull request record (links, reviewers, reviewed_by, draft, state, original merged head and base, merge commit, and once published: the host's pull request, what was last sent to it, the host's checks of the pushed head and whether it may still add some, whether Branvil published it) | PR API, merge, publish, the upstream poller, push recording (`updated_at`) | PR reads, patrol, the upstream poller |
+| `pulls` | `(repo id, n)` | pull request record (links, reviewers, reviewed_by, draft, state, original merged head and base, merge commit and checks used to decide it, and once published: the host's pull request, what was last sent to it, the host's checks of the pushed head and whether it may still add some, whether Branvil published it) | PR API, merge, publish, the upstream poller, push recording (`updated_at`) | PR reads, patrol, the upstream poller |
 | `landing` | `(repo id, n)` | checked head/base SHA, conflicts, the jobs the base requires of the head, told problems, notified_at, automatic error | sweep, merge/publish, webhook acknowledgment | PR conditions, next action, patrol |
 | `reviews` | `(repo id, n, seq)` | review with reactions and, for an owner's approval, the required checks it accepted removing | review API | reviews, activity |
 | `threads` | `(repo id, n, root seq)` | path, line, side, commit, resolved | inline-comment API | threads |

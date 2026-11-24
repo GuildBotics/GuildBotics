@@ -294,6 +294,23 @@ export const ja: Record<MessageKey, string> = {
     "ここに入れたジョブは、PR では流さず、マージのあとの main の確認で流します。必須チェックには入れられません。",
   "ci.postMergeReason":
     "リポジトリの設定でマージ後だけ流すジョブなので、PR では流していません。マージのあとの main の確認で流れます。今すぐ確かめたいときは再実行で流せます。",
+  "ci.mergeDecision": "マージの判定",
+  "ci.mergeDecisionNoRequired": "この head に対する Branvil の必須チェックはありませんでした。",
+  "ci.mergeDecisionUnavailable": "この PR のマージ判定に使ったチェックは記録されていません。",
+  "ci.mergeDecisionAtPublication": "Branvil がこの head を上流に公開した時点の必須チェックです。",
+  "ci.upstreamMergeHeadChecks": "上流 PR の head チェック",
+  "ci.upstreamMergeHeadChecksReason":
+    "上流マージの取り込み時点で確認した、受け入れブランチの検証より前の PR 側のチェックです。上流ホストのマージ判定は上流 PR にあります。",
+  "ci.mergeDecisionNoResults": "この時点で参照できる必須チェックの結果はありませんでした。",
+  "ci.postMergeConfirmation": "マージ後の確認",
+  "ci.postMergePullReason":
+    "マージで次の PR の head が進んだため、その PR の base に対してチェックします。",
+  "ci.postMergeBranchReason": "マージで入ったコミットを次のブランチの確認として実行します。",
+  "ci.postMergeUnavailable": "このマージ後のチェックは記録されていません。",
+  "ci.postMergeDefaultReason":
+    "この PR が {{branch}} に入ったあとの確認で流れます。今すぐ確かめたいときは再実行で流せます。",
+  "ci.postMergeCollectingReason":
+    "集約 PR が {{branch}} に入ったあとの確認で流れます。今すぐ確かめたいときは再実行で流せます。",
   "ci.postMergeSkipped": "マージ後だけ",
   "ci.pathsSkipped": "省略（変更なし）",
   "ci.pathsReason": "変更されたファイルが次の paths に一致しません: {{paths}}",

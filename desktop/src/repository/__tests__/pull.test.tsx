@@ -50,8 +50,6 @@ describe.each(["en", "ja"] as const)("base branch guidance (%s)", (language) => 
     { state: "open", merged: false, draft: true, behind: 3, visible: true },
     { state: "open", merged: false, draft: false, behind: 0, visible: false },
     { state: "closed", merged: false, draft: false, behind: 3, visible: false },
-    { state: "closed", merged: true, draft: false, behind: 1, visible: false },
-    { state: "open", merged: true, draft: false, behind: 1, visible: false },
   ] as const)(
     "state=$state merged=$merged draft=$draft behind=$behind",
     async ({ state, merged, draft, behind, visible }) => {
@@ -116,6 +114,161 @@ it.each(["en", "ja"] as const)(
     ).toHaveAttribute("href", "/workspaces/acme/repos/demo/tickets/17");
   },
 );
+
+describe.each(["en", "ja"] as const)("merged check evidence (%s)", (language) => {
+  const words = dictionaries[language];
+  it.each([
+    {
+      branch: "ticket/10",
+      pullNumbers: [289],
+      destination: "!289",
+      path: "/workspaces/acme/repos/demo/pulls/289",
+    },
+    {
+      branch: "main",
+      pullNumbers: [],
+      destination: "main",
+      path: `/workspaces/acme/repos/demo/commits/${NEW_HEAD}`,
+    },
+  ])("links the confirmation for $branch and keeps the decision", async (target) => {
+    fakeApi(
+      pullRoutes({
+        [`GET ${P}`]: json(200, pull({ state: "closed", merged: true, base: target.branch })),
+        [`GET ${P}/checks`]: json(200, {
+          ...CHECKS,
+          checks: [],
+          behind_by: 3,
+          merge_checks: {
+            source: "merge",
+            required_checks: "passed",
+            head_sha: HEAD,
+            base_sha: BASE,
+            checks: [
+              {
+                name: "rust",
+                status: "completed",
+                conclusion: "skipped",
+                attempt: 1,
+                path_skip: { reason: "paths", paths: ["src/**"], bases: [] },
+              },
+            ],
+          },
+          post_merge_checks: {
+            sha: NEW_HEAD,
+            branch: target.branch,
+            pulls: target.pullNumbers,
+            checks: [
+              { name: "rust", status: "in_progress", conclusion: null, attempt: 2, runner: null },
+            ],
+            checks_expected: true,
+          },
+        }),
+      }),
+    );
+    renderApp("/workspaces/acme/repos/demo/pulls/3", language);
+    const decision = within(await screen.findByRole("region", { name: words["ci.mergeDecision"] }));
+    expect(await decision.findByText("rust")).toBeInTheDocument();
+    expect(decision.getByText(words["ci.passing"])).toBeInTheDocument();
+    expect(decision.getByText(words["ci.required"])).toBeInTheDocument();
+    expect(decision.getByText(words["ci.pathsSkipped"])).toBeInTheDocument();
+    expect(decision.getByText("#1")).toBeInTheDocument();
+    expect(
+      decision.queryByText(
+        i18n.getFixedT(language, "repository")("pull.behindBy", {
+          base: target.branch,
+          count: 3,
+        }),
+      ),
+    ).not.toBeInTheDocument();
+    const follow = within(screen.getByRole("region", { name: words["ci.postMergeConfirmation"] }));
+    expect(follow.getByRole("link", { name: target.destination })).toHaveAttribute(
+      "href",
+      target.path,
+    );
+    expect(
+      follow.getByText(
+        words[target.pullNumbers.length ? "ci.postMergePullReason" : "ci.postMergeBranchReason"],
+      ),
+    ).toBeInTheDocument();
+    expect(follow.getByText(words["ci.status.in_progress"])).toBeInTheDocument();
+    expect(follow.getByText("#2")).toBeInTheDocument();
+    expect(follow.queryByText(words["ci.required"])).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["main", "ci.postMergeDefaultReason"],
+    ["ticket/10", "ci.postMergeCollectingReason"],
+  ] as const)("explains when post-merge-only jobs run on %s", async (base, key) => {
+    fakeApi(
+      pullRoutes({
+        [`GET ${P}`]: json(200, pull({ base })),
+        [`GET ${P}/checks`]: json(200, {
+          ...CHECKS,
+          checks: [
+            {
+              ...SUCCESS,
+              conclusion: "skipped",
+              path_skip: { reason: "post_merge", paths: [], bases: [] },
+            },
+          ],
+        }),
+      }),
+    );
+    renderApp("/workspaces/acme/repos/demo/pulls/3", language);
+    const region = within(await screen.findByRole("region", { name: words["pull.checks"] }));
+    expect(
+      await region.findByText(i18n.getFixedT(language, "repository")(key, { branch: "main" })),
+    ).toBeInTheDocument();
+  });
+});
+
+it("shows the observed Branvil checks for an upstream revision that was still running", async () => {
+  const words = dictionaries.en;
+  fakeApi(
+    pullRoutes({
+      [`GET ${P}`]: json(200, pull({ state: "closed", merged: true })),
+      [`GET ${P}/checks`]: json(200, {
+        ...CHECKS,
+        checks: [],
+        merge_checks: {
+          source: "upstream_merge",
+          required_checks: "running",
+          head_sha: HEAD,
+          base_sha: BASE,
+          checks: [{ name: "unit", status: "in_progress", conclusion: null, attempt: 2 }],
+        },
+      }),
+    }),
+  );
+  renderApp("/workspaces/acme/repos/demo/pulls/3", "en");
+  const decision = within(
+    await screen.findByRole("region", { name: words["ci.upstreamMergeHeadChecks"] }),
+  );
+  expect(screen.queryByRole("region", { name: words["ci.mergeDecision"] })).not.toBeInTheDocument();
+  expect(await decision.findByText(words["ci.upstreamMergeHeadChecksReason"])).toBeInTheDocument();
+  expect(decision.getByText(words["ci.status.in_progress"])).toBeInTheDocument();
+  expect(decision.getByText(words["ci.pending"])).toBeInTheDocument();
+  expect(decision.getByText("#2")).toBeInTheDocument();
+});
+
+it("shows unavailable evidence on merges that predate merge check recording", async () => {
+  fakeApi(
+    pullRoutes({
+      [`GET ${P}`]: json(200, pull({ state: "closed", merged: true })),
+      [`GET ${P}/checks`]: json(200, {
+        ...CHECKS,
+        checks: [],
+        merge_checks: null,
+        post_merge_checks: null,
+      }),
+    }),
+  );
+  renderApp("/workspaces/acme/repos/demo/pulls/3", "en");
+  expect(
+    await screen.findByText(dictionaries.en["ci.mergeDecisionUnavailable"]),
+  ).toBeInTheDocument();
+  expect(screen.getByText(dictionaries.en["ci.postMergeUnavailable"])).toBeInTheDocument();
+});
 
 describe("related ticket editor", () => {
   it.each(["en", "ja"] as const)(

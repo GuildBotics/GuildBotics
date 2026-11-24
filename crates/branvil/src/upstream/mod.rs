@@ -869,12 +869,14 @@ async fn sync_pull(
                             }
                             None => None,
                         };
+                        let checks =
+                            merged_checks(app, repo, &p, &mut x, hp.head_sha.as_deref()).await?;
                         let (r2, x2) = (repo.clone(), x.clone());
                         let merged = app
                             .store
                             .write(move |w| {
                                 pulls::store_published(w, &r2, number, x2, None)?;
-                                pulls::mark_merged(w, &r2, number, &merge_sha, merged_base)
+                                pulls::mark_merged(w, &r2, number, &merge_sha, merged_base, checks)
                             })
                             .await?;
                         app.events.publish("pull", &repo.path, number.to_string());
@@ -947,6 +949,31 @@ async fn sync_pull(
     Ok(())
 }
 
+/// Reads Branvil's evidence using the head the host says it merged.
+async fn merged_checks(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    published: &mut Published,
+    merged_head: Option<&str>,
+) -> AppResult<Option<crate::model::MergeChecks>> {
+    use crate::model::PushedChecks;
+    let (Some(evidence), Some(head)) = (
+        published.pushed_checks.take(),
+        merged_head.filter(|head| Some(*head) == published.pushed.as_deref()),
+    ) else {
+        return Ok(None);
+    };
+    match evidence {
+        PushedChecks::Publication { snapshot } => {
+            Ok((snapshot.head_sha == head).then_some(snapshot))
+        }
+        PushedChecks::Forwarded { base_sha } => {
+            crate::landing::imported_merge_checks(app, repo, p, head, &base_sha).await
+        }
+    }
+}
+
 /// Whether the host's merge commit is on Branvil's default branch (following
 /// the host first when it is not): a commit only fetched into the hidden ref,
 /// while following is stopped, is not merged here.
@@ -976,22 +1003,25 @@ async fn send_changes(
 ) {
     let Place { host, setting, .. } = at;
     if let Some(w) = writer {
-        let head = match pulls::tips(at.app, at.repo).await {
-            Ok(t) => t.get(&p.head).cloned(),
+        let tips = match pulls::tips(at.app, at.repo).await {
+            Ok(tips) => tips,
             Err(e) => {
                 x.error = Some(e.message);
                 return;
             }
         };
-        if let Some(head) = head
+        if let Some(head) = tips.get(&p.head)
             && x.stopped.is_none()
             && x.pushed.as_deref() != Some(head.as_str())
         {
+            let base_sha = tips.get(&p.base).cloned().unwrap_or_default();
             let lease = x.pushed.clone().unwrap_or_default();
-            match push_branch(at, w, &p.head, &head, &lease).await {
-                Pushed::Done => {
-                    x.record_push(head, at.app.upstream.config.checks_registration_secs)
-                }
+            match push_branch(at, w, &p.head, head, &lease).await {
+                Pushed::Done => x.record_push(
+                    head.clone(),
+                    crate::model::PushedChecks::Forwarded { base_sha },
+                    at.app.upstream.config.checks_registration_secs,
+                ),
                 Pushed::Refused(why) => x.stopped = Some(why),
                 Pushed::Failed(why) => x.error = Some(why),
             }
