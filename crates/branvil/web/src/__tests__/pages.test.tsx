@@ -13,7 +13,6 @@ const repo = (path: string) => ({
   clone_url: "",
   url: "",
   protected_branches: [],
-  post_merge_jobs: [],
   required_approvals: 0,
   labels: [],
   upstream: null,
@@ -99,8 +98,8 @@ it.each([
   expect(await screen.findByText(label)).toBeInTheDocument();
   const postMergeExplanation =
     lang === "ja"
-      ? "リポジトリの設定でマージ後だけ流すジョブなので、PR では流していません。マージのあとの main の確認で流れます。今すぐ確かめたいときは再実行で流せます。"
-      : "This job runs only after merging (repository setting), so it doesn't run on pull requests. It runs in the main verification after the merge. You can retry it to check it now.";
+      ? ".guildbotics-ci.toml の post_merge でマージ後だけ流すジョブなので、PR では流していません。マージのあとの main の確認で流れます。今すぐ確かめたいときは再実行で流せます。"
+      : "This job runs only after merging (post_merge in .guildbotics-ci.toml), so it doesn't run on pull requests. It runs in the main verification after the merge. You can retry it to check it now.";
   if (reason === "post_merge") expect(screen.getByText(postMergeExplanation)).toBeInTheDocument();
   if (reason === "paths") expect(screen.getByText(/src\/\*\*, tests\/\*\.rs/)).toBeInTheDocument();
   if (reason === "paths")

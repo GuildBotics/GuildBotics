@@ -6,6 +6,7 @@
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::queue::PipelineState;
@@ -32,13 +33,35 @@ const MAX_TMPFS_MIB: u32 = 4096;
 /// failure (a missing commit, an unreadable tree or blob) is an error, never a
 /// pipeline (the service's registration is retried by the reconciler).
 pub async fn read(git: &Git, dir: &Path, sha: &str) -> AppResult<PipelineState> {
-    Ok(read_file(git, dir, sha).await?.0)
+    Ok(match read_file(git, dir, sha).await? {
+        File::Absent => PipelineState::Absent,
+        File::Invalid(message) => PipelineState::Invalid { message },
+        File::Parsed(file) => PipelineState::Jobs { jobs: file.jobs },
+    })
 }
 
 /// What the pipeline of commit `sha` requires of the pull requests into its
 /// branch, under the same rules as `read`.
 pub async fn read_required(git: &Git, dir: &Path, sha: &str) -> AppResult<RequiredJobs> {
-    Ok(read_file(git, dir, sha).await?.1)
+    Ok(match read_file(git, dir, sha).await? {
+        File::Absent => RequiredJobs::Absent,
+        File::Invalid(_) => RequiredJobs::Invalid,
+        File::Parsed(file) => RequiredJobs::Jobs(file.required),
+    })
+}
+
+/// Whether each job of commit `sha`'s pipeline runs only after merge, by job
+/// name: empty without a pipeline, `None` when it is invalid.
+pub async fn read_post_merge(
+    git: &Git,
+    dir: &Path,
+    sha: &str,
+) -> AppResult<Option<BTreeMap<String, bool>>> {
+    Ok(match read_file(git, dir, sha).await? {
+        File::Absent => Some(BTreeMap::new()),
+        File::Invalid(_) => None,
+        File::Parsed(file) => Some(file.post_merge),
+    })
 }
 
 /// The jobs a commit's pipeline marks `required`.
@@ -51,11 +74,13 @@ pub enum RequiredJobs {
     Invalid,
 }
 
-fn invalid(message: String) -> (PipelineState, RequiredJobs) {
-    (PipelineState::Invalid { message }, RequiredJobs::Invalid)
+enum File {
+    Absent,
+    Invalid(String),
+    Parsed(ParsedFile),
 }
 
-async fn read_file(git: &Git, dir: &Path, sha: &str) -> AppResult<(PipelineState, RequiredJobs)> {
+async fn read_file(git: &Git, dir: &Path, sha: &str) -> AppResult<File> {
     let failed = |what: &str, stderr: &str| {
         AppError::internal(format!(
             "{what} {PIPELINE_PATH} of {sha}: {}",
@@ -72,31 +97,25 @@ async fn read_file(git: &Git, dir: &Path, sha: &str) -> AppResult<(PipelineState
     let entry = out.text();
     let mut fields = entry.trim_end_matches('\0').split(['\t', ' ']);
     let (kind, object) = match (fields.next(), fields.next(), fields.next()) {
-        (None | Some(""), ..) => return Ok((PipelineState::Absent, RequiredJobs::Absent)),
+        (None | Some(""), ..) => return Ok(File::Absent),
         (Some(_), Some(kind), Some(object)) => (kind, object.to_string()),
         _ => return Err(failed("listing", &format!("unexpected entry {entry:?}"))),
     };
     if kind != "blob" {
-        return Ok(invalid(format!("{PIPELINE_PATH} is not a file.")));
+        return Ok(File::Invalid(format!("{PIPELINE_PATH} is not a file.")));
     }
     let out = git.run(Some(dir), &["cat-file", "blob", &object]).await?;
     if !out.ok() {
         return Err(failed("reading", &out.stderr));
     }
     if out.stdout.len() > MAX_PIPELINE_BYTES {
-        return Ok(invalid(format!(
+        return Ok(File::Invalid(format!(
             "{PIPELINE_PATH} is larger than {MAX_PIPELINE_BYTES} bytes."
         )));
     }
     Ok(match String::from_utf8(out.stdout) {
-        Ok(text) => match parse_file(&text) {
-            Ok(file) => (
-                PipelineState::Jobs { jobs: file.jobs },
-                RequiredJobs::Jobs(file.required),
-            ),
-            Err(message) => invalid(message),
-        },
-        Err(_) => invalid(format!("{PIPELINE_PATH} is not UTF-8.")),
+        Ok(text) => parse_file(&text).map_or_else(File::Invalid, File::Parsed),
+        Err(_) => File::Invalid(format!("{PIPELINE_PATH} is not UTF-8.")),
     })
 }
 
@@ -125,8 +144,8 @@ struct JobSchema {
     /// `JobDef`, so stored runs, reuse and the runner's messages do not change.
     #[serde(default)]
     required: bool,
-    /// Kept out of `JobDef` for the same reason as `required`. Validated now;
-    /// selection still reads the repository setting until it moves here (#449).
+    /// Like `required`, kept out of `JobDef`: the base decides it for the jobs
+    /// it has (`ci::selection`).
     #[serde(default)]
     post_merge: bool,
     name: String,
@@ -153,6 +172,7 @@ pub fn parse(text: &str) -> Result<Vec<JobDef>, String> {
 struct ParsedFile {
     jobs: Vec<JobDef>,
     required: Vec<String>,
+    post_merge: BTreeMap<String, bool>,
 }
 
 /// Parses and validates a pipeline. `Err` is the message shown on the
@@ -174,9 +194,9 @@ fn parse_file(text: &str) -> Result<ParsedFile, String> {
             "{PIPELINE_PATH} defines more than {MAX_JOBS} jobs."
         ));
     }
-    let (mut jobs, mut required) = (Vec::new(), Vec::new());
+    let (mut jobs, mut required, mut post_merge) = (Vec::new(), Vec::new(), BTreeMap::new());
     for j in file.jobs {
-        let is_required = j.required;
+        let (is_required, is_post_merge) = (j.required, j.post_merge);
         let job = validate_job(j)?;
         if jobs
             .iter()
@@ -187,9 +207,14 @@ fn parse_file(text: &str) -> Result<ParsedFile, String> {
         if is_required {
             required.push(job.name.clone());
         }
+        post_merge.insert(job.name.clone(), is_post_merge);
         jobs.push(job);
     }
-    Ok(ParsedFile { jobs, required })
+    Ok(ParsedFile {
+        jobs,
+        required,
+        post_merge,
+    })
 }
 
 fn validate_job(j: JobSchema) -> Result<JobDef, String> {
@@ -519,10 +544,19 @@ mod tests {
     #[test]
     fn post_merge_is_an_optional_boolean_that_cannot_be_required() {
         let job = "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n";
-        for value in ["true", "false"] {
+        assert_eq!(
+            parse_file(job).unwrap().post_merge,
+            [("test".to_string(), false)].into()
+        );
+        for (value, post_merge) in [("true", true), ("false", false)] {
             let file = parse_file(&format!("{job}post_merge={value}\n")).unwrap();
             assert_eq!(file.jobs, parse(job).unwrap(), "{value}");
             assert!(file.required.is_empty(), "{value}");
+            assert_eq!(
+                file.post_merge,
+                [("test".to_string(), post_merge)].into(),
+                "{value}"
+            );
         }
         for value in ["'yes'", "1"] {
             let error = parse(&format!("{job}post_merge={value}\n")).unwrap_err();

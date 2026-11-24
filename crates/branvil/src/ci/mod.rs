@@ -653,8 +653,10 @@ impl Ci {
     }
 
     /// Makes the checks of `head` answer for `required`: an entry for each
-    /// required check the head does not have, and a failure for a required job
-    /// the repository runs only after merge. The run's record does not change.
+    /// required check the head does not have, and a queued one for a required
+    /// job skipped as post-merge only. No base requires a job it runs only after
+    /// merge, so that skip was decided for an earlier base, and selecting the head
+    /// for the current one runs the job. The run's record does not change.
     pub(crate) async fn require(
         &self,
         repo: &Repo,
@@ -670,10 +672,10 @@ impl Ci {
                     .is_some_and(|skip| skip.reason == queue::SkipReason::PostMerge)
             {
                 let why = format!(
-                    "{} cannot be both required and post-merge only.",
+                    "{} was skipped as post-merge only for an earlier base; it runs once the head is selected for the current base.",
                     check.name
                 );
-                *check = Check::placeholder(&check.name, "completed", Some("failure"), why);
+                *check = Check::placeholder(&check.name, "queued", None, why);
             }
         }
         if let Some(why) = &required.pipeline_problem
@@ -1659,7 +1661,6 @@ mod tests {
             workspace: "ws_1".into(),
             default_branch: "main".into(),
             protected_branches: vec![],
-            post_merge_jobs: Vec::new(),
             required_approvals: 1,
             auto_land: false,
             hold_while_failing: false,
@@ -2000,7 +2001,7 @@ mod tests {
                     selection,
                 };
                 let selection = queue::JobSelection {
-                    post_merge_jobs: Vec::new(),
+                    post_merge_jobs: vec![],
                     bases: vec![],
                     skipped_jobs: vec!["test".into()],
                 };
@@ -2024,6 +2025,48 @@ mod tests {
         assert_eq!(report.checks[0].status, "queued");
         assert!(report.checks[0].path_skip.is_none());
         assert!(!report.checks[0].head_satisfied());
+    }
+
+    #[tokio::test]
+    async fn a_required_job_skipped_as_post_merge_waits_for_the_current_base() {
+        let (_d, ci, repo) = setup();
+        let skipped = |name: &str, reason| Check {
+            name: name.into(),
+            status: "completed".into(),
+            conclusion: Some("skipped".into()),
+            path_skip: Some(queue::PathSkip {
+                reason,
+                paths: vec![],
+                bases: vec![],
+            }),
+            ..Check::default()
+        };
+        let mut report = Checks {
+            run_registered: true,
+            checks: vec![
+                skipped("e2e", queue::SkipReason::PostMerge),
+                skipped("lint", queue::SkipReason::Paths),
+                skipped("release", queue::SkipReason::PostMerge),
+            ],
+            checks_expected: true,
+        };
+        let required = PullRequired {
+            names: vec!["e2e".into(), "lint".into()],
+            ..PullRequired::default()
+        };
+        ci.require(&repo, "head", &mut report, &required)
+            .await
+            .unwrap();
+        let [e2e, lint, release] = &report.checks[..] else {
+            panic!("{report:?}")
+        };
+        assert_eq!(
+            (e2e.status.as_str(), e2e.conclusion.as_deref()),
+            ("queued", None)
+        );
+        assert!(!e2e.head_satisfied());
+        assert!(lint.head_satisfied());
+        assert!(release.head_satisfied());
     }
 
     #[tokio::test]
@@ -2525,99 +2568,6 @@ mod tests {
             )
         );
     }
-    #[tokio::test]
-    async fn a_post_merge_round_trip_on_a_required_job_keeps_the_head_s_other_attempts() {
-        async fn latest(ci: &Ci, repo: &str, sha: &str, job: &str) -> Attempt {
-            let (repo, sha, job) = (repo.to_string(), sha.to_string(), job.to_string());
-            ci.inner
-                .store
-                .read(move |r| {
-                    Ok(queue::attempts_of(r, &repo, &sha)?
-                        .into_iter()
-                        .rfind(|a| a.job.name == job)
-                        .unwrap())
-                })
-                .await
-                .unwrap()
-        }
-        async fn set_post_merge(ci: &Ci, repo: &mut Repo, jobs: &[&str]) {
-            repo.post_merge_jobs = jobs.iter().map(|job| job.to_string()).collect();
-            let saved = repo.clone();
-            ci.inner
-                .store
-                .write(move |w| w.put(store::REPOS, &Repo::key(&saved.id), &saved))
-                .await
-                .unwrap();
-            ci.reconcile_locked(repo).await.unwrap();
-        }
-
-        let (temp, ci, mut repo) = setup();
-        let app = app(&temp, &ci);
-        let dir = app.git.repo_dir(&repo.path);
-        app.git.init_bare(&dir, "main").await.unwrap();
-        let work = temp.path().join("work");
-        app.git
-            .run_ok(None, &["init", "-q", "-b", "main", work.to_str().unwrap()])
-            .await
-            .unwrap();
-        std::fs::write(
-            work.join(".guildbotics-ci.toml"),
-            "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n\n\
-             [[jobs]]\nname='lint'\nimage='alpine'\ncommands=['true']\nrequired=true\n",
-        )
-        .unwrap();
-        let base = commit_all(&app.git, &work, "base").await;
-        let head = commit_all(&app.git, &work, "head").await;
-        app.git
-            .run_ok(
-                None,
-                &[
-                    "-C",
-                    work.to_str().unwrap(),
-                    "push",
-                    "-q",
-                    dir.to_str().unwrap(),
-                    &format!("{base}:refs/heads/main"),
-                    &format!("{head}:refs/heads/fix"),
-                ],
-            )
-            .await
-            .unwrap();
-        let saved = repo.clone();
-        app.store
-            .write(move |w| {
-                w.put(store::REPOS, &Repo::key(&saved.id), &saved)?;
-                let pull = open_pull(&saved.id, 1, "fix", "main");
-                crate::model::put_indexed(
-                    w,
-                    store::PULLS,
-                    &crate::model::Pull::key(&saved.id, 1),
-                    None,
-                    &pull,
-                    crate::model::pull_index(&pull),
-                )
-            })
-            .await
-            .unwrap();
-        ci.on_pull_opened(&app, &repo, "fix").await;
-        let test = latest(&ci, &repo.id, &head, "test").await;
-        assert_eq!(test.status, "queued");
-
-        set_post_merge(&app.ci, &mut repo, &["lint"]).await;
-        let during = latest(&ci, &repo.id, &head, "test").await;
-        assert_eq!((&during.id, during.status.as_str()), (&test.id, "queued"));
-        let lint = latest(&ci, &repo.id, &head, "lint").await;
-        assert_eq!(lint.conclusion.as_deref(), Some("skipped"));
-        assert_eq!(lint.path_skip.unwrap().reason, queue::SkipReason::PostMerge);
-
-        set_post_merge(&app.ci, &mut repo, &[]).await;
-        let after = latest(&ci, &repo.id, &head, "test").await;
-        assert_eq!((&after.id, after.status.as_str()), (&test.id, "queued"));
-        let lint = latest(&ci, &repo.id, &head, "lint").await;
-        assert_eq!(lint.status, "queued");
-        assert!(lint.path_skip.is_none());
-    }
-
     #[tokio::test]
     async fn verification_batches_main_and_marks_only_completed_success() {
         let (temp, ci, repo) = setup();

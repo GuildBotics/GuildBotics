@@ -15,104 +15,64 @@ pub(crate) const DIGEST: &str =
     "sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8";
 
 #[tokio::test]
-async fn post_merge_settings_validate_the_result_atomically_and_require_owner() {
+async fn ci_job_lists_live_in_the_pipeline_not_in_the_repository_settings() {
     let w = World::new().await;
     let before = w.server.ok(&w.repo_path(), &w.owner).await;
-    assert_eq!(before["post_merge_jobs"], json!([]));
-    assert!(before.get("required_checks").is_none(), "{before}");
-    let patch = |actor: String, fields: Value| {
-        let (w, mut body) = (&w, fields);
-        async move {
-            let current = w.server.ok(&w.repo_path(), &w.owner).await;
-            body["revision"] = current["revision"].clone();
-            w.server.patch(&w.repo_path(), &actor, body).await
-        }
-    };
-    let refused = [
-        (w.aiko.clone(), json!({"post_merge_jobs":["slow"]}), 403),
-        // Required checks live in the pipeline: the setting is an unknown field.
-        (
-            w.owner.clone(),
-            json!({"post_merge_jobs":["slow"],"required_checks":["slow"]}),
-            400,
-        ),
-        // A bad name refuses the whole patch, with its valid fields.
-        (
-            w.owner.clone(),
-            json!({"required_approvals":2,"post_merge_jobs":["bad name"]}),
-            400,
-        ),
-    ];
-    for (actor, fields, status) in refused {
-        let (code, body) = patch(actor, fields).await;
-        assert_eq!(code, status, "{body}");
-        assert_eq!(w.server.ok(&w.repo_path(), &w.owner).await, before);
+    for field in ["post_merge_jobs", "required_checks"] {
+        assert!(before.get(field).is_none(), "{before}");
+        let (code, body) = w
+            .server
+            .patch(
+                &w.repo_path(),
+                &w.owner,
+                json!({"revision": before["revision"], field: ["slow"]}),
+            )
+            .await;
+        assert_eq!(code, 400, "{body}");
     }
-    let (code, saved) = patch(w.owner.clone(), json!({"post_merge_jobs":["slow"]})).await;
-    assert_eq!(code, 200, "{saved}");
-    assert_eq!(saved["post_merge_jobs"], json!(["slow"]));
+    assert_eq!(w.server.ok(&w.repo_path(), &w.owner).await, before);
 }
 
 #[tokio::test]
-async fn a_required_job_skipped_as_post_merge_is_a_failure_of_the_pull_request() {
+async fn a_head_cannot_skip_its_base_s_jobs_but_decides_for_the_jobs_it_adds() {
     let w = World::new().await;
     let runner = Runner::new(&w, "post-merge-runner").await;
     land(
         &w,
         "setup",
-        &[(".guildbotics-ci.toml", &required_pipeline(&["slow"]))],
+        &[(
+            ".guildbotics-ci.toml",
+            &mark(&pipeline(&["lint", "release"]), "post_merge", &["release"]),
+        )],
         None,
     )
     .await;
     runner.drain("success").await;
-    // The repository setting cannot know what any branch requires.
-    let repo = w.server.ok(&w.repo_path(), &w.owner).await;
-    let (code, body) = w
-        .server
-        .patch(
-            &w.repo_path(),
-            &w.owner,
-            json!({"revision":repo["revision"],"post_merge_jobs":["slow"]}),
-        )
-        .await;
-    assert_eq!(code, 200, "{body}");
-    let head = w.push_change("feature", "f.txt", "1\n");
+    // The head marks the other way round every job its base has.
+    let head = w.push_change(
+        "feature",
+        ".guildbotics-ci.toml",
+        &mark(
+            &pipeline(&["lint", "release", "added"]),
+            "post_merge",
+            &["lint", "added"],
+        ),
+    );
     let p = w.open_pull("feature", json!([])).await;
     let n = p["number"].as_u64().unwrap();
+    let lint = runner.next_claim().await;
+    assert_eq!(
+        (&lint["job"]["name"], &lint["sha"]),
+        (&json!("lint"), &json!(head))
+    );
+    runner.finish(&lint, "success").await;
     let report = checks(&w, n).await;
-    let slow = check(&report, "slow");
-    assert_eq!(
-        (slow["status"].as_str(), slow["conclusion"].as_str()),
-        (Some("completed"), Some("failure")),
-        "{report}"
-    );
-    assert!(
-        slow["details"]
-            .as_str()
-            .unwrap()
-            .contains("cannot be both required and post-merge only"),
-        "{slow}"
-    );
-    // The commit's own record still says what the run did.
-    let commit = w
-        .server
-        .ok(&format!("{}/commits/{head}/checks", w.repo_path()), &w.aiko)
-        .await;
-    assert_eq!(check(&commit, "slow")["conclusion"], "skipped", "{commit}");
-    assert_eq!(check(&commit, "slow")["path_skip"]["reason"], "post_merge");
-    let (st, v) = w
-        .server
-        .post(
-            &format!("{}/pulls/{n}/merge", w.repo_path()),
-            &w.owner,
-            json!({"expected_head": head, "expected_base": p["base_sha"]}),
-        )
-        .await;
-    assert_eq!(
-        (st.as_u16(), v["error"]["code"].as_str()),
-        (409, Some("not_mergeable")),
-        "{v}"
-    );
+    for job in ["release", "added"] {
+        let skipped = check(&report, job);
+        assert_eq!(skipped["conclusion"], "skipped", "{report}");
+        assert_eq!(skipped["path_skip"]["reason"], "post_merge", "{report}");
+    }
+    assert_eq!(check(&report, "lint")["conclusion"], "success", "{report}");
 }
 
 #[tokio::test]
@@ -122,6 +82,7 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
     let jobs = config["jobs"].as_array_mut().unwrap();
     jobs.retain(|job| job["name"].as_str() == Some("client-linux"));
     assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0]["post_merge"].as_bool(), Some(true));
     assert!(
         jobs[0]["commands"][0]
             .as_str()
@@ -150,18 +111,6 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
     );
     let w = World::new().await;
     let runner = Runner::new(&w, "post-merge-runner").await;
-    let repo = w.server.ok(&w.repo_path(), &w.owner).await;
-    assert_eq!(
-        w.server
-            .patch(
-                &w.repo_path(),
-                &w.owner,
-                json!({"revision":repo["revision"],"post_merge_jobs":["client-linux"]})
-            )
-            .await
-            .0,
-        200
-    );
     let head = w.push_change("feature", ".guildbotics-ci.toml", &pipeline);
     let commit_checks = w
         .server
@@ -194,7 +143,7 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
         .await;
     assert_eq!(
         log["log"],
-        "[branvil] skipped: post-merge only (repository setting)\n"
+        "[branvil] skipped: post-merge only (post_merge in the pipeline)\n"
     );
     let (status, result) = w
         .server
@@ -219,7 +168,7 @@ async fn merged_checks_keep_the_decision_when_the_receiving_branch_reselects_job
     let config = format!(
         "{}paths=['src/**']\n{}",
         required_pipeline(&["rust"]),
-        pipeline(&["release"])
+        mark(&pipeline(&["release"]), "post_merge", &["release"])
     );
     land(
         &w,
@@ -229,16 +178,6 @@ async fn merged_checks_keep_the_decision_when_the_receiving_branch_reselects_job
     )
     .await;
     runner.drain("success").await;
-    let repo = w.server.ok(&w.repo_path(), &w.owner).await;
-    let (status, body) = w
-        .server
-        .patch(
-            &w.repo_path(),
-            &w.owner,
-            json!({"revision": repo["revision"], "post_merge_jobs": ["release"]}),
-        )
-        .await;
-    assert_eq!(status, 200, "{body}");
 
     std::fs::create_dir_all(w.work.join("src")).unwrap();
     let collecting_tip = w.push_change("ticket/10", "src/code.txt", "parent change");
@@ -636,7 +575,7 @@ async fn previous_schema_upgrade_preserves_records() {
     let repos = records(&db, "repos");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let indexed_memory = tables(&db)["ix_ci_memory"].clone();
-    as_schema_43(&db);
+    as_schema_44(&db);
     let prior_runs = records(&db, "ci_runs");
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
@@ -648,7 +587,7 @@ async fn previous_schema_upgrade_preserves_records() {
     );
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 43 to 44"), "{output}");
+    assert!(output.contains("from schema version 44 to 45"), "{output}");
     assert_eq!(
         tables(&db).get("ix_repair_unnotified"),
         before.get("ix_repair_unnotified")
@@ -682,7 +621,8 @@ async fn previous_schema_upgrade_preserves_records() {
     assert_eq!(admin("upgrade").0, 0);
     assert_eq!(tables(&db), upgraded);
     w.restart(&[]);
-    assert!(checks(&w, 1).await["merge_checks"].is_null());
+    let report = checks(&w, 1).await;
+    assert!(report["merge_checks"].is_object(), "{report}");
 }
 
 #[tokio::test]
@@ -863,9 +803,14 @@ pub(crate) fn pipeline(jobs: &[&str]) -> String {
 
 /// `text` with its jobs `names` marked `required = true`.
 pub(crate) fn mark_required(text: &str, names: &[&str]) -> String {
+    mark(text, "required", names)
+}
+
+/// `text` with its jobs `names` setting `key = true`.
+pub(crate) fn mark(text: &str, key: &str, names: &[&str]) -> String {
     names.iter().fold(text.to_string(), |text, name| {
         let line = format!("name = \"{name}\"\n");
-        text.replace(&line, &format!("{line}required = true\n"))
+        text.replace(&line, &format!("{line}{key} = true\n"))
     })
 }
 

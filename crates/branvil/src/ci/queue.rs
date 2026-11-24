@@ -67,6 +67,8 @@ pub struct SelectionBase {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct JobSelection {
+    /// The jobs the pipelines of the bases and the head run only after merge
+    /// (`Ci::post_merge_jobs`).
     pub post_merge_jobs: Vec<String>,
     pub bases: Vec<SelectionBase>,
     pub skipped_jobs: Vec<String>,
@@ -90,7 +92,7 @@ pub enum SkipReason {
 impl PathSkip {
     pub fn reason(&self) -> String {
         if self.reason == SkipReason::PostMerge {
-            return "post-merge only (repository setting)".into();
+            return "post-merge only (post_merge in the pipeline)".into();
         }
         format!(
             "no file matching paths changed since {}",
@@ -3378,7 +3380,6 @@ mod tests {
             workspace: "ws".into(),
             default_branch: "main".into(),
             protected_branches: vec![],
-            post_merge_jobs: Vec::new(),
             required_approvals: 0,
             auto_land: false,
             hold_while_failing: false,

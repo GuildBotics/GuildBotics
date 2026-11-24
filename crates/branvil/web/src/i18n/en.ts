@@ -311,11 +311,8 @@ export const en = {
   "ci.conclusion.cancelled": "cancelled",
   "ci.conclusion.timed_out": "timed out",
   "ci.conclusion.skipped": "skipped",
-  "settings.postMergeJobs": "Post-merge only jobs",
-  "settings.postMergeJobsHelp":
-    "Jobs listed here run only during main verification after merging, not on PRs. They cannot be required checks.",
   "ci.postMergeReason":
-    "This job runs only after merging (repository setting), so it doesn't run on pull requests. It runs in the main verification after the merge. You can retry it to check it now.",
+    "This job runs only after merging (post_merge in .guildbotics-ci.toml), so it doesn't run on pull requests. It runs in the main verification after the merge. You can retry it to check it now.",
   "ci.mergeDecision": "Merge decision",
   "ci.mergeDecisionNoRequired": "Branvil recorded no required checks for this head.",
   "ci.mergeDecisionUnavailable": "No merge decision checks were recorded for this pull request.",
@@ -681,7 +678,6 @@ export const en = {
     "How many members other than the author must have approved the current head before publishing to the upstream host (a later comment keeps an approval); 0 needs none.",
   "settings.labelsHelp": "Labels this repository's tickets may carry. Type one and press Enter.",
   "settings.addBranch": "Add a branch",
-  "settings.addCheck": "Add a check (e.g. test)",
   "settings.addLabel": "Add a label",
   "settings.saved": "Saved.",
   "settings.membersHelp": "The owner, agents, and runners, and their accounts on code hosts.",

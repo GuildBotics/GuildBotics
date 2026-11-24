@@ -85,7 +85,7 @@ commands = ["./scripts/test.sh", "make lint"]   # 1-64 commands, each run by /bi
 paths = ["src/**", "tests/*.rs", "Cargo.lock"]  # optional; empty/omitted runs every change
 verified_sha = false             # optional; declares GB_CI_VERIFIED_SHA as an input
 required = true                   # optional; PRs into this branch must pass it
-post_merge = false                # optional, not with required; the repository setting still decides post-merge jobs
+post_merge = false                # optional, not with required; PR heads skip the job
 timeout_secs = 600                # optional, 1-86400; default the runner's time limit
 tmpfs_mib = 2048                   # optional, 1-4096; /tmp uses a 4 GiB disk by default
 # ram_workspace = { paths = ["out/cache"], max_mib = 4608 }  # optional, see below
@@ -417,21 +417,24 @@ only those names: the other required checks still have to pass.
 
 ### Post-merge only jobs
 
-The repository CI settings expose `post_merge_jobs`, a list of job names (empty by
-default). These jobs do not run on ordinary branches or PR heads, even before a PR
-opens, without a merge base, or when the pipeline changes. Protected branches execute them during main verification. Repair PR heads execute
-them before merge too, regardless of paths.
-Manual retries also execute them and their skips cannot supply reusable results.
+A job with `post_merge = true` in `.guildbotics-ci.toml` runs only after merge.
+It does not run on ordinary branches or PR heads, even before a PR opens, without a
+merge base, or when the pipeline changes. Protected branches execute it during
+main verification. Repair PR heads execute it before merge too, regardless of paths.
+Manual retries also execute it and its skips cannot supply reusable results.
 
-The owner controls this in repository settings rather than `.guildbotics-ci.toml` so a
-PR cannot exempt its own jobs. A required job cannot be post-merge only: on a PR
-head its post-merge skip reads as a failed required check, and the run's records
-stay as they are, so removing either setting restores the job.
-Selection records include the setting; reconciliation reselects open heads when
-it changes. Newly excluded queued jobs complete as `skipped`, not `cancelled`;
-running jobs finish and manual retries remain executable. Removing a name restores
-normal path selection and queues a real attempt when it is selected again.
-The log for this decision is `[branvil] skipped: post-merge only (repository setting)`.
+Like required checks, the **base** decides: a PR head follows the pipeline at the tip
+of its base for every job the base has, so a head cannot exempt itself from the base's
+jobs, and its own pipeline for the jobs it adds, so even the first PR of a release build
+can keep it off PR heads. A head without an open PR, or whose base branch is gone,
+follows its own pipeline. With several open PRs, a job is skipped only when every base
+skips it, and a base with an invalid pipeline skips none. A job cannot be both
+`required` and `post_merge`: such a pipeline is invalid.
+Selection records the post-merge jobs; a head is reselected when they change.
+Newly excluded queued jobs complete as `skipped`, not `cancelled`; running jobs finish
+and manual retries remain executable. A job that stops being post-merge only returns
+to normal path selection and queues a real attempt when it is selected again.
+The log for this decision is `[branvil] skipped: post-merge only (post_merge in the pipeline)`.
 
 Repair PR landing requires success of every head job as well as all required
 checks. A pending, skipped, or failed optional job blocks publication and merging.

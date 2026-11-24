@@ -697,7 +697,7 @@ mod tests {
     fn fixture() -> (Repo, Pull, Landing) {
         let repo = serde_json::from_value(json!({
             "id":"r", "path":"acme/demo", "workspace":"w", "default_branch":"main", "protected_branches":[],
-            "post_merge_jobs":[], "required_approvals":0, "auto_land":true,"hold_while_failing":false, "ci_network":false, "labels":[],
+             "required_approvals":0, "auto_land":true,"hold_while_failing":false, "ci_network":false, "labels":[],
             "upstream":null, "revision":1, "created_at":"now"
         })).unwrap();
         let pull = serde_json::from_value(json!({

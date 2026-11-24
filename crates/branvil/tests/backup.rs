@@ -281,11 +281,11 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     );
     assert!(text(&out).contains(&serves), "{}", text(&out));
 
-    // A backup of the previous schema version: what version 43 wrote.
+    // A backup of the previous schema version: what version 44 wrote.
     let previous = out_dir.path().join("previous");
     copy_backup(&backup, &previous, &manifest);
     let db = previous.join("branvil.redb");
-    as_schema_43(&db);
+    as_schema_44(&db);
     let mut old = manifest.clone();
     old["schema_version"] = json!(PREVIOUS_SCHEMA_VERSION);
     // Refresh the checksum of the database rewritten by the fixture.
@@ -323,12 +323,12 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("from schema version 43 to 44"),
+        text(&out).contains("from schema version 44 to 45"),
         "{}",
         text(&out)
     );
     assert!(
-        text(&out).contains("pending failures to the default branch"),
+        text(&out).contains("no repository had post-merge only jobs in its settings"),
         "{}",
         text(&out)
     );
