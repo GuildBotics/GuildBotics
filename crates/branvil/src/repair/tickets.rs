@@ -10,37 +10,85 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Serialize, Deserialize)]
 struct Pending {
     repo: String,
+    branch: Option<String>,
     sha: String,
     failures: Vec<verify::FailedJob>,
 }
 
 pub fn failed(w: &Wtx, repo: &str, sha: &str, failures: &[verify::FailedJob]) -> AppResult<()> {
-    w.put(
-        store::REPAIR_PENDING,
-        &Key::new().s(repo).s(sha).bytes(),
-        &Pending {
-            repo: repo.into(),
-            sha: sha.into(),
-            failures: failures.to_vec(),
-        },
-    )
+    failed_for(w, repo, None, sha, failures)
+}
+
+pub(crate) fn failed_for(
+    w: &Wtx,
+    repo: &str,
+    branch: Option<&str>,
+    sha: &str,
+    failures: &[verify::FailedJob],
+) -> AppResult<()> {
+    if branch.is_some() {
+        clear_pending(w, repo, branch)?;
+    }
+    let pending = Pending {
+        repo: repo.into(),
+        branch: branch.map(str::to_owned),
+        sha: sha.into(),
+        failures: failures.to_vec(),
+    };
+    w.put(store::REPAIR_PENDING, &pending.key(), &pending)
+}
+
+impl Pending {
+    fn key(&self) -> Vec<u8> {
+        let key = Key::new().s(&self.repo).s(&self.sha);
+        match &self.branch {
+            Some(branch) => key.s(branch).bytes(),
+            None => key.bytes(),
+        }
+    }
 }
 
 pub fn open_ticket(r: &impl Rd, repo: &str) -> AppResult<Option<Ticket>> {
-    let first = r.prefix_raw(store::IX_OPEN_REPAIRS, &Key::new().s(repo).bytes(), None, 1)?;
-    first
-        .first()
-        .map(|(key, _)| r.get(store::TICKETS, key))
-        .transpose()
-        .map(Option::flatten)
+    open_ticket_for(r, repo, None)
 }
 
-pub fn passed(w: &Wtx, repo: &str, sha: &str) -> AppResult<()> {
-    for key in w.prefix_keys(store::REPAIR_PENDING, &Key::new().s(repo).bytes())? {
-        w.del(store::REPAIR_PENDING, &key)?;
+pub(crate) fn open_ticket_for(
+    r: &impl Rd,
+    repo: &str,
+    branch: Option<&str>,
+) -> AppResult<Option<Ticket>> {
+    Ok(open_tickets_for(r, repo, branch)?.into_iter().next())
+}
+
+fn open_tickets_for(r: &impl Rd, repo: &str, branch: Option<&str>) -> AppResult<Vec<Ticket>> {
+    let mut tickets = Vec::new();
+    for key in r.prefix_keys(store::IX_OPEN_REPAIRS, &Key::new().s(repo).bytes())? {
+        let t: Ticket = r.get(store::TICKETS, &key)?.expect("indexed ticket");
+        if t.repair
+            .as_ref()
+            .is_some_and(|repair| repair.branch.as_deref() == branch)
+        {
+            tickets.push(t);
+        }
     }
-    for key in w.prefix_keys(store::IX_OPEN_REPAIRS, &Key::new().s(repo).bytes())? {
-        let old: Ticket = w.get(store::TICKETS, &key)?.expect("indexed ticket");
+    Ok(tickets)
+}
+
+#[cfg(test)]
+pub fn passed(w: &Wtx, repo: &str, sha: &str) -> AppResult<()> {
+    passed_for(w, repo, None, "main", sha).map(|_| ())
+}
+
+pub(crate) fn passed_for(
+    w: &Wtx,
+    repo: &str,
+    branch: Option<&str>,
+    branch_name: &str,
+    sha: &str,
+) -> AppResult<Vec<u64>> {
+    clear_pending(w, repo, branch)?;
+    let mut closed = Vec::new();
+    for old in open_tickets_for(w, repo, branch)? {
         let now = crate::util::now();
         let mut t = tickets::place(w, &old, "done", None, None)?;
         t.state = "closed".into();
@@ -66,12 +114,24 @@ pub fn passed(w: &Wtx, repo: &str, sha: &str) -> AppResult<()> {
             },
             "branvil",
             format!(
-                "Verification of main passed at {}. Closing.\n\n{explanation}",
+                "Verification of {} passed at {}. Closing.\n\n{explanation}",
+                text(branch_name),
                 short(sha)
             ),
             None,
         )?;
         tickets::write_ticket(w, Some(&old), &t)?;
+        closed.push(t.number);
+    }
+    Ok(closed)
+}
+
+fn clear_pending(w: &Wtx, repo: &str, branch: Option<&str>) -> AppResult<()> {
+    for key in w.prefix_keys(store::REPAIR_PENDING, &Key::new().s(repo).bytes())? {
+        let pending: Pending = w.get(store::REPAIR_PENDING, &key)?.expect("indexed repair");
+        if pending.branch.as_deref() == branch {
+            w.del(store::REPAIR_PENDING, &key)?;
+        }
     }
     Ok(())
 }
@@ -92,10 +152,12 @@ async fn evidence(
     repo: &Repo,
     pending: &Pending,
 ) -> AppResult<(String, Vec<Pull>, String)> {
-    let id = repo.id.clone();
+    let (id, branch) = (repo.id.clone(), pending.branch.clone());
     let verified = app
         .store
-        .read(move |r| verify::latest_verified(r, &id))
+        .read(
+            move |r| Ok(verify::get_for(r, &id, branch.as_deref())?.and_then(|v| v.last_verified)),
+        )
         .await?;
     let dir = app.git.repo_dir(&repo.path);
     let verified = match verified {
@@ -131,16 +193,23 @@ async fn evidence(
         .filter_map(|sha| {
             pulls
                 .iter()
-                .filter(|p| p.merged && p.merge_sha.as_ref() == Some(sha))
+                .filter(|p| {
+                    p.merged
+                        && p.merge_sha.as_ref() == Some(sha)
+                        && pending
+                            .branch
+                            .as_ref()
+                            .is_none_or(|branch| &p.base == branch)
+                })
                 .min_by_key(|p| p.number)
                 .cloned()
         })
         .collect();
     let root = format!("{}/{}", app.base_url, repo.path);
     let commit_link = |sha: &str| format!("[{}]({root}/-/commit/{sha})", short(sha));
+    let branch = text(pending.branch.as_deref().unwrap_or(&repo.default_branch));
     let mut body = format!(
-        "Branvil created this repair ticket because verification of {} failed at {}. Restore passing verification of main, regardless of whose change caused the failure. Branvil will close this ticket when verification of main passes.\n\n## Failed jobs\n",
-        text(&repo.default_branch),
+        "Branvil created this repair ticket because verification of {branch} failed at {}. Restore passing verification of {branch}, regardless of whose change caused the failure. Branvil will close this ticket when verification of {branch} passes.\n\n## Failed jobs\n",
         commit_link(&pending.sha)
     );
     for f in &pending.failures {
@@ -196,7 +265,7 @@ async fn evidence(
     }
     body.push_str("\n## Range\n\n");
     body.push_str(&verified.as_ref().map_or_else(
-        || "main has not passed verification yet.\n".into(),
+        || format!("{branch} has not passed verification yet.\n"),
         |v| format!("Last verified: {}.\n", commit_link(&v.sha)),
     ));
     body.push_str("\n| Commit | Pull request | Author |");
@@ -398,7 +467,15 @@ fn create(
         ));
     }
     body.push_str(&format!("\n## Assignee\n\n{}: {reason}\n", text(&name)));
-    body.push_str("\nHints from running the failed jobs on the commits in between are added as comments. They do not change the assignee.\n");
+    if pending.branch.is_none() {
+        body.push_str("\nHints from running the failed jobs on the commits in between are added as comments. They do not change the assignee.\n");
+    }
+    let branch = pending.branch.as_deref().unwrap_or(&repo.default_branch);
+    let scope = if pending.branch.is_none() {
+        "Main"
+    } else {
+        "Collection branch"
+    };
     let now = crate::util::now();
     let number = w.next(&format!("ticket:{}", repo.id))?;
     let t = Ticket {
@@ -407,7 +484,7 @@ fn create(
         number,
         title: format!(
             "Repair {}: verification failed ({})",
-            repo.default_branch,
+            branch,
             pending
                 .failures
                 .iter()
@@ -432,10 +509,11 @@ fn create(
         parent: None,
         blocked_by: vec![],
         repair: Some(Repair {
+            branch: pending.branch.clone(),
             notice: Some(format!(
-                "Main verification failed: {} {} {} ({})\nRange: {}..{}, {} pull request(s): {}\nRepair ticket: {}, assigned to {}",
+                "{scope} verification failed: {} {} {} ({})\nRange: {}..{}, {} pull request(s): {}\nRepair ticket: {}, assigned to {}",
                 repo.path,
-                repo.default_branch,
+                branch,
                 short(&pending.sha),
                 pending
                     .failures
@@ -463,7 +541,9 @@ fn create(
         revision: 1,
     };
     tickets::write_ticket(w, None, &t)?;
-    if let Some(v) = verify::latest_verified(w, &repo.id)? {
+    if pending.branch.is_none()
+        && let Some(v) = verify::latest_verified(w, &repo.id)?
+    {
         for f in &pending.failures {
             if let Some(n) = crate::ci::narrow::concluded(w, &repo.id, &v.sha, &f.name)?
                 && let Some(hint) = super::Hint::from_conclusion(&n)
@@ -494,8 +574,11 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
         .store
         .read(move |r| crate::domain::repo_by_id(r, &id))
         .await?;
-    let id = p.repo.clone();
-    let old = app.store.read(move |r| open_ticket(r, &id)).await?;
+    let (id, branch) = (p.repo.clone(), p.branch.clone());
+    let old = app
+        .store
+        .read(move |r| open_ticket_for(r, &id, branch.as_deref()))
+        .await?;
     // Existing repairs need no new assignee: roster failures cannot suppress updates.
     let active = if old.is_none() {
         let roster = super::active_agents(app)?;
@@ -559,9 +642,12 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
                 ));
             }
             if repair.reported == p.sha {
-                lines.push(format!(
-                    "- Still failing after its failed jobs were retried: {job} — {link}"
-                ));
+                let description = if p.branch.is_some() {
+                    "Still failing at this commit"
+                } else {
+                    "Still failing after its failed jobs were retried"
+                };
+                lines.push(format!("- {description}: {job} — {link}"));
             }
         }
     }
@@ -575,11 +661,11 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
     let changed = app
         .store
         .write(move |w| {
-            let key = Key::new().s(&p.repo).s(&p.sha).bytes();
+            let key = p.key();
             if w.get::<Pending>(store::REPAIR_PENDING, &key)?.is_none() {
                 return Ok(None);
             }
-            let current = open_ticket(w, &p.repo)?;
+            let current = open_ticket_for(w, &p.repo, p.branch.as_deref())?;
             if current
                 .as_ref()
                 .map(|t| (&t.number, &t.repair.as_ref().unwrap().reported))
@@ -619,7 +705,8 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
                         },
                         "branvil",
                         format!(
-                            "Verification of main failed again at {}.\n\n{}",
+                            "Verification of {} failed again at {}.\n\n{}",
+                            text(p.branch.as_deref().unwrap_or(&repo.default_branch)),
                             short(&p.sha),
                             lines.join("\n")
                         ),
@@ -692,7 +779,7 @@ mod tests {
                 crate::domain::members::insert_member(w,&crate::domain::members::NewMember{name:name.into(),display_name:None,kind})?;
             }
             let active=vec!["bob".into(),"alice".into()];
-            let pending=Pending{repo:repo.id.clone(),sha:"failed0".into(),failures:vec![]};
+            let pending=Pending{repo:repo.id.clone(),branch:None,sha:"failed0".into(),failures:vec![]};
             for responder in ["owner","absent","runner","unknown","bob"] {
                 repo.responder=Some(responder.into());
                 for author in ["owner","absent","runner","unknown","bob"] {
@@ -737,7 +824,7 @@ mod tests {
                         w.put(store::CI_VERIFICATIONS, &Key::new().s("repo").bytes(), &json!({"sha":n.failed_sha,"base":n.base,"state":"failed","started_at":"0","failed_jobs":[],"last_verified":{"sha":n.base,"at":"0"}}))
                     };
                     if before { save(w)?; }
-                    let pending = Pending { repo: repo.id.clone(), sha: n.failed_sha.clone(), failures: vec![verify::FailedJob { name: n.job.clone(), attempt_id: None, details: None }] };
+                    let pending = Pending { repo: repo.id.clone(), branch: None, sha: n.failed_sha.clone(), failures: vec![verify::FailedJob { name: n.job.clone(), attempt_id: None, details: None }] };
                     let t = create(w, &repo, &pending, "Evidence".into(), &[], "aaaaaaa", "http://example.test", None)?;
                     assert!(t.body.contains("Hints from running the failed jobs"));
                     assert_eq!(comments(w, &t).len(), usize::from(before && has_hint));
@@ -881,6 +968,7 @@ mod tests {
         let pending = Pending {
             repo: repo.id.clone(),
             sha: "abcdef0123".into(),
+            branch: None,
             failures: vec![verify::FailedJob {
                 name: "test".into(),
                 attempt_id: None,

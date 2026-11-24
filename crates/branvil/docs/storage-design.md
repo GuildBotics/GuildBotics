@@ -67,7 +67,9 @@ automatic failure state. CI runs hold their commit's pipeline and tree;
 attempts hold reuse sources and cache keys. Runs retain the protected branches that
 requested them. Repair tickets retain their undelivered creation notice.
 Runs also hold the input digest of each job with `paths`, and attempts the one
-of their job when claimed. `ci_verifications` is keyed by repository id and stores
+of their job when claimed. `ci_verifications` uses the repository id for default
+branch verification and `(repo id, branch)` for the last terminal observation of
+a collection branch's required checks. A record stores
 `sha`, `base`, `state` (`running`, `passed`, `failed`), `started_at`, `finished_at`,
 `failed_jobs` (name, last attempt id or null, details), `failing_since`, and
 `last_verified` (SHA and time). Attempts store optional `verified_sha`; job
@@ -250,17 +252,18 @@ random bytes made at each start: a restart ends the cursors handed out before
 - Backups and restores: `docs/backup-restore.md`. The token hashes in the
   database are not secrets by themselves; `secrets/` is not backed up.
 
-## Repair records (schema 30)
+## Repair records
 
-`Ticket.repair` is null for ordinary tickets or `{jobs: [...], reported: sha, notice: text or null}` for
-repair tickets. `REPAIR_PENDING` (`repair_pending`) keys are `(repo id, sha)` and
-values contain the repository, SHA and failed jobs (name, optional attempt ID,
-details). `IX_OPEN_REPAIRS` (`ix_open_repairs`) marks `(repo id, ticket number)`
-for open tickets with a repair marker. `model::ticket_index` maintains it and
-`admin reindex` rebuilds it; the oldest entry is the repository's open repair.
-Ordinary tickets have `repair: null`. The 29 → 30 upgrade adds `repair: null`
-to all tickets; `repair_pending` and `ix_open_repairs` start empty.
-There is no parallel reader for older schemas.
+`Ticket.repair` is null for ordinary tickets. A repair records `jobs`,
+`reported` (SHA), `notice` (text or null), and `branch` (collection branch
+name, or null for the repository's default branch). `REPAIR_PENDING` uses
+`(repo id, sha)` for default branch failures and `(repo id, sha, branch)` for
+collection failures. Each record has the branch scope and the failed jobs
+(name, optional attempt ID, details). `IX_OPEN_REPAIRS` marks
+`(repo id, ticket number)` for open repairs, which are then filtered by branch
+scope. `model::ticket_index` maintains it and `admin reindex` rebuilds it.
+The 43 → 44 upgrade sets the branch to null for existing repair tickets and
+pending failures.
 
 Repository records (`repos`) include `post_merge_jobs` (job names). Run selections
 (`ci_runs`) snapshot `post_merge_jobs` alongside bases and skipped jobs, so changing

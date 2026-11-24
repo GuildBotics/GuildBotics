@@ -176,6 +176,40 @@ pub async fn blockers(
         why.held = Some(hold);
         out.push(why);
     }
+    if repo.hold_while_failing && p.base != repo.default_branch {
+        let pr = p.clone();
+        let repair = app
+            .store
+            .read(move |r| crate::repair::is_pull(r, &pr))
+            .await?;
+        if !repair {
+            let tips = pulls::tips(app, repo).await?;
+            let main = tips.get(&repo.default_branch).map_or("", String::as_str);
+            if let Some(failure) =
+                crate::ci::collection::base_failure(app, repo, &p.base, base, main).await?
+            {
+                let mut why = reason(
+                    "base_checks_failed",
+                    format!(
+                        "Required checks on {} failed: {}.",
+                        failure.branch,
+                        failure
+                            .failed_jobs
+                            .iter()
+                            .map(|j| j.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                );
+                why.jobs = failure.failed_jobs.into_iter().map(|j| j.name).collect();
+                why.held = failure.repair.map(|repair| crate::model::Held {
+                    number: repair.number,
+                    assignee: repair.assignee,
+                });
+                out.push(why);
+            }
+        }
+    }
     if p.draft {
         out.push(reason("draft", "The pull request is a draft."));
     }

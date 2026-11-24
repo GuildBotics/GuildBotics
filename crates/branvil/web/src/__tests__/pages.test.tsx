@@ -209,6 +209,7 @@ describe("pages", () => {
         checks: [],
         checks_expected: false,
         base_checks: 0,
+        base_failure: null,
         required_names: [],
       }),
       "GET /api/v1/repos/acme/web/pulls/1/checks": json(200, {
@@ -218,6 +219,7 @@ describe("pages", () => {
         checks: [],
         checks_expected: false,
         base_checks: 0,
+        base_failure: null,
         required_names: [],
       }),
     });

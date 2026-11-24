@@ -18,6 +18,7 @@ describe("card helpers", () => {
       checks: [],
       checks_expected: true,
       base_checks: 0,
+      base_failure: null,
       required_names: [],
     };
     expect(rollup(base)).toBe("not_registered");

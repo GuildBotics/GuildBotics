@@ -1046,9 +1046,24 @@ reports itself unavailable without it, as without `msb`).
   is clean, a non-root user that cannot read a file of mode 0, `/tmp` on a
   disk, the cache restored in the next attempt, nothing left behind).
 
+## 集約用ブランチの確認
+
+子チケットを持つ `ticket/<key>` から既定ブランチへの open Draft PR は、子 PR の
+集約先を示す。集約 PR の head を、その PR のマージ判定と同じ必須チェックで確認する。
+既定ブランチ側の CI 設定が必須を決め、マージ結果で必須から外れるジョブは修復の対象から外れる。
+
+失敗時は集約先ごとに修復チケットを作り、既定ブランチの修復と同じ規則で担当を選び、
+ready の先頭に置く。修復 PR はその集約ブランチへ向かう。修復後の先頭か再試行で
+必須チェックが通るとチケットが閉じる。
+
+子 PR の画面と `repository/pr_checks` には、子の head の結果に加えて、base の
+失敗したコミット、ジョブ、修復チケットが出る。`hold_while_failing` が有効なら、
+確認が回復するまでその集約先への手動・自動マージは修復 PR に限られる。
+後続のコミットや再試行の確認中も、直前の失敗は回復が確認できるまで残る。
+
 ## 修復チケットの知らせ
 
-main の確認が失敗して修復チケットを作るとき、チケットと同じ書き込みで
+既定ブランチまたは集約ブランチの確認が失敗して修復チケットを作るとき、チケットと同じ書き込みで
 `repair.notice` に知らせを保存する。webhook へ送る文は次のとおり。
 
 ```text
@@ -1057,12 +1072,14 @@ Range: <verified sha7 or "no verified commit">..<sha7>, <n> pull request(s): !12
 Repair ticket: <ticket URL>, assigned to <member name>
 ```
 
+集約ブランチの場合、1 行目は `Collection branch verification failed` で始まる。
+
 `IX_REPAIR_UNNOTIFIED` のチケットをイベント、起動時、毎分の巡回で読み、
 トランザクションの外で送る。送れたら現在のチケットの `notice` を `null` にする。
 webhook が未設定または送信失敗なら残して次の巡回で再送する。
 通常の再起動では重複しないが、送信成功から保存までに停止すると重複し得る。
-開いている修復チケットへの追加の失敗、チケットの終了、必須チェックだけの失敗、
-自動再実行の回復は通知しない。自動再実行の回数と順、着地の通知は変わらない。
+開いている修復チケットへの追加の失敗、チケットの終了、通常の PR の失敗、
+自動再実行の回復は通知しない。
 移行前の修復チケットの `notice` は `null` で、過去の作成は通知しない。
 
 ### 確認の状態を見る

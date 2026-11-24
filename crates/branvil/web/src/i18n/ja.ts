@@ -176,6 +176,7 @@ export const ja: Record<MessageKey, string> = {
   "pull.changes": "変更ファイル",
   "pull.checks": "チェック",
   "pull.checksOn": "対象",
+  "pull.baseFailure": "{base} の必須チェックが失敗しました",
   "pull.behindBy":
     "ベースのブランチ（{base}）が、この PR のブランチより {count} コミット先に進んでいます。この PR のブランチを最新のベースに追いつかせてください。",
   "pull.conversation": "会話とレビュー",
@@ -242,11 +243,11 @@ export const ja: Record<MessageKey, string> = {
   "landing.check.success": "成功",
   "landing.check.pathsSkipped": "パスにより対象外",
   "landing.check.postMergeSkipped": "マージ後に実行",
-  "settings.holdWhileFailing": "main の確認が失敗している間は、修復の PR だけを出す",
+  "settings.holdWhileFailing": "base の確認が失敗している間は、通常の PR を保留する",
   "settings.holdWhileFailingHelp":
-    "修復チケットにつながっていない PR は、main の確認が通るまでマージしません。オーナーのマージも自動のマージも保留します。",
+    "確認が失敗している間は、その既定ブランチまたは集約ブランチへの手動・自動マージを修復 PR に限ります。",
   "settings.holdWhileFailingHelpUpstream":
-    "修復チケットにつながっていない PR は、main の確認が通るまで {host} に出しません。すでに {host} に出ている PR は、{host} でのマージを Branvil は止められません。その PR は保留中と表示します。",
+    "修復チケットにつながっていない PR は、main の確認が通るまで {host} に出しません。すでに {host} に出ている PR は、{host} でのマージを Branvil は止められません。その PR は保留中と表示します。 確認が失敗している集約ブランチへのマージも、その修復 PR に限ります。",
   "landing.blocker.held": "保留中（main の失敗）",
   "landing.held":
     "保留中：main の確認が失敗しています（修復 #{number}、担当 {name}）。main の確認が通ると、保留が解けます。",
@@ -258,6 +259,7 @@ export const ja: Record<MessageKey, string> = {
   "landing.blocker.already_in_base": "baseに取り込み済み",
   "landing.blocker.conflict": "衝突",
   "landing.blocker.publish_requirements": "公開条件",
+  "landing.blocker.base_checks_failed": "保留中（base の必須チェックが失敗）",
   "landing.blocker.head_checks": "必須チェック",
   "landing.blocker.required_removal": "必須チェックの削除",
   "landing.blocker.approvals": "承認",
