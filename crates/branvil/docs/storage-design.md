@@ -60,10 +60,11 @@ to remain unchanged when the version stays at the verified version. It runs
 only on default-branch verification and skips the comparison when no verified
 commit exists.
 
-`meta["schema_version"]` is written on creation (currently `44`). The current
+`meta["schema_version"]` is written on creation (currently `45`). The current
 format includes per-pull landing conditions, each merged pull request's original
 reviewed head distinct from its merge commit, and per-head notification and
-automatic failure state. Schema 44 stores the required check attempts used for
+automatic failure state. Workspaces record the execution root they are bound
+to. The format stores the required check attempts used for
 a local merge in its ref journal and then on the pull request. An upstream
 publication stores the Branvil decision on the published head. Forwarding a
 new head records its base. The merge import stores observations of that
@@ -96,6 +97,12 @@ Images attached to tickets are recorded in `attachments`; the 23 → 24
 upgrade indexes the attachment ids the kept ticket bodies and comments refer
 to (`ix_attachment_refs`).
 
+The 44 → 45 upgrade binds each workspace to the execution root named by the
+configuration being migrated, and rewrites stored local ticket links and
+workflow metadata URLs to the workspace URL form. Version 44 databases may
+predate the merge check records above; those records stay absent after the
+upgrade and read as unavailable.
+
 A database of any other version is refused at open. The previous version is
 upgraded by `guildbotics server hub-data upgrade` or `guildbotics server hub-data restore` (`src/upgrade.rs`, the
 only code that reads previous shapes, replaced whenever the version rises).
@@ -113,7 +120,7 @@ check did not change stored records or raise the version.
 | `counters` | `(name)` | `u64` | ticket numbers `ticket:<repo>`, PR numbers `pull:<repo>`, `entry` sequence | allocation in the same txn as the insert |
 | `members` | `(fold(name))` | member, kind (`owner`, `agent`, `runner`), accounts on upstream hosts (provider, login; the token is a file), reviewers of the pull requests it opens | owner API, `init`, automatic runner | auth, kind checks, upstream |
 | `tokens` | `(token id)` | member, label, SHA-256 of the secret, last use | token API | auth (by id, constant-time hash compare) |
-| `workspaces` | `(workspace id)` | name | workspace API | repository creation, cards, closed |
+| `workspaces` | `(workspace id)` | name, execution root (optional) | workspace API, execution registration, upgrade | repository creation, cards, closed |
 | `repos` | `(repo id)` | path, workspace id, default branch, protected branches, required approvals, `auto_land`, `hold_while_failing` (boolean, defaults to false on creation and upgrade), `ci_network`, `responder` (explicit agent name or null for automatic), labels, upstream (provider, repository), revision | repo API | everything under a repository |
 | `tickets` | `(repo id, n)` | ticket incl. its workspace id, its one assignee with `assigned_at` (or none), labels, whether it is interactive, upstream issue (or none), lane/rank on the workspace's board, its parent (or none) and the tickets it is blocked by, as (repo id, n), state, revision | ticket API, merge | `read(tickets)`, candidates |
 | `ticket_moves` | `(repo id, n)` of a ticket moved to another repository | the `(repo id, n)` it moved to | ticket move | ticket lookups by number or URL, which follow each move (numbers are never reused, so the chain ends) |
