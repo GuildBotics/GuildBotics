@@ -1,9 +1,12 @@
 //! Per-pull landing conditions and notifications, independent of other pulls.
 use crate::app::App;
-use crate::ci::Check;
+use crate::ci::{Check, PullRequired};
 use crate::domain::{self, pulls};
 use crate::error::AppResult;
-use crate::model::{Landing, LandingReason, Member, MemberKind, Published, Pull, Repo};
+use crate::model::{
+    Landing, LandingReason, Member, MemberKind, MergeChecks, MergeChecksSource, Published, Pull,
+    Repo,
+};
 use crate::store::{self, Rd, Wtx};
 use serde::Serialize;
 
@@ -157,6 +160,17 @@ pub async fn blockers(
     base: &str,
     e: &Landing,
 ) -> AppResult<Vec<LandingReason>> {
+    Ok(conditions(app, repo, p, head, base, e).await?.0)
+}
+
+pub(crate) async fn conditions(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    head: &str,
+    base: &str,
+    e: &Landing,
+) -> AppResult<(Vec<LandingReason>, Vec<Check>)> {
     let hold = if repo.hold_while_failing {
         let (r2, p2) = (repo.clone(), p.clone());
         app.store.read(move |r| held(r, &r2, &p2)).await?
@@ -262,14 +276,15 @@ pub async fn blockers(
         }
     }
     let required = app.ci.pull_required(repo, head, base).await?;
-    let (check_state, jobs, names) = if head.is_empty() {
+    let (check_state, jobs, names, checks) = if head.is_empty() {
         (
             HeadChecks::Running,
             required.names.clone(),
             required.names.clone(),
+            Vec::new(),
         )
     } else {
-        pull_head_check_details(app, repo, p, head, base).await?
+        evaluate_head_checks(app, repo, p, head, &required).await?
     };
     if head.is_empty() || check_state != HeadChecks::Passed {
         let mut why = reason(
@@ -326,7 +341,7 @@ pub async fn blockers(
             out.push(why);
         }
     }
-    Ok(out)
+    Ok((out, checks))
 }
 
 fn blank(repo: &Repo, number: u64) -> Landing {
@@ -499,15 +514,75 @@ pub(crate) async fn pull_head_check_details(
     head: &str,
     base: &str,
 ) -> AppResult<(HeadChecks, Vec<String>, Vec<String>)> {
+    let required = app.ci.pull_required(repo, head, base).await?;
+    let (state, jobs, names, _) = evaluate_head_checks(app, repo, p, head, &required).await?;
+    Ok((state, jobs, names))
+}
+
+/// Captures the forwarded head's Branvil checks when importing its upstream merge.
+pub(crate) async fn imported_merge_checks(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    head: &str,
+    base: &str,
+) -> AppResult<Option<MergeChecks>> {
+    let Some(checks) = app.ci.head_checks_before_verification(repo, head).await? else {
+        return Ok(None);
+    };
+    let required = app.ci.pull_required(repo, head, base).await?;
+    let (state, _, _, checks) = evaluate_checks(app, repo, p, head, &required, checks).await?;
+    Ok(Some(check_snapshot(
+        MergeChecksSource::UpstreamMerge,
+        head.to_string(),
+        base.to_string(),
+        state,
+        checks,
+    )))
+}
+
+pub(crate) fn check_snapshot(
+    source: MergeChecksSource,
+    head_sha: String,
+    base_sha: String,
+    required_checks: HeadChecks,
+    checks: Vec<Check>,
+) -> MergeChecks {
+    MergeChecks {
+        source,
+        head_sha,
+        base_sha,
+        required_checks,
+        checks: checks.into_iter().map(Into::into).collect(),
+    }
+}
+
+async fn evaluate_head_checks(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    head: &str,
+    required: &PullRequired,
+) -> AppResult<(HeadChecks, Vec<String>, Vec<String>, Vec<Check>)> {
+    let checks = app.ci.head_checks(repo, head).await?;
+    evaluate_checks(app, repo, p, head, required, checks).await
+}
+
+async fn evaluate_checks(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    head: &str,
+    required: &PullRequired,
+    mut checks: crate::ci::Checks,
+) -> AppResult<(HeadChecks, Vec<String>, Vec<String>, Vec<Check>)> {
     let p = p.clone();
     let repair = app
         .store
         .read(move |r| crate::repair::is_pull(r, &p))
         .await?;
-    let required = app.ci.pull_required(repo, head, base).await?;
-    let mut checks = app.ci.head_checks(repo, head).await?;
     if !head.is_empty() {
-        app.ci.require(repo, head, &mut checks, &required).await?;
+        app.ci.require(repo, head, &mut checks, required).await?;
     }
     let names = required_names(&required.names, &checks.checks, repair);
     let mut waiting = repair && !checks.run_registered;
@@ -522,15 +597,17 @@ pub(crate) async fn pull_head_check_details(
         waiting = true;
     }
     let jobs = missing_head_checks(&names, &checks.checks, repair);
-    Ok((
-        if waiting {
-            HeadChecks::Running
-        } else {
-            head_checks(&names, &checks.checks)
-        },
-        jobs,
-        names,
-    ))
+    let state = if waiting {
+        HeadChecks::Running
+    } else {
+        head_checks(&names, &checks.checks)
+    };
+    let required_checks = checks
+        .checks
+        .into_iter()
+        .filter(|c| names.contains(&c.name))
+        .collect();
+    Ok((state, jobs, names, required_checks))
 }
 
 fn required_names(required: &[String], checks: &[Check], repair: bool) -> Vec<String> {

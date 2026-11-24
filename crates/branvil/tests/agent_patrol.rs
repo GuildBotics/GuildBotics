@@ -517,7 +517,7 @@ async fn optional_failure_does_not_hold_a_waiting_run() {
         .readiness(&f.url, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
-    assert_eq!(checks.report.required_checks, RequiredChecks::Passed);
+    assert_eq!(checks.report.required_checks, Some(RequiredChecks::Passed));
     assert!(
         checks
             .report

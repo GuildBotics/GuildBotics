@@ -33,6 +33,7 @@ pub struct FakePull {
     pub body: String,
     pub open: bool,
     pub merge_sha: Option<String>,
+    pub merged_head_sha: Option<String>,
     /// The login that created it.
     pub author: String,
 }
@@ -213,7 +214,7 @@ fn pull_json(p: &FakePull, owner_repo: &str) -> Value {
         "merge_commit_sha": p.merge_sha,
         "title": p.title,
         "body": p.body,
-        "head": {"ref": p.head},
+        "head": {"ref": p.head, "sha": p.merged_head_sha},
         "base": {"ref": p.base},
         "user": {"login": p.author},
     })
@@ -407,6 +408,7 @@ async fn pulls_create(
         body: body["body"].as_str().unwrap_or_default().into(),
         open: true,
         merge_sha: None,
+        merged_head_sha: None,
         author: who,
     };
     let v = pull_json(&p, &repo);
@@ -955,7 +957,7 @@ impl FakeGitHub {
         parent
     }
 
-    fn mark_merged(&self, repo: &str, number: u64, sha: &str) {
+    pub fn mark_merged(&self, repo: &str, number: u64, sha: &str) {
         let mut st = self.state.lock().unwrap();
         let q = st
             .pulls
@@ -964,6 +966,7 @@ impl FakeGitHub {
             .unwrap();
         q.open = false;
         q.merge_sha = Some(sha.to_string());
+        q.merged_head_sha = self.tip(repo, &q.head);
     }
 
     /// Closes or reopens pull request `number` of `octo/demo`.

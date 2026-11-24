@@ -438,7 +438,7 @@ async fn publish_op(
     auto: bool,
 ) -> AppResult<(Repo, Pull)> {
     let _guard = app.upstream.pull_lock(repo_id, number).await;
-    let (repo, setting, p, author, head) = {
+    let (repo, setting, p, author, checks) = {
         let _guard = app.lock_repo(repo_id).await;
         let id = repo_id.to_string();
         let (repo, p, author) = app
@@ -471,8 +471,16 @@ async fn publish_op(
         let host = app.upstream.hosts.get(&setting.provider)?;
         super::require_account(&author, host)
             .map_err(|why| AppError::conflict_code("no_account", why))?;
-        let (head, _) = check_landable(app, &repo, &p, &input, auto).await?;
-        (repo, setting, p, author, head)
+        let checks = check_landable(
+            app,
+            &repo,
+            &p,
+            &input,
+            auto,
+            crate::model::MergeChecksSource::Publication,
+        )
+        .await?;
+        (repo, setting, p, author, checks)
     };
     let host = app.upstream.hosts.get(&setting.provider)?;
     // A record of another place (the upstream changed since) is replaced.
@@ -503,6 +511,7 @@ async fn publish_op(
         url: None,
         state: "none".into(),
         pushed: None,
+        pushed_checks: None,
         sent_title: String::new(),
         sent_body: String::new(),
         sent_state: "open".into(),
@@ -530,7 +539,9 @@ async fn publish_op(
         host,
         setting: &setting,
     };
-    let refused = if theirs.as_deref() == Some(head.as_str()) {
+    let head = checks.head_sha.clone();
+    let already_there = theirs.as_deref() == Some(head.as_str());
+    let refused = if already_there {
         // Already there (an earlier publish pushed it, then stopped).
         None
     } else if theirs.is_none() || theirs == x.pushed || replace {
@@ -551,7 +562,17 @@ async fn publish_op(
         ))
     };
     if refused.is_none() {
-        x.record_push(head, app.upstream.config.checks_registration_secs);
+        // An opening retry can recover the same push after the base has moved.
+        let previous = if already_there && x.pushed.as_ref() == Some(&head) {
+            x.pushed_checks.take()
+        } else {
+            None
+        };
+        x.record_push(
+            head,
+            previous.unwrap_or(crate::model::PushedChecks::Publication { snapshot: checks }),
+            app.upstream.config.checks_registration_secs,
+        );
         if x.number.is_none() {
             open_on_host(at, writer, super::login_of(&author, host), &p, &mut x).await;
         }

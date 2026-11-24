@@ -369,9 +369,51 @@ pub struct Pull {
     pub merged_head: Option<String>,
     /// The base tip the merge moved from (so the merged diff stays available).
     pub merged_base: Option<String>,
+    /// The Branvil check evidence saved by the merge operation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_checks: Option<MergeChecks>,
     /// Set once the pull request was published to the upstream host.
     pub upstream: Option<Published>,
     pub revision: u64,
+}
+
+/// A snapshot of the required checks for one head and base pair.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MergeChecks {
+    pub source: MergeChecksSource,
+    pub required_checks: crate::agent::port::RequiredChecks,
+    pub head_sha: String,
+    pub base_sha: String,
+    pub checks: Vec<MergeCheck>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeChecksSource {
+    Merge,
+    Publication,
+    UpstreamMerge,
+}
+
+/// Branvil's evidence of how the currently pushed head reached the host.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum PushedChecks {
+    Publication { snapshot: MergeChecks },
+    Forwarded { base_sha: String },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MergeCheck {
+    pub name: String,
+    pub status: String,
+    pub conclusion: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_skip: Option<crate::ci::queue::PathSkip>,
 }
 
 /// The last checked pair and per-head landing notices.
@@ -427,6 +469,9 @@ pub struct Published {
     pub state: String,
     /// The commit Branvil last pushed to the host's branch.
     pub pushed: Option<String>,
+    /// The publication gate or the base used when sending a revised head.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pushed_checks: Option<PushedChecks>,
     pub sent_title: String,
     pub sent_body: String,
     /// `open` or `closed`, as last sent or read.
@@ -483,13 +528,14 @@ impl Published {
 
     /// Records that the host's branch is at `head`; the checks of another
     /// head are not its own.
-    pub fn record_push(&mut self, head: String, registration_secs: u64) {
+    pub fn record_push(&mut self, head: String, checks: PushedChecks, registration_secs: u64) {
         if self.pushed.as_ref() != Some(&head) {
             self.checks.clear();
             self.checks_settled = false;
             self.await_checks(registration_secs);
         }
         self.pushed = Some(head);
+        self.pushed_checks = Some(checks);
     }
 
     /// Records the host's checks of `pushed` and whether the runs that have
@@ -621,7 +667,11 @@ pub struct JournalEntry {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JournalOp {
-    Merge { number: u64 },
+    Merge {
+        number: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        checks: Option<MergeChecks>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

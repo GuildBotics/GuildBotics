@@ -204,7 +204,7 @@ pub async fn patrol(
                     return None;
                 }
             };
-            if readiness.report.required_checks == RequiredChecks::Running {
+            if readiness.report.required_checks == Some(RequiredChecks::Running) {
                 return None;
             }
         }
