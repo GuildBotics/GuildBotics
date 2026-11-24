@@ -308,7 +308,7 @@ describe("settings", () => {
     {
       lang: "ja",
       upstream: true,
-      help: "修復チケットにつながっていない PR は、main の確認が通るまで GitHub に出しません。すでに GitHub に出ている PR は、GitHub でのマージを Branvil は止められません。その PR は保留中と表示します。 確認が失敗している集約ブランチへのマージも、その修復 PR に限ります。",
+      help: "修復チケットにつながっていない PR は、main の確認が通るまで GitHub に出しません。すでに GitHub に出ている PR は、GitHub でのマージを Branvil は止められません。その PR は保留中と表示します。確認が失敗している集約ブランチへのマージも、その修復 PR に限ります。",
     },
   ] as const)(
     "explains hold behavior ($lang, upstream=$upstream)",

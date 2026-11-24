@@ -137,60 +137,52 @@ async fn observe(app: &App, repo: &Repo, branch: &str, sha: &str, main: &str) ->
     if state == HeadChecks::Running {
         return Ok(());
     }
-    let (id, branch, sha, main) = (
-        repo.id.clone(),
-        branch.to_owned(),
-        sha.to_owned(),
-        main.to_owned(),
-    );
-    let closed = app
-        .store
-        .write(move |w| {
-            let prior = verify::get_for(w, &id, Some(&branch))?;
-            let state = if state == HeadChecks::Failed {
-                "failed"
-            } else {
-                "passed"
-            };
-            if prior.as_ref().is_some_and(|v| {
-                v.sha == sha
-                    && v.base.as_deref() == Some(&main)
-                    && v.state == state
-                    && v.failed_jobs == failed_jobs
-            }) {
-                return Ok(vec![]);
-            }
-            let now = crate::util::now();
-            let mut record = Verification {
-                sha: sha.clone(),
-                base: Some(main),
-                state: state.into(),
-                started_at: now.clone(),
-                finished_at: Some(now.clone()),
-                failed_jobs,
-                failing_since: prior.as_ref().and_then(|v| v.failing_since.clone()),
-                last_verified: prior.and_then(|v| v.last_verified),
-            };
-            let closed = if state == "failed" {
-                record.failing_since.get_or_insert_with(|| sha.clone());
-                repair::failed_for(w, &id, Some(&branch), &sha, &record.failed_jobs)?;
-                vec![]
-            } else {
-                record.failing_since = None;
-                record.last_verified = Some(Verified {
+    let (id, branch, sha) = (repo.id.clone(), branch.to_owned(), sha.to_owned());
+    let closed =
+        app.store
+            .write(move |w| {
+                let prior = verify::get_for(w, &id, Some(&branch))?;
+                let state = if state == HeadChecks::Failed {
+                    "failed"
+                } else {
+                    "passed"
+                };
+                if prior.as_ref().is_some_and(|v| {
+                    v.sha == sha && v.state == state && v.failed_jobs == failed_jobs
+                }) {
+                    return Ok(vec![]);
+                }
+                let now = crate::util::now();
+                let mut record = Verification {
                     sha: sha.clone(),
-                    at: now,
-                });
-                repair::passed_for(w, &id, Some(&branch), &branch, &sha)?
-            };
-            w.put(
-                store::CI_VERIFICATIONS,
-                &verify::key(&id, Some(&branch)),
-                &record,
-            )?;
-            Ok(closed)
-        })
-        .await?;
+                    base: None,
+                    state: state.into(),
+                    started_at: now.clone(),
+                    finished_at: Some(now.clone()),
+                    failed_jobs,
+                    failing_since: prior.as_ref().and_then(|v| v.failing_since.clone()),
+                    last_verified: prior.and_then(|v| v.last_verified),
+                };
+                let closed = if state == "failed" {
+                    record.failing_since.get_or_insert_with(|| sha.clone());
+                    repair::failed_for(w, &id, Some(&branch), &sha, &record.failed_jobs)?;
+                    vec![]
+                } else {
+                    record.failing_since = None;
+                    record.last_verified = Some(Verified {
+                        sha: sha.clone(),
+                        at: now,
+                    });
+                    repair::passed_for(w, &id, Some(&branch), &branch, &sha)?
+                };
+                w.put(
+                    store::CI_VERIFICATIONS,
+                    &verify::key(&id, Some(&branch)),
+                    &record,
+                )?;
+                Ok(closed)
+            })
+            .await?;
     verify::publish_closed(&app.events, repo, closed);
     Ok(())
 }

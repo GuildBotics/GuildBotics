@@ -247,7 +247,7 @@ export const ja: Record<MessageKey, string> = {
   "settings.holdWhileFailingHelp":
     "確認が失敗している間は、その既定ブランチまたは集約ブランチへの手動・自動マージを修復 PR に限ります。",
   "settings.holdWhileFailingHelpUpstream":
-    "修復チケットにつながっていない PR は、main の確認が通るまで {host} に出しません。すでに {host} に出ている PR は、{host} でのマージを Branvil は止められません。その PR は保留中と表示します。 確認が失敗している集約ブランチへのマージも、その修復 PR に限ります。",
+    "修復チケットにつながっていない PR は、main の確認が通るまで {host} に出しません。すでに {host} に出ている PR は、{host} でのマージを Branvil は止められません。その PR は保留中と表示します。確認が失敗している集約ブランチへのマージも、その修復 PR に限ります。",
   "landing.blocker.held": "保留中（main の失敗）",
   "landing.held":
     "保留中：main の確認が失敗しています（修復 #{number}、担当 {name}）。main の確認が通ると、保留が解けます。",

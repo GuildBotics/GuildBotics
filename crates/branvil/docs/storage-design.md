@@ -69,7 +69,9 @@ requested them. Repair tickets retain their undelivered creation notice.
 Runs also hold the input digest of each job with `paths`, and attempts the one
 of their job when claimed. `ci_verifications` uses the repository id for default
 branch verification and `(repo id, branch)` for the last terminal observation of
-a collection branch's required checks. A record stores
+a collection branch's required checks. New collection records leave `base` unset.
+The current target tip still determines the collecting PR's required checks.
+A record stores
 `sha`, `base`, `state` (`running`, `passed`, `failed`), `started_at`, `finished_at`,
 `failed_jobs` (name, last attempt id or null, details), `failing_since`, and
 `last_verified` (SHA and time). Attempts store optional `verified_sha`; job

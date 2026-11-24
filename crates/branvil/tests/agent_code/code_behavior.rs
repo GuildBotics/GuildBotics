@@ -1187,7 +1187,24 @@ async fn collecting_branch_failure_runs_repair_and_holds_only_its_children() {
             .base_failure
             .is_none()
     );
-    owner
+    git.push(
+        &remote,
+        &main_child,
+        "watch-main",
+        "owner",
+        owner_token.trim(),
+    );
+    let watch = owner
+        .pulls_create(
+            REPO,
+            input(json!({
+                "head": "watch-main", "base": "main", "title": "Watch main advance",
+            })),
+        )
+        .await
+        .unwrap()
+        .pull;
+    let advanced = owner
         .pulls_merge(
             REPO,
             unrelated.number,
@@ -1196,7 +1213,80 @@ async fn collecting_branch_failure_runs_repair_and_holds_only_its_children() {
             })),
         )
         .await
+        .unwrap()
+        .merge_sha
         .unwrap();
+
+    let wait_for_landing = |head: String| {
+        let advanced = &advanced;
+        async move {
+            tokio::time::timeout(std::time::Duration::from_secs(15), async {
+                loop {
+                    let view = owner.pulls_get(REPO, watch.number).await.unwrap();
+                    if view.landing.is_some_and(|landing| {
+                        landing.entry.head_sha == head && landing.entry.base_sha == *advanced
+                    }) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                }
+            })
+            .await
+            .expect("landing should refresh the watch pull");
+        }
+    };
+    let mut watch_head = main_child;
+    wait_for_landing(watch_head.clone()).await;
+    // Autoland can refresh landing twice in a sweep even with auto-land off.
+    // Two further refreshes ensure a later sweep saw the new main tip.
+    for marker in ["first", "second"] {
+        watch_head = git.commit(&watch_head, "watch.txt", marker);
+        git.push(
+            &remote,
+            &watch_head,
+            "watch-main",
+            "owner",
+            owner_token.trim(),
+        );
+        wait_for_landing(watch_head.clone()).await;
+    }
+    let comments = t
+        .read(Resource::TicketComments, &repair, None, "")
+        .await
+        .unwrap();
+    assert!(
+        comments.items().is_empty(),
+        "moving main did not change the collection failure: {:?}",
+        comments.items()
+    );
+
+    let attempt = report["base_failure"]["failed_jobs"][0]["attempt_id"]
+        .as_str()
+        .unwrap();
+    let retry = owner
+        .job_retry(REPO, attempt, Default::default())
+        .await
+        .unwrap();
+    assert_ne!(retry.id, attempt);
+    finish(base, runner, &broken, "failure").await;
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            let comments = t
+                .read(Resource::TicketComments, &repair, None, "")
+                .await
+                .unwrap();
+            if let Some(comment) = comments.items().first() {
+                assert_eq!(comments.items().len(), 1, "{:?}", comments.items());
+                let body = comment["body"].as_str().unwrap();
+                assert!(body.contains("Still failing at this commit"), "{body}");
+                assert!(body.contains(&retry.id), "{body}");
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+    })
+    .await
+    .expect("a new failed attempt on the same commit should be reported");
 
     let fix = format!("ticket/{repair_key}");
     let fixed = git.commit(&broken, "src/broken.txt", "fixed");
