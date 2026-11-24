@@ -500,6 +500,47 @@ def test_ticket_prompt_requires_current_pr_readiness_in_both_languages():
     for language in ("en", "ja"):
         body = _prompt_body("handle_ticket", language)
         assert "repository/pr_checks" in body, language
+
+
+@pytest.mark.parametrize(
+    ("language", "heading", "conditions"),
+    [
+        (
+            "en",
+            "Preparing a collecting draft PR",
+            ("agreed", "write access", "Reuse an open draft", "owner"),
+        ),
+        (
+            "ja",
+            "集約用 Draft PR の準備",
+            ("合意", "書き込み権限", "Draft PR があれば再利用", "オーナー"),
+        ),
+    ],
+)
+def test_ticket_workflow_points_to_collecting_draft_setup(
+    language, heading, conditions
+):
+    body = _prompt_body("handle_ticket", language)
+    preparation = body.split("3. ", 1)[1].split("\n4. ", 1)[0]
+    assert heading in preparation
+
+    section = (
+        capability_reference_text()
+        .split(f"#### {heading}\n", 1)[1]
+        .split("\n#### ", 1)[0]
+    )
+    for phrase in (
+        *conditions,
+        "git switch -c ticket/<parent-key> origin/<default-branch>",
+        "member git push",
+        "--head ticket/<parent-key>",
+        "--base <default-branch>",
+        "--draft true",
+        "member ticket comment",
+        "member pr create",
+        "git prepare --issue-url",
+    ):
+        assert phrase in section
         assert (
             "必須チェック" in body
             if language == "ja"
