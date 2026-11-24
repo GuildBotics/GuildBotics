@@ -85,6 +85,7 @@ commands = ["./scripts/test.sh", "make lint"]   # 1-64 commands, each run by /bi
 paths = ["src/**", "tests/*.rs", "Cargo.lock"]  # optional; empty/omitted runs every change
 verified_sha = false             # optional; declares GB_CI_VERIFIED_SHA as an input
 required = true                   # optional; PRs into this branch must pass it
+post_merge = false                # optional, not with required; the repository setting still decides post-merge jobs
 timeout_secs = 600                # optional, 1-86400; default the runner's time limit
 tmpfs_mib = 2048                   # optional, 1-4096; /tmp uses a 4 GiB disk by default
 # ram_workspace = { paths = ["out/cache"], max_mib = 4608 }  # optional, see below
