@@ -855,6 +855,10 @@ async fn sync_pull(
                         _ => false,
                     };
                     if landed {
+                        // A direct update on the host can merge a revision Branvil never sent.
+                        if hp.head_sha.is_none() || hp.head_sha != x.pushed {
+                            x.pushed_checks = None;
+                        }
                         // Under the lock, so a backup has the merge together
                         // with the ref that keeps its head.
                         let _guard = app.lock_repo(&repo.id).await;
@@ -976,22 +980,37 @@ async fn send_changes(
 ) {
     let Place { host, setting, .. } = at;
     if let Some(w) = writer {
-        let head = match pulls::tips(at.app, at.repo).await {
-            Ok(t) => t.get(&p.head).cloned(),
+        let tips = match pulls::tips(at.app, at.repo).await {
+            Ok(tips) => tips,
             Err(e) => {
                 x.error = Some(e.message);
                 return;
             }
         };
-        if let Some(head) = head
+        if let Some(head) = tips.get(&p.head)
             && x.stopped.is_none()
             && x.pushed.as_deref() != Some(head.as_str())
         {
+            let base = tips.get(&p.base).map(String::as_str).unwrap_or_default();
+            let checks =
+                match crate::landing::forwarding_checks(at.app, at.repo, p, head, base).await {
+                    Ok(checks) => Some(checks),
+                    Err(e) => {
+                        tracing::warn!(
+                            "upstream: {} !{} forwarding checks: {e}",
+                            at.repo.path,
+                            p.number
+                        );
+                        None
+                    }
+                };
             let lease = x.pushed.clone().unwrap_or_default();
-            match push_branch(at, w, &p.head, &head, &lease).await {
-                Pushed::Done => {
-                    x.record_push(head, at.app.upstream.config.checks_registration_secs)
-                }
+            match push_branch(at, w, &p.head, head, &lease).await {
+                Pushed::Done => x.record_push(
+                    head.clone(),
+                    checks,
+                    at.app.upstream.config.checks_registration_secs,
+                ),
                 Pushed::Refused(why) => x.stopped = Some(why),
                 Pushed::Failed(why) => x.error = Some(why),
             }

@@ -826,7 +826,7 @@ pub fn as_schema_43(db: &Path) {
     edit_records(db, "pulls", |v| {
         v.as_object_mut().unwrap().remove("merge_checks");
         if let Some(upstream) = v["upstream"].as_object_mut() {
-            upstream.remove("publication_checks");
+            upstream.remove("pushed_checks");
         }
     });
 }

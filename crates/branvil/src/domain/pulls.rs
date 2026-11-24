@@ -15,8 +15,8 @@ use crate::domain::{
 use crate::error::{AppError, AppResult};
 use crate::git::{CommitSummary, FileChange, ZERO_SHA};
 use crate::model::{
-    self, InlineComment, JournalEntry, JournalOp, MergeCheck, MergeChecks, Published, Pull, Repo,
-    Review, Target, Thread, TicketLink,
+    self, InlineComment, JournalEntry, JournalOp, MergeChecks, MergeChecksSource, Published, Pull,
+    Repo, Review, Target, Thread, TicketLink,
 };
 use crate::refs;
 use crate::store::{self, Key, Rd, Wtx};
@@ -1909,16 +1909,8 @@ pub struct ChecksView {
     pub required_names: Vec<String>,
     pub checks_expected: bool,
     pub base_checks: usize,
-    pub merge_checks: Option<MergeChecksView>,
+    pub merge_checks: Option<MergeChecks>,
     pub post_merge_checks: Option<PostMergeChecks>,
-}
-
-#[derive(Serialize, Debug, Clone)]
-pub struct MergeChecksView {
-    /// "merge" for a local decision or "publication" for the Branvil gate before an upstream merge.
-    pub source: &'static str,
-    #[serde(flatten)]
-    pub snapshot: MergeChecks,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -2033,21 +2025,14 @@ pub async fn checks(
         post_merge_checks: None,
     };
     if p.merged {
-        view.merge_checks = p
-            .merge_checks
-            .clone()
-            .map(|snapshot| MergeChecksView {
-                source: "merge",
-                snapshot,
-            })
-            .or_else(|| {
-                let published = p.upstream.as_ref().filter(|x| x.state == "merged")?;
-                let snapshot = published.publication_checks.as_ref()?;
-                (snapshot.head_sha == view.head_sha).then(|| MergeChecksView {
-                    source: "publication",
-                    snapshot: snapshot.clone(),
-                })
-            });
+        view.merge_checks = p.merge_checks.clone().or_else(|| {
+            let published = p.upstream.as_ref().filter(|x| x.state == "merged")?;
+            published
+                .pushed_checks
+                .as_ref()
+                .filter(|snapshot| snapshot.head_sha == view.head_sha)
+                .cloned()
+        });
         view.post_merge_checks = post_merge_checks(app, &repo, &p).await?;
     } else {
         let head = display_checks(app, &repo, &p, &view.head_sha, &judged_base).await?;
@@ -2136,6 +2121,7 @@ pub async fn check_landable(
     p: &Pull,
     input: &MergeInput,
     auto: bool,
+    source: MergeChecksSource,
 ) -> AppResult<MergeChecks> {
     let number = p.number;
     if auto && !repo.auto_land {
@@ -2182,20 +2168,13 @@ pub async fn check_landable(
                 .join("; "),
         ));
     }
-    Ok(MergeChecks {
-        head_sha: head,
-        base_sha: base,
-        checks: checks
-            .into_iter()
-            .map(|c| MergeCheck {
-                name: c.name,
-                conclusion: c.conclusion,
-                attempt_id: c.attempt_id,
-                attempt: c.attempt,
-                path_skip: c.path_skip,
-            })
-            .collect(),
-    })
+    Ok(crate::landing::check_snapshot(
+        source,
+        head,
+        base,
+        crate::landing::HeadChecks::Passed,
+        checks,
+    ))
 }
 
 pub async fn merge(
@@ -2254,7 +2233,7 @@ async fn merge_locked(
             app.upstream.host_name(&up.provider)
         )));
     }
-    let checks = check_landable(app, &repo, &p, &input, auto).await?;
+    let checks = check_landable(app, &repo, &p, &input, auto, MergeChecksSource::Merge).await?;
     let (head, base) = (&checks.head_sha, &checks.base_sha);
     let dir = app.git.repo_dir(&repo.path);
     let commit = app

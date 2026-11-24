@@ -315,10 +315,13 @@ export const en = {
   "ci.postMergeReason":
     "This job runs only after merging (repository setting), so it doesn't run on pull requests. It runs in the main verification after the merge. You can retry it to check it now.",
   "ci.mergeDecision": "Merge decision",
-  "ci.mergeDecisionNoRequired": "This merge had no required checks.",
+  "ci.mergeDecisionNoRequired": "Branvil recorded no required checks for this head.",
   "ci.mergeDecisionUnavailable": "No merge decision checks were recorded for this pull request.",
   "ci.mergeDecisionAtPublication":
     "Branvil’s required checks when it published this head to the upstream host.",
+  "ci.mergeDecisionAtForwarding":
+    "Branvil observed these checks before sending this revision upstream. The upstream host made the merge decision.",
+  "ci.mergeDecisionNoResults": "No required check results were available at that time.",
   "ci.postMergeConfirmation": "Post-merge verification",
   "ci.postMergePullReason":
     "The merge advanced the head of these pull requests, which check it against their base.",

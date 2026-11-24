@@ -50,6 +50,12 @@ function toneOf(c: Pick<Check, "status" | "conclusion">): Tone {
 /** A paths reuse ran on a commit whose files outside the job's `paths` differ, so it is labeled apart. */
 const reusedLabel = (r: ReusedFrom) => (r.basis === "paths" ? "ci.reusedPaths" : "ci.reused");
 
+const DECISION_ROLLUP = {
+  passed: "passing",
+  failed: "failing",
+  running: "pending",
+} as const;
+
 const ROLLUP_TONE: Record<CiRollup, Tone> = {
   passing: "success",
   failing: "danger",
@@ -201,7 +207,6 @@ export function ChecksCard({
     const judged: Check[] =
       decision?.checks.map((check) => ({
         ...check,
-        status: "completed",
         runner: null,
       })) ?? [];
     return (
@@ -212,8 +217,14 @@ export function ChecksCard({
           query={checks}
           data={decision ? { checks: judged, checks_expected: false } : undefined}
           sha={decision?.head_sha}
-          state={decision ? "passing" : undefined}
-          empty={t(decision ? "ci.mergeDecisionNoRequired" : "ci.mergeDecisionUnavailable")}
+          state={decision ? DECISION_ROLLUP[decision.required_checks] : undefined}
+          empty={t(
+            !decision
+              ? "ci.mergeDecisionUnavailable"
+              : decision.required_checks === "passed"
+                ? "ci.mergeDecisionNoRequired"
+                : "ci.mergeDecisionNoResults",
+          )}
           requiredChecks={judged.map((check) => check.name)}
           context={context}
           onOpen={onOpen}
@@ -221,6 +232,11 @@ export function ChecksCard({
           {decision?.source === "publication" && (
             <Text size="sm" c="dimmed" mb="xs">
               {t("ci.mergeDecisionAtPublication")}
+            </Text>
+          )}
+          {decision?.source === "forwarding" && (
+            <Text size="sm" c="dimmed" mb="xs">
+              {t("ci.mergeDecisionAtForwarding")}
             </Text>
           )}
           {pull.upstream?.state === "merged" && pull.upstream.url && (

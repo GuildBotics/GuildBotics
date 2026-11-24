@@ -480,10 +480,11 @@ export interface CheckSet {
 }
 
 export interface MergeChecks {
-  source: "merge" | "publication";
+  source: "merge" | "publication" | "forwarding";
+  required_checks: "passed" | "running" | "failed";
   head_sha: string;
   base_sha: string;
-  checks: Pick<Check, "name" | "conclusion" | "attempt_id" | "attempt" | "path_skip">[];
+  checks: Pick<Check, "name" | "status" | "conclusion" | "attempt_id" | "attempt" | "path_skip">[];
 }
 
 export interface PostMergeChecks extends CheckSet {

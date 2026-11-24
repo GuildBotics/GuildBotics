@@ -110,6 +110,7 @@ async fn a_merge_interrupted_after_the_ref_update_completes_at_startup() {
         checks["merge_checks"],
         json!({
             "source": "merge",
+            "required_checks": "passed",
             "head_sha": head,
             "base_sha": main,
             "checks": [],

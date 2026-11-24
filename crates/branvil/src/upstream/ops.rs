@@ -471,7 +471,15 @@ async fn publish_op(
         let host = app.upstream.hosts.get(&setting.provider)?;
         super::require_account(&author, host)
             .map_err(|why| AppError::conflict_code("no_account", why))?;
-        let checks = check_landable(app, &repo, &p, &input, auto).await?;
+        let checks = check_landable(
+            app,
+            &repo,
+            &p,
+            &input,
+            auto,
+            crate::model::MergeChecksSource::Publication,
+        )
+        .await?;
         (repo, setting, p, author, checks)
     };
     let host = app.upstream.hosts.get(&setting.provider)?;
@@ -503,7 +511,7 @@ async fn publish_op(
         url: None,
         state: "none".into(),
         pushed: None,
-        publication_checks: None,
+        pushed_checks: None,
         sent_title: String::new(),
         sent_body: String::new(),
         sent_state: "open".into(),
@@ -531,14 +539,15 @@ async fn publish_op(
         host,
         setting: &setting,
     };
-    let head = &checks.head_sha;
-    let refused = if theirs.as_deref() == Some(head.as_str()) {
+    let head = checks.head_sha.clone();
+    let already_there = theirs.as_deref() == Some(head.as_str());
+    let refused = if already_there {
         // Already there (an earlier publish pushed it, then stopped).
         None
     } else if theirs.is_none() || theirs == x.pushed || replace {
         // Nothing there, Branvil's own push, or the owner replaces it.
         let lease = theirs.clone().unwrap_or_default();
-        match push_branch(at, writer, &p.head, head, &lease).await {
+        match push_branch(at, writer, &p.head, &head, &lease).await {
             Pushed::Done => None,
             Pushed::Refused(why) => Some(why),
             Pushed::Failed(why) => return Err(AppError::unavailable(why)),
@@ -553,8 +562,17 @@ async fn publish_op(
         ))
     };
     if refused.is_none() {
-        x.record_push(head.clone(), app.upstream.config.checks_registration_secs);
-        x.publication_checks = Some(checks);
+        // An opening retry can recover the same push after the base has moved.
+        let previous = if already_there && x.pushed.as_ref() == Some(&head) {
+            x.pushed_checks.take()
+        } else {
+            None
+        };
+        x.record_push(
+            head,
+            previous.or(Some(checks)),
+            app.upstream.config.checks_registration_secs,
+        );
         if x.number.is_none() {
             open_on_host(at, writer, super::login_of(&author, host), &p, &mut x).await;
         }

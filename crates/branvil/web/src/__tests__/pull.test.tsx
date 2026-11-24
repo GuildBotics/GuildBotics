@@ -95,11 +95,13 @@ describe.each(["en", "ja"] as const)("merged check evidence (%s)", (language) =>
           behind_by: 3,
           merge_checks: {
             source: "merge",
+            required_checks: "passed",
             head_sha: HEAD,
             base_sha: BASE,
             checks: [
               {
                 name: "rust",
+                status: "completed",
                 conclusion: "skipped",
                 attempt: 1,
                 path_skip: { reason: "paths", paths: ["src/**"], bases: [] },
@@ -166,6 +168,32 @@ describe.each(["en", "ja"] as const)("merged check evidence (%s)", (language) =>
     const region = within(await screen.findByRole("region", { name: words["pull.checks"] }));
     expect(await region.findByText(format(words[key], { branch: "main" }))).toBeInTheDocument();
   });
+});
+
+it("shows the observed Branvil checks for an upstream revision that was still running", async () => {
+  const words = dictionaries.en;
+  fakeApi(
+    pullRoutes({
+      [`GET ${P}`]: json(200, pull({ state: "closed", merged: true })),
+      [`GET ${P}/checks`]: json(200, {
+        ...CHECKS,
+        checks: [],
+        merge_checks: {
+          source: "forwarding",
+          required_checks: "running",
+          head_sha: HEAD,
+          base_sha: BASE,
+          checks: [{ name: "unit", status: "in_progress", conclusion: null, attempt: 2 }],
+        },
+      }),
+    }),
+  );
+  renderApp("/acme/demo/-/pulls/3", "en");
+  const decision = within(await screen.findByRole("region", { name: words["ci.mergeDecision"] }));
+  expect(await decision.findByText(words["ci.mergeDecisionAtForwarding"])).toBeInTheDocument();
+  expect(decision.getByText(words["ci.status.in_progress"])).toBeInTheDocument();
+  expect(decision.getByText(words["ci.pending"])).toBeInTheDocument();
+  expect(decision.getByText("#2")).toBeInTheDocument();
 });
 
 it("shows unavailable evidence on merges that predate merge check recording", async () => {

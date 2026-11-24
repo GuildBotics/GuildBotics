@@ -3,7 +3,10 @@ use crate::app::App;
 use crate::ci::{Check, PullRequired};
 use crate::domain::{self, pulls};
 use crate::error::AppResult;
-use crate::model::{Landing, LandingReason, Member, MemberKind, Published, Pull, Repo};
+use crate::model::{
+    Landing, LandingReason, Member, MemberKind, MergeCheck, MergeChecks, MergeChecksSource,
+    Published, Pull, Repo,
+};
 use crate::store::{self, Rd, Wtx};
 use serde::Serialize;
 
@@ -304,11 +307,7 @@ pub(crate) async fn conditions(
             out.push(why);
         }
     }
-    let required_checks = checks
-        .into_iter()
-        .filter(|c| names.contains(&c.name))
-        .collect();
-    Ok((out, required_checks))
+    Ok((out, checks))
 }
 
 fn blank(repo: &Repo, number: u64) -> Landing {
@@ -486,6 +485,51 @@ pub(crate) async fn pull_head_check_details(
     Ok((state, jobs, names))
 }
 
+/// Records what Branvil saw before forwarding an already published pull's new head.
+pub(crate) async fn forwarding_checks(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    head: &str,
+    base: &str,
+) -> AppResult<MergeChecks> {
+    let required = app.ci.pull_required(repo, head, base).await?;
+    let (state, _, _, checks) = evaluate_head_checks(app, repo, p, head, &required).await?;
+    Ok(check_snapshot(
+        MergeChecksSource::Forwarding,
+        head.to_string(),
+        base.to_string(),
+        state,
+        checks,
+    ))
+}
+
+pub(crate) fn check_snapshot(
+    source: MergeChecksSource,
+    head_sha: String,
+    base_sha: String,
+    required_checks: HeadChecks,
+    checks: Vec<Check>,
+) -> MergeChecks {
+    MergeChecks {
+        source,
+        head_sha,
+        base_sha,
+        required_checks,
+        checks: checks
+            .into_iter()
+            .map(|c| MergeCheck {
+                name: c.name,
+                status: c.status,
+                conclusion: c.conclusion,
+                attempt_id: c.attempt_id,
+                attempt: c.attempt,
+                path_skip: c.path_skip,
+            })
+            .collect(),
+    }
+}
+
 async fn evaluate_head_checks(
     app: &App,
     repo: &Repo,
@@ -515,16 +559,17 @@ async fn evaluate_head_checks(
         waiting = true;
     }
     let jobs = missing_head_checks(&names, &checks.checks, repair);
-    Ok((
-        if waiting {
-            HeadChecks::Running
-        } else {
-            head_checks(&names, &checks.checks)
-        },
-        jobs,
-        names,
-        checks.checks,
-    ))
+    let state = if waiting {
+        HeadChecks::Running
+    } else {
+        head_checks(&names, &checks.checks)
+    };
+    let required_checks = checks
+        .checks
+        .into_iter()
+        .filter(|c| names.contains(&c.name))
+        .collect();
+    Ok((state, jobs, names, required_checks))
 }
 
 fn required_names(required: &[String], checks: &[Check], repair: bool) -> Vec<String> {

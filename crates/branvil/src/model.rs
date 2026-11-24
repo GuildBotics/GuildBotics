@@ -375,17 +375,28 @@ pub struct Pull {
     pub revision: u64,
 }
 
-/// The exact required attempts read by a successful landing decision.
+/// A snapshot of the required checks for one head and base pair.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct MergeChecks {
+    pub source: MergeChecksSource,
+    pub required_checks: crate::agent::port::RequiredChecks,
     pub head_sha: String,
     pub base_sha: String,
     pub checks: Vec<MergeCheck>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeChecksSource {
+    Merge,
+    Publication,
+    Forwarding,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct MergeCheck {
     pub name: String,
+    pub status: String,
     pub conclusion: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attempt_id: Option<String>,
@@ -448,9 +459,9 @@ pub struct Published {
     pub state: String,
     /// The commit Branvil last pushed to the host's branch.
     pub pushed: Option<String>,
-    /// The successful Branvil gate at publication, if it judged the pushed head.
+    /// Checks of the exact pair used to publish or forward the pushed head.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub publication_checks: Option<MergeChecks>,
+    pub pushed_checks: Option<MergeChecks>,
     pub sent_title: String,
     pub sent_body: String,
     /// `open` or `closed`, as last sent or read.
@@ -507,14 +518,19 @@ impl Published {
 
     /// Records that the host's branch is at `head`; the checks of another
     /// head are not its own.
-    pub fn record_push(&mut self, head: String, registration_secs: u64) {
+    pub fn record_push(
+        &mut self,
+        head: String,
+        checks: Option<MergeChecks>,
+        registration_secs: u64,
+    ) {
         if self.pushed.as_ref() != Some(&head) {
             self.checks.clear();
-            self.publication_checks = None;
             self.checks_settled = false;
             self.await_checks(registration_secs);
         }
         self.pushed = Some(head);
+        self.pushed_checks = checks;
     }
 
     /// Records the host's checks of `pushed` and whether the runs that have

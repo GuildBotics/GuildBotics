@@ -284,7 +284,8 @@ async fn jobs_run_in_microvms_without_network_or_host_files() {
     while started.elapsed() < Duration::from_secs(300) {
         peak_rss = peak_rss.max(jobs_rss("sandbox", &names).into_iter().max().unwrap_or(0));
         peak_runner = peak_runner.max(rss_of(&runner_cmd).into_iter().max().unwrap_or(0));
-        let v = s.ok(&format!("{base}/checks"), &w.aiko).await;
+        let mut report = s.ok(&format!("{base}/checks"), &w.aiko).await;
+        let v = report["post_merge_checks"].take();
         names = job_names(&v);
         // The log of a running job is readable while it runs.
         if let Some(c) = v["checks"]
@@ -335,7 +336,8 @@ async fn jobs_run_in_microvms_without_network_or_host_files() {
             .await;
         assert_eq!(st, 200, "{v}");
         while started.elapsed() < Duration::from_secs(420) {
-            let c = by(&s.ok(&format!("{base}/checks"), &w.aiko).await, "workspace");
+            let report = s.ok(&format!("{base}/checks"), &w.aiko).await;
+            let c = by(&report["post_merge_checks"], "workspace");
             if c["attempt"] == 2 && c["status"] == "completed" {
                 cached = c;
                 break;

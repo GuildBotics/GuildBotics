@@ -65,7 +65,9 @@ format includes per-pull landing conditions, each merged pull request's original
 reviewed head distinct from its merge commit, and per-head notification and
 automatic failure state. Schema 44 stores the required check attempts used for
 a local merge in its ref journal and then on the pull request. An upstream
-publication stores the Branvil decision on the published head. The 43 → 44
+publication stores the Branvil decision on the published head. Forwarding a
+new head records Branvil's observation before sending it to the upstream
+host. The 43 → 44
 upgrade preserves existing records without reconstructing past decisions. CI runs hold their commit's pipeline and tree;
 attempts hold reuse sources and cache keys. Runs retain the protected branches that
 requested them. Repair tickets retain their undelivered creation notice.

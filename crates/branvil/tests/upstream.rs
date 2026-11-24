@@ -525,6 +525,19 @@ async fn a_pull_request_is_published_as_its_author_and_follows_the_host_to_the_m
     assert_eq!(got["merged"], true, "{got}");
     assert_eq!(got["merge_sha"], merged.as_str());
     assert_eq!(got["upstream"]["state"], "merged");
+    let checks = s.ok(&format!("{pull}/checks"), &w.aiko).await;
+    assert_eq!(
+        checks["merge_checks"],
+        json!({
+            "source": "forwarding",
+            "required_checks": "passed",
+            "head_sha": fixed,
+            "base_sha": p["base_sha"],
+            "checks": [],
+        })
+    );
+    assert_eq!(checks["post_merge_checks"]["sha"], merged);
+    assert_eq!(checks["post_merge_checks"]["branch"], "main");
     // Its branch is deleted here, not on GitHub; it keeps the head it pushed.
     let (st, _) = s
         .get(
@@ -715,6 +728,7 @@ async fn a_first_publish_replaces_only_what_branvil_pushed_and_survives_a_lost_a
             body: String::new(),
             open: true,
             merge_sha: None,
+            merged_head_sha: None,
             author: "someone".into(),
         })
     });
@@ -1016,6 +1030,38 @@ async fn retained_publication_problems_apply_only_to_the_current_upstream() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn retrying_to_open_a_published_head_keeps_the_evidence_of_the_original_push() {
+    let (w, gh) = followed().await;
+    with_aiko_account(&w).await;
+    let head = w.push_change("feature", "f.txt", "one\n");
+    let p = w.open_pull("feature", json!([])).await;
+    let n = p["number"].as_u64().unwrap();
+    gh.set(|st| st.refuse_create = true);
+    let (st, v) = publish(&w, n).await;
+    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "{v}");
+    assert_eq!(gh.tip(GH, "feature").as_deref(), Some(head.as_str()));
+
+    // The owner retries opening the same published head against a new base.
+    let new_base = commit_on_github(&gh, "main", "other change");
+    refresh(&w).await;
+    assert_eq!(branvil_tip(&w, "main"), new_base);
+    let (st, v) = publish(&w, n).await;
+    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "{v}");
+
+    gh.set(|st| st.refuse_create = false);
+    refresh(&w).await;
+    gh.squash_merge(GH, gh.pulls(GH)[0].number);
+    refresh(&w).await;
+    let report = w
+        .server
+        .ok(&format!("{}/pulls/{n}/checks", w.repo_path()), &w.owner)
+        .await;
+    assert_eq!(report["merge_checks"]["head_sha"], head);
+    assert_eq!(report["merge_checks"]["source"], "publication");
+    assert_eq!(report["merge_checks"]["base_sha"], p["base_sha"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_pull_request_the_host_never_opened_is_left_alone_once_closed() {
     let (w, gh) = followed().await;
     with_aiko_account(&w).await;
@@ -1122,11 +1168,35 @@ async fn a_head_that_moved_past_what_the_host_merged_stays() {
         checks["merge_checks"],
         json!({
             "source": "publication",
+            "required_checks": "passed",
             "head_sha": p["head_sha"],
             "base_sha": p["base_sha"],
             "checks": [],
         })
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_head_merged_on_the_host_has_no_snapshot_from_another_head() {
+    let (w, gh) = followed().await;
+    with_aiko_account(&w).await;
+    let published = w.push_change("feature", "f.txt", "one\n");
+    let p = w.open_pull("feature", json!([])).await;
+    let n = p["number"].as_u64().unwrap();
+    let (st, v) = publish(&w, n).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["upstream"]["pushed"], published);
+
+    let direct = commit_on_github(&gh, "feature", "GitHub-only head");
+    assert_ne!(published, direct);
+    let merged = gh.squash_merge(GH, v["upstream"]["number"].as_u64().unwrap());
+    refresh(&w).await;
+    let path = format!("{}/pulls/{n}", w.repo_path());
+    let p = w.server.ok(&path, &w.owner).await;
+    assert_eq!(p["merged"], true);
+    let checks = w.server.ok(&format!("{path}/checks"), &w.owner).await;
+    assert!(checks["merge_checks"].is_null());
+    assert_eq!(checks["post_merge_checks"]["sha"], merged);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1234,6 +1304,44 @@ async fn a_pull_request_is_published_only_once_its_required_checks_succeed() {
     assert_eq!(st, StatusCode::OK, "{v}");
     assert!(gh.tip(GH, "feat").is_some());
     assert_eq!(gh.pulls(GH).len(), 1);
+
+    // The poller forwards later revisions while the local check is pending.
+    let fixed = w.push_change("feat", "f.txt", "two\n");
+    refresh(&w).await;
+    assert_eq!(gh.tip(GH, "feat").as_deref(), Some(fixed.as_str()));
+    let path = format!("{}/pulls/{n}/checks", w.repo_path());
+    let forwarded = w.server.ok(&path, &w.aiko).await;
+    let attempt = forwarded["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "test")
+        .unwrap();
+    assert_eq!(attempt["status"], "queued");
+
+    // Completion after forwarding does not change the recorded observation.
+    assert_eq!(runner.drain("success").await, 1);
+    let merged = gh.squash_merge(GH, v["upstream"]["number"].as_u64().unwrap());
+    refresh(&w).await;
+    let checks = w.server.ok(&path, &w.aiko).await;
+    assert_eq!(
+        checks["merge_checks"],
+        json!({
+            "source": "forwarding",
+            "required_checks": "running",
+            "head_sha": fixed,
+            "base_sha": p["base_sha"],
+            "checks": [{
+                "name": "test",
+                "status": "queued",
+                "conclusion": null,
+                "attempt_id": attempt["attempt_id"],
+                "attempt": attempt["attempt"],
+            }],
+        })
+    );
+    assert_eq!(checks["post_merge_checks"]["branch"], "main");
+    assert_eq!(checks["post_merge_checks"]["sha"], merged);
 }
 
 #[tokio::test(flavor = "multi_thread")]
