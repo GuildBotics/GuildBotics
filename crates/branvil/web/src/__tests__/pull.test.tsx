@@ -864,7 +864,7 @@ describe("pull request review", () => {
         `/acme/demo/-/commits/${HEAD}`,
       );
       const review = fake.calls("POST", `${P}/reviews`)[0];
-      expect(review?.body).toEqual({ verdict: "approve", body: "", commit: HEAD });
+      expect(review?.body).toEqual({ verdict: "approve", body: "", commit: HEAD, base: BASE });
       expect(review?.headers["X-GuildBotics-CSRF"]).toBe("csrf-123");
       // The pull request is reloaded and now shows the new head.
       await waitFor(() => expect(fake.calls("GET", P).length).toBeGreaterThanOrEqual(2));

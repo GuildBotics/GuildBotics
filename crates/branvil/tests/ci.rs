@@ -2501,6 +2501,36 @@ async fn an_approval_does_not_cover_a_removal_the_base_creates_later() {
         "{v}"
     );
 
+    // A base that is not a commit is refused.
+    for base in ["not-a-sha", "0123456789012345678901234567890123456789"] {
+        let (st, v) = w
+            .server
+            .post(
+                &format!("{at}/reviews"),
+                &w.owner,
+                json!({"verdict": "approve", "commit": head, "base": base}),
+            )
+            .await;
+        assert_eq!(st, 400, "{v}");
+    }
+    // An approval sent from a screen that showed the old base, or that says
+    // nothing about its base, does not accept it.
+    for base in [opened["base_sha"].clone(), Value::Null, json!("")] {
+        let (st, v) = w
+            .server
+            .post(
+                &format!("{at}/reviews"),
+                &w.owner,
+                json!({"verdict": "approve", "commit": head, "base": base}),
+            )
+            .await;
+        assert_eq!(st, 201, "{v}");
+        assert_eq!(
+            blocker(&w, n, "required_removal").await.unwrap()["jobs"],
+            json!(["lint"]),
+            "{base}"
+        );
+    }
     // The owner sees it and approves the same head again.
     assert_eq!(
         crate::pulls::review(&w, &at, &w.owner, "approve", &head).await,

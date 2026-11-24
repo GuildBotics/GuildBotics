@@ -983,13 +983,15 @@ async fn review_states(w: &World, pull: &str) -> (Vec<Value>, u64) {
     (states, p["approvals"].as_u64().unwrap())
 }
 
+/// Submits a review on the base the pull request shows now.
 pub(crate) async fn review(w: &World, pull: &str, token: &str, verdict: &str, commit: &str) -> u16 {
+    let base = w.server.ok(pull, token).await["base_sha"].clone();
     let (st, v) = w
         .server
         .post(
             &format!("{pull}/reviews"),
             token,
-            json!({"verdict": verdict, "commit": commit}),
+            json!({"verdict": verdict, "commit": commit, "base": base}),
         )
         .await;
     assert!(st == 201 || st == 400, "{verdict}: {st} {v}");

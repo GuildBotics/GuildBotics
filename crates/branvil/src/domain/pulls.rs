@@ -1400,6 +1400,9 @@ pub struct NewReview {
     #[serde(default)]
     pub body: String,
     pub commit: String,
+    /// The base the reviewer saw: an owner's approval accepts the required
+    /// checks the head removes against that base, and none without it.
+    pub base: Option<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1434,16 +1437,34 @@ pub async fn review(
     // The head is read from Git just before the write: a review is recorded
     // only on the head the caller read; a later push does not change it.
     require_head(app, &repo, &p, &input.commit).await?;
-    let accepted_removals =
-        if input.verdict == "approve" && caller.member.kind == model::MemberKind::Owner {
-            let base = tips(app, &repo).await?.remove(&p.base).unwrap_or_default();
+    let owner_approves =
+        input.verdict == "approve" && caller.member.kind == model::MemberKind::Owner;
+    // A gone base shows as "": nothing to accept then.
+    let accepted_removals = match input.base.as_deref().filter(|base| !base.is_empty()) {
+        Some(base) if owner_approves => {
+            let dir = app.git.repo_dir(&repo.path);
+            let known = util::is_sha(base)
+                && app
+                    .git
+                    .run(
+                        Some(&dir),
+                        &["cat-file", "-e", &format!("{base}^{{commit}}")],
+                    )
+                    .await?
+                    .ok();
+            if !known {
+                return Err(AppError::invalid(format!(
+                    "{base} is not a commit of {}.",
+                    repo.path
+                )));
+            }
             app.ci
-                .pull_required(&repo, &input.commit, &base)
+                .pull_required(&repo, &input.commit, base)
                 .await?
                 .removed
-        } else {
-            Vec::new()
-        };
+        }
+        _ => Vec::new(),
+    };
     let author = caller.name().to_string();
     let url = app.pull_url(&repo.path, number);
     let r2 = repo.clone();

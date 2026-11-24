@@ -800,11 +800,15 @@ or last departure, or `null` before it first joins (see "Landing").
   draft change an agent may make; `draft: false` (ready for review) is
   the owner's. The response is the pull request.
 - `POST .../pulls/{number}/comments` `{"body","meta"?}` → `201` comment; listing them is in process only.
-- `POST .../pulls/{number}/reviews` `{"verdict": "approve"|"request_changes"|"comment", "body", "commit"}`
+- `POST .../pulls/{number}/reviews` `{"verdict": "approve"|"request_changes"|"comment", "body", "commit", "base"?}`
   → `201 {"id","verdict","commit","submitted_at","url"}`; `409 head_moved` when
   `commit` is not the current head. `body` may be empty. The author's own review can
   only be a `comment` (`400 invalid` otherwise). An `approve` on the current head
   counts toward the approvals a merge and a publish need (`review_states`).
+  `base` is the base commit the reviewer saw. An owner's approval accepts the
+  required checks the head removes against that base (`docs/ci.md`, "Required
+  checks"), and none without it or with `""` (a base branch that is gone);
+  `400 invalid` when it is not a commit.
   A closed pull request takes no reviews or inline comments
   (`409 conflict`). A review removes its author from `reviewers` (the request is
   answered). `GET` → items of review.
