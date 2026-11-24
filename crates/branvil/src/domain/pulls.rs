@@ -39,6 +39,8 @@ pub struct PullView {
     /// Present on lists requested with sort=readiness; compared lexicographically.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merge_order: Option<[u64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post_merge_status: Option<PostMergeStatus>,
     pub url: String,
     pub repository: String,
     pub number: u64,
@@ -283,6 +285,7 @@ pub async fn pull_view(app: &App, repo: &Repo, p: &Pull, tips: &Tips) -> AppResu
     Ok(PullView {
         repair,
         merge_order: None,
+        post_merge_status: None,
         url,
         unanswered,
         repository: repo.path.clone(),
@@ -580,6 +583,13 @@ pub struct PullQuery {
     pub state: Option<String>,
     pub head: Option<String>,
     pub base: Option<String>,
+    pub post_merge: Option<PostMergeFilter>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum PostMergeFilter {
+    Active,
 }
 
 #[derive(Deserialize, Debug, Default)]
@@ -602,6 +612,8 @@ pub async fn list(
     if !["open", "closed", "all"].contains(&state.as_str()) {
         return Err(AppError::invalid("state must be open, closed, or all."));
     }
+    let include_verification =
+        state == "open" && matches!(q.post_merge, Some(PostMergeFilter::Active));
     let repo = domain::repos::visible(app, caller, repo_path).await?;
     let r2 = repo.clone();
     let pulls: Vec<Pull> = app
@@ -611,7 +623,7 @@ pub async fn list(
             Ok(all
                 .into_iter()
                 .filter(|p| {
-                    (state == "all" || p.state == state)
+                    (state == "all" || p.state == state || include_verification && p.merged)
                         && q.head.as_ref().is_none_or(|h| &p.head == h)
                         && q.base.as_ref().is_none_or(|b| &p.base == b)
                 })
@@ -621,12 +633,31 @@ pub async fn list(
     let tips = tips(app, &repo).await?;
     let mut positioned = Vec::new();
     for p in pulls {
+        let status = if include_verification && p.merged {
+            // A previous tip can have cancelled checks because the receiving
+            // branch advanced. The open view follows its current verification.
+            if !merge_is_current(&p, &tips) {
+                continue;
+            }
+            let Some((sha, _)) = post_merge_target(app, &repo, &p).await? else {
+                continue;
+            };
+            match PostMergeStatus::of(&app.ci.head_checks(&repo, &sha).await?.checks) {
+                status @ Some(PostMergeStatus::Pending | PostMergeStatus::Failing) => status,
+                _ => continue,
+            }
+        } else {
+            None
+        };
         let order = if readiness {
             Some(ordering::rank(app, &repo, &p, &tips).await?)
         } else {
             None
         };
         let mut position = Vec::new();
+        if include_verification {
+            position.push(u8::from(status.is_none()));
+        }
         if let Some(order) = order {
             for part in order {
                 position.extend(Key::new().u(part).bytes());
@@ -640,14 +671,15 @@ pub async fn list(
                 .into_iter()
                 .map(|b| !b),
         );
-        positioned.push((position, (p, order)));
+        positioned.push((position, (p, order, status)));
     }
     positioned.sort_by(|a, b| a.0.cmp(&b.0));
     let (pulls, next_cursor) = page.slice(positioned);
     let mut items = Vec::new();
-    for (p, order) in &pulls {
+    for (p, order, status) in &pulls {
         let mut view = pull_view(app, &repo, p, &tips).await?;
         view.merge_order = *order;
+        view.post_merge_status = *status;
         items.push(view);
     }
     Ok(Page { items, next_cursor })
@@ -1923,9 +1955,49 @@ pub struct PostMergeChecks {
     pub pulls: Vec<u64>,
     pub checks: Vec<Check>,
     pub checks_expected: bool,
+    pub status: Option<PostMergeStatus>,
 }
 
-async fn post_merge_checks(app: &App, repo: &Repo, p: &Pull) -> AppResult<Option<PostMergeChecks>> {
+#[derive(Serialize, Debug, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum PostMergeStatus {
+    Pending,
+    Failing,
+    Passing,
+}
+
+impl PostMergeStatus {
+    fn of(checks: &[Check]) -> Option<Self> {
+        if checks.is_empty() {
+            return None;
+        }
+        if checks.iter().any(|c| {
+            c.status == "completed"
+                && matches!(
+                    c.conclusion.as_deref(),
+                    Some("failure" | "cancelled" | "timed_out" | "startup_failure")
+                )
+        }) {
+            return Some(Self::Failing);
+        }
+        if checks.iter().any(|c| c.status != "completed") {
+            return Some(Self::Pending);
+        }
+        Some(Self::Passing)
+    }
+}
+
+fn merge_is_current(p: &Pull, tips: &Tips) -> bool {
+    p.merge_sha
+        .as_ref()
+        .is_some_and(|sha| tips.get(&p.base) == Some(sha))
+}
+
+async fn post_merge_target(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+) -> AppResult<Option<(String, Vec<u64>)>> {
     let Some(sha) = p.merge_sha.clone() else {
         return Ok(None);
     };
@@ -1957,16 +2029,31 @@ async fn post_merge_checks(app: &App, repo: &Repo, p: &Pull) -> AppResult<Option
             Ok((!pulls.is_empty()).then_some(pulls))
         })
         .await?;
-    let Some(pulls) = targets else {
+    Ok(targets.map(|pulls| (sha, pulls)))
+}
+
+async fn post_merge_checks(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    tips: &Tips,
+) -> AppResult<Option<PostMergeChecks>> {
+    let Some((sha, pulls)) = post_merge_target(app, repo, p).await? else {
         return Ok(None);
     };
     let mut report = app.ci.head_checks(repo, &sha).await?;
     app.ci.estimate(repo, &sha, &mut report.checks).await;
     app.ci.order_checks(&mut report.checks).await?;
+    let status = if merge_is_current(p, tips) {
+        PostMergeStatus::of(&report.checks)
+    } else {
+        None
+    };
     Ok(Some(PostMergeChecks {
         sha,
         branch: p.base.clone(),
         pulls,
+        status,
         checks: report.checks,
         checks_expected: report.checks_expected,
     }))
@@ -2040,7 +2127,7 @@ pub async fn checks(
     };
     if p.merged {
         view.merge_checks = p.merge_checks.clone();
-        view.post_merge_checks = post_merge_checks(app, &repo, &p).await?;
+        view.post_merge_checks = post_merge_checks(app, &repo, &p, &tips).await?;
     } else {
         let head = display_checks(app, &repo, &p, &view.head_sha, &judged_base).await?;
         let (required_checks, _, required_names) =

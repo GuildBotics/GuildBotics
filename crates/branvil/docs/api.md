@@ -750,6 +750,10 @@ or last departure, or `null` before it first joins (see "Landing").
   are optional exact branch filters. Follow `next_cursor` for older results.
   Cursors locate an update and number, not a snapshot: a PR updated between
   requests may move ahead of the cursor; refresh from the first page to see it.
+  With `state=open`, add `post_merge=active` to include merged PRs whose
+  receiving branch is still at the merge commit and whose recorded verification
+  is pending or failing. They precede the open PRs and have
+  `post_merge_status: "pending" | "failing"`.
   Add `sort=readiness` for ascending `merge_order: [stage, unanswered, ci]`.
   Stages: 0 merge/following; 1 publishing/host checks; 2 conditions with only
   unanswered/checking left; 3 approved with head checks running; 4 approvals
@@ -1048,13 +1052,16 @@ head directly replaces the host branch after checking the same conditions.
   decision. The commit page shows the current checks of the head. A null
   value means there is no snapshot for this head, including merges made
   before recording began or heads pushed directly on the upstream host.
-- `post_merge_checks` is `{sha, branch, pulls, checks, checks_expected}`,
+- `post_merge_checks` is `{sha, branch, pulls, checks, checks_expected, status}`,
   or null if no follow-up CI run is known. It lists the current check
   results for the merge commit on the receiving branch. `pulls` lists the
   numbers of the PRs checking that commit as the head of the receiving
   branch, as with a collecting branch. An empty `pulls` list means branch
-  verification, such as on the default branch. Results in this field can
-  change as jobs run or are retried. They carry no merge-gate designation.
+  verification, such as on the default branch. `status` is `pending`,
+  `failing` or `passing` for checks of the current receiving branch tip.
+  It is null when there are no checks or the merge commit is no longer
+  the tip. Individual results are still available for the merge commit
+  and can change as jobs run or are retried. They carry no merge-gate designation.
 - An unmerged published pull request whose head is the commit Branvil pushed also lists
   the upstream host's check runs of it, named `<provider>/<name>`
   (`github/test-windows`), with `attempt_id` `<provider>-<id>`, `details_url`

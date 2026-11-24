@@ -326,6 +326,7 @@ export const en = {
     "Branvil records the PR head’s checks at import using the results from before any verification of the same commit on the receiving branch. The upstream PR shows the host’s merge decision.",
   "ci.mergeDecisionNoResults": "No required check results were available at that time.",
   "ci.postMergeConfirmation": "Post-merge verification",
+  "ci.postMergeStatus": "Post-merge verification: {status}",
   "ci.postMergePullReason":
     "The merge advanced the head of these pull requests, which check it against their base.",
   "ci.postMergeBranchReason":
@@ -646,6 +647,7 @@ export const en = {
   "pulls.state": "State",
   "pulls.updated": "Updated",
   "pulls.noneOpen": "No open pull requests.",
+  "pulls.openAndVerifying": "Open and post-merge checks",
   "pulls.none": "No pull requests.",
   "pulls.noLoadedMatches":
     "No matching pull requests among those loaded. Load more to continue searching.",

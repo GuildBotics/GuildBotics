@@ -6,22 +6,17 @@ import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "
 import { isApiError } from "../../api/client";
 import * as api from "../../api/endpoints";
 import { ticketRef, type Card, type Lane, type PullSummary } from "../../api/types";
-import {
-  ErrorMessage,
-  errorText,
-  MemberAvatar,
-  StateBadge,
-  type Tone,
-} from "../../components/common";
+import { ErrorMessage, errorText, MemberAvatar, StateBadge } from "../../components/common";
 import { CheckSlot, PeopleItems, type Person } from "../../components/PeoplePicker";
 import { type Translate, useT } from "../../i18n";
 import { useChecks, useSession } from "../../query/hooks";
 import { applyChange } from "../../query/events";
-import { ServiceLink } from "../../router/Router";
-import { routeOfUrl } from "../../router/routes";
+import { Link, ServiceLink } from "../../router/Router";
+import { href, routeOfUrl } from "../../router/routes";
+import { PostMergeStatusBadge } from "../pull/PostMergeStatus";
 import { relationRefusal } from "../ticket/Relations";
 import { TicketLink } from "../ticket/TicketLink";
-import { rollup, type CiRollup } from "./ordering";
+import { CI_TONE, rollup } from "./ordering";
 
 /** The most pull requests whose checks a page of cards loads (one request each). */
 const CI_BUDGET = 30;
@@ -29,14 +24,21 @@ const CI_BUDGET = 30;
 /** How long a menu keeps "copied" on screen before it closes. */
 const COPIED_MS = 1500;
 
-/** The pull requests whose checks `cards` load: the first CI_BUDGET open ones that are this Branvil's. */
+/** Keep head checks within the budget first, then load post-merge checks. */
 export function ciUrlsOf(cards: Card[]): Set<string> {
-  const urls: string[] = [];
-  for (const c of cards)
-    for (const p of c.pull_requests)
-      if (p.state === "open" && urls.length < CI_BUDGET && routeOfUrl(p.url)?.name === "pull")
-        urls.push(p.url);
-  return new Set(urls);
+  const urls = new Set<string>();
+  for (const state of ["open", "merged"]) {
+    for (const card of cards) {
+      for (const pull of card.pull_requests) {
+        const actual = pull.merged ? "merged" : pull.state;
+        if (actual === state && routeOfUrl(pull.url)?.name === "pull") {
+          urls.add(pull.url);
+          if (urls.size === CI_BUDGET) return urls;
+        }
+      }
+    }
+  }
+  return urls;
 }
 
 /** A line the page says about a change it made. */
@@ -57,14 +59,6 @@ export function moveRefusal(err: unknown, card: Card, t: Translate): Notice {
   };
 }
 
-const CI_TONE: Record<CiRollup, Tone> = {
-  passing: "success",
-  failing: "danger",
-  pending: "warning",
-  not_registered: "warning",
-  none: "neutral",
-};
-
 function PullBadges({ pull, loadChecks }: { pull: PullSummary; loadChecks: boolean }) {
   const t = useT();
   const route = routeOfUrl(pull.url);
@@ -75,6 +69,9 @@ function PullBadges({ pull, loadChecks }: { pull: PullSummary; loadChecks: boole
     isPull && loadChecks,
   );
   const state = pull.merged ? "merged" : pull.state;
+  const data = loadChecks && !checks.isError ? checks.data : undefined;
+  const verification = state === "merged" ? data?.post_merge_checks?.status : null;
+  const headStatus = state === "open" && data ? rollup(data) : null;
   return (
     <li className="card-row">
       <ServiceLink url={pull.url}>
@@ -88,10 +85,15 @@ function PullBadges({ pull, loadChecks }: { pull: PullSummary; loadChecks: boole
           {pull.label} {t(`pull.state.${state}`)}
         </Badge>
       </ServiceLink>
-      {checks.data && (
-        <StateBadge tone={CI_TONE[rollup(checks.data)]}>
-          {t("ci.label")}: {t(`ci.${rollup(checks.data)}`)}
+      {headStatus && (
+        <StateBadge tone={CI_TONE[headStatus]}>
+          {t("ci.label")}: {t(`ci.${headStatus}`)}
         </StateBadge>
+      )}
+      {verification && isPull && (
+        <Link to={href.pullVerification(route.repo, route.number)}>
+          <PostMergeStatusBadge status={verification} />
+        </Link>
       )}
     </li>
   );
