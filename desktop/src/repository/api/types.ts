@@ -62,7 +62,6 @@ export interface Repository {
   clone_url: string;
   url: string;
   protected_branches: string[];
-  post_merge_jobs: string[];
   /** The approvals a merge or a publish needs; 0 needs none. */
   required_approvals: number;
   /** Its pull requests land by themselves (merged, or published to the upstream) once they can. */

@@ -100,7 +100,7 @@ scripts/hub-server.sh update
 
 更新は Branvil の main で確認済みのコミットを対象とし、同じコミットの
 `client-windows` と `client-linux` の成果物を照合してから切り替えます。
-事前にリポジトリ設定 → CI のマージ後専用ジョブへ `client-linux` を追加します。
+`client-linux` は `.guildbotics-ci.toml` の `post_merge = true` で PR では流れず、マージ後に流れます。
 arm64 でこのジョブを引き取るランナーでは、x86_64 GNU のクロスツールチェーンを
 含む `guildbotics/agent-environment:dev` をロードします。
 

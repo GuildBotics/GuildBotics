@@ -60,7 +60,7 @@ to remain unchanged when the version stays at the verified version. It runs
 only on default-branch verification and skips the comparison when no verified
 commit exists.
 
-`meta["schema_version"]` is written on creation (currently `45`). The current
+`meta["schema_version"]` is written on creation (currently `46`). The current
 format includes per-pull landing conditions, each merged pull request's original
 reviewed head distinct from its merge commit, and per-head notification and
 automatic failure state. Workspaces record the execution root they are bound
@@ -97,9 +97,9 @@ Images attached to tickets are recorded in `attachments`; the 23 → 24
 upgrade indexes the attachment ids the kept ticket bodies and comments refer
 to (`ix_attachment_refs`).
 
-The 44 → 45 upgrade binds each workspace to the execution root named by the
+The 45 → 46 upgrade binds each workspace to the execution root named by the
 configuration being migrated, and rewrites stored local ticket links and
-workflow metadata URLs to the workspace URL form. Version 44 databases may
+workflow metadata URLs to the workspace URL form. Version 45 databases may
 predate the merge check records above; those records stay absent after the
 upgrade and read as unavailable.
 
@@ -281,9 +281,10 @@ scope. `model::ticket_index` maintains it and `admin reindex` rebuilds it.
 The 43 → 44 upgrade sets the branch to null for existing repair tickets and
 pending failures.
 
-Repository records (`repos`) include `post_merge_jobs` (job names). Run selections
-(`ci_runs`) snapshot `post_merge_jobs` alongside bases and skipped jobs, so changing
-the setting invalidates selection. Service skips in `ci_attempts.path_skip` carry
+Run selections (`ci_runs`) record `post_merge_jobs`, the jobs the pipelines of the
+bases and the head run only after merge, alongside bases and skipped jobs, so a change
+of them invalidates selection. The 44 → 45 upgrade removes the repository setting
+`post_merge_jobs` from `repos`: the pipeline marks such jobs. Service skips in `ci_attempts.path_skip` carry
 `reason` (`paths` or `post_merge`), `paths`, and `bases`. Both reasons have the same
 queue, reuse, retention, and landing semantics.
 

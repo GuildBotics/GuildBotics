@@ -814,10 +814,10 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
     txn.commit().unwrap();
 }
 
-pub const PREVIOUS_SCHEMA_VERSION: u64 = 44;
+pub const PREVIOUS_SCHEMA_VERSION: u64 = 45;
 
 /// Recreates the immediately preceding schema in a stopped database.
-pub fn as_schema_44(db: &Path) {
+pub fn as_schema_45(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
             *v = json!(PREVIOUS_SCHEMA_VERSION);
@@ -826,7 +826,7 @@ pub fn as_schema_44(db: &Path) {
     edit_records(db, "workspaces", |v| {
         v.as_object_mut().unwrap().remove("execution_root");
     });
-    // Version 44 databases may predate merge check recording.
+    // Version 45 databases may predate merge check recording.
     edit_records(db, "pulls", |v| {
         v.as_object_mut().unwrap().remove("merge_checks");
         if let Some(upstream) = v["upstream"].as_object_mut() {

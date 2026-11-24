@@ -122,7 +122,7 @@ async fn three_ready_pulls_publish_without_waiting_for_a_host_merge() {
 
 #[tokio::test]
 async fn hold_blocks_local_merge_until_verification_succeeds() {
-    use crate::ci::{Runner, eventually, pipeline};
+    use crate::ci::{Runner, eventually, mark, pipeline};
     let w = World::new().await;
     let initial = w.server.ok(&w.repo_path(), &w.owner).await;
     assert_eq!(initial["hold_while_failing"], false);
@@ -138,11 +138,13 @@ async fn hold_blocks_local_merge_until_verification_succeeds() {
         403
     );
     let runner = Runner::new(&w, "hold-runner").await;
-    settings(&w, json!({"post_merge_jobs":["verify"]})).await;
     crate::ci::land(
         &w,
         "pipeline",
-        &[(".guildbotics-ci.toml", &pipeline(&["verify"]))],
+        &[(
+            ".guildbotics-ci.toml",
+            &mark(&pipeline(&["verify"]), "post_merge", &["verify"]),
+        )],
         Some(&runner),
     )
     .await;

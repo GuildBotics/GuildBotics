@@ -272,7 +272,6 @@ A workspace holds repositories (`<workspace>/<name>`) and has one board.
   "clone_url": "http://127.0.0.1:7878/git/acme/demo.git",
   "url": "http://127.0.0.1:7878/acme/demo",
   "protected_branches": ["main"],
-  "post_merge_jobs": [],
   "required_approvals": 1,
   "auto_land": false,
   "hold_while_failing": false,
@@ -293,7 +292,7 @@ a code host it follows and publishes to, or `null` (see "Upstream").
 
 - `GET /api/v1/repos` → items (every repository), by path.
 - `POST /api/v1/repos` (owner) `{"path","default_branch"?,"labels"?}` (default `main`, no labels) → repository. `path` is `<workspace>/<name>` of an existing workspace (`404 not_found` otherwise). An empty bare repository is created.
-- `PATCH /api/v1/repos/{repo}` (owner) `{"revision", "default_branch"?, "post_merge_jobs"?, "required_approvals"?, "auto_land"?, "hold_while_failing"?, "protected_branches"?, "ci_network"?, "responder"?, "labels"?}` → `409 conflict` when `revision` is stale. Removing a label leaves it on the tickets that carry it. `ci_network` is the network access of CI jobs (`docs/ci.md`; the CI tab of the repository's settings). With an upstream, the default branch follows the upstream's and cannot be changed (`409 conflict`).
+- `PATCH /api/v1/repos/{repo}` (owner) `{"revision", "default_branch"?, "required_approvals"?, "auto_land"?, "hold_while_failing"?, "protected_branches"?, "ci_network"?, "responder"?, "labels"?}` → `409 conflict` when `revision` is stale. Removing a label leaves it on the tickets that carry it. `ci_network` is the network access of CI jobs (`docs/ci.md`; the CI tab of the repository's settings). With an upstream, the default branch follows the upstream's and cannot be changed (`409 conflict`).
 
 ### `GET /api/v1/repos/{repo}/branches/{branch}`
 
@@ -1660,11 +1659,8 @@ It is published after a verification record transaction, and when its checks
 change (including automatic retries). Clients refetch verification and history.
 The existing commit and pull request checks responses are unchanged.
 
-Repository `post_merge_jobs` lists job names to execute only in protected-branch
-verification. It defaults to `[]`, and each name must be a valid job name. Only the
-owner can change it; other callers get 403. A job that is also `required` in a
-branch's pipeline reads as a failed required check on PR heads into that branch.
-Service skips expose `path_skip.reason` (`paths` or `post_merge`). Both are completed
+Jobs marked `post_merge = true` execute only in protected-branch verification
+(`docs/ci.md`, "Post-merge only jobs"). Service skips expose `path_skip.reason` (`paths` or `post_merge`). Both are completed
 `skipped` checks, cannot supply reusable results or duration estimates, and are
 executed by manual retry and protected registration.
 

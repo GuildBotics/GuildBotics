@@ -13,7 +13,6 @@ fn repo(w: &Wtx, approvals: u64) -> AppResult<()> {
             workspace: "acme".into(),
             default_branch: "main".into(),
             protected_branches: vec!["release".into()],
-            post_merge_jobs: Vec::new(),
             required_approvals: approvals,
             auto_land: false,
             hold_while_failing: false,

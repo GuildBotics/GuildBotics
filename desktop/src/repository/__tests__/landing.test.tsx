@@ -20,7 +20,6 @@ const REPO: Repository = {
   url: "",
   protected_branches: ["main"],
   responder: { member: "aiko", chosen: false, automatic: "aiko" },
-  post_merge_jobs: [],
   required_approvals: 1,
   auto_land: false,
   hold_while_failing: false,

@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use super::Ci;
+use super::pipeline;
 use super::queue::{self, JobSelection, PipelineState, SelectionBase};
 use crate::error::{AppError, AppResult};
 use crate::model::Repo;
@@ -74,13 +75,14 @@ impl Ci {
             })
             .collect();
         bases.sort_by_key(|b| b.pull);
+        let post_merge = self.post_merge_jobs(repo, sha, &bases).await?;
 
         if let Some(run) = &previous
             && run.pipeline == *pipeline
             && run
                 .selection
                 .as_ref()
-                .is_some_and(|s| s.post_merge_jobs == repo.post_merge_jobs)
+                .is_some_and(|s| s.post_merge_jobs == post_merge)
             && let Some(selection) = &run.selection
             && selection.bases.len() == bases.len()
             && selection
@@ -91,15 +93,53 @@ impl Ci {
         {
             return Ok(Some(selection.clone()));
         }
-        Ok(Some(self.select_bases(repo, sha, jobs, bases).await?))
+        Ok(Some(
+            self.select_bases(repo, sha, jobs, bases, post_merge)
+                .await?,
+        ))
+    }
+
+    /// The jobs `sha` runs only after merge. Each base decides for the jobs its
+    /// pipeline has, so a head cannot exempt itself from them, and the head
+    /// decides for the jobs it adds, or for all of them while no base is known.
+    /// A job runs only after merge when every base says so; an invalid base
+    /// says so of none.
+    async fn post_merge_jobs(
+        &self,
+        repo: &Repo,
+        sha: &str,
+        bases: &[SelectionBase],
+    ) -> AppResult<Vec<String>> {
+        let (git, dir) = (&self.inner.git, self.inner.git.repo_dir(&repo.path));
+        let Some(own) = pipeline::read_post_merge(git, &dir, sha).await? else {
+            return Ok(Vec::new());
+        };
+        let mut decided = Vec::new();
+        for base in bases.iter().filter(|b| !b.base_sha.is_empty()) {
+            decided.push(pipeline::read_post_merge(git, &dir, &base.base_sha).await?);
+        }
+        Ok(own
+            .into_iter()
+            .filter(|(name, own)| {
+                if decided.is_empty() {
+                    return *own;
+                }
+                decided.iter().all(|base| {
+                    base.as_ref()
+                        .is_some_and(|jobs| *jobs.get(name).unwrap_or(own))
+                })
+            })
+            .map(|(name, _)| name)
+            .collect())
     }
 
     async fn select_bases(
         &self,
         repo: &Repo,
         sha: &str,
-        jobs: &[super::pipeline::JobDef],
+        jobs: &[pipeline::JobDef],
         mut bases: Vec<SelectionBase>,
+        post_merge_jobs: Vec<String>,
     ) -> AppResult<JobSelection> {
         let dir = self.inner.git.repo_dir(&repo.path);
         let mut all = bases.is_empty();
@@ -131,7 +171,7 @@ impl Ci {
                     repo,
                     base.merge_base.as_deref().unwrap(),
                     sha,
-                    &[super::pipeline::PIPELINE_PATH.to_string()],
+                    &[pipeline::PIPELINE_PATH.to_string()],
                 )
                 .await?
             {
@@ -157,12 +197,12 @@ impl Ci {
             }
         }
         for job in jobs {
-            if repo.post_merge_jobs.contains(&job.name) && !skipped_jobs.contains(&job.name) {
+            if post_merge_jobs.contains(&job.name) && !skipped_jobs.contains(&job.name) {
                 skipped_jobs.push(job.name.clone());
             }
         }
         Ok(JobSelection {
-            post_merge_jobs: repo.post_merge_jobs.clone(),
+            post_merge_jobs,
             bases,
             skipped_jobs,
         })
@@ -277,72 +317,83 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn post_merge_setting_invalidates_selection_without_pr_bases_and_all_jobs_bypasses_it() {
-        let (_temp, ci, mut repo) = super::super::tests::setup();
-        ci.inner
-            .git
-            .init_bare(&ci.inner.git.repo_dir(&repo.path), "main")
+    async fn the_base_decides_post_merge_for_its_jobs_and_the_head_for_the_rest() {
+        let (temp, ci, repo) = super::super::tests::setup();
+        let git = &ci.inner.git;
+        let dir = git.repo_dir(&repo.path);
+        git.init_bare(&dir, "main").await.unwrap();
+        let work = temp.path().join("work");
+        let w = work.to_str().unwrap();
+        git.run_ok(None, &["init", "-q", "-b", "main", w])
             .await
             .unwrap();
-        let pipeline = PipelineState::Jobs {
-            jobs: super::super::pipeline::parse(&inputs_pipeline("'src/**'")).unwrap(),
+        let job = |name: &str, post_merge: bool| {
+            format!(
+                "[[jobs]]\nname='{name}'\nimage='alpine'\ncommands=['true']\npost_merge={post_merge}\n\n"
+            )
         };
-        repo.post_merge_jobs = vec!["test".into()];
-        let selection = ci
-            .select_jobs(&repo, "head", &pipeline, false)
-            .await
-            .unwrap();
-        assert_eq!(selection.as_ref().unwrap().skipped_jobs, ["test"]);
-        let reg = queue::Registration {
-            order: vec![],
-            selection,
-            repo: repo.id.clone(),
-            repo_path: repo.path.clone(),
-            sha: "head".into(),
-            tree: None,
-            branch: "feature".into(),
-            protected: false,
-            pipeline: pipeline.clone(),
-            network: false,
-            inputs: BTreeMap::new(),
+        let mut shas = Vec::new();
+        for text in [
+            job("lint", false) + &job("rel", true),
+            // The head tries to skip the base's lint and run its rel.
+            job("lint", true) + &job("rel", false) + &job("new", true),
+            "[[jobs]]\nname='broken'\n".to_string(),
+        ] {
+            std::fs::write(work.join(pipeline::PIPELINE_PATH), text).unwrap();
+            shas.push(commit_all(git, &work, "pipeline").await);
+        }
+        let mut args = vec!["-C", w, "push", "-q", dir.to_str().unwrap()];
+        let refspecs: Vec<String> = shas
+            .iter()
+            .enumerate()
+            .map(|(i, sha)| format!("{sha}:refs/heads/v{i}"))
+            .collect();
+        args.extend(refspecs.iter().map(String::as_str));
+        git.run_ok(None, &args).await.unwrap();
+        let [base, head, invalid] = <[String; 3]>::try_from(shas).unwrap();
+        let at = |sha: &str| SelectionBase {
+            pull: 1,
+            base: "main".into(),
+            base_sha: sha.into(),
+            merge_base: None,
         };
-        ci.inner
-            .store
-            .write(move |w| queue::register(w, reg, 10, "now"))
-            .await
-            .unwrap();
-        repo.post_merge_jobs = vec!["lint".into()];
+        for (bases, expected) in [
+            (vec![], vec!["lint", "new"]),
+            (vec![at(&base)], vec!["new", "rel"]),
+            (vec![at(&base), at(&invalid)], vec![]),
+            (vec![at("")], vec!["lint", "new"]),
+        ] {
+            assert_eq!(
+                ci.post_merge_jobs(&repo, &head, &bases).await.unwrap(),
+                expected,
+                "{bases:?}"
+            );
+        }
+        assert!(
+            ci.post_merge_jobs(&repo, &invalid, &[at(&base)])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let pipeline = pipeline::read(git, &dir, &head).await.unwrap();
         let selection = ci
-            .select_jobs(&repo, "head", &pipeline, false)
+            .select_jobs(&repo, &head, &pipeline, false)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(selection.skipped_jobs, ["lint"]);
-        assert_eq!(selection.post_merge_jobs, repo.post_merge_jobs);
+        assert_eq!(
+            (selection.post_merge_jobs, selection.skipped_jobs),
+            (
+                vec!["lint".into(), "new".into()],
+                vec!["lint".into(), "new".into()]
+            )
+        );
         assert!(
-            ci.select_jobs(&repo, "head", &pipeline, true)
+            ci.select_jobs(&repo, &head, &pipeline, true)
                 .await
                 .unwrap()
                 .is_none()
         );
-        let PipelineState::Jobs { jobs } = &pipeline else {
-            unreachable!()
-        };
-        let selection = ci
-            .select_bases(
-                &repo,
-                "head",
-                jobs,
-                vec![SelectionBase {
-                    pull: 1,
-                    base: "missing".into(),
-                    base_sha: String::new(),
-                    merge_base: None,
-                }],
-            )
-            .await
-            .unwrap();
-        assert_eq!(selection.skipped_jobs, ["lint"]);
     }
 
     #[tokio::test]
@@ -491,6 +542,7 @@ mod tests {
                         base_sha: base_sha.into(),
                         merge_base: None,
                     }],
+                    Vec::new(),
                 )
                 .await
                 .unwrap();

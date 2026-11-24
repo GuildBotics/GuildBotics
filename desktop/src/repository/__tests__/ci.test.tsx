@@ -511,7 +511,6 @@ describe("CI settings", () => {
           url: "",
           protected_branches: [],
           responder: { member: "aiko", chosen: false, automatic: "aiko" },
-          post_merge_jobs: [],
           ci_network: false,
           labels: [],
           upstream: null,

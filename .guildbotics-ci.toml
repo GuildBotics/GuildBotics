@@ -11,8 +11,7 @@
 # PR heads select jobs by paths; default-branch verification runs execute
 # every job. test and markdown-links always run, as their inputs span the repo.
 # post_merge = true keeps a job, such as the release builds, off PR heads: it
-# runs after merge. Branvil still selects jobs by the repository CI setting
-# post_merge_jobs, so a post_merge job must be listed there too.
+# runs after merge. As with required, the base's file decides for its jobs.
 # required = true makes a job required of PRs into this branch: the base's file
 # decides, so a PR that drops a required job needs the owner's approval of its head.
 #

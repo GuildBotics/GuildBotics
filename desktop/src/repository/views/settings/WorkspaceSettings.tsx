@@ -187,7 +187,6 @@ type RepoForm = {
   revision: number;
   default_branch: string;
   protected_branches: string[];
-  post_merge_jobs: string[];
   /** `""` while the field is empty, which cannot be saved. */
   required_approvals: string | number;
   auto_land: boolean;
@@ -201,7 +200,6 @@ const seed = (r: Repository): RepoForm => ({
   revision: r.revision,
   default_branch: r.default_branch,
   protected_branches: r.protected_branches,
-  post_merge_jobs: r.post_merge_jobs,
   required_approvals: r.required_approvals,
   auto_land: r.auto_land,
   hold_while_failing: r.hold_while_failing,
@@ -320,14 +318,6 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
               description={t("settings.ciNetworkHelp")}
               checked={form.ci_network}
               onChange={(e) => setForm({ ...form, ci_network: e.currentTarget.checked })}
-            />
-            <TagsInput
-              label={t("settings.postMergeJobs")}
-              description={t("settings.postMergeJobsHelp")}
-              value={form.post_merge_jobs}
-              onChange={(v) => setForm({ ...form, post_merge_jobs: v })}
-              placeholder={t("settings.addCheck")}
-              clearable
             />
             <NumberInput
               label={t("repo.requiredApprovals")}
