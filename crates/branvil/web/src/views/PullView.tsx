@@ -77,6 +77,9 @@ export function PullView({
   if (pull.isPending) return <Loading />;
   if (pull.isError) return <ErrorMessage error={pull.error} />;
   const pr = pull.data;
+  const checkContext = repository.data
+    ? { base: pr.base, defaultBranch: repository.data.default_branch }
+    : undefined;
   const state = pr.merged ? "merged" : pr.state;
   const workspace = repo.split("/")[0] as string;
   const fileItems = files.data?.items;
@@ -170,7 +173,12 @@ export function PullView({
         onOpenFile={(path) => setFilesOpen({ focus: path })}
       />
 
-      <ChecksCard repo={repo} pull={pr} onOpen={(c) => setCheck(drawerTarget(c))} />
+      <ChecksCard
+        repo={repo}
+        pull={pr}
+        context={checkContext}
+        onOpen={(c) => setCheck(drawerTarget(c))}
+      />
 
       {pr.state === "open" &&
         (repository.data?.upstream && pr.base === repository.data.default_branch ? (
@@ -215,6 +223,7 @@ export function PullView({
       <CheckDrawer
         repo={repo}
         check={check}
+        context={checkContext}
         onClose={() => {
           setCheck(null);
           // A job's own address showed this page with its drawer; closing it leaves the page.

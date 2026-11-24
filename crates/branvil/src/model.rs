@@ -367,9 +367,32 @@ pub struct Pull {
     pub merged_head: Option<String>,
     /// The base tip the merge moved from (so the merged diff stays available).
     pub merged_base: Option<String>,
+    /// The Branvil check evidence saved by the merge operation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_checks: Option<MergeChecks>,
     /// Set once the pull request was published to the upstream host.
     pub upstream: Option<Published>,
     pub revision: u64,
+}
+
+/// The exact required attempts read by a successful landing decision.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MergeChecks {
+    pub head_sha: String,
+    pub base_sha: String,
+    pub checks: Vec<MergeCheck>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MergeCheck {
+    pub name: String,
+    pub conclusion: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_skip: Option<crate::ci::queue::PathSkip>,
 }
 
 /// The last checked pair and per-head landing notices.
@@ -425,6 +448,9 @@ pub struct Published {
     pub state: String,
     /// The commit Branvil last pushed to the host's branch.
     pub pushed: Option<String>,
+    /// The successful Branvil gate at publication, if it judged the pushed head.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publication_checks: Option<MergeChecks>,
     pub sent_title: String,
     pub sent_body: String,
     /// `open` or `closed`, as last sent or read.
@@ -484,6 +510,7 @@ impl Published {
     pub fn record_push(&mut self, head: String, registration_secs: u64) {
         if self.pushed.as_ref() != Some(&head) {
             self.checks.clear();
+            self.publication_checks = None;
             self.checks_settled = false;
             self.await_checks(registration_secs);
         }
@@ -619,7 +646,11 @@ pub struct JournalEntry {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JournalOp {
-    Merge { number: u64 },
+    Merge {
+        number: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        checks: Option<MergeChecks>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

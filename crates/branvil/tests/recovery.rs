@@ -105,6 +105,16 @@ async fn a_merge_interrupted_after_the_ref_update_completes_at_startup() {
     let pull = s.ok(&base, &w.aiko).await;
     assert_eq!(pull["merged"], true, "{pull}");
     assert_eq!(pull["merge_sha"], head.as_str());
+    let checks = s.ok(&format!("{base}/checks"), &w.aiko).await;
+    assert_eq!(
+        checks["merge_checks"],
+        json!({
+            "source": "merge",
+            "head_sha": head,
+            "base_sha": main,
+            "checks": [],
+        })
+    );
     let ticket = s
         .ok(&format!("/repos/{}/tickets/1", encode(REPO)), &w.aiko)
         .await;

@@ -438,7 +438,7 @@ async fn publish_op(
     auto: bool,
 ) -> AppResult<(Repo, Pull)> {
     let _guard = app.upstream.pull_lock(repo_id, number).await;
-    let (repo, setting, p, author, head) = {
+    let (repo, setting, p, author, checks) = {
         let _guard = app.lock_repo(repo_id).await;
         let id = repo_id.to_string();
         let (repo, p, author) = app
@@ -471,8 +471,8 @@ async fn publish_op(
         let host = app.upstream.hosts.get(&setting.provider)?;
         super::require_account(&author, host)
             .map_err(|why| AppError::conflict_code("no_account", why))?;
-        let (head, _) = check_landable(app, &repo, &p, &input, auto).await?;
-        (repo, setting, p, author, head)
+        let checks = check_landable(app, &repo, &p, &input, auto).await?;
+        (repo, setting, p, author, checks)
     };
     let host = app.upstream.hosts.get(&setting.provider)?;
     // A record of another place (the upstream changed since) is replaced.
@@ -503,6 +503,7 @@ async fn publish_op(
         url: None,
         state: "none".into(),
         pushed: None,
+        publication_checks: None,
         sent_title: String::new(),
         sent_body: String::new(),
         sent_state: "open".into(),
@@ -530,13 +531,14 @@ async fn publish_op(
         host,
         setting: &setting,
     };
+    let head = &checks.head_sha;
     let refused = if theirs.as_deref() == Some(head.as_str()) {
         // Already there (an earlier publish pushed it, then stopped).
         None
     } else if theirs.is_none() || theirs == x.pushed || replace {
         // Nothing there, Branvil's own push, or the owner replaces it.
         let lease = theirs.clone().unwrap_or_default();
-        match push_branch(at, writer, &p.head, &head, &lease).await {
+        match push_branch(at, writer, &p.head, head, &lease).await {
             Pushed::Done => None,
             Pushed::Refused(why) => Some(why),
             Pushed::Failed(why) => return Err(AppError::unavailable(why)),
@@ -551,7 +553,8 @@ async fn publish_op(
         ))
     };
     if refused.is_none() {
-        x.record_push(head, app.upstream.config.checks_registration_secs);
+        x.record_push(head.clone(), app.upstream.config.checks_registration_secs);
+        x.publication_checks = Some(checks);
         if x.number.is_none() {
             open_on_host(at, writer, super::login_of(&author, host), &p, &mut x).await;
         }

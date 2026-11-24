@@ -874,7 +874,7 @@ async fn sync_pull(
                             .store
                             .write(move |w| {
                                 pulls::store_published(w, &r2, number, x2, None)?;
-                                pulls::mark_merged(w, &r2, number, &merge_sha, merged_base)
+                                pulls::mark_merged(w, &r2, number, &merge_sha, merged_base, None)
                             })
                             .await?;
                         app.events.publish("pull", &repo.path, number.to_string());

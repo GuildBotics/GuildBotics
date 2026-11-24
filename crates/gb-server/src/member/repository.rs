@@ -384,11 +384,19 @@ pub async fn answered(
     }
     Ok(results)
 }
-pub fn ensure_ready(results: &[(Value, Readiness)]) -> Result<()> {
-    if results
+fn incomplete_checks(
+    results: &[(Value, Readiness)],
+) -> impl Iterator<Item = (&Readiness, RequiredChecks)> {
+    results
         .iter()
-        .any(|(_, r)| r.report.required_checks != RequiredChecks::Passed)
-    {
+        .filter_map(|(_, r)| match r.report.required_checks {
+            Some(state @ (RequiredChecks::Running | RequiredChecks::Failed)) => Some((r, state)),
+            _ => None,
+        })
+}
+
+pub fn ensure_ready(results: &[(Value, Readiness)]) -> Result<()> {
+    if incomplete_checks(results).next().is_some() {
         Err(MemberError::CapabilityArgs {
             key: "cli.member.required_checks_incomplete",
             args: [("blockers".into(), required_summary(results))].into(),
@@ -398,14 +406,12 @@ pub fn ensure_ready(results: &[(Value, Readiness)]) -> Result<()> {
     }
 }
 fn required_summary(results: &[(Value, Readiness)]) -> String {
-    results
-        .iter()
-        .filter(|(_, r)| r.report.required_checks != RequiredChecks::Passed)
-        .map(|(_, r)| {
+    incomplete_checks(results)
+        .map(|(r, state)| {
             format!(
                 "{}: {}",
                 r.target.url,
-                serde_json::json!(r.report.required_checks)
+                serde_json::json!(state)
                     .as_str()
                     .expect("check state is a string")
             )
@@ -414,23 +420,20 @@ fn required_summary(results: &[(Value, Readiness)]) -> String {
         .join("; ")
 }
 pub fn ensure_awaitable(results: &[(Value, Readiness)]) -> Result<Vec<&Readiness>> {
-    let awaited: Vec<_> = results
-        .iter()
-        .filter(|(_, r)| r.report.required_checks != RequiredChecks::Passed)
-        .collect();
+    let awaited: Vec<_> = incomplete_checks(results).collect();
     if awaited.is_empty() {
         return Err(MemberError::Capability("cli.member.checks_none"));
     }
     if awaited
         .iter()
-        .any(|(_, r)| r.report.required_checks == RequiredChecks::Failed)
+        .any(|(_, state)| *state == RequiredChecks::Failed)
     {
         return Err(MemberError::CapabilityArgs {
             key: "cli.member.checks_not_awaitable",
             args: [("blockers".into(), required_summary(results))].into(),
         });
     }
-    Ok(awaited.into_iter().map(|(_, r)| r).collect())
+    Ok(awaited.into_iter().map(|(r, _)| r).collect())
 }
 
 pub async fn open_pull_request_readiness(

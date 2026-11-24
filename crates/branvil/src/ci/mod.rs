@@ -2081,6 +2081,7 @@ mod tests {
             merge_sha: None,
             merged_head: None,
             merged_base: None,
+            merge_checks: None,
             upstream: None,
             revision: 1,
         }

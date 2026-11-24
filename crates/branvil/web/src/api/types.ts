@@ -479,6 +479,19 @@ export interface CheckSet {
   checks_expected: boolean;
 }
 
+export interface MergeChecks {
+  source: "merge" | "publication";
+  head_sha: string;
+  base_sha: string;
+  checks: Pick<Check, "name" | "conclusion" | "attempt_id" | "attempt" | "path_skip">[];
+}
+
+export interface PostMergeChecks extends CheckSet {
+  sha: string;
+  branch: string;
+  pulls: number[];
+}
+
 export interface Checks extends CheckSet {
   conflicts: string[] | null;
   head_sha: string;
@@ -488,6 +501,8 @@ export interface Checks extends CheckSet {
   base_checks: number;
   /** What the pull request's base requires of this head. */
   required_names: string[];
+  merge_checks?: MergeChecks | null;
+  post_merge_checks?: PostMergeChecks | null;
 }
 
 export interface CommitChecks extends CheckSet {

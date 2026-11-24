@@ -1114,6 +1114,19 @@ async fn a_head_that_moved_past_what_the_host_merged_stays() {
         .await;
     assert_eq!(got["merged"], true, "{got}");
     assert_eq!(branvil_tip(&w, "feature"), later);
+    let checks = w
+        .server
+        .ok(&format!("{}/pulls/{n}/checks", w.repo_path()), &w.owner)
+        .await;
+    assert_eq!(
+        checks["merge_checks"],
+        json!({
+            "source": "publication",
+            "head_sha": p["head_sha"],
+            "base_sha": p["base_sha"],
+            "checks": [],
+        })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

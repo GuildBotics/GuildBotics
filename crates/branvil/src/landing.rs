@@ -1,6 +1,6 @@
 //! Per-pull landing conditions and notifications, independent of other pulls.
 use crate::app::App;
-use crate::ci::Check;
+use crate::ci::{Check, PullRequired};
 use crate::domain::{self, pulls};
 use crate::error::AppResult;
 use crate::model::{Landing, LandingReason, Member, MemberKind, Published, Pull, Repo};
@@ -157,6 +157,17 @@ pub async fn blockers(
     base: &str,
     e: &Landing,
 ) -> AppResult<Vec<LandingReason>> {
+    Ok(conditions(app, repo, p, head, base, e).await?.0)
+}
+
+pub(crate) async fn conditions(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    head: &str,
+    base: &str,
+    e: &Landing,
+) -> AppResult<(Vec<LandingReason>, Vec<Check>)> {
     let hold = if repo.hold_while_failing {
         let (r2, p2) = (repo.clone(), p.clone());
         app.store.read(move |r| held(r, &r2, &p2)).await?
@@ -228,14 +239,15 @@ pub async fn blockers(
         }
     }
     let required = app.ci.pull_required(repo, head, base).await?;
-    let (check_state, jobs, names) = if head.is_empty() {
+    let (check_state, jobs, names, checks) = if head.is_empty() {
         (
             HeadChecks::Running,
             required.names.clone(),
             required.names.clone(),
+            Vec::new(),
         )
     } else {
-        pull_head_check_details(app, repo, p, head, base).await?
+        evaluate_head_checks(app, repo, p, head, &required).await?
     };
     if head.is_empty() || check_state != HeadChecks::Passed {
         let mut why = reason(
@@ -292,7 +304,11 @@ pub async fn blockers(
             out.push(why);
         }
     }
-    Ok(out)
+    let required_checks = checks
+        .into_iter()
+        .filter(|c| names.contains(&c.name))
+        .collect();
+    Ok((out, required_checks))
 }
 
 fn blank(repo: &Repo, number: u64) -> Landing {
@@ -465,15 +481,26 @@ pub(crate) async fn pull_head_check_details(
     head: &str,
     base: &str,
 ) -> AppResult<(HeadChecks, Vec<String>, Vec<String>)> {
+    let required = app.ci.pull_required(repo, head, base).await?;
+    let (state, jobs, names, _) = evaluate_head_checks(app, repo, p, head, &required).await?;
+    Ok((state, jobs, names))
+}
+
+async fn evaluate_head_checks(
+    app: &App,
+    repo: &Repo,
+    p: &Pull,
+    head: &str,
+    required: &PullRequired,
+) -> AppResult<(HeadChecks, Vec<String>, Vec<String>, Vec<Check>)> {
     let p = p.clone();
     let repair = app
         .store
         .read(move |r| crate::repair::is_pull(r, &p))
         .await?;
-    let required = app.ci.pull_required(repo, head, base).await?;
     let mut checks = app.ci.head_checks(repo, head).await?;
     if !head.is_empty() {
-        app.ci.require(repo, head, &mut checks, &required).await?;
+        app.ci.require(repo, head, &mut checks, required).await?;
     }
     let names = required_names(&required.names, &checks.checks, repair);
     let mut waiting = repair && !checks.run_registered;
@@ -496,6 +523,7 @@ pub(crate) async fn pull_head_check_details(
         },
         jobs,
         names,
+        checks.checks,
     ))
 }
 

@@ -314,6 +314,21 @@ export const en = {
     "Jobs listed here run only during main verification after merging, not on PRs. They cannot be required checks.",
   "ci.postMergeReason":
     "This job runs only after merging (repository setting), so it doesn't run on pull requests. It runs in the main verification after the merge. You can retry it to check it now.",
+  "ci.mergeDecision": "Merge decision",
+  "ci.mergeDecisionNoRequired": "This merge had no required checks.",
+  "ci.mergeDecisionUnavailable": "No merge decision checks were recorded for this pull request.",
+  "ci.mergeDecisionAtPublication":
+    "Branvil’s required checks when it published this head to the upstream host.",
+  "ci.postMergeConfirmation": "Post-merge verification",
+  "ci.postMergePullReason":
+    "The merge advanced the head of these pull requests, which check it against their base.",
+  "ci.postMergeBranchReason":
+    "These checks verify the commit after it landed on the receiving branch.",
+  "ci.postMergeUnavailable": "No follow-up checks are recorded for this merge.",
+  "ci.postMergeDefaultReason":
+    "This job runs during verification after this pull request merges into {branch}. You can retry it to check it now.",
+  "ci.postMergeCollectingReason":
+    "This job runs during verification after the collecting pull request merges into {branch}. You can retry it to check it now.",
   "ci.postMergeSkipped": "Post-merge only",
   "ci.pathsSkipped": "Skipped (no changes)",
   "ci.pathsReason": "No changed file matches: {paths}",

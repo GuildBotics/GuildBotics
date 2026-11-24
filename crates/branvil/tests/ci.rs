@@ -213,6 +213,118 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
 }
 
 #[tokio::test]
+async fn merged_checks_keep_the_decision_when_the_receiving_branch_reselects_jobs() {
+    let w = World::new().await;
+    let runner = Runner::new(&w, "merge-checks-runner").await;
+    let config = format!(
+        "{}paths=['src/**']\n{}",
+        required_pipeline(&["rust"]),
+        pipeline(&["release"])
+    );
+    land(
+        &w,
+        "setup",
+        &[(".guildbotics-ci.toml", &config)],
+        Some(&runner),
+    )
+    .await;
+    runner.drain("success").await;
+    let repo = w.server.ok(&w.repo_path(), &w.owner).await;
+    let (status, body) = w
+        .server
+        .patch(
+            &w.repo_path(),
+            &w.owner,
+            json!({"revision": repo["revision"], "post_merge_jobs": ["release"]}),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+
+    std::fs::create_dir_all(w.work.join("src")).unwrap();
+    let collecting_tip = w.push_change("ticket/10", "src/code.txt", "parent change");
+    let collecting = w.open_pull("ticket/10", json!([])).await;
+    let collecting_n = collecting["number"].as_u64().unwrap();
+    let child_head = w.push_change("ticket/11", "notes.md", "child change");
+    let (status, child) = w
+        .server
+        .post(
+            &format!("{}/pulls", w.repo_path()),
+            &w.aiko,
+            json!({"head": "ticket/11", "base": "ticket/10", "title": "Child"}),
+        )
+        .await;
+    assert_eq!(status, 201, "{child}");
+    let child_n = child["pull"]["number"].as_u64().unwrap();
+
+    let merge = |number, head: String, base: Value| {
+        let path = format!("{}/pulls/{number}/merge", w.repo_path());
+        let body = json!({"expected_head": head, "expected_base": base});
+        let w = &w;
+        async move {
+            let (status, result) = w.server.post(&path, &w.owner, body).await;
+            assert_eq!(status, 200, "{result}");
+        }
+    };
+    let child_before = checks(&w, child_n).await;
+    let skipped = check(&child_before, "rust");
+    assert_eq!(child_before["required_checks"], "passed");
+    assert_eq!(skipped["path_skip"]["reason"], "paths");
+    merge(child_n, child_head.clone(), json!(collecting_tip)).await;
+
+    let new_rust = runner.next_claim().await;
+    assert_eq!(new_rust["job"]["name"], "rust");
+    assert_eq!(new_rust["sha"], child_head);
+    let after = checks(&w, child_n).await;
+    assert_eq!(after["checks"], json!([]));
+    assert!(after["required_checks"].is_null());
+    let decision = &after["merge_checks"];
+    assert_eq!(decision["source"], "merge");
+    assert_eq!(decision["head_sha"], child_head);
+    assert_eq!(decision["base_sha"], collecting_tip);
+    let rust = check(decision, "rust");
+    assert_eq!(rust["conclusion"], "skipped");
+    assert_eq!(rust["attempt"], 1);
+    assert_eq!(rust["attempt_id"], skipped["attempt_id"]);
+    let confirmation = &after["post_merge_checks"];
+    assert_eq!(confirmation["branch"], "ticket/10");
+    assert_eq!(confirmation["pulls"], json!([collecting_n]));
+    assert_eq!(confirmation["sha"], child_head);
+    let rust = check(confirmation, "rust");
+    assert_eq!(rust["status"], "in_progress");
+    assert_eq!(rust["attempt"], 2);
+    assert_eq!(rust["attempt_id"], new_rust["attempt_id"]);
+
+    assert_eq!(runner.finish(&new_rust, "success").await.0, 200);
+    merge(
+        collecting_n,
+        child_head.clone(),
+        collecting["base_sha"].clone(),
+    )
+    .await;
+    let release = runner.next_claim().await;
+    assert_eq!(release["job"]["name"], "release");
+    let after = checks(&w, collecting_n).await;
+    let decision = &after["merge_checks"];
+    assert_eq!(decision["checks"].as_array().unwrap().len(), 1);
+    assert_eq!(check(decision, "rust")["conclusion"], "success");
+    assert_eq!(
+        check(decision, "rust")["attempt_id"],
+        new_rust["attempt_id"]
+    );
+    let confirmation = &after["post_merge_checks"];
+    assert_eq!(confirmation["branch"], "main");
+    assert_eq!(confirmation["pulls"], json!([]));
+    assert_eq!(confirmation["sha"], child_head);
+    let release_check = check(confirmation, "release");
+    assert_eq!(release_check["status"], "in_progress");
+    assert_eq!(release_check["attempt_id"], release["attempt_id"]);
+    assert_eq!(
+        checks(&w, child_n).await["merge_checks"]["checks"][0]["attempt_id"],
+        skipped["attempt_id"]
+    );
+}
+
+#[tokio::test]
 async fn job_and_check_responses_identify_the_runner_that_claimed_each_attempt() {
     let w = World::new().await;
     let head = w.push_change(
@@ -390,9 +502,7 @@ async fn previous_schema_upgrade_preserves_records() {
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let indexed_memory = tables(&db)["ix_ci_memory"].clone();
     let prior_runs = records(&db, "ci_runs");
-    as_schema_42(&db);
-    // main's pipeline requires `test`, so the old setting can move there.
-    edit_records(&db, "repos", |r| r["required_checks"] = json!(["test"]));
+    as_schema_43(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
     assert_eq!(before["ix_ci_memory"], indexed_memory);
@@ -403,7 +513,7 @@ async fn previous_schema_upgrade_preserves_records() {
     );
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 42 to 43"), "{output}");
+    assert!(output.contains("from schema version 43 to 44"), "{output}");
     assert_eq!(
         tables(&db).get("ix_repair_unnotified"),
         before.get("ix_repair_unnotified")
@@ -436,6 +546,8 @@ async fn previous_schema_upgrade_preserves_records() {
     let upgraded = tables(&db);
     assert_eq!(admin("upgrade").0, 0);
     assert_eq!(tables(&db), upgraded);
+    w.restart(&[]);
+    assert!(checks(&w, 1).await["merge_checks"].is_null());
 }
 
 #[tokio::test]

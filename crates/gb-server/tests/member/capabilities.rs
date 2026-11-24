@@ -267,6 +267,8 @@ fn readiness_of(url: &str, state: &str) -> Readiness {
             required_names: vec![],
             checks_expected: false,
             base_checks: 0,
+            merge_checks: None,
+            post_merge_checks: None,
         },
         feedback: Feedback::default(),
         failed_logs: None,
@@ -432,7 +434,10 @@ async fn wait_notices_keep_the_work_identity_and_do_not_wait_for_ready_prs() {
         .readiness(&pr, false, MAX_LOG_TAIL_BYTES)
         .await
         .unwrap();
-    assert_eq!(pending.report.required_checks, RequiredChecks::Running);
+    assert_eq!(
+        pending.report.required_checks,
+        Some(RequiredChecks::Running)
+    );
     let roster = BTreeMap::new();
     let r = Repository {
         services: &provider,
