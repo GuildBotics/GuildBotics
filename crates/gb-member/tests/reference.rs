@@ -98,7 +98,11 @@ fn reference_includes_standard_work_procedure() {
     assert!(text.contains(
         "A child PR with a closing link closes its ticket on merge into the collecting branch."
     ));
-    assert!(text.contains("Humans mark the collecting PR ready after all children are closed."));
+    assert!(
+        text.contains(
+            "The owner marks the collecting PR ready after all child tickets are closed."
+        )
+    );
     assert!(!text.contains("manual-close rule"));
     assert!(text.contains("does not by itself authorize closing the ticket"));
     assert!(text.contains("files[].commentable_lines"));
