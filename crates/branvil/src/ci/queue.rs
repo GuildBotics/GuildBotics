@@ -92,7 +92,7 @@ pub enum SkipReason {
 impl PathSkip {
     pub fn reason(&self) -> String {
         if self.reason == SkipReason::PostMerge {
-            return "post-merge only (post_merge in the pipeline)".into();
+            return "post-merge only".into();
         }
         format!(
             "no file matching paths changed since {}",

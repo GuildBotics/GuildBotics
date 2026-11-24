@@ -434,7 +434,7 @@ Selection records the post-merge jobs; a head is reselected when they change.
 Newly excluded queued jobs complete as `skipped`, not `cancelled`; running jobs finish
 and manual retries remain executable. A job that stops being post-merge only returns
 to normal path selection and queues a real attempt when it is selected again.
-The log for this decision is `[branvil] skipped: post-merge only (post_merge in the pipeline)`.
+The log for this decision is `[branvil] skipped: post-merge only`.
 
 Repair PR landing requires success of every head job as well as all required
 checks. A pending, skipped, or failed optional job blocks publication and merging.

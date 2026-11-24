@@ -312,7 +312,7 @@ export const en = {
   "ci.conclusion.timed_out": "timed out",
   "ci.conclusion.skipped": "skipped",
   "ci.postMergeReason":
-    "This job runs only after merging (post_merge in .guildbotics-ci.toml), so it doesn't run on pull requests. It runs in the main verification after the merge. You can retry it to check it now.",
+    "This job runs only after merging, so it doesn't run on pull requests. It runs in the main verification after the merge. You can retry it to check it now.",
   "ci.mergeDecision": "Merge decision",
   "ci.mergeDecisionNoRequired": "Branvil recorded no required checks for this head.",
   "ci.mergeDecisionUnavailable": "No merge decision checks were recorded for this pull request.",

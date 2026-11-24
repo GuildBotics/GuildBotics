@@ -315,7 +315,7 @@ export const ja: Record<MessageKey, string> = {
   "ci.conclusion.timed_out": "タイムアウト",
   "ci.conclusion.skipped": "スキップ",
   "ci.postMergeReason":
-    ".guildbotics-ci.toml の post_merge でマージ後だけ流すジョブなので、PR では流していません。マージのあとの main の確認で流れます。今すぐ確かめたいときは再実行で流せます。",
+    "マージ後だけ流すジョブなので、PR では流していません。マージのあとの main の確認で流れます。今すぐ確かめたいときは再実行で流せます。",
   "ci.mergeDecision": "マージの判定",
   "ci.mergeDecisionNoRequired": "この head に対する Branvil の必須チェックはありませんでした。",
   "ci.mergeDecisionUnavailable": "この PR のマージ判定に使ったチェックは記録されていません。",

@@ -141,10 +141,7 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
             &w.owner,
         )
         .await;
-    assert_eq!(
-        log["log"],
-        "[branvil] skipped: post-merge only (post_merge in the pipeline)\n"
-    );
+    assert_eq!(log["log"], "[branvil] skipped: post-merge only\n");
     let (status, result) = w
         .server
         .post(
