@@ -197,7 +197,11 @@ pub async fn notify(
     let Some(url) = vault.get(&secrets.webhook())? else {
         return Ok(false);
     };
-    webhook::send(&webhook::client(), &url, text)
+    let timeout = crate::config::Config::load(None, data)?
+        .limits
+        .webhook_timeout_secs;
+    let client = webhook::client(std::time::Duration::from_secs(timeout));
+    webhook::send(&client, &url, text)
         .await
         .map_err(anyhow::Error::msg)?;
     Ok(true)

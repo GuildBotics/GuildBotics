@@ -31,16 +31,14 @@ pub struct Autoland {
     problem: Mutex<Option<String>>,
 }
 
-impl Default for Autoland {
-    fn default() -> Self {
+impl Autoland {
+    pub(crate) fn new(webhook_timeout: Duration) -> Self {
         Self {
-            client: crate::webhook::client(),
+            client: crate::webhook::client(webhook_timeout),
             problem: Mutex::new(None),
         }
     }
-}
 
-impl Autoland {
     /// Shares delivery and its diagnostic with CI and landing notices. True
     /// only after delivery; an unset webhook is a successful no-op.
     pub(crate) async fn send(&self, secrets: &crate::vault::Secrets, text: &str) -> bool {

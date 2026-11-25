@@ -72,7 +72,7 @@ impl<'a> Fixture<'a> {
         }
     }
     async fn ticket(&self, title: &str, interactive: bool, parent: Option<String>) -> String {
-        let mut request = contracts::ticket_request(REPOSITORY, title);
+        let mut request = branvil::test_support::ticket_request(REPOSITORY, title);
         request.interactive = interactive;
         request.parent = parent;
         self.tickets

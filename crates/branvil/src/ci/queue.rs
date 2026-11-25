@@ -2439,6 +2439,33 @@ fn active(r: &impl Rd) -> AppResult<Vec<Attempt>> {
     Ok(out)
 }
 
+/// The next lease expiry or age at which an attempt can fail for lack of a runner.
+pub(super) fn next_sweep_at(
+    r: &impl Rd,
+    swept_at: &str,
+    absent_secs: u64,
+) -> AppResult<Option<String>> {
+    let lease = active(r)?
+        .into_iter()
+        .filter_map(|a| a.lease_expires_at)
+        .min();
+    let before = earlier(swept_at, absent_secs);
+    let mut queued = None;
+    for (_, id) in r.prefix_raw(store::IX_CI_PENDING, &[], None, usize::MAX)? {
+        let id = String::from_utf8_lossy(&id);
+        if let Some(attempt) = get_attempt(r, &id)?
+            && can_fail_without_runner(&attempt)
+            && attempt.created_at >= before
+        {
+            queued = queued.into_iter().chain(Some(attempt.created_at)).min();
+        }
+    }
+    Ok(lease
+        .into_iter()
+        .chain(queued.map(|at| later(&at, absent_secs)))
+        .min())
+}
+
 pub fn running_by_runner(r: &impl Rd) -> AppResult<BTreeMap<String, usize>> {
     let mut counts = BTreeMap::new();
     for attempt in active(r)? {
@@ -2571,6 +2598,15 @@ pub fn fail_queued(
     fail_unavailable(w, before, now, |_| Some(details.to_owned()))
 }
 
+fn can_fail_without_runner(attempt: &Attempt) -> bool {
+    // Automatic retries can wait for a runner without exhausting the budget.
+    !attempt.wait_for_runner
+        && attempt
+            .retry_decision
+            .as_ref()
+            .is_none_or(|retry| retry.selection.runner.is_none())
+}
+
 pub fn fail_unavailable(
     w: &Wtx,
     before: &str,
@@ -2583,15 +2619,7 @@ pub fn fail_unavailable(
         let Some(old) = get_attempt(w, &id)? else {
             continue;
         };
-        // Automatic retries wait for a runner instead of exhausting their
-        // entire budget while no runner is available.
-        if old.wait_for_runner
-            || old
-                .retry_decision
-                .as_ref()
-                .is_some_and(|retry| retry.selection.runner.is_some())
-            || old.created_at.as_str() >= before
-        {
+        if !can_fail_without_runner(&old) || old.created_at.as_str() >= before {
             continue;
         }
         let Some(details) = reason(&old) else {
@@ -4762,6 +4790,30 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn sweep_uses_the_earliest_lease_or_runner_absence_deadline() {
+        let (_dir, store) = store();
+        store
+            .write_sync(|w| {
+                register(w, reg("s1", "feature", &["test", "lint"]), 10, T0)?;
+                claim(w, "runner", 60, T0)?;
+                Ok(())
+            })
+            .unwrap();
+        let deadline = |swept_at, absent| {
+            store
+                .read_sync(|r| next_sweep_at(r, swept_at, absent))
+                .unwrap()
+        };
+        assert_eq!(deadline(T0, 30).as_deref(), Some(T1));
+        assert_eq!(deadline(T0, 90), Some(later(T0, 60)));
+        // An old queued job that survived a sweep is checked again at the
+        // normal interval, without keeping an elapsed deadline armed.
+        assert_eq!(deadline(T2, 30), Some(later(T0, 60)));
+        store.write_sync(|w| expire(w, T2)).unwrap();
+        assert_eq!(deadline(T2, 30), Some(later(T2, 30)));
     }
 
     #[test]

@@ -168,7 +168,9 @@ impl App {
             events,
             ci,
             upstream: crate::upstream::Upstream::new(&config.upstream),
-            autoland: Default::default(),
+            autoland: crate::autoland::Autoland::new(Duration::from_secs(
+                config.limits.webhook_timeout_secs,
+            )),
             cursor_key: crate::util::random_bytes::<32>().to_vec(),
             secrets,
             hook_secret: crate::util::random_secret::<32>(),

@@ -98,6 +98,8 @@ or diffs, and then run one short write transaction.
   `limits.git_http_timeout_secs` per Smart HTTP request
   (the child is killed), `limits.git_push_max_mib` request body,
   `limits.git_command_timeout_secs` and 64 MiB of output per service command.
+- Each owner webhook request has a `limits.webhook_timeout_secs` limit,
+  10 seconds by default.
 - Service-side Git children (Smart HTTP's included) run in a process group of
   their own, so a terminal's Ctrl-C or a supervisor that kills the service's
   group never reaches Git in the middle of a ref update: Git killed there

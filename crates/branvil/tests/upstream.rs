@@ -18,13 +18,19 @@ const AIKO_TOKEN: &str = "gh-aiko-9e2b";
 /// A world whose `acme/demo` follows `octo/demo` on the stand-in, with the
 /// owner's account set.
 pub(crate) async fn followed() -> (World, FakeGitHub) {
-    let mut w = World::new().await;
-    let gh = FakeGitHub::start(&w.dir.path().join("github")).await;
+    followed_with(|_| {}).await
+}
+
+pub(crate) async fn followed_with(configure: impl FnOnce(&std::path::Path)) -> (World, FakeGitHub) {
+    let gh = FakeGitHub::start().await;
+    let w = World::with_config(|data| {
+        gh.configure(data);
+        configure(data);
+    })
+    .await;
     gh.repository(GH, &w.work);
     gh.account(OWNER_TOKEN, "alice-gh");
     gh.account(AIKO_TOKEN, "aiko-bot");
-    gh.configure(&w.server.data);
-    w.restart(&[]);
     let s = &w.server;
     let (st, v) = s
         .put(
@@ -159,12 +165,10 @@ async fn accounts_are_checked_with_the_host_and_their_tokens_never_returned() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_repository_follows_its_upstream_and_its_default_branch_changes_only_there() {
-    let mut w = World::new().await;
-    let gh = FakeGitHub::start(&w.dir.path().join("github")).await;
+    let gh = FakeGitHub::start().await;
+    let w = World::with_config(|data| gh.configure(data)).await;
     gh.repository(GH, &w.work);
     gh.account(OWNER_TOKEN, "alice-gh");
-    gh.configure(&w.server.data);
-    w.restart(&[]);
     let s = &w.server;
     let upstream = format!("{}/upstream", w.repo_path());
     let setting = json!({"provider": "github", "repository": GH});
@@ -931,100 +935,113 @@ async fn a_pull_request_stays_with_the_repository_it_was_published_to() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn retained_publication_problems_apply_only_to_the_current_upstream() {
-    for condition in ["healthy", "stopped", "failed"] {
-        for destination in ["current", "different", "absent"] {
-            let (w, gh) = followed().await;
-            with_aiko_account(&w).await;
-            gh.repository("octo/other", &w.work);
-            let mut head = w.push_change("feature", "f.txt", "one\n");
-            let p = w.open_pull("feature", json!([])).await;
-            let n = p["number"].as_u64().unwrap();
-            let pull = format!("{}/pulls/{n}", w.repo_path());
-            let (st, v) = publish(&w, n).await;
-            assert_eq!(st, StatusCode::OK, "{condition}/{destination}: {v}");
-            match condition {
-                "stopped" => {
-                    commit_on_github(&gh, "feature", "Host-side suggestion");
-                    head = w.push_change("feature", "f.txt", "two\n");
-                }
-                "failed" => gh.check(&head, 51, "host-test", "failure", "failed\n"),
-                _ => {}
+async fn a_healthy_retained_publication_does_not_control_a_new_destination() {
+    retained_publication_problems("healthy").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stopped_retained_publication_does_not_control_a_new_destination() {
+    retained_publication_problems("stopped").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_retained_publication_does_not_control_a_new_destination() {
+    retained_publication_problems("failed").await;
+}
+
+async fn retained_publication_problems(condition: &str) {
+    for destination in ["different", "absent"] {
+        let (w, gh) = followed().await;
+        with_aiko_account(&w).await;
+        gh.repository("octo/other", &w.work);
+        let mut head = w.push_change("feature", "f.txt", "one\n");
+        let p = w.open_pull("feature", json!([])).await;
+        let n = p["number"].as_u64().unwrap();
+        let pull = format!("{}/pulls/{n}", w.repo_path());
+        let (st, v) = publish(&w, n).await;
+        assert_eq!(st, StatusCode::OK, "{condition}/{destination}: {v}");
+        match condition {
+            "stopped" => {
+                commit_on_github(&gh, "feature", "Host-side suggestion");
+                head = w.push_change("feature", "f.txt", "two\n");
             }
-            refresh(&w).await;
-            let expected = match condition {
-                "stopped" => None,
-                "failed" => Some("host_failed"),
-                _ => None,
-            };
-            eventually(
-                &format!("{condition}/{destination}: the current publication controls admission"),
-                || async {
-                    let got = w.server.ok(&pull, &w.owner).await;
-                    match expected {
-                        // The failure blocker is computed before the sweep posts its
-                        // notification. Wait for that comment before acknowledging it.
-                        Some(code) => [code, "unanswered"].iter().all(|code| {
-                            got["landing"]["blockers"]
-                                .as_array()
-                                .unwrap()
-                                .iter()
-                                .any(|b| b["code"] == *code)
-                        }),
-                        None => got["landing"]["blockers"] == json!([]),
-                    }
-                },
-            )
-            .await;
-            // The author answers what Branvil said of the failure.
-            w.acknowledge(n).await;
-            match destination {
-                "current" => continue,
-                "different" => {
-                    let (st, v) = w
-                        .server
-                        .put(
-                            &format!("{}/upstream", w.repo_path()),
-                            &w.owner,
-                            json!({"provider":"github", "repository":"octo/other"}),
-                        )
-                        .await;
-                    assert_eq!(st, StatusCode::OK, "{v}");
+            "failed" => gh.check(&head, 51, "host-test", "failure", "failed\n"),
+            _ => {}
+        }
+        refresh(&w).await;
+        let expected = match condition {
+            "stopped" => None,
+            "failed" => Some("host_failed"),
+            _ => None,
+        };
+        eventually(
+            &format!("{condition}/{destination}: the current publication controls admission"),
+            || async {
+                let got = w.server.ok(&pull, &w.owner).await;
+                match expected {
+                    // The failure blocker is computed before the sweep posts its
+                    // notification. Wait for that comment before acknowledging it.
+                    Some(code) => [code, "unanswered"].iter().all(|code| {
+                        got["landing"]["blockers"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|b| b["code"] == *code)
+                    }),
+                    None => got["landing"]["blockers"] == json!([]),
                 }
-                _ => {
-                    let (st, v) = w
-                        .server
-                        .delete(&format!("{}/upstream", w.repo_path()), &w.owner)
-                        .await;
-                    assert_eq!(st, StatusCode::OK, "{v}");
-                }
-            }
-            eventually(
-                &format!("{condition}/{destination}: an old publication cannot exclude the new destination"),
-                || async { w.server.ok(&pull, &w.owner).await["landing"]["blockers"] == json!([]) },
-            )
-            .await;
-            let got = w.server.ok(&pull, &w.owner).await;
-            assert_eq!(got["upstream"]["repository"], GH);
-            assert_eq!(got["head_sha"], head);
-            if destination == "different" {
-                let (st, v) = publish(&w, n).await;
-                assert_eq!(st, StatusCode::OK, "{condition}/{destination}: {v}");
-                assert_eq!(v["upstream"]["repository"], "octo/other");
-                assert_eq!(gh.pulls("octo/other").len(), 1);
-            } else {
+            },
+        )
+        .await;
+        // The author answers what Branvil said of the failure.
+        w.acknowledge(n).await;
+        match destination {
+            "different" => {
                 let (st, v) = w
                     .server
-                    .post(
-                        &format!("{pull}/merge"),
+                    .put(
+                        &format!("{}/upstream", w.repo_path()),
                         &w.owner,
-                        json!({"expected_head":head, "expected_base":got["base_sha"]}),
+                        json!({"provider":"github", "repository":"octo/other"}),
                     )
                     .await;
-                assert_eq!(st, StatusCode::OK, "{condition}/{destination}: {v}");
-                assert_eq!(v["head_sha"], head);
-                assert_eq!(v["merged"], true);
+                assert_eq!(st, StatusCode::OK, "{v}");
             }
+            _ => {
+                let (st, v) = w
+                    .server
+                    .delete(&format!("{}/upstream", w.repo_path()), &w.owner)
+                    .await;
+                assert_eq!(st, StatusCode::OK, "{v}");
+            }
+        }
+        eventually(
+            &format!(
+                "{condition}/{destination}: an old publication cannot exclude the new destination"
+            ),
+            || async { w.server.ok(&pull, &w.owner).await["landing"]["blockers"] == json!([]) },
+        )
+        .await;
+        let got = w.server.ok(&pull, &w.owner).await;
+        assert_eq!(got["upstream"]["repository"], GH);
+        assert_eq!(got["head_sha"], head);
+        if destination == "different" {
+            let (st, v) = publish(&w, n).await;
+            assert_eq!(st, StatusCode::OK, "{condition}/{destination}: {v}");
+            assert_eq!(v["upstream"]["repository"], "octo/other");
+            assert_eq!(gh.pulls("octo/other").len(), 1);
+        } else {
+            let (st, v) = w
+                .server
+                .post(
+                    &format!("{pull}/merge"),
+                    &w.owner,
+                    json!({"expected_head":head, "expected_base":got["base_sha"]}),
+                )
+                .await;
+            assert_eq!(st, StatusCode::OK, "{condition}/{destination}: {v}");
+            assert_eq!(v["head_sha"], head);
+            assert_eq!(v["merged"], true);
         }
     }
 }
@@ -1481,8 +1498,8 @@ fn reads_since(gh: &FakeGitHub, since: usize) -> Vec<String> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_reader_is_picked_once_and_changes_only_when_the_owner_or_a_removal_says_so() {
-    let mut w = World::new().await;
-    let gh = FakeGitHub::start(&w.dir.path().join("github")).await;
+    let gh = FakeGitHub::start().await;
+    let w = World::with_config(|data| gh.configure(data)).await;
     gh.repository(GH, &w.work);
     for (token, login) in [
         (OWNER_TOKEN, "alice-gh"),
@@ -1492,8 +1509,6 @@ async fn the_reader_is_picked_once_and_changes_only_when_the_owner_or_a_removal_
     ] {
         gh.account(token, login);
     }
-    gh.configure(&w.server.data);
-    w.restart(&[]);
     let s = &w.server;
     let same = json!({"provider": "github", "repository": GH});
 

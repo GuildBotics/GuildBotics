@@ -265,10 +265,13 @@ fi
                 let fake = Arc::new(Fake::new());
                 fake.sync_blocked.store(blocked, Ordering::SeqCst);
                 fake.sync_failed.store(!blocked, Ordering::SeqCst);
-                let runner = Arc::new(Runner::new(
-                    Api::new(&s.url, &s.runner_token),
-                    s.dir.path().join("runner"),
-                ));
+                let runner = Arc::new(
+                    Runner::new(
+                        Api::new(&s.url, &s.runner_token),
+                        s.dir.path().join("runner"),
+                    )
+                    .idle_wait(TEST_IDLE_WAIT),
+                );
                 let running = tokio::spawn(runner.serve({
                     let fake = fake.clone();
                     move || fake.clone()
@@ -556,12 +559,26 @@ fi
         /// and the repository acme/demo, whose main (tagged v1; the tag `later`
         /// is of a commit it does not reach) has `pipeline`, recorded so that its
         /// run is queued.
+        const TEST_IDLE_WAIT: Duration = Duration::from_millis(50);
+
+        async fn observe_more_claims(claims: &std::sync::atomic::AtomicUsize) {
+            let before = claims.load(Ordering::SeqCst);
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while claims.load(Ordering::SeqCst) - before < 3 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("the runner made three more claim requests");
+        }
+
         struct Service {
             dir: tempfile::TempDir,
             app: crate::app::Shared,
             url: String,
             owner: String,
             runner_token: String,
+            claims: Arc<std::sync::atomic::AtomicUsize>,
             http: reqwest::Client,
             repo: crate::model::Repo,
             bare: PathBuf,
@@ -662,8 +679,24 @@ fi
                 url.clone(),
             );
             // The test server's routes too: the test opens its PR over HTTP.
+            let claims = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = claims.clone();
             let mut router =
-                crate::http::router_with(app.clone(), crate::test_support::routes::routes());
+                crate::http::router_with(app.clone(), crate::test_support::routes::routes()).layer(
+                    axum::middleware::from_fn(
+                        move |request: axum::extract::Request, next: axum::middleware::Next| {
+                            let counted = counted.clone();
+                            async move {
+                                let claim = request.uri().path() == "/api/v1/runner/claim";
+                                let response = next.run(request).await;
+                                if claim {
+                                    counted.fetch_add(1, Ordering::SeqCst);
+                                }
+                                response
+                            }
+                        },
+                    ),
+                );
             if let Some(gate) = gate {
                 router = router.layer(axum::middleware::from_fn(
                     move |request: axum::extract::Request, next: axum::middleware::Next| {
@@ -740,6 +773,7 @@ fi
                 url,
                 owner,
                 runner_token,
+                claims,
                 http,
                 repo,
                 bare,
@@ -776,14 +810,13 @@ fi
             // environment or depending on an msb installed in the developer's home.
             const CHILD: &str = "GUILDBOTICS_TEST_LATE_RUNTIME_CHILD";
             if std::env::var_os(CHILD).is_none() {
-                for mode in ["ready", "doctor-failure"] {
+                let run_child = |mode: &'static str| async move {
                     let home = tempfile::tempdir().unwrap();
+                    let (_, module) = module_path!().split_once("::").unwrap();
+                    let name =
+                        format!("{module}::a_runtime_installed_after_startup_runs_the_next_job");
                     let output = tokio::process::Command::new(std::env::current_exe().unwrap())
-                        .args([
-                            "--exact",
-                            "runner::tests::a_runtime_installed_after_startup_runs_the_next_job",
-                            "--nocapture",
-                        ])
+                        .args(["--exact", &name, "--nocapture"])
                         .env(CHILD, mode)
                         .env("HOME", home.path())
                         .env("USERPROFILE", home.path())
@@ -792,7 +825,10 @@ fi
                         .await
                         .unwrap();
                     assert!(output.status.success(), "{mode}: {output:?}");
-                }
+                    let stdout = String::from_utf8(output.stdout).unwrap();
+                    assert!(stdout.contains("1 passed"), "{mode}: {stdout}");
+                };
+                tokio::join!(run_child("ready"), run_child("doctor-failure"));
                 return;
             }
             let doctor_fails = std::env::var(CHILD).unwrap() == "doctor-failure";
@@ -800,6 +836,19 @@ fi
                 "[[jobs]]\nname = \"build\"\nimage = \"alpine\"\ncommands = [\"echo ok\"]\n",
             )
             .await;
+            // This stand-in never starts a VM. Give its claims a budget that
+            // fits even on a small test runner.
+            let limits = crate::ci::config::JobLimits {
+                max_cpus: 1,
+                max_memory_mib: 512,
+                ..s.app.ci.settings().limits()
+            };
+            s.app
+                .ci
+                .settings()
+                .set_limits(Some("runner1"), limits)
+                .await
+                .unwrap();
             let msb = s.dir.path().join("msb");
             let home = s.dir.path().join("msb-home");
             let mut settings = Settings::new(
@@ -812,12 +861,13 @@ fi
             .unwrap();
             settings.msb_path = Some(msb.clone());
             settings.msb_home = home.clone();
+            settings.idle_wait = TEST_IDLE_WAIT;
             let serving = tokio::spawn(run(settings));
             let sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
             let settled = |sha: String| {
                 let s = &s;
                 async move {
-                    tokio::time::timeout(Duration::from_secs(20), async {
+                    let result = tokio::time::timeout(Duration::from_secs(20), async {
                         loop {
                             let result = result_of(s, &sha).await;
                             if result.conclusion.is_some() {
@@ -826,8 +876,14 @@ fi
                             tokio::time::sleep(Duration::from_millis(20)).await;
                         }
                     })
-                    .await
-                    .expect("the attempt finished")
+                    .await;
+                    match result {
+                        Ok(result) => result,
+                        Err(_) => panic!(
+                            "attempt {sha} did not finish: {}",
+                            s.app.ci.diagnostics().await
+                        ),
+                    }
                 }
             };
             tokio::time::timeout(Duration::from_secs(10), async {
@@ -898,21 +954,27 @@ esac
                 .unwrap();
                 assert_eq!(result_of(&s, &sha).await.status, "queued");
             } else {
+                let result = settled(sha.clone()).await;
                 assert_eq!(
-                    settled(sha.clone()).await.conclusion.as_deref(),
-                    Some("success")
+                    result.conclusion.as_deref(),
+                    Some("success"),
+                    "{:?}",
+                    result.details
                 );
             }
             assert_eq!(home.join("ran").is_file(), !doctor_fails);
             assert!(!serving.is_finished(), "the same runner is still serving");
             if !doctor_fails {
                 let another_sha = empty_main(&s, "runtime still ready").await;
+                let result = settled(another_sha).await;
                 assert_eq!(
-                    settled(another_sha).await.conclusion.as_deref(),
-                    Some("success")
+                    result.conclusion.as_deref(),
+                    Some("success"),
+                    "{:?}",
+                    result.details
                 );
             }
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            observe_more_claims(&s.claims).await;
             let calls = std::fs::read_to_string(msb.with_extension("calls")).unwrap();
             assert_eq!(
                 calls.lines().filter(|c| *c == "doctor").count(),
@@ -940,7 +1002,8 @@ esac
             let runner = Runner::new(
                 Api::new(&s.url, &s.runner_token),
                 s.dir.path().join("runner"),
-            );
+            )
+            .idle_wait(TEST_IDLE_WAIT);
             let fake = Fake::new();
             let first_sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
             runner.once(&fake).await.unwrap();
@@ -1004,7 +1067,8 @@ esac
             let runner = Runner::new(
                 Api::new(&s.url, &s.runner_token),
                 s.dir.path().join("runner"),
-            );
+            )
+            .idle_wait(TEST_IDLE_WAIT);
             let fake = Fake::new();
             let first_sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
             runner.once(&fake).await.unwrap();
@@ -1102,7 +1166,8 @@ esac
             let runner = Runner::new(
                 Api::new(&s.url, &s.runner_token),
                 s.dir.path().join("runner"),
-            );
+            )
+            .idle_wait(TEST_IDLE_WAIT);
             let fake = Fake::new();
             let first_sha = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
             runner.once(&fake).await.unwrap();
@@ -1174,7 +1239,8 @@ esac
             let runner = Runner::new(
                 Api::new(&s.url, &s.runner_token),
                 s.dir.path().join("runner"),
-            );
+            )
+            .idle_wait(TEST_IDLE_WAIT);
             let fake = Fake::new();
             assert!(runner.once(&fake).await.unwrap());
             let main = s.app.git.branch_tips(&s.bare).await.unwrap()["main"].clone();
@@ -1260,6 +1326,7 @@ esac
                 url,
                 owner,
                 runner_token,
+                claims,
                 http,
                 repo,
                 bare,
@@ -1279,7 +1346,8 @@ esac
                 }
             };
             max_jobs(2).await;
-            let runner = Runner::new(Api::new(&url, &runner_token), dir.path().join("runner"));
+            let runner = Runner::new(Api::new(&url, &runner_token), dir.path().join("runner"))
+                .idle_wait(TEST_IDLE_WAIT);
             // This tests scheduling, not heartbeat frequency. A three-second
             // lease can expire under CI contention and this fixture has no reaper.
             // Complete jobs explicitly; cancellation delivery is tested separately.
@@ -1398,7 +1466,7 @@ esac
                 count(s, "cancelled") == 2 && count(s, "in_progress") == 1
             })
             .await;
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            observe_more_claims(&claims).await;
             let seen = settle("lowered limit stays effective", |s| {
                 count(s, "in_progress") == 1 && count(s, "queued") == 1
             })
@@ -1442,7 +1510,8 @@ esac
             let runner = Runner::new(
                 Api::new(&s.url, &s.runner_token),
                 s.dir.path().join("runner"),
-            );
+            )
+            .idle_wait(TEST_IDLE_WAIT);
             let fake = Arc::new(Fake::new());
             let serving = tokio::spawn(Arc::new(runner).serve({
                 let fake = fake.clone();
@@ -1506,10 +1575,13 @@ esac
                 .set_limits(Some("runner1"), limits)
                 .await
                 .unwrap();
-            let runner = Arc::new(Runner::new(
-                Api::new(&s.url, &s.runner_token),
-                s.dir.path().join("runner"),
-            ));
+            let runner = Arc::new(
+                Runner::new(
+                    Api::new(&s.url, &s.runner_token),
+                    s.dir.path().join("runner"),
+                )
+                .idle_wait(TEST_IDLE_WAIT),
+            );
             let fake = Arc::new(Fake::new());
             let serving = tokio::spawn(runner.clone().serve({
                 let fake = fake.clone();
@@ -1580,6 +1652,7 @@ esac
             http,
             repo,
             bare,
+            ..
         } = service(
             "[[jobs]]\nname = \"ok\"\nimage = \"alpine\"\ncommands = [\"echo hello from the job\", \"write out/r.txt report\", \"git rev-parse HEAD\", \"git describe --tags\", \"git tag --list\", \"git ls-files\", \"git config --list --local\"]\nartifacts = [{name = \"report\", paths = [\"out/\"]}]\n\n\
              [[jobs]]\nname = \"slow\"\nimage = \"alpine\"\ncommands = [\"wait\"]\ntimeout_secs = 5000\n",
@@ -1598,7 +1671,8 @@ esac
                 .set_limits(Some("runner1"), limits)
                 .await
                 .unwrap();
-            let runner = Runner::new(Api::new(&url, &runner_token), dir.path().join("runner"));
+            let runner = Runner::new(Api::new(&url, &runner_token), dir.path().join("runner"))
+                .idle_wait(TEST_IDLE_WAIT);
             let fake = Fake::new();
             let job = |id: &str| {
                 let (http, url, owner, id) =

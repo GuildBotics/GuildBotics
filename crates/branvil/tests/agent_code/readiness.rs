@@ -1,44 +1,6 @@
 //! Provider-boundary readiness cases from the frozen Branvil code service.
 use super::*;
 
-async fn upload(base: &str, runner: &str, attempt: &Value, suffix: &str, body: &[u8]) {
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .unwrap();
-    let url = format!(
-        "{base}/api/v1/runner/attempts/{}{suffix}",
-        attempt["attempt_id"].as_str().unwrap()
-    );
-    let request = if suffix == "/log" {
-        client.post(url)
-    } else {
-        client.put(url)
-    };
-    let response = request
-        .bearer_auth(runner)
-        .header("x-branvil-lease", attempt["lease"].as_str().unwrap())
-        .body(body.to_vec())
-        .send()
-        .await
-        .unwrap();
-    assert!(response.status().is_success(), "{}", response.status());
-}
-
-async fn finish_claim(base: &str, runner: &str, attempt: &Value, conclusion: &str) {
-    api_call(
-        base,
-        &format!(
-            "/runner/attempts/{}/finish",
-            attempt["attempt_id"].as_str().unwrap()
-        ),
-        runner,
-        json!({"lease":attempt["lease"],"conclusion":conclusion,"image_digest":format!("sha256:{}","2".repeat(64))}),
-    )
-    .await;
-}
-
 async fn fixture(
     root: &Path,
     owner: &::branvil::api::MemberApi,
@@ -82,17 +44,6 @@ async fn fixture(
     (git, repo, head, pull)
 }
 
-async fn claim_head(base: &str, runner: &str, head: &str) -> Value {
-    for _ in 0..100 {
-        let attempt = next_claim(base, runner).await;
-        if attempt["sha"] == head {
-            return attempt;
-        }
-        finish_claim(base, runner, &attempt, "success").await;
-    }
-    panic!("readiness fixture head was never claimed");
-}
-
 pub(super) async fn primary_failure_logs_and_cancelled_fallback(
     root: &Path,
     owner: &::branvil::api::MemberApi,
@@ -101,6 +52,7 @@ pub(super) async fn primary_failure_logs_and_cancelled_fallback(
     owner_token: &str,
     runner: &str,
 ) {
+    let runner = Runner::at(base, runner);
     for only_cancelled in [false, true] {
         let name = if only_cancelled {
             "cancelled"
@@ -115,7 +67,7 @@ pub(super) async fn primary_failure_logs_and_cancelled_fallback(
         let (_, _, head, pull) = fixture(root, owner, code, owner_token, name, jobs).await;
         let mut expected_id = String::new();
         for _ in jobs {
-            let attempt = claim_head(base, runner, &head).await;
+            let attempt = runner.claim_head(&head).await;
             let job = attempt["job"]["name"].as_str().unwrap();
             let conclusion = match job {
                 "test" => "failure",
@@ -127,21 +79,36 @@ pub(super) async fn primary_failure_logs_and_cancelled_fallback(
                 "lint" => "stopped",
                 _ => "built",
             };
-            upload(base, runner, &attempt, "/log", log.as_bytes()).await;
+            assert!(
+                runner
+                    .raw(
+                        reqwest::Method::POST,
+                        &attempt,
+                        "log",
+                        log.as_bytes().to_vec()
+                    )
+                    .await
+                    .0
+                    .is_success()
+            );
             if job == "test" {
-                upload(
-                    base,
-                    runner,
-                    &attempt,
-                    "/artifacts/report",
-                    b"PK\x03\x04report",
-                )
-                .await;
+                assert!(
+                    runner
+                        .raw(
+                            reqwest::Method::PUT,
+                            &attempt,
+                            "artifacts/report",
+                            b"PK\x03\x04report".to_vec()
+                        )
+                        .await
+                        .0
+                        .is_success()
+                );
             }
             if job == "test" || only_cancelled {
                 expected_id = attempt["attempt_id"].as_str().unwrap().into();
             }
-            finish_claim(base, runner, &attempt, conclusion).await;
+            assert_eq!(runner.finish(&attempt, conclusion).await.0, 200);
         }
         let readiness = code
             .readiness(&pull.written.target.url, true, MAX_LOG_TAIL_BYTES)
@@ -187,18 +154,30 @@ pub(super) async fn ten_failed_logs_fit_one_page(
     owner_token: &str,
     runner: &str,
 ) {
+    let runner = Runner::at(base, runner);
     let names = (0..10).map(|n| format!("job{n}")).collect::<Vec<_>>();
     let names = names.iter().map(String::as_str).collect::<Vec<_>>();
     let (_, _, head, pull) = fixture(root, owner, code, owner_token, "budget", &names).await;
     let mut ids = std::collections::BTreeMap::new();
     for _ in 0..10 {
-        let attempt = claim_head(base, runner, &head).await;
+        let attempt = runner.claim_head(&head).await;
         ids.insert(
             attempt["job"]["name"].as_str().unwrap().to_owned(),
             attempt["attempt_id"].as_str().unwrap().to_owned(),
         );
-        upload(base, runner, &attempt, "/log", &vec![b'x'; MAX_PAGE_BYTES]).await;
-        finish_claim(base, runner, &attempt, "failure").await;
+        assert!(
+            runner
+                .raw(
+                    reqwest::Method::POST,
+                    &attempt,
+                    "log",
+                    vec![b'x'; MAX_PAGE_BYTES]
+                )
+                .await
+                .0
+                .is_success()
+        );
+        assert_eq!(runner.finish(&attempt, "failure").await.0, 200);
     }
     let page = code
         .read(
@@ -232,6 +211,7 @@ pub(super) async fn pending_closed_and_advanced_heads(
     owner_token: &str,
     runner: &str,
 ) {
+    let runner = Runner::at(base, runner);
     let (git, repo, head, pull) =
         fixture(root, owner, code, owner_token, "freshness", &["test"]).await;
     let pending = code
@@ -243,8 +223,8 @@ pub(super) async fn pending_closed_and_advanced_heads(
         pending.report.required_checks,
         Some(RequiredChecks::Running)
     );
-    let attempt = claim_head(base, runner, &head).await;
-    finish_claim(base, runner, &attempt, "success").await;
+    let attempt = runner.claim_head(&head).await;
+    assert_eq!(runner.finish(&attempt, "success").await.0, 200);
     assert_eq!(
         code.readiness(&pull.written.target.url, false, MAX_LOG_TAIL_BYTES)
             .await
@@ -283,8 +263,8 @@ pub(super) async fn pending_closed_and_advanced_heads(
         .await
         .unwrap();
     assert_eq!(closed.report.head_sha, advanced);
-    let attempt = claim_head(base, runner, &advanced).await;
-    finish_claim(base, runner, &attempt, "success").await;
+    let attempt = runner.claim_head(&advanced).await;
+    assert_eq!(runner.finish(&attempt, "success").await.0, 200);
 }
 
 pub(super) async fn author_yields_running_checks(
@@ -295,8 +275,9 @@ pub(super) async fn author_yields_running_checks(
     owner_token: &str,
     runner: &str,
 ) {
+    let runner = Runner::at(base, runner);
     let (_, repo, head, pull) = fixture(root, owner, code, owner_token, "yield", &["test"]).await;
-    let attempt = claim_head(base, runner, &head).await;
+    let attempt = runner.claim_head(&head).await;
     let n = pull
         .written
         .target
@@ -334,7 +315,7 @@ pub(super) async fn author_yields_running_checks(
             .unwrap(),
         0
     );
-    finish_claim(base, runner, &attempt, "failure").await;
+    assert_eq!(runner.finish(&attempt, "failure").await.0, 200);
     let ready = code
         .readiness(&pull.written.target.url, false, MAX_LOG_TAIL_BYTES)
         .await
@@ -346,9 +327,9 @@ pub(super) async fn author_yields_running_checks(
             .iter()
             .all(|c| c.conclusion.as_deref() != Some("cancelled"))
     );
-    let replacement = claim_head(base, runner, &head).await;
+    let replacement = runner.claim_head(&head).await;
     assert_ne!(replacement["attempt_id"], attempt["attempt_id"]);
-    finish_claim(base, runner, &replacement, "success").await;
+    assert_eq!(runner.finish(&replacement, "success").await.0, 200);
 }
 
 pub(super) async fn retry_main_verification(
@@ -383,15 +364,17 @@ pub(super) async fn retry_main_verification(
         .members_issue_token("retry-runner".into(), input(json!({"label":"fixture"})))
         .await
         .unwrap();
-    let mut runners = [runner, alternate.token.as_str()].into_iter().cycle();
+    let runner = Runner::at(base, runner);
+    let alternate = Runner::at(base, &alternate.token);
+    let mut runners = [&runner, &alternate].into_iter().cycle();
     let mut selected = runners.next().unwrap();
-    let mut attempt = claim_head(base, selected, &head).await;
+    let mut attempt = selected.claim_head(&head).await;
     loop {
         let before = serde_json::to_value(owner.repos_verification(&repo).await.unwrap()).unwrap()
             ["current"]["retry"]["number"]
             .as_u64()
             .unwrap();
-        finish_claim(base, selected, &attempt, "failure").await;
+        assert_eq!(selected.finish(&attempt, "failure").await.0, 200);
         let failed = tokio::time::timeout(std::time::Duration::from_secs(15), async {
             loop {
                 let state =
@@ -411,7 +394,7 @@ pub(super) async fn retry_main_verification(
             break;
         }
         selected = runners.next().unwrap();
-        attempt = claim_head(base, selected, &head).await;
+        attempt = selected.claim_head(&head).await;
     }
     let url = format!(
         "{base}/workspaces/{workspace}/repos/{name}/jobs/{}",
@@ -481,8 +464,8 @@ pub(super) async fn retry_main_verification(
         serde_json::to_value(verification).unwrap()["current"]["state"],
         "running"
     );
-    let retry = claim_head(base, runner, &head).await;
+    let retry = runner.claim_head(&head).await;
     assert!(next.ends_with(retry["attempt_id"].as_str().unwrap()));
     assert!(code.retry_job(&next, Default::default()).await.is_err());
-    finish_claim(base, runner, &retry, "success").await;
+    assert_eq!(runner.finish(&retry, "success").await.0, 200);
 }

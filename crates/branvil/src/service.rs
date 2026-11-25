@@ -45,7 +45,7 @@ impl Embedded {
     }
 
     pub async fn drain(&self) -> anyhow::Result<usize> {
-        let cut = self.app.ci.stop(false).await?;
+        let cut = self.app.ci.stop().await?;
         if cut > 0 {
             tracing::warn!("stopped with {cut} CI job(s) interrupted at the drain deadline");
         }

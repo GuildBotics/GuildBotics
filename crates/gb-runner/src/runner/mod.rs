@@ -146,6 +146,8 @@ enum RunnerCommand {
     },
 }
 
+const DEFAULT_IDLE_WAIT: Duration = Duration::from_secs(2);
+
 /// What the runner process needs, resolved from flags, environment, and the
 /// optional configuration.
 pub struct Settings {
@@ -154,6 +156,7 @@ pub struct Settings {
     pub work_dir: PathBuf,
     pub msb_path: Option<PathBuf>,
     pub msb_home: PathBuf,
+    pub idle_wait: Duration,
     #[cfg(feature = "host")]
     pub vm_home: Option<PathBuf>,
 }
@@ -175,6 +178,7 @@ impl Settings {
                 .or(default_work_dir)
                 .unwrap_or_else(|| executor::runner_home().join("work")),
             msb_path: ci.microsandbox.msb_path.clone(),
+            idle_wait: DEFAULT_IDLE_WAIT,
             #[cfg(feature = "host")]
             vm_home: None,
             msb_home: ci
@@ -713,7 +717,7 @@ pub async fn run(settings: Settings) -> anyhow::Result<()> {
             settings.work_dir.display()
         );
     }
-    let runner = Runner::new(api, settings.work_dir.clone());
+    let runner = Runner::new(api, settings.work_dir.clone()).idle_wait(settings.idle_wait);
     tracing::info!(
         "runner {name} serving {} (work directory {})",
         settings.url,
@@ -739,6 +743,7 @@ pub struct Runner {
     pub work_dir: PathBuf,
     cache: Arc<workspace::Cache>,
     sync_detail: Mutex<Option<String>>,
+    idle_wait: Duration,
 }
 
 impl Runner {
@@ -746,9 +751,16 @@ impl Runner {
         Self {
             cache: Arc::new(workspace::Cache::new(work_dir.join("cache"))),
             sync_detail: Mutex::new(None),
+            idle_wait: DEFAULT_IDLE_WAIT,
             api,
             work_dir,
         }
+    }
+
+    /// Sets the delay between successful polls when no job was claimed.
+    pub fn idle_wait(mut self, delay: Duration) -> Self {
+        self.idle_wait = delay;
+        self
     }
 
     #[cfg(feature = "test-support")]
@@ -777,7 +789,7 @@ impl Runner {
         let mut backoff = 1;
         let mut version_changed = false;
         'claiming: loop {
-            let mut wait = Duration::from_secs(2);
+            let mut wait = self.idle_wait;
             let result = async {
                 let hub = self.api.health().await?;
                 version_changed = hub.version != gb_base::BUILD_VERSION;
