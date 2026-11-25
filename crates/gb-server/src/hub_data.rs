@@ -243,6 +243,7 @@ fn excluded(relative: &Path) -> bool {
     [
         "local/clones",
         "local/cache",
+        "local/build-cache",
         "local/run",
         "local/agent_environment/snapshots",
         "local/msb",
@@ -728,6 +729,7 @@ mod tests {
         write(&source, "state/run.json", r#"{"schema_version":4}"#);
         write(&source, "local/secrets.enc.json", "opaque encrypted bytes");
         write(&source, "local/clones/huge", "excluded");
+        write(&source, "local/build-cache/yuki/sccache/huge", "excluded");
         write(
             &source,
             "local/agent_environment/snapshots/huge",
@@ -762,6 +764,7 @@ mod tests {
             );
         }
         assert!(!archive.join("0/.guildbotics/local/clones").exists());
+        assert!(!archive.join("0/.guildbotics/local/build-cache").exists());
         assert!(
             !archive
                 .join("0/.guildbotics/local/agent_environment/snapshots")
