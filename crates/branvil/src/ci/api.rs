@@ -543,32 +543,44 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     // too, so a claim it does not see gives out nothing.
     let ci = app.ci.clone();
     let (claimed, waiting, cache_write) = app
-        .store
-        .write(move |w| {
-            if ci.stopping() {
-                return Ok((None, None, false));
+        .finish(move |app| async move {
+            let selection = app
+                .store
+                .write(move |w| {
+                    if ci.stopping() {
+                        return Ok((None, None, false));
+                    }
+                    let (claimed, waiting) = queue::claim_images(
+                        w,
+                        queue::ClaimRunner {
+                            name: runner.clone(),
+                            images,
+                            limits,
+                            machine,
+                            has_free_slot: true,
+                            ram_fresh: reported_at.elapsed() <= super::RAM_REPORT_MAX_AGE,
+                            cache_groups,
+                            ram_unsupported_images,
+                        },
+                        lease_secs,
+                        &at,
+                        || ci.online_alternatives(w, &runner),
+                    )?;
+                    let cache_write = match claimed.as_ref() {
+                        Some(claim) if limits.cache_max_mib > 0 => {
+                            queue::keeps_cache(w, &claim.attempt)?
+                        }
+                        _ => false,
+                    };
+                    Ok((claimed, waiting, cache_write))
+                })
+                .await?;
+            if let (Some(claim), _, _) = &selection {
+                app.ci.sweep_changed();
+                app.events
+                    .publish("check", &claim.attempt.repo_path, claim.attempt.sha.clone());
             }
-            let (claimed, waiting) = queue::claim_images(
-                w,
-                queue::ClaimRunner {
-                    name: runner.clone(),
-                    images,
-                    limits,
-                    machine,
-                    has_free_slot: true,
-                    ram_fresh: reported_at.elapsed() <= super::RAM_REPORT_MAX_AGE,
-                    cache_groups,
-                    ram_unsupported_images,
-                },
-                lease_secs,
-                &at,
-                || ci.online_alternatives(w, &runner),
-            )?;
-            let cache_write = match claimed.as_ref() {
-                Some(claim) if limits.cache_max_mib > 0 => queue::keeps_cache(w, &claim.attempt)?,
-                _ => false,
-            };
-            Ok((claimed, waiting, cache_write))
+            AppResult::Ok(selection)
         })
         .await?;
     app.ci.report_resource_wait(c.name(), reported_at, waiting);
@@ -576,7 +588,6 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
     let a = &cl.attempt;
-    app.events.publish("check", &a.repo_path, a.sha.clone());
     Ok(ok(ClaimView {
         execution: gb_runner::ci::api::ExecutionLimits {
             limits,
@@ -916,25 +927,32 @@ async fn finish(
     }
     let now = util::now();
     let a = app
-        .store
-        .write(move |w| {
-            queue::finish(
-                w,
-                &id,
-                &input.lease,
-                &input.conclusion,
-                input.details,
-                queue::ResultInfo {
-                    image_digest: input.image_digest,
-                    peak_memory_mib: input.peak_memory_mib,
-                    reused_from: input.reused_from,
-                    cache_key: input.cache_key,
-                },
-                &now,
-            )
+        .finish(move |app| async move {
+            let attempt = app
+                .store
+                .write(move |w| {
+                    queue::finish(
+                        w,
+                        &id,
+                        &input.lease,
+                        &input.conclusion,
+                        input.details,
+                        queue::ResultInfo {
+                            image_digest: input.image_digest,
+                            peak_memory_mib: input.peak_memory_mib,
+                            reused_from: input.reused_from,
+                            cache_key: input.cache_key,
+                        },
+                        &now,
+                    )
+                })
+                .await?;
+            app.ci.attempt_ended();
+            app.events
+                .publish("check", &attempt.repo_path, attempt.sha.clone());
+            AppResult::Ok(attempt)
         })
         .await?;
-    app.events.publish("check", &a.repo_path, a.sha.clone());
     Ok(ok(view(&app, &a).await?))
 }
 

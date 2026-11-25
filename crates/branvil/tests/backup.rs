@@ -54,15 +54,13 @@ fn ls_remote(server: &Server, dir: &Path, token: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_backup_restores_into_another_directory_with_everything_linked() {
-    let mut w = World::new().await;
-    let gh = common::github::FakeGitHub::start(&w.dir.path().join("github")).await;
+    let gh = common::github::FakeGitHub::start().await;
+    let mut w = World::with_config(|data| gh.configure(data)).await;
     gh.repository("octo/demo", &w.work);
     let secret = "gh-token-7d1f";
     gh.account(secret, "alice-gh");
     let key = common::github::AppKey::generate();
     gh.app("4242", "777", "octo-app", &key);
-    gh.configure(&w.server.data);
-    w.restart(&[]);
     let s = &w.server;
 
     // Data of every kind: a ticket on the board, a pull request that closes

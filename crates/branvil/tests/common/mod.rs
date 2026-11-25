@@ -598,8 +598,14 @@ pub const REPO: &str = "acme/demo";
 
 impl World {
     pub async fn new() -> World {
+        Self::with_config(|_| {}).await
+    }
+
+    /// Configure the initialized data directory before the service reads it.
+    pub async fn with_config(configure: impl FnOnce(&Path)) -> World {
         let dir = tempfile::tempdir().unwrap();
         let owner = init(dir.path(), "alice");
+        configure(&dir.path().join("data"));
         let server = Server::start(dir.path());
         let s = &server;
         assert_eq!(

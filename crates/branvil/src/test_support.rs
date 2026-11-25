@@ -5,6 +5,7 @@ pub use service::{
     FileVault, OWNER_TOKEN, Running, SESSION_COOKIE, SESSION_CSRF, TestHost, initialize, serve,
 };
 
+use crate::agent::port::CreateTicket;
 use crate::api::{DataApi, MemberApi};
 use crate::ci::pipeline::{self, PIPELINE_PATH};
 use serde::de::DeserializeOwned;
@@ -135,6 +136,20 @@ commands = ["true"]
 
 pub fn input<T: DeserializeOwned>(value: Value) -> T {
     serde_json::from_value(value).expect("fixture input")
+}
+
+pub fn ticket_request(tracker: &str, title: &str) -> CreateTicket {
+    CreateTicket {
+        tracker: tracker.into(),
+        title: title.into(),
+        body: String::new(),
+        labels: vec![],
+        interactive: false,
+        assignee: None,
+        lane: None,
+        parent: None,
+        blocked_by: vec![],
+    }
 }
 
 /// Owns the service and its temporary storage, in shutdown order.
@@ -308,6 +323,38 @@ impl Fixture {
     pub async fn stop(self) {
         self.running.stop().await.unwrap();
     }
+}
+
+/// Fill another page with copies of an API-created pull on distinct bases.
+pub async fn seed_open_pulls(data: &DataApi, repo: &str, head: &str, n: usize) -> Vec<String> {
+    let repo = repo.to_owned();
+    let head = head.to_owned();
+    let base_url = data.base_url().to_owned();
+    data.app
+        .store
+        .write(move |w| {
+            use crate::domain::{pulls, repo_by_path};
+            let repo = repo_by_path(w, &repo)?;
+            let first = pulls::load_pull(w, &repo, 1)?;
+            assert_eq!(first.head, head);
+            assert_eq!(first.state, "open");
+            (0..n)
+                .map(|i| {
+                    let number = w.next(&format!("pull:{}", repo.id))?;
+                    let pull = crate::model::Pull {
+                        number,
+                        base: format!("order-base-{i}"),
+                        ..first.clone()
+                    };
+                    pulls::write_pull(w, None, &pull)?;
+                    Ok(crate::util::item_url(
+                        &base_url, &repo.path, "pulls", number,
+                    ))
+                })
+                .collect()
+        })
+        .await
+        .unwrap()
 }
 
 /// Drive the commit's single CI job on an embedded service without starting a runner.

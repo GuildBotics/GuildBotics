@@ -1,8 +1,8 @@
 //! Sending to the owner's webhook.
 
-pub fn client() -> reqwest::Client {
+pub fn client(timeout: std::time::Duration) -> reqwest::Client {
     reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
         .user_agent(concat!("branvil/", env!("CARGO_PKG_VERSION")))
         .build()
@@ -68,13 +68,25 @@ mod tests {
             "the webhook request timed out"
         );
         let status = format!("http://{address}/secret-status");
-        let error = send(&client(), &status, "notice").await.unwrap_err();
+        let error = send(
+            &client(std::time::Duration::from_secs(1)),
+            &status,
+            "notice",
+        )
+        .await
+        .unwrap_err();
         assert!(error.contains("500"), "{error}");
         assert!(!error.contains("secret"), "{error}");
         server.abort();
         let _ = server.await;
         assert_eq!(
-            send(&client(), &status, "notice").await.unwrap_err(),
+            send(
+                &client(std::time::Duration::from_secs(1)),
+                &status,
+                "notice"
+            )
+            .await
+            .unwrap_err(),
             "could not connect to the webhook"
         );
     }

@@ -61,9 +61,7 @@ async fn mint_token(app: &Shared) -> AppResult<String> {
             ))
         })
         .await?;
-    for (path, sha) in changed {
-        app.events.publish("check", &path, sha);
-    }
+    app.ci.publish(&changed);
     Ok(token)
 }
 

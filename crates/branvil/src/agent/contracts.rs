@@ -1,21 +1,9 @@
 //! Shared behavioral contracts, run against real hermetic provider fixtures.
 use crate::agent::TicketAgent;
 use crate::agent::port::*;
+use crate::test_support::ticket_request;
 use serde_json::{Value, json};
 
-pub fn ticket_request(tracker: &str, title: &str) -> CreateTicket {
-    CreateTicket {
-        tracker: tracker.into(),
-        title: title.into(),
-        body: String::new(),
-        labels: vec![],
-        interactive: false,
-        assignee: None,
-        lane: None,
-        parent: None,
-        blocked_by: vec![],
-    }
-}
 async fn ticket_detail(t: &TicketAgent, url: &str) -> Value {
     let p = t.read(Resource::Tickets, url, None, "").await.unwrap();
     assert_eq!(p.items().len(), 1);

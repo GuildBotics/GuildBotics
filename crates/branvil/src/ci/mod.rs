@@ -218,6 +218,8 @@ struct Inner {
     required: Mutex<BTreeMap<(String, String, String), PullRequired>>,
     /// Set by `stop`: when the wait for the running jobs ends.
     stopping: OnceLock<String>,
+    sweep_changed: tokio::sync::Notify,
+    attempts_ended: tokio::sync::Notify,
     /// Serializes log appends (one file per attempt, small writes).
     log_lock: tokio::sync::Mutex<()>,
 }
@@ -247,6 +249,8 @@ impl Ci {
                 runners: Mutex::new(BTreeMap::new()),
                 required: Mutex::new(BTreeMap::new()),
                 stopping: OnceLock::new(),
+                sweep_changed: tokio::sync::Notify::new(),
+                attempts_ended: tokio::sync::Notify::new(),
                 log_lock: tokio::sync::Mutex::new(()),
             }),
         }
@@ -286,9 +290,21 @@ impl Ci {
     }
 
     fn publish(&self, changed: &[(String, String)]) {
+        if !changed.is_empty() {
+            self.sweep_changed();
+            self.attempt_ended();
+        }
         for (path, sha) in changed {
             self.inner.events.publish("check", path, sha.clone());
         }
+    }
+
+    fn sweep_changed(&self) {
+        self.inner.sweep_changed.notify_one();
+    }
+
+    fn attempt_ended(&self) {
+        self.inner.attempts_ended.notify_waiters();
     }
 
     pub fn reused_from(&self, a: &Attempt, source: &queue::Source) -> Option<ReusedFrom> {
@@ -1070,7 +1086,7 @@ impl Ci {
                 runners.values().map(|r| r.last_seen_at.clone()).max(),
             )
         };
-        if last_contact.elapsed() > Duration::from_secs(absent) {
+        if last_contact.elapsed() >= Duration::from_secs(absent) {
             let details = format!(
                 "No CI runner has contacted the server for {absent} s (last contact: {}). Start `guildbotics runner` (docs/ci.md)",
                 last_text.unwrap_or_else(|| "none since GuildBotics started".into())
@@ -1140,15 +1156,16 @@ impl Ci {
     /// `ci.stop_wait_secs`. The checks
     /// still running then are interrupted and queued again in their place,
     /// ahead of the jobs queued meanwhile (which run after the next start);
-    /// it returns how many. With `announce`, it says on stdout that it waits
-    /// (`cli::serve`).
-    pub async fn stop(&self, announce: bool) -> AppResult<usize> {
+    /// it returns how many.
+    pub async fn stop(&self) -> AppResult<usize> {
         let wait = self.inner.config.stop_wait_secs;
         let deadline = Instant::now() + Duration::from_secs(wait);
         let _ = self.inner.stopping.set(queue::later(&util::now(), wait));
         // The first count is a write, so it comes after every claim that did
         // not see the service stopping; no claim succeeds after it.
         let store = &self.inner.store;
+        let ended = self.inner.attempts_ended.notified();
+        tokio::pin!(ended);
         let mut running = store.write(|w| Ok(queue::counts(w)?.1)).await?;
         let mut told = 0;
         while running > 0 {
@@ -1164,22 +1181,16 @@ impl Ci {
                 return Ok(changed.len());
             }
             if running != told {
-                // The standalone service announces the wait once on stdout.
-                if told == 0 && announce {
-                    use std::io::Write;
-                    let mut out = std::io::stdout().lock();
-                    let _ = writeln!(
-                        out,
-                        "branvil stopping: waiting for {running} running CI job(s) to finish, at most {wait} s"
-                    )
-                    .and_then(|_| out.flush());
-                }
                 tracing::info!(
                     "stopping: waiting for {running} running CI job(s) to finish, at most {wait} s after the stop began; new jobs wait for the next start"
                 );
                 told = running;
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::select! {
+                _ = &mut ended => {}
+                _ = tokio::time::sleep_until(deadline.into()) => {}
+            }
+            ended.set(self.inner.attempts_ended.notified());
             running = store.read(|r| Ok(queue::counts(r)?.1)).await?;
         }
         Ok(0)
@@ -1472,8 +1483,44 @@ impl Ci {
         }))
     }
 
-    /// Starts the periodic work: sweep every 5 s, reconcile every minute,
-    /// retention every hour, and one orphan-file collection at start.
+    async fn wait_for_sweep(&self, observed: Instant, swept_at: &str, regular: Instant) {
+        let absent = self.inner.config.runner_absent_secs;
+        loop {
+            let startup = self.inner.started + Duration::from_secs(absent);
+            let mut deadline = if startup > observed {
+                regular.min(startup)
+            } else {
+                regular
+            };
+            let swept_at = swept_at.to_owned();
+            match self
+                .inner
+                .store
+                .read(move |r| queue::next_sweep_at(r, &swept_at, absent))
+                .await
+            {
+                Ok(Some(at)) => {
+                    if let Ok(at) = chrono::DateTime::parse_from_rfc3339(&at) {
+                        // Stored times have millisecond precision and expire after the deadline.
+                        let remaining = (at + chrono::Duration::milliseconds(1)
+                            - chrono::Utc::now().with_timezone(at.offset()))
+                        .to_std()
+                        .unwrap_or_default();
+                        deadline = deadline.min(Instant::now() + remaining);
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!("CI: reading deadlines failed: {e}"),
+            }
+            tokio::select! {
+                biased;
+                _ = tokio::time::sleep_until(deadline.into()) => return,
+                _ = self.inner.sweep_changed.notified() => {}
+            }
+        }
+    }
+
+    /// Starts the sweep, minute reconciliation, hourly retention and orphan collection.
     pub fn start(app: crate::app::Shared) {
         verify::start(app.clone());
         tokio::spawn(async move {
@@ -1483,23 +1530,35 @@ impl Ci {
                 Ok(n) => tracing::info!("CI: removed {n} orphaned log/artifact file(s)"),
                 Err(e) => tracing::warn!("CI: orphan collection failed: {e}"),
             }
-            let mut tick: u64 = 0;
+            let mut reconcile_at = Instant::now();
+            let mut retain_at = reconcile_at;
             loop {
-                if tick.is_multiple_of(12)
-                    && let Err(e) = ci.reconcile(&app).await
-                {
-                    tracing::warn!("CI: reconcile failed: {e}");
+                let now = Instant::now();
+                if now >= reconcile_at {
+                    reconcile_at = now + Duration::from_secs(60);
+                    if let Err(e) = ci.reconcile(&app).await {
+                        tracing::warn!("CI: reconcile failed: {e}");
+                    }
                 }
-                if let Err(e) = ci.sweep().await {
-                    tracing::warn!("CI: sweep failed: {e}");
+                let observed = Instant::now();
+                let swept_at = util::now();
+                let sweep = ci.sweep().await;
+                if now >= retain_at {
+                    retain_at = now + Duration::from_secs(3600);
+                    if let Err(e) = files::apply_retention(&app).await {
+                        tracing::warn!("CI: retention failed: {e}");
+                    }
                 }
-                if tick.is_multiple_of(720)
-                    && let Err(e) = files::apply_retention(&app).await
-                {
-                    tracing::warn!("CI: retention failed: {e}");
+                let regular = (Instant::now() + Duration::from_secs(5))
+                    .min(reconcile_at)
+                    .min(retain_at);
+                match sweep {
+                    Ok(()) => ci.wait_for_sweep(observed, &swept_at, regular).await,
+                    Err(e) => {
+                        tracing::warn!("CI: sweep failed: {e}");
+                        tokio::time::sleep_until(regular.into()).await;
+                    }
                 }
-                tick += 1;
-                tokio::time::sleep(Duration::from_secs(5)).await;
             }
         });
     }

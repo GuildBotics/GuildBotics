@@ -70,16 +70,15 @@ pub(super) async fn reused_and_gates(
                 &credential.password,
             );
             let pr = open(c, &repo, "same").await;
-            let attempt = api_call(
-                base,
-                "/runner/claim",
-                runner,
-                json!({"executor":"microsandbox","executor_state":"ready","version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true,"architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","2".repeat(64))}]}),
-            )
-            .await;
+            let runner = Runner::at(base, runner);
+            let attempt = runner.claim().await.unwrap();
             assert_eq!(attempt["sha"], same);
             assert_eq!(attempt["reuse"]["sha"], head);
-            api_call(base,&format!("/runner/attempts/{}/finish",attempt["attempt_id"].as_str().unwrap()),runner,json!({"lease":attempt["lease"],"conclusion":"success","image_digest":format!("sha256:{}","2".repeat(64)),"reused_from":attempt["reuse"]["attempt_id"]})).await;
+            let (status, result) = runner.post(&attempt, "finish", json!({
+                "lease": attempt["lease"], "conclusion": "success",
+                "image_digest": crate::ci::DIGEST, "reused_from": attempt["reuse"]["attempt_id"],
+            })).await;
+            assert_eq!(status, 200, "{result}");
             assert_eq!(
                 c.readiness(&pr.written.target.url, false, MAX_LOG_TAIL_BYTES)
                     .await

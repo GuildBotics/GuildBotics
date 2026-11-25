@@ -1,20 +1,7 @@
 use branvil::agent::port::*;
 use branvil::agent::{CodeAgent, TicketAgent};
-use serde_json::json;
-pub fn ticket_request(tracker: &str, title: &str) -> CreateTicket {
-    CreateTicket {
-        tracker: tracker.into(),
-        title: title.into(),
-        body: String::new(),
-        labels: vec![],
-        interactive: false,
-        assignee: None,
-        lane: None,
-        parent: None,
-        blocked_by: vec![],
-    }
-}
 use branvil::test_support::ticket_items as tracker_items;
+use serde_json::json;
 pub async fn ticket_search_decoy_contract(
     t: &TicketAgent,
     c: &CodeAgent,
@@ -1125,44 +1112,24 @@ pub async fn code_cross_repo_link_contract(code: &CodeAgent, url: &str, other_ti
     .unwrap();
 }
 
-/// Branvil lists newest first across signed pages; Local preserves its frozen
-/// ascending store order. Both traverse more than one provider page fully.
+/// Branvil lists newest first across signed pages.
 pub async fn code_open_order_contract(
     code: &CodeAgent,
     repository: &str,
     head: &str,
-    bases: &[String],
-    newest_first: bool,
+    created: Vec<String>,
 ) {
     assert!(
-        bases.len() > 100,
+        created.len() > 100,
         "fixture must cross Branvil's page boundary"
     );
-    let mut created = vec![];
-    for base in bases {
-        let result = code
-            .create_pull_request(CreatePullRequest {
-                repository: repository.into(),
-                head: head.into(),
-                base: base.clone(),
-                title: format!("page {base}"),
-                body: String::new(),
-                draft: false,
-                tickets: vec![],
-            })
-            .await
-            .unwrap();
-        assert!(result.created);
-        created.push(result.written.target.url);
-    }
-    let counted = code.authored_open_pull_requests().await.unwrap();
-    assert!(created.iter().all(|url| counted.contains(url)));
-    if newest_first {
-        created.reverse();
-    }
+    let expected = created.into_iter().rev().collect::<Vec<_>>();
+    let mut authored = expected.clone();
+    authored.sort();
+    assert_eq!(code.authored_open_pull_requests().await.unwrap(), authored);
     assert_eq!(
         code.open_pull_requests(repository, head).await.unwrap(),
-        created
+        expected
     );
     assert!(
         code.open_pull_requests(repository, "contract-absent-head")

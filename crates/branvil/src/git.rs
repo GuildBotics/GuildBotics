@@ -959,8 +959,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let layout = Layout::new(&temp.path().join("service"));
         layout.create().unwrap();
-        // Long enough for Git to reach its hook on a loaded runner.
-        let git = Git::new(layout.clone(), 2, Duration::from_secs(5));
+        let git = Git::new(layout.clone(), 2, Duration::from_millis(500));
         let dir = temp.path().join("demo.git");
         git.init_bare(&dir, "main").await.unwrap();
         let blob = git
@@ -985,6 +984,15 @@ mod tests {
                 .await
                 .unwrap()
         );
+        if !reached.exists() {
+            // On a loaded runner, allow time for Git to enter the hook.
+            let git = Git::new(layout, 2, Duration::from_secs(5));
+            assert!(
+                !git.update_ref(&dir, name, &blob, ZERO_SHA, "test")
+                    .await
+                    .unwrap()
+            );
+        }
         let sleep: libc::pid_t = std::fs::read_to_string(&reached)
             .expect("Git reached the hook before its time limit")
             .trim()

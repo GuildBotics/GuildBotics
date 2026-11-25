@@ -95,6 +95,8 @@ pub struct LimitsConfig {
     pub git_http_timeout_secs: u64,
     /// Wall-clock limit of one service-side Git command, in seconds.
     pub git_command_timeout_secs: u64,
+    /// Wall-clock limit of a webhook request sent by the running service, in seconds.
+    pub webhook_timeout_secs: u64,
     /// Largest accepted push body, in MiB.
     pub git_push_max_mib: u64,
     /// Largest JSON request body, in KiB.
@@ -108,6 +110,7 @@ impl Default for LimitsConfig {
             git_http_concurrency: 8,
             git_http_timeout_secs: 600,
             git_command_timeout_secs: 120,
+            webhook_timeout_secs: 10,
             git_push_max_mib: 1024,
             api_body_max_kib: 1024,
         }
@@ -257,6 +260,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let c = Config::load(None, dir.path()).unwrap();
         assert_eq!(c.storage.cache_size_mib, 32);
+        assert_eq!(c.limits.webhook_timeout_secs, 10);
         std::fs::write(
             dir.path().join("config.toml"),
             "listen = \"127.0.0.1:7878\"\n",

@@ -19,7 +19,8 @@ use crate::common::github::Refusal;
 use crate::common::*;
 use crate::pulls::review;
 use crate::upstream::{
-    GH, branch_on_github, commit_on_github, followed, publish, refresh, with_aiko_account,
+    GH, branch_on_github, commit_on_github, followed, followed_with, publish, refresh,
+    with_aiko_account,
 };
 
 const OTHER: &str = "acme/other";
@@ -510,22 +511,19 @@ fn registration_over(w: &mut World) {
     w.restart(&[]);
 }
 
+fn set_registration_window(data: &std::path::Path, seconds: i64) {
+    let path = data.join("config.toml");
+    let mut config: toml::Table = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+    config["upstream"].as_table_mut().unwrap().insert(
+        "checks_registration_secs".into(),
+        toml::Value::Integer(seconds),
+    );
+    std::fs::write(path, toml::to_string(&config).unwrap()).unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_registration_deadline_polls_without_waiting_for_the_regular_interval() {
-    let (mut w, gh) = followed().await;
-    // Both regular intervals are an hour. Only the registration deadline
-    // can poll the already-finished checks in time to send this notice.
-    let config = w.server.data.join("config.toml");
-    let text = std::fs::read_to_string(&config).unwrap();
-    std::fs::write(
-        &config,
-        text.replace(
-            "checks_registration_secs = 0",
-            "checks_registration_secs = 5",
-        ),
-    )
-    .unwrap();
-    w.restart(&[]);
+    let (w, gh) = followed_with(|data| set_registration_window(data, 5)).await;
     let hook = Hook::start(&w, &[]).await;
     with_aiko_account(&w).await;
     settings(&w, json!({"auto_land": true})).await;
@@ -570,16 +568,7 @@ async fn the_registration_deadline_polls_without_waiting_for_the_regular_interva
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_webhook_is_told_only_once_every_host_check_of_the_head_succeeded() {
-    let (mut w, gh) = followed().await;
-    // GitHub takes its time to register the checks of a new head.
-    let config = w.server.data.join("config.toml");
-    let text = std::fs::read_to_string(&config).unwrap();
-    let text = text.replace(
-        "checks_registration_secs = 0",
-        "checks_registration_secs = 3600",
-    );
-    std::fs::write(&config, text).unwrap();
-    w.restart(&[]);
+    let (mut w, gh) = followed_with(|data| set_registration_window(data, 3600)).await;
     let hook = Hook::start(&w, &[]).await;
     let other = other_repo(&w, OTHER, true).await;
     with_aiko_account(&w).await;
@@ -897,8 +886,16 @@ async fn a_changed_upstream_never_notifies_the_old_publication_or_republishes_au
 /// `acme/other` has a pull request that can land, landing by itself from this
 /// start; the webhook holds every answer. The start sweeps `acme/demo`
 /// (created first), then `acme/other`. Returns that pull request's number.
-async fn notices_before_a_landing() -> (World, Hook, Other, u64) {
-    let (mut w, _gh) = followed().await;
+async fn notices_before_a_landing(timeout_secs: u64) -> (World, Hook, Other, u64) {
+    let (mut w, _gh) = followed_with(|data| {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(data.join("config.toml"))
+            .unwrap();
+        writeln!(file, "\n[limits]\nwebhook_timeout_secs = {timeout_secs}").unwrap();
+    })
+    .await;
     with_aiko_account(&w).await;
     settings(&w, json!({"auto_land": true})).await;
     for branch in ["one"] {
@@ -921,7 +918,7 @@ async fn notices_before_a_landing() -> (World, Hook, Other, u64) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_repository_switched_off_while_a_sweep_walks_lands_nothing() {
-    let (w, hook, other, fix) = notices_before_a_landing().await;
+    let (w, hook, other, fix) = notices_before_a_landing(10).await;
     // The sweep waits at acme/demo's first notice; acme/other is switched off.
     eventually("the notice", || async { hook.received().len() == 1 }).await;
     let at = format!("/repos/{}", encode(OTHER));
@@ -943,17 +940,21 @@ async fn a_repository_switched_off_while_a_sweep_walks_lands_nothing() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_webhook_that_hangs_holds_landing_in_another_repository_up_once_at_most() {
-    let (w, hook, other, fix) = notices_before_a_landing().await;
+    const TIMEOUT_SECS: u64 = 1;
+    let (w, hook, other, fix) = notices_before_a_landing(TIMEOUT_SECS).await;
     let started = std::time::Instant::now();
     eventually("the landing", || async {
         other_pull(&w, &other, fix).await["merged"] == true
     })
     .await;
-    // One send that timed out (10 s), and no other in that sweep: every
-    // sweep tries the first notice only.
+    // The sweep tries the first notice and waits for at most one timeout.
     let waited = started.elapsed();
-    assert!(waited < std::time::Duration::from_secs(20), "{waited:?}");
+    assert!(
+        waited < std::time::Duration::from_secs(2 * TIMEOUT_SECS),
+        "{waited:?}"
+    );
     let received = hook.received();
+    assert!(!received.is_empty());
     assert!(
         received
             .iter()
@@ -1007,19 +1008,7 @@ async fn an_automatic_missing_credential_is_persisted_and_clears_after_repair() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_statement_on_a_published_pull_request_holds_its_notice_until_answered() {
-    let (mut w, _gh) = followed().await;
-    // The host takes its time to register the checks of the head.
-    let config = w.server.data.join("config.toml");
-    let text = std::fs::read_to_string(&config).unwrap();
-    std::fs::write(
-        &config,
-        text.replace(
-            "checks_registration_secs = 0",
-            "checks_registration_secs = 3600",
-        ),
-    )
-    .unwrap();
-    w.restart(&[]);
+    let (mut w, _gh) = followed_with(|data| set_registration_window(data, 3600)).await;
     let hook = Hook::start(&w, &[]).await;
     let other = other_repo(&w, OTHER, true).await;
     with_aiko_account(&w).await;
