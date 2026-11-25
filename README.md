@@ -179,7 +179,7 @@ Open the **Service** screen and press **Run**. A worker starts for each active m
 
 The screen has three execution sources, each toggled individually with **Include in service run**; at least one stays included. The choices, the patrol interval, and the failure limit are saved on this machine's server, so every start runs with them: from any screen, from `guildbotics service start`, or by the server as it starts. A change made while the service runs applies from its next start.
 
-- **Patrol commands**: the ticket-driven workflow wakes on changes and works through all candidates. The **Patrol interval (minutes)** (default 3 minutes) is the interval for rechecking work that those changes do not cover. Other patrol commands run in round-robin order at this interval. When the project uses a ticket service, a new member gets the ticket-driven workflow as its default; otherwise it starts with no patrol commands, so pick them under **Settings → Members and patrol → Patrol**
+- **Patrol commands**: the ticket-driven workflow wakes on changes and works through all candidates. The **Patrol interval (minutes)** (default 3 minutes) is the interval for rechecking work that those changes do not cover. Other patrol commands run in round-robin order at this interval. When the project uses a ticket service, a new member gets the ticket-driven workflow as its default; otherwise it starts with no patrol commands, so edit the member under **Settings → Members and patrol** and pick the commands on the **Patrol** tab
 - **Scheduled commands**: runs the scheduled commands defined in member settings at the times you specify
 - **Event triggers**: receives events such as Slack messages and routes them to the chat workflow
 
@@ -236,9 +236,9 @@ How it behaves in Slack (reply with a message / only add a reaction / do nothing
 
 Two things need to be configured:
 
-First choose Slack under **Settings → Integrations → Chat**; the members then have a Slack tab.
+Choose Slack under **Settings → Integrations → Chat** and save. The Slack tab then appears in the member editor.
 
-1. **Create a Slack App**: under **Settings → Members and patrol → Slack**, choose **Register a new app** and press **Create the app on Slack**. The browser opens with the required scopes, Socket Mode and event subscriptions already configured, so you pick a workspace and create the app. Then press **Reinstall to Workspace** under **OAuth & Permissions** and copy the two tokens (`xoxb-...` / `xapp-...`) — the first bot token Slack issues does not carry the scopes, so the reinstall is required
+1. **Create a Slack App**: under **Settings → Members and patrol**, edit the member. On the **Slack** tab, choose **Register a new app** and press **Create the app on Slack**. The browser opens with the required scopes, Socket Mode and event subscriptions already configured, so you pick a workspace and create the app. Then press **Reinstall to Workspace** under **OAuth & Permissions** and copy the two tokens (`xoxb-...` / `xapp-...`) — the first bot token Slack issues does not carry the scopes, so the reinstall is required
 2. **Register it with the member**: on the same Slack tab, configure the following
    - Paste the **Slack Bot token** (`xoxb-...`) and **Slack App token** (`xapp-...`), then press **Verify app** to confirm the bot name, workspace, granted scopes, and channel membership
    - **Channel**: add the channel names or IDs to watch
@@ -248,7 +248,7 @@ If you already have a Slack App, choose **Use a registered app** and start from 
 
 The tokens are stored with the member's credentials, shared by every workspace. The channels are stored in the workspace's `member.yml` for the member (`message_channels`).
 
-When ticket or PR work stops for a person's response, Branvil sends one notice to the owner's webhook with a link to the item and, when available, its comment. Set the destination in **Branvil → Settings → Notifications**. For Slack, choose a channel that no member watches.
+When ticket or PR work stops for a person's response, Branvil sends one notice to the owner's webhook with a link to the item and, when available, its comment. Set the destination in **Settings → Notifications**. For Slack, choose a channel that no member watches.
 
 To receive chat events, start the service with **Event triggers** included on the **Service** screen. Scheduled posts at fixed times (a news digest, for example) go through a separate path: configure `workflows/chat_post_command` as a scheduled command.
 
@@ -256,7 +256,7 @@ For the manual Slack App setup steps (including the list of required scopes), sh
 
 ## Automate Recurring Work
 
-Configure two kinds of automated execution per member under **Settings → Members and patrol → Patrol**. Both are run by the service you start on the **Service** screen.
+To configure the two kinds of automated execution, edit the member under **Settings → Members and patrol** and open the **Patrol** tab. Both are run by the service you start on the **Service** screen.
 
 - **Patrol commands**: turn on "Configure patrol commands for this member" and choose the saved commands. Members with it turned off do not run patrol work. The ticket-driven workflow (`workflows/ticket_driven_workflow`) wakes on changes and continues without waiting for the patrol interval while candidates remain. Other commands run one at a time in round-robin order at each interval. With the default shortened to 3 minutes, members configured with those other commands run them more often
 - **Scheduled commands**: use **Add schedule** to choose a command and its execution time (for example, periodic reports or cleanup). The time can be an Hourly / Daily / Weekly preset, or a **Detailed schedule** (five-field cron notation)
@@ -345,7 +345,7 @@ Return only the translated text.
 **How to run a command**:
 
 - **Run** on the **Edit Command** screen (you can supply input text and additional args)
-- Patrol / scheduled execution under **Settings → Members and patrol → Patrol** (→ [Automate Recurring Work](#automate-recurring-work))
+- Patrol / scheduled execution on the member editor's **Patrol** tab under **Settings → Members and patrol** (→ [Automate Recurring Work](#automate-recurring-work))
 - Scheduled Slack posts (configured as a scheduled command combined with `workflows/chat_post_command`)
 - The CLI: `guildbotics run <command_name> [args...]` (→ [Run on a Server](#run-on-a-server))
 

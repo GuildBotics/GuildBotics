@@ -38,7 +38,7 @@ Slack への投稿・返信・リアクションと完了記録は、すべて�
 
 AI エージェントとして振る舞う Slack App（送信 + 受信）を Slack 上で作成します。画面からの半自動登録が既定の手順で、必要な scope・Socket Mode・イベント購読は GuildBotics が生成する App Manifest で設定済みになります。
 
-まず **設定 → 連携** の **チャット** で Slack を選びます。メンバーに Slack タブが表示されます。**設定 → メンバー → Slack** タブで **新規に App を登録** を選び、以下を行います。
+**設定 → 連携** の **チャット** で Slack を選んで保存します。**設定 → メンバー・巡回** でメンバーを編集し、**Slack** タブの **新規に App を登録** を選びます。
 
 1. **App 名** を入力し（既定はメンバー ID）、**Slack で App を作成** を押す
    - 外部ブラウザで、manifest を適用した Slack のアプリ作成画面が開きます
@@ -106,7 +106,7 @@ Slack の OAuth リダイレクトは `http://localhost` を許可せず、ト�
 
 ## 画面での設定
 
-**設定 → メンバー → Slack** タブで、メンバーごとに設定します。
+**設定 → メンバー・巡回** でメンバーを編集し、**Slack** タブを開きます。
 
 - **Slack Bot トークン**（`xoxb-...`）と **Slack App トークン**（`xapp-...`）: Slack App の設定手順で控えたトークンを入力します。保存済みのメンバーでは、空欄のままにすると保存済みのトークンが維持されます
 - **App を検証**: 保存したときに有効になる構成を Slack に問い合わせます。トークンの有効性、Bot に付与された権限、設定したチャンネルを Bot が読み取れるか（＝招待済みか）をまとめて確認します。空欄のトークンは保存済みのものが検証され、結果には「保存済みの Bot トークン」のようにどちらを検証したかが表示されます
@@ -125,7 +125,7 @@ Slack の OAuth リダイレクトは `http://localhost` を許可せず、ト�
 
 ## チャット判断エンジン
 
-**設定 → LLM・AI CLIツール → 詳細設定 → チャット判断エンジン**で選び、セクション上部の保存ボタンで確定します。
+**設定 → LLM・AI CLI ツール → 詳細設定 → チャット判断エンジン**で選び、セクション上部の保存ボタンで確定します。
 
 - **LLM**: 既存のスロットへ割り当てます。モデル・パラメーター・認証はそのスロットの設定を使います。
 - **Jev**: `jev-latest` を使います。選択時に表示される API キー欄へ入力し、設定と一緒に保存します。登録済みのキーは伏せ字で表示され、変更しなければ維持されます。キーは SecretStore の `TYPESAFE_API_KEY` に保存されます。
@@ -151,7 +151,7 @@ uv run --no-sync python scripts/evaluate-chat-decision.py /path/to/evaluation.js
 
 決まった時刻の投稿は、`workflows/chat_post_command` を定期実行することで行います（投稿本文は GuildBotics カスタムコマンドの出力）。
 
-**設定 → メンバー → 巡回** タブで **定期実行を追加** を押し、コマンド欄を **直接入力** に切り替えて、以下のようなコマンドラインを指定します。実行時刻は 毎時 / 毎日 / 毎週 のプリセットか **詳細 cron** で指定します。
+**設定 → メンバー・巡回** でメンバーを編集し、**巡回** タブの **定期実行を追加** を押します。コマンド欄を **直接入力** に切り替えて、以下のようなコマンドラインを指定します。実行時刻は 毎時 / 毎日 / 毎週 のプリセットか **詳細 cron** で指定します。
 
 ```text
 workflows/chat_post_command channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
@@ -208,7 +208,7 @@ task_schedules:
 ポイント:
 
 - 監視対象チャネルは `message_channels` で定義し、`chat.enabled: true` のものがプロジェクトのチャット（`services.chat_service`）で監視対象になります
-- チケットや PR の作業が人の対応を待って止まったときは、Branvil がオーナーの webhook に 1 回通知します。通知には対象項目へのリンクと、コメントがある場合はそのリンクが入ります。Slack で受け取る場合は、どのメンバーも監視していないチャンネルの Incoming Webhook を **Branvil → 設定 → 通知** で設定します。Slack では通常の bot 投稿として届くため、監視対象のチャンネルに送るとメンバーが会話の入力として扱うことがあります。
+- チケットや PR の作業が人の対応を待って止まったときは、Branvil がオーナーの webhook に 1 回通知します。通知には対象項目へのリンクと、コメントがある場合はそのリンクが入ります。Slack で受け取る場合は、どのメンバーも監視していないチャンネルの Incoming Webhook を **設定 → 通知** で設定します。Slack では通常の bot 投稿として届くため、監視対象のチャンネルに送るとメンバーが会話の入力として扱うことがあります。
 - `chat.participation` は GUI の **会話への参加条件** に対応します。`strict`（既定）は明示メンションと一度呼ばれた thread の follow-up、`social` は雑談チャネル向けに未メンションの自然参加も許可、`muted` は明示メンションのみを処理します
 - `startup_backfill_minutes` と `backfill_interval_seconds` は GUI からは設定できません。起動時に Slack history から直近の channel message と既知 thread reply を取り込み（backfill）、既定値はそれぞれ `60` と `300` です。`backfill_interval_seconds` を `0` にすると、起動後の定期 history 確認を無効化できます
 - すべてのワークスペースで共通のメンバーのアイデンティティ（`~/.guildbotics/identity/.guildbotics/config/team/members/<person_id>/identity.yml`）の `profile.character` には、興味・嗜好・会話参加方針などを定義できます（GUI の **基本** タブに対応）。チャット判断にはこのプロフィールが入力として渡され、返信生成は割り当てられたエンジン経由で参照します。人間のメンバーの Slack User ID は、同じファイルの `account_info.slack_user_id` です

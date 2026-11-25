@@ -1472,9 +1472,10 @@ alone and automatic retry recovery do not send notices.
 
 ### CI settings
 
-What the owner changes under Settings → CI (`docs/ci.md`). The runner mode and
-the limits are `branvil.toml` settings: written there, keeping the rest of the
-file, and applied without a restart. The Hub uses the shared image store at
+The owner manages runners and limits under **Settings → CI**, and images
+under **Settings → Agent execution environment → Images** (`docs/ci.md`).
+Changes to runner mode and limits are written to `branvil.toml`, preserving
+the rest of the file, and take effect immediately. The Hub uses the shared image store at
 `<GuildBotics data>/msb`.
 
 - `GET /api/v1/admin/ci` (owner) →
@@ -1608,7 +1609,7 @@ file, and applied without a restart. The Hub uses the shared image store at
   `max_jobs` is the reported capacity and `limits` are the current effective
   job resources. `limits_source` is `default` for the Hub defaults or `runner`
   when an override is saved, even if its values match the defaults.
-  `missing_images` is computed only in Settings → CI.
+  `GET /api/v1/admin/ci` computes `missing_images` for each runner.
   `upstream` is `{"state": "not_configured"}` without
   repositories that have an upstream, otherwise
 

@@ -38,7 +38,7 @@ To receive chat events, start the service with **Event triggers** included on th
 
 Create a Slack App (send + receive) in Slack that acts as the AI agent. The default path is the semi-automatic registration on the screens: the required scopes, Socket Mode and event subscriptions all come pre-configured from an App Manifest that GuildBotics generates.
 
-First choose Slack under **Settings → Integrations → Chat**; the members then have a Slack tab. Under **Settings → Members → Slack**, choose **Register a new app** and do the following.
+Choose Slack under **Settings → Integrations → Chat** and save. Under **Settings → Members and patrol**, edit the member, open the **Slack** tab, and choose **Register a new app**.
 
 1. Enter an **App name** (defaults to the member ID) and press **Create the app on Slack**
    - Slack's app creation screen opens in your external browser with the manifest applied
@@ -106,7 +106,7 @@ If you want a separate receiving path (for example, a separate workspace or a se
 
 ## Configuring on the Screens
 
-Configure this per member under **Settings → Members → Slack**.
+Under **Settings → Members and patrol**, edit the member and open the **Slack** tab.
 
 - **Slack Bot token** (`xoxb-...`) and **Slack App token** (`xapp-...`): the tokens you noted down during the Slack App setup. On a saved member, leaving a field empty keeps the saved token
 - **Verify app**: asks Slack about the configuration that saving would leave in effect — the tokens, the scopes actually granted to the bot, and whether the bot can read each configured channel (that is, whether it was invited). An empty token field is checked against the saved token, and the result names which one it checked ("Saved bot token", for example)
@@ -151,7 +151,7 @@ uv run --no-sync python scripts/evaluate-chat-decision.py /path/to/evaluation.js
 
 Posts at fixed times are made by running `workflows/chat_post_command` on a schedule (the post body is the output of a GuildBotics custom command).
 
-Under **Settings → Members → Patrol**, press **Add schedule**, switch the command field to **Custom**, and enter a command line such as the following. Set the time with the Hourly / Daily / Weekly presets or a **Detailed schedule**.
+Under **Settings → Members and patrol**, edit the member, open the **Patrol** tab, and press **Add schedule**, switch the command field to **Custom**, and enter a command line such as the following. Set the time with the Hourly / Daily / Weekly presets or a **Detailed schedule**.
 
 ```text
 workflows/chat_post_command channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'
@@ -208,7 +208,7 @@ task_schedules:
 Key points:
 
 - Watched channels are defined in `message_channels`; those with `chat.enabled: true` are watched on the project's chat (`services.chat_service`)
-- When ticket or PR work stops for a person's response, Branvil sends one notice to the owner's webhook with a link to the item and, when available, its comment. To receive these notices in Slack, create an Incoming Webhook for a channel that no member watches and set its URL in **Branvil → Settings → Notifications**. Slack delivers these posts as ordinary bot messages, so members may treat them as conversation input in watched channels.
+- When ticket or PR work stops for a person's response, Branvil sends one notice to the owner's webhook with a link to the item and, when available, its comment. To receive these notices in Slack, create an Incoming Webhook for a channel that no member watches and set its URL in **Settings → Notifications**. Slack delivers these posts as ordinary bot messages, so members may treat them as conversation input in watched channels.
 - `chat.participation` corresponds to **When to join** in the GUI. `strict` (default) handles explicit mentions and follow-ups in threads it was already invited to, `social` also allows natural participation without a mention in casual channels, and `muted` handles explicit mentions only
 - `startup_backfill_minutes` and `backfill_interval_seconds` cannot be set from the GUI. At startup, recent channel messages and known thread replies are pulled from Slack history (backfill); the defaults are `60` and `300` respectively. Setting `backfill_interval_seconds` to `0` disables the periodic history check after startup
 - `profile.character` in the member's identity (`~/.guildbotics/identity/.guildbotics/config/team/members/<person_id>/identity.yml`, the same in every workspace) defines interests, preferences, conversation participation policy, and so on (this corresponds to the **Basic** tab in the GUI). Chat judgment receives this profile as part of its input, and reply generation reads it through its assigned engine. A human member's Slack User ID is `account_info.slack_user_id` in the same file

@@ -22,8 +22,8 @@ The Hub hands out only compatible work. A missing image on every live runner
 ends the queued attempt as `startup_failure` after `runner_absent_secs`, with the
 missing tag and CPU in its details. Automatic retries wait for a compatible runner.
 
-Settings → CI and `guildbotics environment image load --ci <archive>` accept archives
-for either CPU. The Hub retains the archives under its data directory; native images also enter the Hub's shared image store. The Hub's CI and isolated commands both use this store. `scripts/build-agent-environment-image.sh` sends
+**Settings → Agent execution environment → Images** and
+`guildbotics environment image load --ci <archive>` accept archives for either CPU. The Hub retains the archives under its data directory; native images also enter the Hub's shared image store. The Hub's CI and isolated commands both use this store. `scripts/build-agent-environment-image.sh` sends
 every built architecture to the Hub. Registry images are pulled on each runner
 with `guildbotics runner pull <tag>`; jobs themselves never pull.
 
@@ -195,8 +195,8 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
 - A pipeline names an image by its tag; which version runs is the image the
   runner's cache holds under that tag. The runner never pulls during a job
   (pull policy `never`): images enter the runner's cache through the Hub archive sync,
-  `guildbotics runner pull` or Settings → CI (pull a tag from a registry, or load
-  a `docker save` / OCI archive from a file on the Branvil machine). To move
+  `guildbotics runner pull` or **Settings → Agent execution environment → Images**
+  (pull a tag from a registry or load a `docker save` / OCI archive from a file on the Hub). To move
   the jobs to a new version, pull or load the same tag again; nothing in the
   pipelines changes. A job whose tag the cache does not hold concludes
   `startup_failure` with the reason.
@@ -209,15 +209,15 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   manifest digest does not. An image the cache does not hold, or whose
   digest `msb` does not report as `sha256:<64 hex>`, ends the job
   `startup_failure` with the reason. Pulls and
-  loads (Settings → CI, `guildbotics runner pull`) hold a lock of the image cache
-  (a file of `MSB_HOME`) exclusively, and a job holds it shared from checking
-  its image until its VM has started, so a load that re-points the tag waits
+  loads hold the image cache lock (a file of `MSB_HOME`) exclusively, whether
+  started from the image settings or with `guildbotics runner pull`. A job holds
+  it shared from checking its image until its VM has started, so a load that re-points the tag waits
   for the jobs that are starting and never changes the image a checked job
   runs (with several jobs at once, a pull or a load waits for a moment when
   no job is starting); a job that waits for a pull or a load says so in its
   log and can be cancelled meanwhile (`msb` used by hand does not take the
-  lock). Settings → CI shows the tag to write and the digest of
-  every cached image. (A runner started by hand on another machine loads such
+  lock). **Settings → Agent execution environment → Images** shows the tag
+  to write and the digest of every cached image. (A runner started by hand on another machine loads such
   an archive with `msb load` under its own `MSB_HOME`.)
 - The Hub loads each archive image with a manifest digest reference. Only the
   snapshot-aware sweep removes unused versions from the shared store. Tags stay
@@ -227,8 +227,8 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   reference names. After a pull or a load, and before each job, the runner
   removes the versions no tag points to anymore, with their layers; msb
   refuses one a job still runs on, which goes at a later job's start. These
-  digest references are no images a pipeline can name, and Settings → CI does
-  not show them. A load pins the reference it changed in the cache, the name
+  digest references are not tags a pipeline can name. The image settings
+  list only images named by tag. A load pins the reference it changed in the cache, the name
   msb registered (for a `docker save` archive its `RepoTags`, not the
   `docker.io/…` name of its `index.json`). Loading a version the cache already
   holds pins it if it has no pin yet (loaded by hand, before pins existed, or
@@ -572,8 +572,9 @@ No runner, no executor:
   for other ready runners. When no ready runner has an attempt's image, the same
   timeout concludes it `startup_failure`, naming the missing image and CPU.
   The check includes the runner's CPU, executor or synchronization failure details,
-  and actions in Settings → CI / `image load --ci` / `runner pull`. The same details remain
-  visible in runner diagnostics.
+  and actions for supplying the image. See **Settings → CI** for runner diagnostics
+  and **Settings → Agent execution environment → Images** to manage Hub images,
+  or use `image load --ci` or `runner pull`.
 
 Windows runners report remaining commit headroom from `GlobalMemoryStatusEx`.
 Each execution needs enough headroom for the full VM allocation. The Hub
@@ -796,8 +797,8 @@ runner for queued work.
 Switching the supervised runner off stops its child. Stopping or restarting
 the child interrupts the attempts it is running, which are queued once more
 (see "Leases and interruptions"); the service removes the microVMs it left.
-The image cache Settings → CI manages is the supervised runner's
-(`<GuildBotics data>/msb`). Another machine can synchronize CPU-specific Hub
+**Settings → Agent execution environment → Images** manages the supervised runner's
+image cache (`<GuildBotics data>/msb`). Another machine can synchronize CPU-specific Hub
 images or fill its own cache with `guildbotics runner pull`. Upgrade manually
 started runners together with the Hub, as their runner API shares the build's
 job and image formats.

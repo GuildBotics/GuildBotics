@@ -40,8 +40,8 @@ outside see. Branvil never pushes the default branch; it follows it.
    its private key; it acts as `<app>[bot]`, and Branvil makes its short-lived
    tokens itself) or a token of a bot account. One of them also reads GitHub
    for Branvil, so your own token is not needed (set it only to publish pull
-   requests you author yourself). Set them under Settings → Members → a
-   member → Accounts on code hosts.
+   requests you author yourself). Under **Settings → Review and authentication**, edit the member and
+   open **Accounts on code hosts**.
 
 2. Point the repository at its GitHub repository in its settings (Upstream).
    An empty repository is filled with GitHub's default branch; an existing one
