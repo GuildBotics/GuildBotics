@@ -81,7 +81,7 @@ impl Fixture {
     }
 }
 fn card() -> Value {
-    json!({"url":"http://unused/test/repo/-/tickets/1","key":"1","title":"Work","body":"","repository":"test/repo","state":"open","lane":"in_progress","assignee":{"name":"agent1","assigned_at":"2026-01-02T00:00:00Z"},"interactive_ancestor":null,"comments":[],"mentions":[]})
+    json!({"url":"http://unused/workspaces/test/repos/repo/tickets/1","key":"1","title":"Work","body":"","repository":"test/repo","state":"open","lane":"in_progress","assignee":{"name":"agent1","assigned_at":"2026-01-02T00:00:00Z"},"interactive_ancestor":null,"comments":[],"mentions":[]})
 }
 fn comment(author: &str, body: &str) -> Value {
     json!({"author":author,"body":body,"created_at":"2026-01-03T00:00:00Z","mentions":[]})
@@ -820,11 +820,11 @@ async fn canonical_ticket_addresses_fail_without_mutation() {
     let url = f.create().await;
     let base = f.running.running.data.base_url();
     for address in [
-        format!("{base}/test/repo/-/tickets/01"),
-        format!("{base}/test/repo/-/tickets/0"),
-        format!("{base}/test/repo/-/tickets/DEMO-1"),
+        format!("{base}/workspaces/test/repos/repo/tickets/01"),
+        format!("{base}/workspaces/test/repos/repo/tickets/0"),
+        format!("{base}/workspaces/test/repos/repo/tickets/DEMO-1"),
         format!("{url}?x=1"),
-        format!("{base}/test/repo/-/pulls/1"),
+        format!("{base}/workspaces/test/repos/repo/pulls/1"),
         format!("{base}/test/-/tickets/1"),
     ] {
         assert_eq!(
@@ -1228,7 +1228,7 @@ async fn repository_ticket_numbers_and_assignee_projection_are_independent() {
     assert_eq!(
         url,
         format!(
-            "{}/test/repo/-/tickets/1",
+            "{}/workspaces/test/repos/repo/tickets/1",
             f.running.running.data.base_url()
         )
     );
@@ -1359,7 +1359,10 @@ async fn ticket_task_comments_use_roster_names_and_role_fallbacks() {
         assert!(
             service
                 .item(
-                    &format!("{}/test/repo/-/pulls/{key}", running.data.base_url()),
+                    &format!(
+                        "{}/workspaces/test/repos/repo/pulls/{key}",
+                        running.data.base_url()
+                    ),
                     "pulls"
                 )
                 .is_ok()
@@ -1369,7 +1372,10 @@ async fn ticket_task_comments_use_roster_names_and_role_fallbacks() {
         assert!(
             service
                 .item(
-                    &format!("{}/test/repo/-/pulls/{key}", running.data.base_url()),
+                    &format!(
+                        "{}/workspaces/test/repos/repo/pulls/{key}",
+                        running.data.base_url()
+                    ),
                     "pulls"
                 )
                 .is_err(),
@@ -1710,21 +1716,21 @@ async fn ticket_outcomes_require_current_assignee_and_assignment_history() {
         (
             "agent1",
             "agent1",
-            "http://unused/test/repo/-/tickets/1",
+            "http://unused/workspaces/test/repos/repo/tickets/1",
             "2026-01-03T00:00:00Z",
             Some("working_lane"),
         ),
         (
             "other",
             "agent1",
-            "http://unused/test/repo/-/tickets/1",
+            "http://unused/workspaces/test/repos/repo/tickets/1",
             "2026-01-03T00:00:00Z",
             None,
         ),
         (
             "agent1",
             "other",
-            "http://unused/test/repo/-/tickets/1",
+            "http://unused/workspaces/test/repos/repo/tickets/1",
             "2026-01-03T00:00:00Z",
             None,
         ),
@@ -1738,7 +1744,7 @@ async fn ticket_outcomes_require_current_assignee_and_assignment_history() {
         (
             "agent1",
             "agent1",
-            "http://unused/test/repo/-/tickets/1",
+            "http://unused/workspaces/test/repos/repo/tickets/1",
             "2026-01-01T00:00:00Z",
             None,
         ),

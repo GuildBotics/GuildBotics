@@ -937,7 +937,7 @@ mod tests {
             "https://github.com/acme/demo/pull/12",
             "https://github.com/acme/demo/issues/012",
             "https://github.com/acme/demo/issues/12/x",
-            "http://127.0.0.1:7878/acme/demo/-/tickets/12",
+            "http://127.0.0.1:7878/workspaces/acme/repos/demo/tickets/12",
         ] {
             assert_eq!(g.issue_line("acme/demo", bad, true), None, "{bad}");
         }

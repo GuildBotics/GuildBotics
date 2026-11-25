@@ -310,9 +310,8 @@ lock requires.
 When `uv.lock` changed, also run `uv run --no-sync lint-imports` and the whole
 suite, `uv run --no-sync python -m pytest tests/ -n auto -m 'not real_device'`:
 a library is used throughout the code. When `package-lock.json`
-changed, run `npm ci` at the root, `npm run quality --workspace desktop`,
-and lint, typecheck and test in `crates/branvil/web`. Keep shared dependency
-ranges aligned. Keep the locked `@playwright/test` version aligned with
+changed, run `npm ci` and `npm run quality --workspace desktop` at the root.
+Keep the locked `@playwright/test` version aligned with
 `PLAYWRIGHT_VERSION` in `docker/agent-environment/Dockerfile`; the VM uses
 that image's Chromium and cannot download a different version.
 

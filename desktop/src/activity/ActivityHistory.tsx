@@ -1,3 +1,4 @@
+import { WorkspaceLink } from "../ui/workspaceLinks";
 import {
   Alert,
   Avatar,
@@ -18,7 +19,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router";
+
 import {
   CheckCircle2,
   ChevronLeft,
@@ -551,7 +552,7 @@ function MemberActiveWorkStatus({ work }: { work: RuntimeActiveWork }) {
     work.command;
   const tone = presentation ? tracePresentationTone(presentation) : "neutral";
   return (
-    <Link
+    <WorkspaceLink
       className={`activity-member-current activity-member-current-${tone}`}
       aria-label={t("activity.nowRunning")}
       title={message}
@@ -559,7 +560,7 @@ function MemberActiveWorkStatus({ work }: { work: RuntimeActiveWork }) {
     >
       <span className="activity-member-current-dot" aria-hidden="true" />
       <span className="activity-member-current-message">{message}</span>
-    </Link>
+    </WorkspaceLink>
   );
 }
 
@@ -744,11 +745,11 @@ function ActivityBlockDetail({ block }: { block: ActivityBlock }) {
     <Stack gap="xs">
       <Group gap="xs" justify="space-between">
         {executionUrl ? (
-          <Link className="activity-block-title-link" to={executionUrl}>
+          <WorkspaceLink className="activity-block-title-link" to={executionUrl}>
             <Text fw={700} size="sm" lineClamp={2}>
               {block.title}
             </Text>
-          </Link>
+          </WorkspaceLink>
         ) : (
           <Text fw={700} size="sm" lineClamp={2}>
             {block.title}
@@ -879,10 +880,10 @@ function LinkList({ links }: { links: ActivityHistoryLink[] }) {
         const icon = activityLinkIcon(link.kind);
         const className = `activity-link-kind-${link.kind}`;
         return href && isInternalActivityLink(href) ? (
-          <Link className={className} to={href} key={activityLinkKey(link)}>
+          <WorkspaceLink className={className} to={href} key={activityLinkKey(link)}>
             {icon}
             <span>{link.label}</span>
-          </Link>
+          </WorkspaceLink>
         ) : href ? (
           <a
             className={className}

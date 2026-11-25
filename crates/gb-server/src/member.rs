@@ -38,17 +38,37 @@ pub struct Agents {
     display_name: String,
     members: std::collections::BTreeMap<String, String>,
 }
+fn service_scope(project: &serde_json::Value, workspace: Option<&str>, kind: &str) -> String {
+    workspace
+        .filter(|_| {
+            project["services"][kind]["name"]
+                .as_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case("branvil"))
+        })
+        .unwrap_or_default()
+        .to_owned()
+}
+
 impl Agents {
+    pub fn has_tickets(&self) -> bool {
+        !self.tickets.is_empty()
+    }
+
+    pub fn has_code(&self) -> bool {
+        !self.code.is_empty()
+    }
+
     pub fn new(
         data: Option<&branvil::api::DataApi>,
         project: &serde_json::Value,
+        workspace: Option<&str>,
         person: &gb_member::context::PublicMember,
         roster: &[gb_member::context::PublicMember],
     ) -> Self {
         Self {
             data: data.cloned(),
-            tickets: native::service_workspace(project, "ticket_service").into(),
-            code: native::service_workspace(project, "code_hosting_service").into(),
+            tickets: service_scope(project, workspace, "ticket_service"),
+            code: service_scope(project, workspace, "code_hosting_service"),
             person_id: person.person_id.clone(),
             display_name: person.name.clone(),
             members: roster

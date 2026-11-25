@@ -12,7 +12,7 @@ test("shows usage checks from the real backend without probing missing credentia
     if (/\/intelligences\/cli-agents\/[^/]+\/usage/.test(request.url()))
       usageRequests.push(request.url());
   });
-  await page.goto("/-/guildbotics/#/setup?section=environment&focus=agent-environment-tool-codex");
+  await page.goto("/setup?section=environment&focus=agent-environment-tool-codex");
   const row = page.locator("#agent-environment-tool-codex");
   await expect(row).toBeVisible();
   await expect(row.getByText(/^No credentials saved on .+$/)).toBeVisible();
@@ -55,15 +55,15 @@ test("renders readiness badges and reports the missing-key LLM check from scenar
 
   // Readiness badges and the scenario check live in the Verification section of
   // the Settings screen; the Diagnostics screen owns executions and transcripts.
-  await page.goto("/-/guildbotics/#/setup?section=verification");
+  await page.goto("/setup?section=verification");
   await expect(page.getByRole("heading", { name: "Verification" }).first()).toBeVisible();
 
   // Readiness badges are derived from the real /config/status, /team and
   // /config/project responses for the seeded workspace: config "Configured",
-  // Branvil for tickets/code, and local chat.
+  // the Hub for tickets and code, and the local chat used by the fixture.
   await expect(page.getByText("Configured", { exact: true })).toBeVisible({ timeout: 30_000 });
   const status = page.locator("dl.status-list");
-  await expect(status.getByText("Branvil", { exact: true })).toHaveCount(2);
+  await expect(status.getByText("Hub", { exact: true })).toHaveCount(2);
   await expect(status.getByText("local", { exact: true })).toHaveCount(1);
   // Run the real read-only scenario diagnostics. With no OpenAI key configured
   // the backend short-circuits BEFORE any network call, so this resolves in
@@ -82,7 +82,7 @@ test("renders readiness badges and reports the missing-key LLM check from scenar
   // The all-ok summary must NOT appear when a check failed.
   await expect(page.getByText("Settings validated")).toHaveCount(0);
 
-  await page.goto("/-/guildbotics/#/diagnostics");
+  await page.goto("/diagnostics");
   await expect(page.getByRole("heading", { name: "Diagnostics" })).toBeVisible();
 
   await page.getByRole("tab", { name: "Settings" }).click();
@@ -115,7 +115,7 @@ test("sends a troubleshooting question through the real backend and reports the 
   // component tests.
   const ctx = readStackContext("diagnostics");
 
-  await page.goto("/-/guildbotics/#/diagnostics?tab=executions");
+  await page.goto("/diagnostics?tab=executions");
   await page.getByRole("button", { name: "Ask AI" }).click();
 
   const panel = page.getByRole("region", { name: "Troubleshooting AI" });

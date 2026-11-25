@@ -1,30 +1,16 @@
-//! The server's in-process event bus, as the Python version's
-//! (`guildbotics/app_api/events.py`): every event is recorded in the selected
-//! workspace's diagnostics and handed to every subscriber, which first
-//! receives the latest ones. A log is recorded only: it is neither kept nor
-//! streamed.
+//! Workspace diagnostics and change notifications for the browser.
 
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use gb_observability::{Diagnostics, Trace};
 use serde_json::{Map, Value, json};
-use tokio::sync::mpsc;
-
-/// How many of the latest events a new subscriber receives first.
-pub const HISTORY_LIMIT: usize = 200;
-
-pub struct EventBus {
-    limit: usize,
-    state: Arc<Mutex<State>>,
-}
 
 #[derive(Default)]
-struct State {
-    history: VecDeque<Value>,
-    subscribers: std::collections::BTreeMap<u64, mpsc::UnboundedSender<Value>>,
-    next: u64,
-    store: Option<Diagnostics>,
+pub struct EventBus {
+    store: Mutex<Option<Diagnostics>>,
+    changes: Arc<OnceLock<branvil::api::DataApi>>,
+    #[cfg(test)]
+    recorded: Mutex<Vec<Value>>,
 }
 
 /// Where an event comes from: the trace it belongs to, and a source and
@@ -36,58 +22,22 @@ pub struct Origin<'a> {
     pub attributes: Map<String, Value>,
 }
 
-/// The events published after it was opened, the latest ones first. Dropping
-/// it closes it: nothing is sent to it afterwards.
-pub struct Subscription {
-    receiver: mpsc::UnboundedReceiver<Value>,
-    state: Weak<Mutex<State>>,
-    id: u64,
-}
-
-impl Drop for Subscription {
-    fn drop(&mut self) {
-        if let Some(state) = self.state.upgrade() {
-            state
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .subscribers
-                .remove(&self.id);
-        }
-    }
-}
-
-impl Subscription {
-    pub async fn next(&mut self) -> Option<Value> {
-        self.receiver.recv().await
-    }
-}
-
-impl Default for EventBus {
-    fn default() -> Self {
-        EventBus::new(HISTORY_LIMIT)
-    }
-}
-
 impl EventBus {
-    #[cfg(test)]
-    pub(crate) fn subscriber_count(&self) -> usize {
-        self.state().subscribers.len()
-    }
-    pub fn new(limit: usize) -> EventBus {
-        EventBus {
-            limit,
-            state: Arc::default(),
+    pub(crate) fn with_changes(changes: Arc<OnceLock<branvil::api::DataApi>>) -> Self {
+        Self {
+            changes,
+            ..Self::default()
         }
     }
 
-    fn state(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    fn store(&self) -> Option<Diagnostics> {
+        self.store.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
     /// Records what is published from now on in `store`: the selected
     /// workspace's diagnostics, or none while no workspace is selected.
     pub fn record_in(&self, store: Option<Diagnostics>) {
-        self.state().store = store;
+        *self.store.lock().unwrap_or_else(|p| p.into_inner()) = store;
     }
 
     /// Publishes `event_type` with `payload`, from any thread.
@@ -98,30 +48,36 @@ impl EventBus {
         item.extend(correlation(origin));
         item.insert("payload".into(), payload.into());
         item.insert("timestamp".into(), timestamp());
-        self.deliver(Value::Object(item), true);
+        if let Some(store) = self.store() {
+            store.record(item.clone());
+        }
+        self.announce(&item);
     }
 
-    /// Hands `item`, an event already recorded, to every subscriber.
+    /// Announces a recorded change without sending its diagnostic payload.
     pub fn announce(&self, item: &Map<String, Value>) {
-        self.deliver(Value::Object(item.clone()), false);
-    }
-
-    fn deliver(&self, item: Value, record: bool) {
-        let store = {
-            let mut state = self.state();
-            if state.history.len() == self.limit {
-                state.history.pop_front();
-            }
-            if self.limit > 0 {
-                state.history.push_back(item.clone());
-            }
-            state
-                .subscribers
-                .retain(|_, subscriber| subscriber.send(item.clone()).is_ok());
-            state.store.clone()
+        #[cfg(test)]
+        self.recorded
+            .lock()
+            .unwrap()
+            .push(Value::Object(item.clone()));
+        let Some(host) = self.changes.get() else {
+            return;
         };
-        if let (true, Some(store), Value::Object(item)) = (record, store, item) {
-            store.record(item);
+        match item.get("type").and_then(Value::as_str) {
+            Some("workspace.changed") => host.workspace_changed(),
+            Some(kind)
+                if kind.starts_with("command.")
+                    && item.get("source").and_then(Value::as_str) == Some("manual")
+                    && item
+                        .get("attributes")
+                        .and_then(|a| a.get("run.entry"))
+                        .and_then(Value::as_str)
+                        == Some("command") =>
+            {
+                host.command_runs_changed();
+            }
+            _ => {}
         }
     }
 
@@ -142,33 +98,14 @@ impl EventBus {
         item.insert("message".into(), message.into());
         item.extend(fields.unwrap_or_else(|| correlation(Origin::default())));
         item.insert("timestamp".into(), timestamp());
-        let store = self.state().store.clone();
-        if let Some(store) = store {
+        if let Some(store) = self.store() {
             store.record(item);
         }
     }
 
-    /// Opens a subscription that receives the kept events in the order they
-    /// were published, then every later one, with none missed or repeated.
-    pub fn subscribe(&self) -> Subscription {
-        let (sender, receiver) = mpsc::unbounded_channel();
-        let mut state = self.state();
-        for item in &state.history {
-            let _ = sender.send(item.clone());
-        }
-        let id = state.next;
-        state.next += 1;
-        state.subscribers.insert(id, sender);
-        Subscription {
-            receiver,
-            state: Arc::downgrade(&self.state),
-            id,
-        }
-    }
-
-    /// The kept events, oldest first.
+    #[cfg(test)]
     pub fn snapshot(&self) -> Vec<Value> {
-        self.state().history.iter().cloned().collect()
+        self.recorded.lock().unwrap().clone()
     }
 }
 
@@ -201,43 +138,9 @@ fn timestamp() -> Value {
         .into()
 }
 
-/// Browser sessions are the only credential on the event connection.
-pub(crate) async fn stream(
-    axum::extract::State(api): axum::extract::State<crate::api::Shared>,
-    headers: axum::http::HeaderMap,
-    upgrade: axum::extract::ws::WebSocketUpgrade,
-) -> axum::response::Response {
-    let admitted = headers.contains_key(axum::http::header::ORIGIN)
-        && loopback_auth::check_request(api.auth.base_url(), &headers).is_ok()
-        && api.auth.session_csrf(&headers).is_some();
-    upgrade.on_upgrade(move |mut socket| async move {
-        use axum::extract::ws::{Message, CloseFrame};
-        if !admitted {
-            let _=socket.send(Message::Close(Some(CloseFrame{code:1008,reason:"".into()}))).await;
-            return;
-        }
-        let mut subscription=api.events.subscribe();
-        loop {
-            tokio::select! {
-                _=api.cancelled.cancelled()=>break,
-                _=api.shutdown.closing()=>break,
-                incoming=socket.recv()=>match incoming {
-                    None|Some(Err(_))|Some(Ok(Message::Close(_)))=>break,
-                    _=>(),
-                },
-                event=subscription.next()=>match event {
-                    Some(event)=>if socket.send(Message::Text(event.to_string().into())).await.is_err(){break;},
-                    None=>break,
-                },
-            }
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     fn payload(value: Value) -> Map<String, Value> {
         match value {
@@ -282,84 +185,23 @@ mod tests {
             .collect()
     }
 
-    async fn nothing_within(subscription: &mut Subscription, wait: Duration) {
-        assert!(
-            tokio::time::timeout(wait, subscription.next())
-                .await
-                .is_err(),
-            "nothing more is sent"
-        );
-    }
-
     #[test]
-    fn history_keeps_only_the_latest_events_up_to_its_limit() {
-        let bus = EventBus::new(3);
-        for index in 0..5 {
-            bus.publish("tick", payload(json!({"index": index})), Origin::default());
-        }
-        let kept: Vec<_> = bus
-            .snapshot()
-            .iter()
-            .map(|e| e["payload"]["index"].clone())
-            .collect();
-        assert_eq!(kept, [json!(2), json!(3), json!(4)]);
-        assert_eq!(EventBus::default().limit, 200);
-    }
-
-    #[tokio::test]
-    async fn a_new_subscriber_first_receives_the_history_in_order() {
-        let bus = EventBus::default();
-        bus.publish("first", payload(json!({"n": 1})), Origin::default());
-        bus.publish("second", payload(json!({"n": 2})), Origin::default());
-        let mut subscription = bus.subscribe();
-        bus.publish("third", payload(json!({"n": 3})), Origin::default());
-        for (kind, n) in [("first", 1), ("second", 2), ("third", 3)] {
-            let event = subscription.next().await.unwrap();
-            assert_eq!(
-                (event["type"].as_str(), &event["payload"]),
-                (Some(kind), &json!({"n": n}))
-            );
-        }
-        nothing_within(&mut subscription, Duration::from_millis(200)).await;
-    }
-
-    #[tokio::test]
-    async fn a_closed_subscription_receives_nothing() {
-        let bus = EventBus::default();
-        let subscription = bus.subscribe();
-        drop(subscription);
-        bus.publish("after", Map::new(), Origin::default());
-        assert!(
-            bus.state().subscribers.is_empty(),
-            "a closed one is forgotten"
-        );
-        let mut open = bus.subscribe();
-        assert_eq!(open.next().await.unwrap()["type"], "after");
-        nothing_within(&mut open, Duration::from_millis(200)).await;
-    }
-
-    #[tokio::test]
-    async fn a_log_is_recorded_but_never_streamed_nor_kept_in_history() {
+    fn a_log_is_stored_with_the_diagnostics() {
         let workspace = tempfile::tempdir().unwrap();
         let bus = EventBus::default();
         let diagnostics = Diagnostics::open(workspace.path());
         // A record outside any trace lands in the system transcript.
         diagnostics.start_system_session("service-run").unwrap();
         bus.record_in(Some(diagnostics.clone()));
-        let mut subscription = bus.subscribe();
         bus.publish(
             "command.started",
             payload(json!({"command": "hello"})),
             Origin::default(),
         );
         bus.publish_log("INFO", "log line", None);
-        let streamed = subscription.next().await.unwrap();
-        assert_eq!(streamed["type"], "command.started");
-        assert!(streamed.get("level").is_none());
-        nothing_within(&mut subscription, Duration::from_millis(200)).await;
-        assert_eq!(bus.snapshot(), std::slice::from_ref(&streamed));
         let recorded = records(workspace.path());
-        assert!(recorded.contains(&streamed), "{recorded:?}");
+        assert_eq!(bus.snapshot()[0]["type"], "command.started");
+        assert!(recorded.contains(&bus.snapshot()[0]), "{recorded:?}");
         let logs: Vec<_> = recorded.iter().filter(|r| r["kind"] == "log").collect();
         assert_eq!(logs.len(), 1);
         assert_eq!(
@@ -371,8 +213,8 @@ mod tests {
         diagnostics.finish_system_session().unwrap();
     }
 
-    #[tokio::test]
-    async fn an_event_carries_the_correlation_of_its_trace() {
+    #[test]
+    fn an_event_carries_the_correlation_of_its_trace() {
         let workspace = tempfile::tempdir().unwrap();
         let trace = Trace::open(&Diagnostics::open(workspace.path()), "manual")
             .person("alice")
@@ -386,9 +228,7 @@ mod tests {
                 ..Origin::default()
             },
         );
-        // A later subscriber is replayed the event with its trace.
-        let mut subscription = bus.subscribe();
-        let event = subscription.next().await.unwrap();
+        let event = &bus.snapshot()[0];
         assert_eq!(event["kind"], "event");
         assert_eq!(event["trace_id"], trace.id());
         assert_eq!(event["source"], "manual");
@@ -467,25 +307,5 @@ mod tests {
         );
         assert_eq!(events[1]["source"], "scheduler");
         assert_eq!(events[1]["attributes"], json!({"service_run_id": "svc-1"}));
-    }
-
-    #[tokio::test]
-    async fn a_publish_from_another_thread_reaches_an_async_subscriber() {
-        let bus = std::sync::Arc::new(EventBus::default());
-        let mut subscription = bus.subscribe();
-        let publisher = bus.clone();
-        std::thread::spawn(move || {
-            publisher.publish("from-thread", payload(json!({"n": 42})), Origin::default())
-        })
-        .join()
-        .unwrap();
-        let event = tokio::time::timeout(Duration::from_secs(2), subscription.next())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            (event["type"].as_str(), &event["payload"]),
-            (Some("from-thread"), &json!({"n": 42}))
-        );
     }
 }

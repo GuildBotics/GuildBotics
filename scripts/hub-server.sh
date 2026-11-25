@@ -247,7 +247,7 @@ build_head() {
         (
             cd "$source"
             npm ci
-            npm run build --workspace desktop --workspace crates/branvil/web
+            npm run build --workspace desktop
             cargo build --release --locked -p guildbotics --target-dir "$storage/target"
         )
         cp "$storage/target/release/guildbotics" "$candidate.new"

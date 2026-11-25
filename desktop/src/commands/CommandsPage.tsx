@@ -1,3 +1,4 @@
+import { WorkspaceNavLink } from "../ui/workspaceLinks";
 import {
   Alert,
   Button,
@@ -25,7 +26,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { NavLink, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
 
 import {
   ApiRequestError,
@@ -41,7 +42,6 @@ import {
   getTraces,
   listCommandFiles,
   runCommand,
-  subscribeEvents,
   updateCommandFile,
   type CommandFileFormat,
   type CommandFilesResponse,
@@ -138,9 +138,10 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
   const [uploads, setUploads] = useState<Record<string, string>>({});
   const [cwd, setCwd] = useState(initial.cwd);
   const [showAdvanced, setShowAdvanced] = useState(initial.showAdvanced);
-  // The run started here or seen starting; until one is, the latest run.
-  const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
-  const [runError, setRunError] = useState<string | null>(null);
+  const [runError, setRunError] = useState<{
+    message: string;
+    traceId: string | null;
+  } | null>(null);
   const [activeTab, setActiveTab] = useState<string | null>(initial.activeTab ?? "events");
 
   const [draftContent, setDraftContent] = useState("");
@@ -480,6 +481,33 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
     retry: false,
   });
 
+  const commandRuns = useQuery({
+    queryKey: [...COMMAND_RUNS_QUERY_KEY, storageDir],
+    queryFn: () =>
+      getTraces({
+        source: "manual",
+        attrKey: COMMAND_RUN_ATTRIBUTE,
+        attrValue: COMMAND_RUN,
+        limit: 1,
+        preferRunning: true,
+      }),
+    enabled: hasProjectConfig,
+  });
+  const visibleRun = commandRuns.data?.traces[0];
+  const visibleTraceId = visibleRun?.trace_id ?? null;
+  const traceDetail = useQuery({
+    queryKey: ["command-run-detail", storageDir, visibleTraceId],
+    queryFn: () => getTraceDetail(visibleTraceId as string),
+    enabled: Boolean(visibleTraceId),
+    refetchInterval: (query: { state: { data?: TraceDetailResponse } }) =>
+      commandTraceRefetchInterval(
+        visibleRun?.status === "interrupted"
+          ? visibleRun.status
+          : query.state.data?.summary?.status,
+      ),
+  });
+  const runSummary = visibleRun?.status === "interrupted" ? visibleRun : traceDetail.data?.summary;
+
   const [runBusy, setRunBusy] = useState(false);
   const saveAndRun = useCallback(async () => {
     if (!selectedFileId || !runPerson || !detail) {
@@ -493,7 +521,7 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
       setRunError(null);
       setActiveTab("events");
       const args = buildFileRunArgs(runFile, argValues, extraArgs);
-      const response = await runCommand({
+      await runCommand({
         command: runFile.command,
         args,
         person: selectedPerson ?? undefined,
@@ -508,7 +536,6 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
         expected_command_file_id: runFile.id,
         expected_command_file_revision: runFile.revision,
       });
-      setActiveTraceId(response.trace_id);
       setActiveTab("output");
     } catch (error) {
       // A run that names its trace is shown from it. Any other failure is
@@ -516,12 +543,16 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
       // failed in a way that does not name it.
       const traceId = error instanceof ApiRequestError ? error.context.trace_id : undefined;
       if (typeof traceId === "string") {
-        setActiveTraceId(traceId);
         setActiveTab("output");
       } else {
-        setRunError(error instanceof Error ? error.message : String(error));
+        setRunError({
+          message: error instanceof Error ? error.message : String(error),
+          traceId: visibleTraceId,
+        });
       }
     } finally {
+      void queryClient.invalidateQueries({ queryKey: [...COMMAND_RUNS_QUERY_KEY, storageDir] });
+      void queryClient.invalidateQueries({ queryKey: ["command-run-detail", storageDir] });
       setRunBusy(false);
     }
   }, [
@@ -533,56 +564,14 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
     extraArgs,
     message,
     uploads,
+    queryClient,
     saveMutation,
     selectedFileId,
     selectedPerson,
+    storageDir,
+    visibleTraceId,
   ]);
 
-  const latestRun = useQuery({
-    queryKey: COMMAND_RUNS_QUERY_KEY,
-    queryFn: () =>
-      getTraces({
-        source: "manual",
-        attrKey: COMMAND_RUN_ATTRIBUTE,
-        attrValue: COMMAND_RUN,
-        limit: 1,
-      }),
-    enabled: hasProjectConfig,
-  });
-
-  // Command lifecycle events follow a run started from any screen.
-  useEffect(() => {
-    return subscribeEvents((event) => {
-      if (
-        !event.type.startsWith("command.") ||
-        !event.trace_id ||
-        event.attributes?.[COMMAND_RUN_ATTRIBUTE] !== COMMAND_RUN
-      ) {
-        return;
-      }
-      if (event.type === "command.started") {
-        // A new run takes the console over, with no earlier run's failure.
-        setActiveTraceId(event.trace_id);
-        setRunError(null);
-      }
-      void queryClient.invalidateQueries({ queryKey: COMMAND_RUNS_QUERY_KEY });
-      void queryClient.invalidateQueries({ queryKey: ["diagnostics-trace", event.trace_id] });
-    });
-  }, [queryClient]);
-
-  const runDetail = (traceId: string | null) => ({
-    queryKey: ["diagnostics-trace", traceId],
-    queryFn: () => getTraceDetail(traceId as string),
-    enabled: Boolean(traceId),
-    refetchInterval: (query: { state: { data?: TraceDetailResponse } }) =>
-      commandTraceRefetchInterval(query.state.data?.summary?.status),
-  });
-  const activeRun = useQuery(runDetail(activeTraceId));
-  // A run this workspace does not know -- one the event stream replays from
-  // before a workspace switch -- gives way to the latest run.
-  const followed = activeRun.isFetched && !activeRun.data?.summary ? null : activeTraceId;
-  const visibleTraceId = followed ?? latestRun.data?.traces[0]?.trace_id ?? null;
-  const traceDetail = useQuery(runDetail(visibleTraceId));
   const traceRecords = useMemo(
     () => [...(traceDetail.data?.records ?? [])].reverse(),
     [traceDetail.data?.records],
@@ -684,7 +673,7 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
         <Alert color="warning" title={t("overview.setupRequiredTitle")}>
           <Group justify="space-between" align="center">
             <Text size="sm">{t("overview.setupRequiredBody")}</Text>
-            <Button component={NavLink} to="/setup" variant="light">
+            <Button component={WorkspaceNavLink} to="/setup" variant="light">
               {t("overview.openSetup")}
             </Button>
           </Group>
@@ -880,8 +869,8 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
                     runBusy={runBusy || authoringMutation.isPending}
                     onSaveAndRun={() => void saveAndRun()}
                     runTraceId={visibleTraceId}
-                    runSummary={traceDetail.data?.summary ?? null}
-                    runError={runError}
+                    runSummary={runSummary ?? null}
+                    runError={runError?.traceId === visibleTraceId ? runError.message : null}
                     traceRecords={traceRecords}
                     traceLoading={traceDetail.isFetching && !traceDetail.data}
                     transcriptAvailable={traceDetail.data?.transcript_available}

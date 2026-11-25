@@ -1,22 +1,6 @@
 export const resources = {
   en: {
-    translation: {
-      hub: {
-        versionLabel: '{{sha}} ("{{subject}}")',
-        preparingVersions:
-          "Preparing an automatic Hub update from {{current}} to {{target}}. New runs will stop being accepted soon.",
-        updateVersions:
-          "The Hub is updating automatically and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. After {{runs}} running tasks and {{ci_jobs}} CI jobs finish, the Hub will switch from {{current}} to {{target}}. Services will resume afterward if they were running when the stop was accepted.",
-        title: "Hub maintenance",
-        version: "Hub version",
-        dismiss: "Dismiss until the phase changes",
-        preparing: "Preparing an automatic Hub update. New runs will stop being accepted soon.",
-        update:
-          "The Hub is updating automatically and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. After {{runs}} running tasks and {{ci_jobs}} CI jobs finish, the Hub will switch versions. Services will resume afterward if they were running when the stop was accepted.",
-        restart:
-          "The Hub is restarting and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. It will restart after {{runs}} running tasks and {{ci_jobs}} CI jobs finish.",
-        stop: "The Hub is stopping and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. It will stop after {{runs}} running tasks and {{ci_jobs}} CI jobs finish.",
-      },
+    desktop: {
       decision: {
         title: "Chat judgment engine",
         team: "Applies to all members unless overridden in member settings.",
@@ -40,7 +24,7 @@ export const resources = {
           service: "Service",
           commands: "Edit Command",
           diagnostics: "Diagnostics",
-          setup: "Setup",
+          setup: "Settings",
         },
         navStatus: {
           service: {
@@ -55,7 +39,6 @@ export const resources = {
           },
         },
         language: {
-          label: "Display language",
           english: "English",
           japanese: "Japanese",
         },
@@ -67,7 +50,6 @@ export const resources = {
         },
       },
       session: {
-        retry: "Retry",
         guide: {
           title: "Open GuildBotics from the server machine",
           run: "Run this on the machine the GuildBotics server runs on. It opens GuildBotics in that machine's browser.",
@@ -519,19 +501,9 @@ export const resources = {
       setup: {
         integrations: {
           title: "Integrations",
-          subtitle:
-            "Choose the service that hosts the code, the tickets, and the chat. Each is optional.",
+          subtitle: "Use Slack to assign work to members and receive their replies.",
           none: "Not used",
-          kinds: {
-            code_hosting_service: "Code hosting",
-            ticket_service: "Tickets",
-            chat_service: "Chat",
-          },
-          kindHints: {
-            code_hosting_service: "Where the members clone repositories and open pull requests.",
-            ticket_service: "Where the members take tickets from and report on them.",
-            chat_service: "Where the members are asked for work and reply.",
-          },
+          chat: "Chat",
         },
         title: "First setup",
         configuredTitle: "Settings",
@@ -564,15 +536,13 @@ export const resources = {
           next: "Next",
         },
         nav: {
-          groupWorkspace: "Workspace",
-          groupMachine: "This machine",
-          project: "Project",
+          project: "Workspace",
           intelligence: "LLM / AI CLI tools",
           environment: "Agent execution environment",
-          members: "Members",
+          members: "Members and patrol",
           integrations: "Integrations",
           verification: "Verification",
-          device: "Registered workspaces",
+          device: "This machine",
         },
         device: {
           clientTitle: "Hub clients",
@@ -582,6 +552,12 @@ export const resources = {
           linuxClientDownload: "Download for Linux x86_64",
           title: "This machine",
           subtitle: "These settings belong to this machine rather than to a workspace.",
+          git: {
+            title: "Git authentication",
+            hint: "To use the Hub as a Git remote, add this credential helper to your global Git configuration. Open it with git config --global --edit.",
+            copy: "Copy",
+            copied: "Copied",
+          },
           registeredWorkspaces: {
             title: "Registered workspaces",
             body: "Registered locations protect each workspace’s .guildbotics directory from agent directory grants, even when another workspace is selected. Remove a location only when you no longer use it. Removing its registration does not delete its files.",
@@ -598,10 +574,12 @@ export const resources = {
         verification: {
           title: "Verification",
           subtitle: "Verify the configuration and connection status of integrations.",
+          codeHosting: "Code hosting",
+          tickets: "Tickets",
         },
         project: {
-          title: "Project",
-          subtitle: "Choose your workspace, language, and other basic project settings.",
+          title: "Workspace",
+          subtitle: "Manage this workspace’s location, description, and default agent language.",
           agentLanguage: "Agent default language",
           agentLanguageDescription:
             "Used for command and role definitions, and for LLM output instructions.",
@@ -1455,23 +1433,7 @@ export const resources = {
     },
   },
   ja: {
-    translation: {
-      hub: {
-        versionLabel: "{{sha}}（{{subject}}）",
-        preparingVersions:
-          "Hub を {{current}} から {{target}} に自動更新する準備をしています。まもなく新しい実行の受け付けを止めます。",
-        updateVersions:
-          "Hub の自動更新のため、新しい実行の受け付けを止めています。巡回・定期実行・チャットの受信は止まり、手動の実行や実行環境のビルドは断ります。実行中の作業 {{runs}} 件と CI のジョブ {{ci_jobs}} 件が終わると、{{current}} から {{target}} に切り替わります。止めた時点でサービスが動いていたら、切り替えのあとに再開します。",
-        title: "Hub の作業",
-        version: "Hub の版",
-        dismiss: "段階が変わるまで閉じる",
-        preparing: "Hub を自動更新する準備をしています。まもなく新しい実行の受け付けを止めます。",
-        update:
-          "Hub の自動更新のため、新しい実行の受け付けを止めています。巡回・定期実行・チャットの受信は止まり、手動の実行や実行環境のビルドは断ります。実行中の作業 {{runs}} 件と CI のジョブ {{ci_jobs}} 件が終わると、版を切り替えます。止めた時点でサービスが動いていたら、切り替えのあとに再開します。",
-        restart:
-          "Hub の再起動のため、新しい実行の受け付けを止めています。巡回・定期実行・チャットの受信は止まり、手動の実行や実行環境のビルドは断ります。実行中の作業 {{runs}} 件と CI のジョブ {{ci_jobs}} 件が終わると、再起動します。",
-        stop: "Hub の停止のため、新しい実行の受け付けを止めています。巡回・定期実行・チャットの受信は止まり、手動の実行や実行環境のビルドは断ります。実行中の作業 {{runs}} 件と CI のジョブ {{ci_jobs}} 件が終わると、停止します。",
-      },
+    desktop: {
       decision: {
         title: "チャット判断エンジン",
         team: "メンバー設定で上書きしない限り、チーム全体に適用します。",
@@ -1510,7 +1472,6 @@ export const resources = {
           },
         },
         language: {
-          label: "表示言語",
           english: "English",
           japanese: "日本語",
         },
@@ -1522,7 +1483,6 @@ export const resources = {
         },
       },
       session: {
-        retry: "再試行",
         guide: {
           title: "サーバーのマシンから GuildBotics を開いてください",
           run: "GuildBotics のサーバーが動くマシンで、次のコマンドを実行してください。そのマシンのブラウザで GuildBotics が開きます。",
@@ -1655,18 +1615,9 @@ export const resources = {
       setup: {
         integrations: {
           title: "連携",
-          subtitle: "コード・チケット・チャットに使うサービスを選びます。どれも任意です。",
+          subtitle: "Slack でメンバーに作業を依頼し、返答を受け取れます。",
           none: "使わない",
-          kinds: {
-            code_hosting_service: "コードホスティング",
-            ticket_service: "チケット",
-            chat_service: "チャット",
-          },
-          kindHints: {
-            code_hosting_service: "メンバーがリポジトリを clone し、プルリクエストを作る場所です。",
-            ticket_service: "メンバーがチケットを受け取り、結果を報告する場所です。",
-            chat_service: "メンバーに作業を依頼し、メンバーが返信する場所です。",
-          },
+          chat: "チャット",
         },
         title: "はじめに",
         configuredTitle: "設定",
@@ -1698,15 +1649,13 @@ export const resources = {
           next: "次へ",
         },
         nav: {
-          groupWorkspace: "ワークスペース",
-          groupMachine: "このマシン",
-          project: "プロジェクト",
-          intelligence: "LLM・AI CLIツール",
+          project: "ワークスペース",
+          intelligence: "LLM・AI CLI ツール",
           environment: "エージェント実行環境",
-          members: "メンバー",
+          members: "メンバー・巡回",
           integrations: "連携",
           verification: "検証",
-          device: "登録済みのワークスペース",
+          device: "このマシン",
         },
         device: {
           clientTitle: "Hub クライアント",
@@ -1716,6 +1665,12 @@ export const resources = {
           linuxClientDownload: "Linux x86_64 版をダウンロード",
           title: "このマシン",
           subtitle: "ワークスペースではなく、このマシン自体に属する設定です。",
+          git: {
+            title: "Git の認証",
+            hint: "Hub を Git のリモートとして使うには、この認証ヘルパーをグローバルな Git 設定に追加してください。git config --global --edit で開けます。",
+            copy: "コピー",
+            copied: "コピーしました",
+          },
           registeredWorkspaces: {
             title: "登録済みのワークスペース",
             body: "別のワークスペースを選択している間も、ここに登録された場所の.guildboticsをエージェントへの共有から保護します。使わなくなった場所だけ登録を外してください。登録を外してもファイルは削除されません。",
@@ -1732,10 +1687,12 @@ export const resources = {
         verification: {
           title: "検証",
           subtitle: "設定したプロジェクトや連携サービスの動作状況をチェックします。",
+          codeHosting: "コードホスティング",
+          tickets: "チケット",
         },
         project: {
-          title: "プロジェクト",
-          subtitle: "ワークスペース、言語などの基本設定を指定します。",
+          title: "ワークスペース",
+          subtitle: "ワークスペースの場所、説明、エージェントの既定言語を管理します。",
           agentLanguage: "エージェントの既定言語",
           agentLanguageDescription: "コマンド、ロール定義、LLMへの指示で使う既定言語です。",
           description: "プロジェクトの説明",

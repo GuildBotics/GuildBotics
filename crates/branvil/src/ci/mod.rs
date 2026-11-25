@@ -282,7 +282,7 @@ impl Ci {
     }
 
     fn job_url(&self, repo_path: &str, id: &str) -> String {
-        format!("{}/{repo_path}/-/jobs/{id}", self.inner.base_url)
+        crate::util::item_url(&self.inner.base_url, repo_path, "jobs", id)
     }
 
     fn publish(&self, changed: &[(String, String)]) {
@@ -2578,7 +2578,7 @@ mod tests {
         assert_eq!(
             lint.details_url.as_deref().unwrap(),
             format!(
-                "http://127.0.0.1:7878/acme/demo/-/jobs/{}",
+                "http://127.0.0.1:7878/workspaces/acme/repos/demo/jobs/{}",
                 lint.attempt_id.as_deref().unwrap()
             )
         );

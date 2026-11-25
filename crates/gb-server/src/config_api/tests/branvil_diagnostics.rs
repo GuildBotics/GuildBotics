@@ -1,13 +1,9 @@
-//! Localized Branvil workspace diagnostics.
+//! The workspace registration is the source of the code host scope.
 use super::*;
 use crate::setup_providers::Registry;
 
-fn services(code: &str, tickets: &str) -> Value {
-    json!({"code_hosting_service":{"name":"branvil","workspace":code},"ticket_service":{"name":"branvil","workspace":tickets}})
-}
-
 #[tokio::test]
-async fn diagnostics_check_each_distinct_workspace_in_requested_language() {
+async fn diagnostics_check_the_execution_workspace_registration() {
     let f = fixture();
     let path = f.root.join("branvil");
     branvil::test_support::initialize(&path, "owner1").unwrap();
@@ -18,79 +14,31 @@ async fn diagnostics_check_each_distinct_workspace_in_requested_language() {
     .await
     .unwrap();
     f.api.branvil.set(running.data.clone()).ok().unwrap();
+    let registry = Registry(Some(f.api.clone()));
+    let services =
+        json!({"ticket_service":{"name":"branvil"},"code_hosting_service":{"name":"branvil"}});
+    let root = f.workspace();
+    let checks = registry.diagnose_branvil(&services, &root, "en").await;
+    assert_eq!(checks[0].status, "error");
     running
         .data
         .owner()
-        .repos_create_workspace(branvil::test_support::input(json!({"name":"acme"})))
+        .assign_execution_root("acme".into(), root.clone())
         .await
         .unwrap();
-    let registry = Registry(Some(f.api.clone()));
     for lang in ["en", "ja"] {
-        let checks = registry
-            .diagnose_branvil(&services("acme", "absent"), lang)
-            .await;
-        let found: Vec<_> = checks
-            .iter()
-            .map(|c| (c.code.as_str(), c.target.as_str(), c.status.as_str()))
-            .collect();
+        let checks = registry.diagnose_branvil(&services, &root, lang).await;
+        assert_eq!(checks.len(), 1);
         assert_eq!(
-            found,
-            [
-                ("branvil_workspace", "acme", "ok"),
-                ("branvil_workspace", "absent", "error")
-            ]
-        );
-        assert_eq!(
-            checks[0].message,
-            crate::i18n::t(
-                lang,
-                "integrations.branvil.provider.workspace",
-                &[("workspace", "acme")]
-            )
-        );
-        assert!(!checks[1].message.contains("integrations.branvil"));
-        assert!(!checks[1].message.contains("%{"));
-        // One workspace named by both services is checked once.
-        assert_eq!(
-            registry
-                .diagnose_branvil(&services("acme", "acme"), lang)
-                .await
-                .len(),
-            1
+            (checks[0].target.as_str(), checks[0].status.as_str()),
+            ("acme", "ok")
         );
     }
-    // Services on other providers ask nothing of Branvil.
     assert!(
         registry
-            .diagnose_branvil(&json!({"chat_service":{"name":"slack"}}), "en")
+            .diagnose_branvil(&json!({"chat_service":{"name":"slack"}}), &root, "en")
             .await
             .is_empty()
     );
     running.stop().await.unwrap();
-}
-
-#[tokio::test]
-async fn a_stopped_branvil_fails_each_workspace_check() {
-    let f = fixture();
-    let registry = Registry(Some(f.api.clone()));
-    for lang in ["en", "ja"] {
-        let checks = registry
-            .diagnose_branvil(&services("acme", "other"), lang)
-            .await;
-        assert_eq!(checks.len(), 2);
-        for (check, target) in checks.iter().zip(["acme", "other"]) {
-            assert_eq!(
-                (
-                    check.code.as_str(),
-                    check.status.as_str(),
-                    check.target.as_str()
-                ),
-                ("branvil_workspace", "error", target)
-            );
-            assert_eq!(
-                check.message,
-                crate::i18n::t(lang, "integrations.branvil.api.stopped", &[])
-            );
-        }
-    }
 }

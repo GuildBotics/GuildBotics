@@ -1,7 +1,7 @@
 import { createTheme } from "@mantine/core";
 import { Notifications, notifications } from "@mantine/notifications";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,8 +11,13 @@ import i18n from "../i18n";
 import "../i18n";
 import { EntryPage } from "../session/EntryPage";
 import { SetupPage } from "../setup/SetupPage";
+import { subscribeChangeStream, type StreamMessage } from "../repository/query/changeStream";
 import { fill } from "../test/fill";
 import { TestMantineProvider } from "../test/TestMantineProvider";
+
+vi.mock("../repository/query/changeStream", () => ({
+  subscribeChangeStream: vi.fn(() => () => {}),
+}));
 
 const t = i18n.getFixedT("en");
 const BASE = "/-/guildbotics/api";
@@ -116,44 +121,6 @@ function jsonResponse(status: number, body: unknown): Response {
     json: async () => body,
     text: async () => JSON.stringify(body),
   } as unknown as Response;
-}
-
-// ---------------------------------------------------------------------------
-// Mock WebSocket boundary: a controllable fake the test can push events into.
-// ---------------------------------------------------------------------------
-
-class FakeWebSocket {
-  static instances: FakeWebSocket[] = [];
-  url: string;
-  protocols: unknown;
-  close = vi.fn();
-  onopen: (() => void) | null = null;
-  onmessage: ((event: { data: string }) => void) | null = null;
-  onerror: (() => void) | null = null;
-  onclose: (() => void) | null = null;
-
-  constructor(url: string, protocols?: unknown) {
-    this.url = url;
-    this.protocols = protocols;
-    FakeWebSocket.instances.push(this);
-  }
-
-  emit(payload: unknown): void {
-    this.onmessage?.({ data: JSON.stringify(payload) });
-  }
-
-  static find(suffix: string): FakeWebSocket {
-    const socket = FakeWebSocket.instances.find((s) => s.url.includes(suffix));
-    if (!socket) {
-      throw new Error(`No websocket opened for ${suffix}`);
-    }
-    return socket;
-  }
-}
-
-function installWebSocket(): void {
-  FakeWebSocket.instances = [];
-  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +305,6 @@ function serviceServer(): MockServer {
 
 function renderApp(server: MockServer, path: string) {
   server.install();
-  installWebSocket();
   const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -357,7 +323,6 @@ function renderApp(server: MockServer, path: string) {
 
 function renderSetup(server: MockServer, path: string) {
   server.install();
-  installWebSocket();
   const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -574,18 +539,12 @@ describe("Setup integration (real client + mock server)", () => {
     await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
 
     await fill(user, screen.getByLabelText("Project description"), "Demo project");
-    // Each kind of service starts unused; the chat is taken by Slack.
-    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
-    for (const kind of ["code_hosting_service", "ticket_service"] as const) {
-      expect(
-        await screen.findByRole("combobox", { name: t(`setup.integrations.kinds.${kind}`) }),
-      ).toHaveValue(t("setup.integrations.none"));
-    }
-    await user.click(
-      screen.getByRole("combobox", { name: t("setup.integrations.kinds.chat_service") }),
-    );
+    await user.click(screen.getByRole("link", { name: t("setup.nav.integrations") }));
+    const chat = screen.getByRole("combobox", { name: t("setup.integrations.chat") });
+    expect(chat).toHaveValue(t("setup.integrations.none"));
+    await user.click(chat);
     await user.click(await screen.findByRole("option", { name: "Slack" }));
-    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
+    await user.click(screen.getByRole("link", { name: "LLM / AI CLI tools" }));
     await user.click(
       await screen.findByRole("button", {
         name: t("setup.intelligence.apiKeyButtonLabel", { provider: "OpenAI" }),
@@ -593,7 +552,7 @@ describe("Setup integration (real client + mock server)", () => {
     );
     await fill(user, await screen.findByLabelText("OpenAI API key"), "sk-test");
 
-    await user.click(screen.getByRole("button", { name: "Members" }));
+    await user.click(screen.getByRole("link", { name: "Members and patrol" }));
     await fill(user, await screen.findByLabelText("Member ID"), "alice");
     await fill(user, screen.getByLabelText("Display name"), "Alice");
     await fill(user, screen.getByLabelText("Roles"), "product");
@@ -667,6 +626,14 @@ function commandFileDetail(overrides: Record<string, unknown> = {}) {
 
 describe("Commands integration (real client + mock server)", () => {
   it("lists command files and runs the selected file via save-and-run", async () => {
+    vi.stubGlobal("EventSource", vi.fn());
+    let receive: (message: StreamMessage) => void = () => undefined;
+    vi.mocked(subscribeChangeStream).mockImplementation((listener) => {
+      receive = listener;
+      return () => undefined;
+    });
+    let status = "";
+    const runSummary = () => traceSummary({ trace_id: "evt-1", command: "greet", status });
     const server = new MockServer()
       .json("GET", "/config/status", configStatus())
       .json("GET", "/team", team())
@@ -679,16 +646,16 @@ describe("Commands integration (real client + mock server)", () => {
         blocking_context: {},
       })
       .json("POST", "/commands/run", { trace_id: "evt-1", output: "hello output" })
-      .json("GET", "/diagnostics/traces", { traces: [] })
+      .on("GET", "/diagnostics/traces", () => ({ body: { traces: status ? [runSummary()] : [] } }))
       .on("GET", "/diagnostics/traces/evt-1", () => ({
         body: {
           trace_id: "evt-1",
-          summary: traceSummary({ trace_id: "evt-1", command: "greet", status }),
+          summary: runSummary(),
           records: [],
         },
       }));
-    let status = "running";
     const user = userEvent.setup();
+    window.history.replaceState(null, "", "/workspaces/demo/commands");
     renderApp(server, "/commands");
     await screen.findByRole("heading", { name: t("commands.title") });
 
@@ -726,33 +693,24 @@ describe("Commands integration (real client + mock server)", () => {
       attr_key: "run.entry",
       attr_value: "command",
       limit: "1",
+      prefer_running: "true",
     });
+    expect(latest.headers["X-GuildBotics-Workspace"]).toBe("demo");
 
-    // A pushed command lifecycle event over the (real-client) websocket
-    // refreshes the run from the server.
-    const socket = FakeWebSocket.find("/events");
-    // The session cookie authenticates the stream: no token rides on it.
-    expect(socket.url).toBe(`ws://${window.location.host}/-/guildbotics/api/events`);
-    expect(socket.protocols).toBeUndefined();
-    await waitFor(() => expect(socket.onmessage).not.toBeNull());
-
-    socket.emit({
-      type: "command.started",
-      trace_id: "evt-1",
-      attributes: { "run.entry": "command" },
-      payload: { command: "greet", person: "alice" },
-      timestamp: "2026-06-04T01:00:00Z",
-    });
+    // The stream supplies only a change notice. The run is read from the workspace.
+    const change = () =>
+      act(() =>
+        receive({ type: "change", data: JSON.stringify({ kind: "command", path: "commands" }) }),
+      );
+    status = "running";
+    change();
     expect(await screen.findByText(t("diagnostics.executions.status.running"))).toBeInTheDocument();
+    expect(
+      server.requestsFor("GET", "/diagnostics/traces/evt-1")[0].headers["X-GuildBotics-Workspace"],
+    ).toBe("demo");
 
     status = "success";
-    socket.emit({
-      type: "command.finished",
-      trace_id: "evt-1",
-      attributes: { "run.entry": "command" },
-      payload: { command: "greet", person: "alice" },
-      timestamp: "2026-06-04T01:00:01Z",
-    });
+    change();
     expect(await screen.findByText(t("diagnostics.executions.status.success"))).toBeInTheDocument();
   });
 });

@@ -246,7 +246,7 @@ pub async fn publish_closed_by(app: &App, p: &Pull) {
 }
 
 pub fn ticket_url(base_url: &str, repo: &Repo, number: u64) -> String {
-    format!("{base_url}/{}/-/tickets/{number}", repo.path)
+    util::item_url(base_url, &repo.path, "tickets", number)
 }
 
 pub fn ticket_view(r: &impl Rd, base_url: &str, repo: &Repo, t: &Ticket) -> AppResult<TicketView> {
@@ -325,15 +325,15 @@ pub fn resolve_ticket_url(
     base_url: &str,
     url: &str,
 ) -> Option<AppResult<(Repo, Ticket)>> {
-    let rest = url.strip_prefix(base_url)?.strip_prefix('/')?;
-    let Some((repo_path, key)) = rest.split_once("/-/tickets/") else {
+    url.strip_prefix(base_url)?.strip_prefix('/')?;
+    let Some((repo_path, key)) = util::parse_item_url(base_url, url, "tickets") else {
         return Some(Err(AppError::not_found(format!(
             "{url} is not a ticket URL of this Branvil."
         ))));
     };
     Some((|| {
-        let repo = repo_by_path(r, repo_path)?;
-        ticket_by_key(r, &repo, key)
+        let repo = repo_by_path(r, &repo_path)?;
+        ticket_by_key(r, &repo, &key)
     })())
 }
 
@@ -1699,7 +1699,7 @@ pub fn linked_pulls(
         pulls.push((
             p.created_at.clone(),
             LinkedPull {
-                url: format!("{base_url}/{}/-/pulls/{}", repo.path, p.number),
+                url: util::item_url(base_url, &repo.path, "pulls", p.number),
                 label: format!("!{}", p.number),
                 title: p.title.clone(),
                 state: p.state.clone(),
@@ -2015,7 +2015,7 @@ pub async fn closed(
                             .bytes(),
                         ClosedItem {
                             kind: "pull_request",
-                            url: format!("{base_url}/{}/-/pulls/{}", repo.path, p.number),
+                            url: util::item_url(&base_url, &repo.path, "pulls", p.number),
                             title: p.title,
                             label: format!("!{}", p.number),
                             closed_at: parts[1].s().to_string(),

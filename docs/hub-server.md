@@ -33,9 +33,9 @@ scripts/hub-server.sh install
 scripts/hub-server.sh status
 ```
 
-`install` はチェックアウトのコミット済みの `HEAD` から両方の画面とRustの実行ファイルを作ります。LaunchAgent `local.guildbotics` がこの実行ファイルの `server start` を直接起動し、1つのプロセスが1つのポート（既定7878）で GuildBotics と Branvil を配ります。ログイン時と異常終了後にも起動します。正常に停止したあとは、次回のログインか `scripts/hub-server.sh restart` で起動します。
+`install` はチェックアウトのコミット済みの `HEAD` から統合画面と Rust の実行ファイルを作ります。LaunchAgent `local.guildbotics` がこの実行ファイルの `server start` を直接起動し、1つのプロセスが1つのポート（既定7878）で画面と API を配信します。ログイン時と異常終了後にも起動します。正常に停止したあとは、次回のログインか `scripts/hub-server.sh restart` で起動します。
 
-`install` は署名の識別を `signing-identity` に記録し、`update` は同じ識別で署名します。識別がキーチェーンに見つからない場合、署名に失敗した場合、署名にTeam IDがない場合（自己署名の証明書など）は、ビルドを切り替えずに止まります。登録時の `PATH` と `GUILDBOTICS_CODE_HOST_DATA_DIR` をLaunchAgentが使います。GuildBoticsのデータは既定で `~/.guildbotics`、ポートは7878です。画面は `http://127.0.0.1:7878/-/guildbotics/` で配り、Branvil を設定済みなら `/` は Branvil の画面、未設定なら GuildBotics の画面へ案内します。更新後は `guildbotics open` でブラウザに入り直してください。変更する場合は登録前に絶対パスの `GUILDBOTICS_HOME` または `GUILDBOTICS_SERVER_PORT` を設定します。導入前のCLIも同じ設定で実行してください。起動確認後に `guildbotics install` がCLIとスキルを配置します。サーバーのログは `~/Library/Logs/guildbotics.log` で確認できます。
+`install` は署名の識別を `signing-identity` に記録し、`update` は同じ識別で署名します。識別がキーチェーンに見つからない場合、署名に失敗した場合、署名にTeam IDがない場合（自己署名の証明書など）は、ビルドを切り替えずに止まります。登録時の `PATH` と `GUILDBOTICS_CODE_HOST_DATA_DIR` をLaunchAgentが使います。GuildBoticsのデータは既定で `~/.guildbotics`、ポートは7878です。画面は `http://127.0.0.1:7878/` で配信します。更新後は `guildbotics open` でブラウザに入り直してください。変更する場合は登録前に絶対パスの `GUILDBOTICS_HOME` または `GUILDBOTICS_SERVER_PORT` を設定します。導入前のCLIも同じ設定で実行してください。起動確認後に `guildbotics install` がCLIとスキルを配置します。サーバーのログは `~/Library/Logs/guildbotics.log` で確認できます。
 
 `GUILDBOTICS_HOME` に別ディスクなどの絶対パスを指定すると、`guildbotics install` はその場所の `bin/guildbotics` に CLI を置きます。起動時に `GUILDBOTICS_HOME` があればその値が優先されます。未設定の場合、導入済みの CLI はリンク経由でも実体の配置場所から machine root を見つけます。単体でコピーした CLI の既定は `~/.guildbotics` です。
 
@@ -84,7 +84,7 @@ scripts/hub-server.sh auto-install
 
 ## CI のキャッシュ容量
 
-キャッシュはランナーごとに保存します。既定は 16 GiB です。Branvil の設定 → CI で、共通の上限またはランナー別の上限を MiB 単位で指定できます。以前に保存した設定値は、そのランナーの上限として引き続き使われます。
+キャッシュはランナーごとに保存します。既定は 16 GiB です。**設定 → CI** で、共通の上限またはランナー別の上限を MiB 単位で指定できます。以前に保存した設定値は、そのランナーの上限として引き続き使われます。
 
 GuildBotics の CI では、ランナーが受け持つ各ジョブの最新世代と、そこからマージ待ちになる保留イメージが収まるように設定します。各イメージの `.branvil-data` にある実データ量の合計を見積もり、ジョブ実行中のディスクと Hub のバックアップ用の空きも確認します。例えば最新世代の合計が 22 GiB、同時に残る保留が 8 GiB なら、32 GiB（32768 MiB）を目安にします。[キャッシュの容量と追い出し順](../crates/branvil/docs/ci.md#dependency-cache)
 
@@ -181,8 +181,7 @@ scripts/hub-server.sh recover
 この版の `manual_update_version` は 3。自動更新は手作業が必要として止まる。
 実機への適用は #177 で行う。既存のチケット・PR・Git remote の 7878 の URL は変えない。
 入口リンクとブラウザセッションは GuildBotics を正として共用する。更新後は
-`guildbotics open`（Branvil へは `guildbotics open --branvil` または
-`guildbotics branvil open`）の新しい入口リンクで一度入り直す。
+`guildbotics open` の新しい入口リンクで一度入り直す。
 古い Branvil セッションは統合サーバーで使えない。単体の `guildbotics branvil serve` は従来どおり。
 
 ### Hub
@@ -298,7 +297,7 @@ scripts/hub-server.sh auto-install
 
 `hub-update.json` の `manual_update_version` 10 の手作業です。メンバーのチケットや PR の作業停止は、Branvil の通知用 webhook に届くようになります。webhook が未設定の場合、作業停止の通知は届きません。
 
-1. オーナーとして Branvil の **設定 → 通知** を開き、設定状況と送り先のホストを確認します。Slack で受け取る場合は、Slack 側で送り先を確認し、どのメンバーも監視していないチャンネルを使います。未設定の場合や送り先を変える場合は、受け取り先の Incoming Webhook の URL を入力して保存します。
+1. 更新前の Hub で、オーナーとして **設定 → 通知** を開きます。設定画面が分かれている版では、Branvil 側の **設定 → 通知** を使います。設定状況と送り先のホストを確認します。Slack で受け取る場合は、Slack 側で送り先を確認し、どのメンバーも監視していないチャンネルを使います。未設定の場合や送り先を変える場合は、受け取り先の Incoming Webhook の URL を入力して保存します。
 2. [手動更新](#手動更新)の手順で、版 10 の確認済みコミットへ更新します。
 3. **設定 → 通知** を開き直し、「設定済み」と送り先のホストを確認します。次に作業が人の対応を待って止まったとき、送り先にメンバー名と対象へのリンクが届くことを確認します。送信の失敗は同じ画面に表示されます。
 
@@ -479,7 +478,7 @@ Hub の既存キャッシュだけでは、別 CPU のアーカイブは配布�
 
    レジストリから同じ版を取得できるタグは、Hubで `guildbotics runner pull <tag>` を実行する方法もあります。
 
-4. CI設定画面で、読み込んだタグと設定digestを手順1の記録と照合します。再書き出ししたタグの新しいdigestを隔離環境の宣言にも使う場合は、該当するCPUのdigestを更新してスナップショットをビルドします。同じタグを使うCIジョブをHubで実行し、隔離コマンドも起動できることを確認します。
+4. 更新後のイメージ一覧で、読み込んだタグと設定digestを手順1の記録と照合します。統合した設定画面では **設定 → エージェント実行環境 → イメージ**、旧構成の版では **CI** 設定で一覧を開きます。再書き出ししたタグの新しいdigestを隔離環境の宣言にも使う場合は、該当するCPUのdigestを更新してスナップショットをビルドします。同じタグを使うCIジョブをHubで実行し、隔離コマンドも起動できることを確認します。
 5. 元に戻す必要がなくなったら、旧ストアと作業用に書き出したアーカイブを削除できます。削除できるのは旧ストア専用のディレクトリです。パスを `realpath` で確認し、新しいストアやHubの運用データを配下に含む場合はディレクトリごと保管します。旧ストアが専用ディレクトリなら、`rm -ri` で削除する内容を確認しながら進めます。コードホストの配布用アーカイブはランナーが取得に使うため保管します。
 
 CI設定の `[ci.microsandbox]` で旧ストアを指定していた場合は、その設定値を手順1の書き出しに使います。更新後のHubは共有ストアを使います。
@@ -496,3 +495,13 @@ git show 148f4f56508088e96299a009428dd787fab123e4:docs/hub-server.md
 ```
 
 このコミットへ更新したあとは、通常の更新で最新の版へ進みます。
+
+## 画面とワークスペースの統合（手作業の版 12）
+
+稼働中の旧版で `guildbotics server hub-data backup <保存先>` を実行し、Hub を停止します。更新候補のバイナリで、退避したデータに対して先に `guildbotics server hub-data upgrade --data-dir <保存先>` と `guildbotics server hub-data check --data-dir <保存先>` を実行します。確認できたら、停止したまま実データに対して同じコマンドを `--data-dir` なしで実行し、Hub を起動します。
+
+移行後の実行設定は、その設定が属するワークスペースのリポジトリを巡回します。旧版でチケット用とコードホスト用に別々のワークスペースを選んでいる場合は、旧版の設定でどちらを使うか選び、両方の指定をそろえてから移行します。同じワークスペースに複数の実行設定が結び付いている場合は、引き継ぐ実行設定の指定を残します。再実行前に設定変更を含むバックアップを取得します。
+
+移行時に Branvil のワークスペース指定がない実行設定（上の手順ですべての指定を外したものを含む）は、`workspace-` に 16 桁の 16 進数が続く名前で登録されます。選択欄と画面の URL にはこの名前が表示されます。この名前でワークスペースが新規に作られた場合、移行直後に巡回するリポジトリはありません。
+
+チケット、PR、コメントの新しいリンクは `/workspaces/{workspace}/repos/{repo}/` の下を指します。既存の本文とコメントはそのまま保存されます。

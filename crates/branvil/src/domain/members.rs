@@ -361,7 +361,6 @@ pub async fn revoke_token(app: &App, caller: &Caller, name: String, id: String) 
 pub struct SessionView {
     pub me: MemberView,
     pub csrf: String,
-    pub host_navigation: crate::host::Navigation,
 }
 
 /// Register valid missing roster agents without overwriting existing identities.

@@ -190,15 +190,17 @@ own [unit `auth::tests::the_host_identifies_the_owner_and_member_tokens_their_me
 ## Markdown
 
 The API stores and returns Markdown as text and never renders HTML. The GUI
-renders it in one place (`web/src/components/Markdown.tsx`): `marked`, then
+renders it in one place (`desktop/src/ui/markdown.ts`): `marked`, then
 DOMPurify with `style`, `form`, `iframe`, `svg`, `math`, … and the `style`,
 `class`, `id` attributes forbidden, and only `http(s):`, `mailto:`, `#`, and
 same-site `/…` URLs kept; links open with `rel="noopener noreferrer nofollow"`.
-The CSP forbids inline scripts as a second line [`web/src/__tests__/markdown.test.tsx`].
+The sanitization tests are in `desktop/src/ui/markdown.test.ts` and
+`desktop/src/repository/__tests__/markdown.test.tsx`. The CSP also forbids
+inline scripts.
 The Markdown's DOMPurify is its own instance, so hooks other libraries add to
 the shared one (Mermaid adds some) never reach it. A ` ```mermaid ` block is
 drawn by Mermaid (`securityLevel: "strict"`, which sanitizes its labels, in a
-temporary element it removes) in `web/src/components/diagram.ts` and shown as
+temporary element it removes) in `desktop/src/ui/diagram.ts` and shown as
 an `<img>` of a `data:` URL, which the CSP's `img-src 'self' data:` already
 allows: an SVG loaded as an image runs no script, loads nothing, and keeps its
 styles to itself, so the limits above apply unchanged to the rest of the body.

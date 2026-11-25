@@ -8,7 +8,7 @@ pub use crate::domain::{attachments, members, pulls, repos, tickets};
 pub use crate::error::{AppError, AppResult};
 use crate::git::{CommitSummary, FileChange};
 pub use crate::model::{MemberKind, Repo, Workspace};
-use crate::store::Rd;
+use crate::store::{self, Rd};
 pub use crate::upstream::host::{AlertState, DependencyAlert};
 
 /// Paging input verified against the actual operation, caller and filters at dispatch.
@@ -25,31 +25,19 @@ pub struct DataApi {
     pub(crate) app: Shared,
 }
 
-pub type HubStatus = std::sync::Arc<
-    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = serde_json::Value> + Send>>
-        + Send
-        + Sync,
->;
-
 impl DataApi {
-    /// Supply device-local maintenance information from the embedding host.
-    pub fn attach_hub_status(&self, status: HubStatus) {
-        let _ = self.app.hub_status.set(status);
-    }
-    /// Status reported by the embedding host, with this service's live CI count.
-    pub async fn hub_status(&self) -> serde_json::Value {
-        let Some(status) = self.app.hub_status.get() else {
-            return serde_json::Value::Null;
-        };
-        let mut value = status().await;
-        if value["operation"].is_object() {
-            value["operation"]["waiting"]["ci_jobs"] =
-                self.app.ci.diagnostics().await["queue"]["in_progress"].clone();
-        }
-        value
-    }
     pub fn subscribe(&self) -> impl futures_util::Stream<Item = crate::events::Notice> + use<> {
         self.app.events.subscribe()
+    }
+
+    pub fn workspace_changed(&self) {
+        self.app
+            .events
+            .publish("workspace.changed", "workspace", "");
+    }
+
+    pub fn command_runs_changed(&self) {
+        self.app.events.publish("command", "commands", "");
     }
 
     pub fn hub_status_changed(&self) {
@@ -93,6 +81,48 @@ impl DataApi {
             name: None,
         }
     }
+    pub fn workspace_for_execution(&self, root: &std::path::Path) -> AppResult<Option<Workspace>> {
+        let _open = self.guard()?;
+        self.app.store.read_sync(|r| {
+            Ok(r.prefix_all::<Workspace>(store::WORKSPACES, &[])?
+                .into_iter()
+                .find(|ws| ws.execution_root.as_deref() == Some(root)))
+        })
+    }
+    pub fn execution_roots(&self) -> AppResult<Vec<std::path::PathBuf>> {
+        let _open = self.guard()?;
+        self.app.store.read_sync(|r| {
+            let mut roots: Vec<_> = r
+                .prefix_all::<Workspace>(store::WORKSPACES, &[])?
+                .into_iter()
+                .filter_map(|ws| ws.execution_root)
+                .collect();
+            roots.sort();
+            Ok(roots)
+        })
+    }
+
+    pub async fn unassign_execution_root(&self, root: std::path::PathBuf) -> AppResult<()> {
+        let _open = self.guard()?;
+        self.app
+            .store
+            .write(move |w| {
+                for mut workspace in w.prefix_all::<Workspace>(store::WORKSPACES, &[])? {
+                    if workspace.execution_root.as_ref() == Some(&root) {
+                        workspace.execution_root = None;
+                        w.put(
+                            store::WORKSPACES,
+                            &Workspace::key(&workspace.id),
+                            &workspace,
+                        )?;
+                        break;
+                    }
+                }
+                Ok(())
+            })
+            .await
+    }
+
     /// The owner's member name.
     pub fn owner_name(&self) -> AppResult<String> {
         let _open = self.guard()?;
@@ -712,6 +742,20 @@ impl MemberApi {
         let caller = self.caller().await?;
         repos::get_workspace(&self.api.app, &caller, name).await
     }
+    pub async fn assign_execution_root(
+        &self,
+        name: String,
+        root: std::path::PathBuf,
+    ) -> AppResult<Workspace> {
+        let _open = self.api.guard()?;
+        self.caller().await?.require_owner()?;
+        self.api
+            .app
+            .store
+            .write(move |w| repos::assign_execution_root(w, name, root))
+            .await
+    }
+
     pub async fn repos_visible_workspace(&self, name: &str) -> AppResult<Workspace> {
         let _open = self.api.guard()?;
         let caller = self.caller().await?;

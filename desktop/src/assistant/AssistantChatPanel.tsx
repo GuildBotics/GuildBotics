@@ -1,8 +1,8 @@
+import { WorkspaceLink } from "../ui/workspaceLinks";
 import { Alert, Button, Group, ScrollArea, Stack, Text, Textarea, Title } from "@mantine/core";
 import { Send, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router";
 
 /** i18n key prefix. Every namespace defines the same leaf keys. */
 export type AssistantChatNamespace = "commands.authoring" | "diagnostics.troubleshooting";
@@ -106,14 +106,14 @@ export function AssistantChatPanel({
                 {message.references?.length ? (
                   <Group className="assistant-chat-references" gap="xs">
                     {message.references.map((reference) => (
-                      <Link
+                      <WorkspaceLink
                         className="assistant-chat-reference"
                         key={reference.traceId}
                         title={reference.traceId}
                         to={reference.to}
                       >
                         {reference.label}
-                      </Link>
+                      </WorkspaceLink>
                     ))}
                   </Group>
                 ) : null}

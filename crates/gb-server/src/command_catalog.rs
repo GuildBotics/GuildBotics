@@ -85,7 +85,7 @@ pub(crate) async fn workspace(api: &Shared, headers: &HeaderMap) -> Result<Works
             .context(json!({ "path": path }))
             .into_response()
     };
-    let Some(directory) = api.selected().workspace.clone() else {
+    let Some(directory) = crate::workspace::for_request(api, headers).await? else {
         return Err(not_found(json!("")));
     };
     let config = directory.join(".guildbotics/config");

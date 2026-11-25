@@ -47,7 +47,8 @@ use std::{
 
 pub use backup::{request as request_backup, restore};
 pub use runner::{RunnerArgs, main as run_runner};
-pub use service::{Embedded, Maintenance, maintain};
+pub use service::{Embedded, Maintenance, maintain, maintain_with_execution_roots};
+pub use upgrade::legacy_item_url;
 pub use upstream::askpass_main;
 
 /// Prepare the service on `data_dir`, creating it on first use, without

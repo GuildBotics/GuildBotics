@@ -37,8 +37,8 @@ import {
   getTranscriptSettings,
   memberAvatarUrl,
   runScenarioDiagnostics,
+  runCommand,
   setWorkspace,
-  subscribeEvents,
   updateRuntimeDebug,
   startScheduler,
   updateServiceSettings,
@@ -46,11 +46,8 @@ import {
   uploadCommandInputFile,
   uploadMemberAvatar,
   verify,
-  type RuntimeEvent,
-  type StreamStatus,
 } from "./client";
 import { startSlackAppRegistration, verifySlackTokens } from "../setup/providers/slack/api";
-import { makeRuntimeEvent } from "../test/factories";
 
 type FetchArgs = { url: string; init: RequestInit };
 
@@ -162,6 +159,34 @@ describe("session", () => {
     expect(headerValue(calls[0].init, "X-GuildBotics-CSRF")).toBe("test-csrf");
     expect(headerValue(calls[2].init, "X-GuildBotics-CSRF")).toBe("fresh");
     expect(calls[2].init.body).toBe(calls[0].init.body);
+  });
+
+  it("retries a manual command in the workspace it was launched from", async () => {
+    window.history.replaceState(null, "", "/workspaces/%61cme/commands");
+    try {
+      const calls = queueFetch(
+        errorResponse(403, "csrf_mismatch"),
+        jsonResponse({ csrf: "fresh" }),
+        jsonResponse({}),
+      );
+      const run = runCommand({ command: "status" });
+      window.history.replaceState(null, "", "/workspaces/beta/commands");
+      await run;
+
+      expect(calls.map(({ url }) => url)).toEqual([
+        "/-/guildbotics/api/commands/run",
+        "/-/guildbotics/api/session",
+        "/-/guildbotics/api/commands/run",
+      ]);
+      expect(calls.map(({ init }) => headerValue(init, "X-GuildBotics-Workspace"))).toEqual([
+        "acme",
+        undefined,
+        "acme",
+      ]);
+      expect(calls[2].init.body).toBe(calls[0].init.body);
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
   });
 
   it("refreshes an upload's refused CSRF value too, sending the same file", async () => {
@@ -901,53 +926,5 @@ describe("websocket subscriptions", () => {
     MockWebSocket.instances[1].onclose?.();
     expect(MockWebSocket.instances[1].send).not.toHaveBeenCalled();
     expect(cancelled).not.toHaveBeenCalled();
-  });
-
-  it("connects to this page's /-/guildbotics/api/events without a subprotocol and drives status transitions", () => {
-    const events: RuntimeEvent[] = [];
-    const statuses: StreamStatus[] = [];
-
-    const unsubscribe = subscribeEvents(
-      (event) => events.push(event),
-      (status) => statuses.push(status),
-    );
-
-    const socket = MockWebSocket.instances[0];
-    // The session cookie authenticates the handshake.
-    expect(socket.url).toBe(`ws://${window.location.host}/-/guildbotics/api/events`);
-    expect(socket.protocols).toBeUndefined();
-    expect(statuses).toEqual(["connecting"]);
-
-    socket.onopen?.();
-    expect(statuses).toEqual(["connecting", "connected"]);
-
-    const event = makeRuntimeEvent({
-      type: "task_started",
-      trace_id: "r1",
-      span_id: "s1",
-      source: "manual",
-      payload: { id: 1 },
-      attributes: { "target.label": "#42" },
-      timestamp: "2026-06-05T00:00:00Z",
-    });
-    socket.onmessage?.({ data: JSON.stringify(event) });
-    expect(events).toEqual([event]);
-
-    socket.onerror?.();
-    expect(statuses).toEqual(["connecting", "connected", "error"]);
-
-    socket.onclose?.();
-    expect(statuses).toEqual(["connecting", "connected", "error", "disconnected"]);
-
-    unsubscribe();
-    expect(socket.close).toHaveBeenCalledTimes(1);
-  });
-
-  it("works without an onStatus callback", () => {
-    expect(() => subscribeEvents(() => undefined)).not.toThrow();
-    const socket = MockWebSocket.instances[0];
-    expect(() => socket.onopen?.()).not.toThrow();
-    expect(() => socket.onerror?.()).not.toThrow();
-    expect(() => socket.onclose?.()).not.toThrow();
   });
 });

@@ -143,10 +143,10 @@ def _expected(read, value, revisions):
         value["revisions"] = {
             k: revisions.get(k, v) for k, v in value["revisions"].items()
         }
-    # Host topology was added after the golden (#176); the copy's Branvil is
-    # unreachable, so the server reports none.
     if read == "config__status.json":
-        value = dict(value, branvil_available=False)
+        # The frozen server exposed neither host topology nor execution workspace names.
+        # This disposable run has no reachable Branvil or registered execution workspace.
+        value = dict(value, branvil_available=False, workspace_name=None)
     return value
 
 

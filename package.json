@@ -2,9 +2,7 @@
   "name": "guildbotics-web",
   "private": true,
   "workspaces": [
-    "desktop",
-    "crates/branvil/web",
-    "packages/ui"
+    "desktop"
   ],
   "engines": {
     "node": ">=24"

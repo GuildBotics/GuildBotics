@@ -16,7 +16,7 @@ The scheduler supports two ways of running commands.
 
 ## Configuring on the Screens
 
-Per-member settings live under **Setup → Members → Patrol**.
+Under **Settings → Members and patrol**, edit the member and open the **Patrol** tab.
 
 - **Configure patrol commands for this member**: turn it on and choose the commands to run on patrol. Members with it turned off do not run patrol work
 - **Add schedule**: choose the command to run and its time. The command can be picked from the **Catalog** (with argument fields) or entered as a **Custom** command line. The time is an Hourly / Daily / Weekly preset, or a **Detailed schedule**

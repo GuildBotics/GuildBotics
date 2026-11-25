@@ -20,7 +20,7 @@ marked "(in process only)".
 GuildBotics authenticates the owner (`host::Host`, given to
 `prepare_embedded`). `GET /api/v1/session` resolves GuildBotics' live owner
 cookie (`guildbotics_session_<port>`) to the owner member and returns
-`{"me", "csrf", "host_navigation": {label, url}}` with GuildBotics' CSRF
+`{"me", "csrf"}` with GuildBotics' CSRF
 value; every non-GET request made with the cookie sends it as
 `X-GuildBotics-CSRF`. A Bearer token that is not a member's token
 (`bvt_...`) is checked as GuildBotics' owner token (the one in
@@ -79,12 +79,12 @@ refused). The browser enters through GuildBotics (`guildbotics open`).
 
 | What | URL |
 | --- | --- |
-| Ticket | `{base}/{repo}/-/tickets/{number}` |
-| Pull request | `{base}/{repo}/-/pulls/{number}` |
-| Ticket comment | `{base}/{repo}/-/tickets/{number}#{comment_id}` |
-| PR comment, review, or inline reply | `{base}/{repo}/-/pulls/{number}#{entry_id}` |
-| Commit | `{base}/{repo}/-/commits/{sha}` |
-| CI attempt | `{base}/{repo}/-/jobs/{attempt_id}` |
+| Ticket | `{base}/workspaces/{workspace}/repos/{repo}/tickets/{number}` |
+| Pull request | `{base}/workspaces/{workspace}/repos/{repo}/pulls/{number}` |
+| Ticket comment | `{base}/workspaces/{workspace}/repos/{repo}/tickets/{number}#{comment_id}` |
+| PR comment, review, or inline reply | `{base}/workspaces/{workspace}/repos/{repo}/pulls/{number}#{entry_id}` |
+| Commit | `{base}/workspaces/{workspace}/repos/{repo}/commits/{sha}` |
+| CI attempt | `{base}/workspaces/{workspace}/repos/{repo}/jobs/{attempt_id}` |
 | Git remote | `{base}/git/{repo}.git` |
 
 Paths in these URLs are not percent-encoded (each name is URL-safe). The API's
@@ -379,7 +379,7 @@ every ticket is on it, in a lane.
 
 ```json
 {
-  "url": "http://127.0.0.1:7878/acme/demo/-/tickets/3",
+  "url": "http://127.0.0.1:7878/workspaces/acme/repos/demo/tickets/3",
   "repository": "acme/demo",
   "key": "3",
   "title": "Fix login",
@@ -396,7 +396,7 @@ every ticket is on it, in a lane.
   "upstream_issue": "https://github.com/acme/demo/issues/12",
   "lane": "ready",
   "rank": "0|hzzzzz",
-  "parent": {"url": "http://127.0.0.1:7878/acme/demo/-/tickets/1", "repository": "acme/demo",
+  "parent": {"url": "http://127.0.0.1:7878/workspaces/acme/repos/demo/tickets/1", "repository": "acme/demo",
              "key": "1", "title": "Sign-in", "state": "open", "state_reason": null},
   "children": [],
   "blocked_by": [ ...the same shape... ],
@@ -552,7 +552,7 @@ The comment shape:
  "mentions": [],
  "meta": {"kind": "workflow_error", "routing": "suppress", "reason": "failed"},
  "created_at": "...", "reactions": [{"author": "ken", "reaction": "ack"}],
- "url": "http://127.0.0.1:7878/acme/demo/-/tickets/3#cmt_01JA..."}
+ "url": "http://127.0.0.1:7878/workspaces/acme/repos/demo/tickets/3#cmt_01JA..."}
 ```
 
 `meta` is an opaque JSON object (at most 4 KiB serialized) a client stores with
@@ -662,7 +662,7 @@ and comments do not keep an attachment.
 
 ```json
 {
-  "url": "http://127.0.0.1:7878/acme/demo/-/pulls/3",
+  "url": "http://127.0.0.1:7878/workspaces/acme/repos/demo/pulls/3",
   "repository": "acme/demo",
   "number": 3,
   "label": "!3",
@@ -939,7 +939,7 @@ head directly replaces the host branch after checking the same conditions.
   "checks": [
     {"name": "test", "status": "completed", "conclusion": "success",
      "attempt_id": "att_01JA...", "attempt": 1, "runner": "runner-west",
-     "details_url": "http://127.0.0.1:7878/acme/demo/-/jobs/att_01JA...",
+     "details_url": "http://127.0.0.1:7878/workspaces/acme/repos/demo/jobs/att_01JA...",
      "artifact_names": ["report"],
      "started_at": "2026-10-24T09:50:00.000Z", "finished_at": "2026-10-24T09:53:12.000Z"}
   ],
@@ -1277,9 +1277,27 @@ nothing.
 ## Events (GUI)
 
 `GET /api/v1/events` is a Server-Sent Events stream. Each event is
-`event: change` with `data: {"kind": "ticket"|"pull"|"board"|"check"|"upstream"|"repo", "path": "...", "id": "...", "actor": "owner"|"agent"|"runner"|null}`.
-`path`/`id` by kind: `ticket` repository / key, `pull` repository / number, `board` workspace / —, `check`
-repository / commit sha, `upstream` repository / — (what following its upstream found changed), `repo` repository / — (its settings, its upstream, or its refs changed, or a member's account on its upstream host was set). The actor is the authenticated writer’s member kind, or null for system changes. Events only say what changed; the GUI refetches it. On reconnect (or after a
+`event: change` with a JSON object containing `kind`, `path`, `id` and
+`actor`. The actor is the authenticated writer’s member kind (`owner`,
+`agent` or `runner`), or null for system changes.
+
+| Kind | Path | ID |
+| --- | --- | --- |
+| `ticket` | Repository | Ticket key |
+| `pull` | Repository | Pull request number |
+| `board` | Workspace | — |
+| `check` | Repository | Commit SHA |
+| `upstream` | Repository | — |
+| `repo` | Repository | — |
+| `verification` | Repository | — |
+| `workspace.changed` | `workspace` | — |
+| `hub_status_changed` | `hub` | — |
+| `command` | `commands` | — |
+
+Events only say what changed. The GUI refetches the affected data, including
+command runs from the workspace in the page URL. The command console prefers
+a run still active in the current server instance. The stream sends new changes
+from the time it opens. On reconnect (or after a
 `event: reset`, sent when the client fell behind) the GUI refetches what it shows.
 The stream ends when the service shuts down. The service subscribes to the
 same changes itself to land pull requests automatically ("Landing
@@ -1454,9 +1472,10 @@ alone and automatic retry recovery do not send notices.
 
 ### CI settings
 
-What the owner changes under Settings → CI (`docs/ci.md`). The runner mode and
-the limits are `branvil.toml` settings: written there, keeping the rest of the
-file, and applied without a restart. The Hub uses the shared image store at
+The owner manages runners and limits under **Settings → CI**, and images
+under **Settings → Agent execution environment → Images** (`docs/ci.md`).
+Changes to runner mode and limits are written to `branvil.toml`, preserving
+the rest of the file, and take effect immediately. The Hub uses the shared image store at
 `<GuildBotics data>/msb`.
 
 - `GET /api/v1/admin/ci` (owner) →
@@ -1590,7 +1609,7 @@ file, and applied without a restart. The Hub uses the shared image store at
   `max_jobs` is the reported capacity and `limits` are the current effective
   job resources. `limits_source` is `default` for the Hub defaults or `runner`
   when an override is saved, even if its values match the defaults.
-  `missing_images` is computed only in Settings → CI.
+  `GET /api/v1/admin/ci` computes `missing_images` for each runner.
   `upstream` is `{"state": "not_configured"}` without
   repositories that have an upstream, otherwise
 
@@ -1690,4 +1709,4 @@ are attached in the ticket creation transaction; closed tickets receive none.
 Undetermined and abandoned searches produce no hint.
 
 
-Embedded hosts may attach a device-local Hub status callback through `DataApi::attach_hub_status`. Diagnostics returns its result as `hub` (`null` for standalone Branvil): `current` and `target` versions (`sha`, `subject`, nullable `url`) and nullable `operation` (`kind`, `phase`, `since`, `commit`, `waiting`). Branvil supplies `operation.waiting.ci_jobs` from its own queue. `hub_status_changed` events invalidate diagnostics. This state is never persisted.
+The shared browser shell reads Hub maintenance state from `/-/guildbotics/api/hub-status` and refreshes it on `hub_status_changed` events.

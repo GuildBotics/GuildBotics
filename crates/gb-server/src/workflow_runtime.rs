@@ -166,21 +166,17 @@ impl Runtime {
             &secrets,
             Arc::new(|_| {}),
         )?;
-        let agents =
-            crate::member::Agents::new(native.branvil.as_ref(), &project, &person, &roster);
-        let tickets =
-            if crate::member::native::service_workspace(&project, "ticket_service").is_empty() {
-                None
-            } else {
-                Some(agents.tickets()?)
-            };
-        let code = if crate::member::native::service_workspace(&project, "code_hosting_service")
-            .is_empty()
-        {
-            None
-        } else {
-            Some(agents.code()?)
-        };
+        let workspace_name =
+            crate::workspace::execution_name(native.branvil.as_ref(), &native.workspace)?;
+        let agents = crate::member::Agents::new(
+            native.branvil.as_ref(),
+            &project,
+            workspace_name.as_deref(),
+            &person,
+            &roster,
+        );
+        let tickets = agents.has_tickets().then(|| agents.tickets()).transpose()?;
+        let code = agents.has_code().then(|| agents.code()).transpose()?;
         let (chat, mut chat_error) = if config.chat_provider.is_empty() {
             (None, None)
         } else {
@@ -1105,8 +1101,8 @@ mod tests {
                 .unwrap()
         };
 
-        let url = "http://example.test/repo/-/tickets/90";
-        let comment = "http://example.test/repo/-/tickets/90#comment";
+        let url = "http://workspaces/example.test/repos/repo/tickets/90";
+        let comment = "http://workspaces/example.test/repos/repo/tickets/90#comment";
         let task = Task {
             url: Some(url.into()),
             label: "#90".into(),
@@ -1179,7 +1175,7 @@ mod tests {
                 runtime.language = language.into();
                 let mut task = task.clone();
                 let expected_url = if reason == "review_limit" {
-                    let pr = "http://example.test/repo/-/pulls/90";
+                    let pr = "http://workspaces/example.test/repos/repo/pulls/90";
                     task.pull_request_url = Some(pr.into());
                     task.label = "!90".into();
                     pr

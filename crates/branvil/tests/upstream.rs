@@ -1611,7 +1611,7 @@ async fn branvils_references_are_written_for_the_host_when_published() {
         "Fixes #1 and #2, after !1 (not !9), like acme/demo#1 and octo/other#5.\n\n\
          `#1` in code, [#2](https://example.test) as a link.\n\n\
          ```\n#1 in a block\n```\n\n\
-         See {base}/acme/demo/-/tickets/1, {base}/acme/demo/-/tickets/2 and {base}/acme/demo/-/pulls/1.\n\n\
+         See {base}/workspaces/acme/repos/demo/tickets/1, {base}/workspaces/acme/repos/demo/tickets/2 and {base}/workspaces/acme/repos/demo/pulls/1.\n\n\
          Use Vec<String> here.\n\nAfter #1 and !1."
     );
     w.push_change("second", "b.txt", "b\n");

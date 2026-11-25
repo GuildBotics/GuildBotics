@@ -149,17 +149,10 @@ impl TicketAgent {
                 [("url", url.to_owned())],
             )
         };
-        let path = url
-            .strip_prefix(self.api.base_url())
-            .and_then(|p| p.strip_prefix('/'))
-            .ok_or_else(invalid)?;
-        let (repo, tail) = path.split_once("/-/").ok_or_else(invalid)?;
-        let (found, key) = tail.split_once('/').ok_or_else(invalid)?;
-        if !crate::agent::port::valid_repository_path(repo) || found != kind || number(key).is_err()
-        {
-            return Err(invalid());
-        }
-        Ok((repo.into(), key.into()))
+        let (repo, key) =
+            crate::util::parse_item_url(self.api.base_url(), url, kind).ok_or_else(invalid)?;
+        number(&key).map_err(|_| invalid())?;
+        Ok((repo, key))
     }
     pub fn repository(&self, path: &str) -> Result<(), ServiceError> {
         if crate::agent::port::valid_repository_path(path) {

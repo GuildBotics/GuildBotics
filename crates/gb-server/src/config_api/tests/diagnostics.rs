@@ -839,6 +839,38 @@ async fn traces_and_detail_localize_chat_titles_and_use_completion_summaries() {
     }
 }
 #[tokio::test]
+async fn command_run_list_prefers_a_running_command_before_applying_the_limit() {
+    let f = fixture();
+    let store = gb_observability::Diagnostics::open(&f.workspace());
+    let current = f.api.instance_id.as_str();
+    for (id, stamp, event, entry, instance) in [
+        ("older", "01", "command.started", "command", current),
+        (
+            "former",
+            "02",
+            "command.started",
+            "command",
+            "previous-server",
+        ),
+        ("newer", "03", "command.started", "command", current),
+        ("newer", "04", "command.finished", "command", current),
+        ("assistant", "05", "command.started", "assistant", current),
+    ] {
+        store.record(json!({"kind":"event","type":event,"trace_id":id,"timestamp":format!("2026-11-01T12:00:{stamp}Z"),"source":"manual","command":"demo","attributes":{"run.entry":entry,"server.instance_id":instance},"payload":{}}).as_object().unwrap().clone());
+    }
+    let path = "/diagnostics/traces?source=manual&attr_key=run.entry&attr_value=command";
+    assert_eq!(
+        f.get(&format!("{path}&limit=1")).await["traces"][0]["trace_id"],
+        "newer"
+    );
+    let preferred = f.get(&format!("{path}&prefer_running=true")).await;
+    assert_eq!(preferred["traces"][0]["trace_id"], "older");
+    assert_eq!(preferred["traces"][0]["status"], "running");
+    assert_eq!(preferred["traces"][1]["trace_id"], "newer");
+    assert_eq!(preferred["traces"][2]["trace_id"], "former");
+    assert_eq!(preferred["traces"][2]["status"], "interrupted");
+}
+#[tokio::test]
 async fn trace_reads_filter_order_collapse_streams_and_keep_review_limits_informational() {
     let f = fixture();
     let store = gb_observability::Diagnostics::open(&f.workspace());

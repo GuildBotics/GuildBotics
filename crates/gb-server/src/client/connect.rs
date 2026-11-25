@@ -71,7 +71,7 @@ async fn connect_as(
     let verifier = loopback_auth::random_secret::<48>();
     let challenge = loopback_auth::b64(&loopback_auth::sha256(verifier.as_bytes()));
     let state = loopback_auth::random_secret::<32>();
-    let mut url = url::Url::parse(&format!("{base}/-/guildbotics/-/authorize"))?;
+    let mut url = url::Url::parse(&format!("{base}/authorize"))?;
     url.query_pairs_mut()
         .append_pair("client", name)
         .append_pair("redirect_uri", &redirect)
@@ -237,7 +237,7 @@ mod tests {
         for code in [Some("server-code"), None, Some("refused-code")] {
             let result = connect_to(port, "Fixture", "en", |url| {
                 let url = url::Url::parse(url).unwrap();
-                assert_eq!(url.path(), "/-/guildbotics/-/authorize");
+                assert_eq!(url.path(), "/authorize");
                 let params = url
                     .query_pairs()
                     .collect::<std::collections::BTreeMap<_, _>>();

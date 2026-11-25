@@ -290,7 +290,7 @@ async fn only_the_providers_the_services_name_are_verified_with_each_members_che
     set_project(
         &f,
         "services",
-        json!({"ticket_service": {"name": "branvil", "workspace": "acme"}}),
+        json!({"ticket_service": {"name": "branvil"}}),
     );
     let answer = verified(&f).await;
     assert!(check(&answer, "provider_secret").is_none());
@@ -317,7 +317,7 @@ async fn a_member_whose_secrets_cannot_be_read_is_an_error_of_its_own() {
     set_project(
         &f,
         "services",
-        json!({"ticket_service": {"name": "branvil", "workspace": "acme"}}),
+        json!({"ticket_service": {"name": "branvil"}}),
     );
     // The keychain answers, but the identity store's encrypted file is broken.
     f.seed_identity_secret("OPENAI_API_KEY", "synthetic-llm-key");
@@ -336,7 +336,7 @@ async fn a_member_whose_secrets_cannot_be_read_is_an_error_of_its_own() {
     set_project(
         &f,
         "services",
-        json!({"ticket_service": {"name": "branvil", "workspace": "acme"},
+        json!({"ticket_service": {"name": "branvil"},
             "chat_service": {"name": "slack"}}),
     );
     let answer = verified(&f).await;

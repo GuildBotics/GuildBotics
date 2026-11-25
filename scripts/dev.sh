@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the screens and the server, and open both screens.
+# Build the screens and the server, and open the application.
 set -euo pipefail
 
 usage() {
@@ -7,7 +7,7 @@ usage() {
 Usage: scripts/dev.sh [--data-dir PATH] [--no-open]
 
 Build and run the server of this checkout -- GuildBotics and its code host in
-one process -- until Ctrl-C, on data of its own, and open both screens once it
+one process -- until Ctrl-C, on data of its own, and open the application once it
 is ready.
   --data-dir PATH  Data directory (default: ~/.gbb/dev): GuildBotics' machine
                    root in its home/ (GUILDBOTICS_HOME), the code host's data
@@ -68,7 +68,7 @@ done
 if [[ ! -f node_modules/.package-lock.json || package-lock.json -nt node_modules/.package-lock.json ]]; then
   npm ci
 fi
-npm run build --workspace desktop --workspace crates/branvil/web
+npm run build --workspace desktop
 # Through the development image's cargo and the repository housekeeping hook
 # (in the image, `cargo` is that wrapper).
 REAL_CARGO="${REAL_CARGO:-$(type -P cargo)}" docker/agent-environment/cargo-wrapper.sh \
@@ -91,10 +91,10 @@ log="$data_dir/server.log"
 : >"$notice"
 : >"$log"
 
-# Says when both listen, and opens their screens: in the background, as the
+# Says when both listen and opens the application in the background, as the
 # launcher becomes the server. A Ctrl-C ends it too where the shell lets it;
 # where it does not, a server that stopped opens no screen.
-open_screens() {
+open_application() {
   local deadline=$((SECONDS + 60))
   until grep -q '^GUILDBOTICS_APP_API_PORT=' "$notice" && grep -q 'Branvil ready on the shared listener' "$log"; do
     # Ended, even before whoever started the launcher reaps it.
@@ -109,13 +109,12 @@ open_screens() {
   if ! "$open_browser"; then return 0; fi
   # A link that no browser takes is printed instead; the session is shared.
   "$binary" open || return 0
-  "$binary" open --branvil || return 0
 }
 server=$$
 # Not the server's child, which nothing would reap.
-(open_screens &)
+(open_application &)
 # The server is this process from here on: a Ctrl-C reaches it once -- the
 # first waits for the commands it runs, a second cancels them -- TERM cancels
 # them, and the launcher ends as it does. The log's copy outlives the signals
 # that stop the server, to its last line.
-exec "$binary" server start >"$notice" 2> >(trap '' INT TERM HUP; exec tee "$log" >&2)
+exec "$binary" server start >"$notice" 2> >(trap '' INT TERM HUP; exec tee -i "$log" >&2)

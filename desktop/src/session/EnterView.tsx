@@ -8,7 +8,7 @@ import { Connecting, NoSessionGuide } from "./Guidance";
 import { replacePage } from "./pageNavigation";
 
 /**
- * `/-/guildbotics/-/enter?next=<page>#<code>`: the page an entry link opens. The code is
+ * `/enter?next=<page>#<code>`: the page an entry link opens. The code is
  * taken from the fragment, removed from the address bar and history, and
  * exchanged once for the session; then the page goes to `next`, the consent
  * page that sent the owner here, or the App.
@@ -27,8 +27,8 @@ export function EnterView() {
     queryFn: async () => {
       await enterSession(code);
       const pending = takeReturn();
-      const explicit = next !== null && next !== "/" && next !== "/-/guildbotics/";
-      replacePage(explicit ? next : (pending ?? next ?? "/-/guildbotics/"));
+      const explicit = next !== null && next !== "/";
+      replacePage(explicit ? next : (pending ?? next ?? "/"));
       return true;
     },
     enabled: code !== "",

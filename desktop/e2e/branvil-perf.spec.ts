@@ -71,7 +71,7 @@ test("time to a rendered board", async ({ browser }) => {
         observer.disconnect();
       }).observe(document, { childList: true, subtree: true });
     });
-    await enter(page, `/${env.workspace}`);
+    await enter(page, `/workspaces/${env.workspace}/task-flow`);
     await page.waitForFunction(() => window.__paintedAt !== undefined, null, {
       polling: 500,
       timeout: 240_000,

@@ -288,9 +288,11 @@ async fn command_and_diagnostics_screens_match_the_python_golden() {
         )
         .unwrap()
     };
-    // Host topology was added after the Python fixture; every server has the code host.
+    // The Python fixture predates the embedded host and execution workspace names.
+    // This server has a code host, but the fixture's workspace is unregistered.
     let mut expected_status = expected["status"].clone();
     expected_status["branvil_available"] = json!(true);
+    expected_status["workspace_name"] = Value::Null;
     let mut urls = vec![
         (
             "/-/guildbotics/api/config/status".to_owned(),
@@ -691,7 +693,7 @@ async fn a_browser_enters_once_with_a_link_and_writes_with_its_csrf() {
     assert_eq!(status, StatusCode::CREATED);
     let url = link["url"].as_str().unwrap();
     let (page, code) = url.split_once('#').unwrap();
-    assert_eq!(page, server.url("/-/guildbotics/-/enter?next=%2Fcommands"));
+    assert_eq!(page, server.url("/enter?next=%2Fcommands"));
 
     let entered = server
         .http
@@ -758,7 +760,7 @@ async fn a_browser_enters_once_with_a_link_and_writes_with_its_csrf() {
         with["url"]
             .as_str()
             .unwrap()
-            .starts_with(&server.url("/-/guildbotics/-/enter#"))
+            .starts_with(&server.url("/enter#"))
     );
     let elsewhere = server
         .http
@@ -803,7 +805,7 @@ async fn open_prints_an_entry_link_a_browser_enters_with_once() {
     assert_ok(&opened);
     let url = String::from_utf8(opened.stdout).unwrap();
     let (page, code) = url.trim().split_once('#').unwrap();
-    assert_eq!(page, server.url("/-/guildbotics/-/enter"));
+    assert_eq!(page, server.url("/enter"));
     for expected in [StatusCode::OK, StatusCode::UNAUTHORIZED] {
         let entered = server
             .http
@@ -1111,60 +1113,55 @@ fn code_host_data(dir: &Path) -> PathBuf {
 }
 
 #[tokio::test]
-async fn open_commands_share_the_entry_and_browser_session() {
+async fn open_uses_the_shared_entry_and_browser_session() {
     let dir = tempfile::tempdir().unwrap();
     let server = Server::start(dir.path());
-    for (args, next) in [
-        (vec!["open", "--print"], None),
-        (vec!["open", "--branvil", "--print"], Some("/")),
-    ] {
-        let opened = Command::new(BIN)
-            .args(args)
-            .env("GUILDBOTICS_HOME", &server.home)
-            .env("GUILDBOTICS_SERVER_PORT", server.port.to_string())
-            .output()
-            .unwrap();
-        assert_ok(&opened);
-        let link = String::from_utf8(opened.stdout).unwrap();
-        let link = reqwest::Url::parse(link.trim()).unwrap();
-        assert_eq!(link.origin().ascii_serialization(), server.url(""));
-        assert_eq!(link.path(), "/-/guildbotics/-/enter");
-        assert_eq!(
-            link.query_pairs()
-                .find(|(key, _)| key == "next")
-                .map(|(_, value)| value.into_owned())
-                .as_deref(),
-            next
-        );
-        let entered = server
+    let opened = Command::new(BIN)
+        .args(["open", "--print"])
+        .env("GUILDBOTICS_HOME", &server.home)
+        .env("GUILDBOTICS_SERVER_PORT", server.port.to_string())
+        .output()
+        .unwrap();
+    assert_ok(&opened);
+    let link = String::from_utf8(opened.stdout).unwrap();
+    let link = reqwest::Url::parse(link.trim()).unwrap();
+    assert_eq!(link.origin().ascii_serialization(), server.url(""));
+    assert_eq!(link.path(), "/enter");
+    assert_eq!(
+        link.query_pairs()
+            .find(|(key, _)| key == "next")
+            .map(|(_, value)| value.into_owned())
+            .as_deref(),
+        None
+    );
+    let entered = server
+        .http
+        .post(server.url("/-/guildbotics/api/session"))
+        .json(&json!({"code": link.fragment().unwrap()}))
+        .send()
+        .await
+        .unwrap();
+    let (status, headers, session) = body(entered).await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    for path in ["/-/guildbotics/api/session", "/api/v1/session"] {
+        let current = server
             .http
-            .post(server.url("/-/guildbotics/api/session"))
-            .json(&json!({"code": link.fragment().unwrap()}))
+            .get(server.url(path))
+            .header("cookie", cookie)
             .send()
             .await
             .unwrap();
-        let (status, headers, session) = body(entered).await;
+        let (status, _, current) = body(current).await;
         assert_eq!(status, StatusCode::OK);
-        let cookie = headers["set-cookie"]
-            .to_str()
-            .unwrap()
-            .split(';')
-            .next()
-            .unwrap();
-        for path in ["/-/guildbotics/api/session", "/api/v1/session"] {
-            let current = server
-                .http
-                .get(server.url(path))
-                .header("cookie", cookie)
-                .send()
-                .await
-                .unwrap();
-            let (status, _, current) = body(current).await;
-            assert_eq!(status, StatusCode::OK);
-            assert!(current["csrf"] == session["csrf"]);
-            if path == "/api/v1/session" {
-                assert_eq!(current["me"]["kind"], "owner");
-            }
+        assert!(current["csrf"] == session["csrf"]);
+        if path == "/api/v1/session" {
+            assert_eq!(current["me"]["kind"], "owner");
         }
     }
     server.stop();
@@ -1472,6 +1469,9 @@ async fn a_command_that_cannot_start_its_environment_ends_failed_in_its_trace() 
     std::fs::create_dir_all(msb.parent().unwrap()).unwrap();
     std::fs::write(&msb, "not a directory").unwrap();
     let server = Server::spawn(command, dir.path(), port);
+    let health = server.health().await;
+    let instance_id = health["service_instance_id"].as_str().unwrap();
+    assert!(!instance_id.is_empty());
     let refusals = [
         gb_server::i18n::t(
             "ja",
@@ -1532,7 +1532,10 @@ async fn a_command_that_cannot_start_its_environment_ends_failed_in_its_trace() 
             (&last["source"], &last["person_id"], &last["command"]),
             (&json!("manual"), &json!("yuki"), &json!("look"))
         );
-        assert_eq!(last["attributes"], json!({"run.entry": "command"}));
+        assert_eq!(
+            last["attributes"],
+            json!({"run.entry": "command", "server.instance_id": instance_id})
+        );
         assert_eq!(last["payload"]["error_type"], "CommandError");
     }
 
@@ -2363,7 +2366,7 @@ fn open_passes_one_entry_link_to_the_browser() {
         .env("LANGUAGE", "en")
         .output()
         .unwrap();
-    let expected = server.url("/-/guildbotics/-/enter#");
+    let expected = server.url("/enter#");
     server.stop();
     assert_ok(&output);
     assert!(output.stdout.is_empty());

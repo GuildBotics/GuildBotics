@@ -15,7 +15,6 @@ use crate::store::{self, Rd, Store};
 
 pub struct App {
     pub active_agents: std::sync::OnceLock<crate::agent::ActiveAgents>,
-    pub hub_status: std::sync::OnceLock<crate::api::HubStatus>,
     /// The embedding host, which authenticates the owner.
     pub host: std::sync::OnceLock<Arc<dyn crate::host::Host>>,
     pub config: Config,
@@ -158,7 +157,6 @@ impl App {
         Arc::new_cyclic(|me| Self {
             host: Default::default(),
             active_agents: Default::default(),
-            hub_status: Default::default(),
             api_requests: Arc::new(tokio::sync::RwLock::new(true)),
             base_url,
             layout,
@@ -311,7 +309,7 @@ impl App {
     }
 
     pub fn pull_url(&self, repo: &str, number: u64) -> String {
-        format!("{}/{repo}/-/pulls/{number}", self.base_url)
+        crate::util::item_url(&self.base_url, repo, "pulls", number)
     }
     pub fn repo_url(&self, repo: &str) -> String {
         format!("{}/{repo}", self.base_url)
@@ -338,21 +336,6 @@ mod tests {
             std::sync::Arc::new(crate::vault::Memory::default()),
             "http://127.0.0.1:7878".into(),
         )
-    }
-
-    #[tokio::test]
-    async fn embedded_hub_status_uses_its_own_ci_count() {
-        let root = tempfile::tempdir().unwrap();
-        let app = app(root.path());
-        let api = crate::api::DataApi::new(app);
-        assert!(api.hub_status().await.is_null());
-        api.attach_hub_status(Arc::new(|| Box::pin(async {
-            serde_json::json!({"current":{"sha":"abc","subject":"Build","url":null},"target":null,"operation":{"kind":"update","phase":"preparing","since":"now","waiting":{"runs":4,"ci_jobs":99}}})
-        })));
-        let status = api.hub_status().await;
-        assert_eq!(status["current"]["subject"], "Build");
-        assert_eq!(status["operation"]["waiting"]["runs"], 4);
-        assert_eq!(status["operation"]["waiting"]["ci_jobs"], 0);
     }
 
     /// An operation that waits for `release` once it has said it started,

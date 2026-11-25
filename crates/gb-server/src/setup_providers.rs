@@ -51,27 +51,21 @@ impl ProviderModels for Registry {
             ))
             .into());
         }
-        if name == "branvil" || name == "slack" {
-            let allowed = if name == "branvil" {
-                "workspace"
-            } else {
-                "base_url"
-            };
+        if name == "branvil" {
             if form
                 .as_object()
-                .is_none_or(|m| m.keys().any(|k| k != "name" && k != allowed))
+                .is_none_or(|m| m.keys().any(|k| k != "name"))
             {
                 return Err(InvalidInput("unknown service field".into()).into());
             }
+            return Ok(json!({"name":"branvil"}));
         }
-        if name == "branvil" {
-            let workspace = form["workspace"].as_str().unwrap_or("").trim();
-            if workspace.contains('/')
-                || !branvil::agent::port::valid_repository_path(&format!("{workspace}/name"))
-            {
-                return Err(InvalidInput("workspace must be one name, such as acme".into()).into());
-            }
-            return Ok(json!({"name":"branvil","workspace":workspace}));
+        if name == "slack"
+            && form
+                .as_object()
+                .is_none_or(|m| m.keys().any(|k| k != "name" && k != "base_url"))
+        {
+            return Err(InvalidInput("unknown service field".into()).into());
         }
         if name == "slack" {
             let mut base = form.get("base_url").cloned().unwrap_or(Value::Null);

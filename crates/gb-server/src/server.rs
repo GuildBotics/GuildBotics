@@ -258,16 +258,6 @@ impl Server {
 
     pub fn attach_branvil(&mut self, branvil: branvil::api::DataApi) -> anyhow::Result<()> {
         branvil.attach_active_agents(self.active_agents());
-        let weak = Arc::downgrade(&self.api);
-        branvil.attach_hub_status(Arc::new(move || {
-            let api = weak.upgrade();
-            Box::pin(async move {
-                match api {
-                    Some(api) => crate::hub_status::snapshot(&api).await,
-                    None => serde_json::Value::Null,
-                }
-            })
-        }));
         let workspace = self.api.selected().workspace.clone();
         self.api
             .branvil

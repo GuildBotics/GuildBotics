@@ -177,6 +177,14 @@ pub(crate) fn load_config(data_dir: &Path) -> anyhow::Result<Config> {
 /// directory without a database has nothing yet: the server's first start
 /// creates it.
 pub fn maintain(operation: Maintenance, data_dir: &Path) -> anyhow::Result<()> {
+    maintain_with_execution_roots(operation, data_dir, Default::default())
+}
+
+pub fn maintain_with_execution_roots(
+    operation: Maintenance,
+    data_dir: &Path,
+    roots: std::collections::BTreeMap<String, std::path::PathBuf>,
+) -> anyhow::Result<()> {
     let layout = crate::config::Layout::new(data_dir);
     if !layout.db().exists() {
         println!("{} has no data yet", data_dir.display());
@@ -188,7 +196,7 @@ pub fn maintain(operation: Maintenance, data_dir: &Path) -> anyhow::Result<()> {
     let open = || Store::open(&layout.db(), cache, 1);
     match operation {
         Maintenance::Upgrade => {
-            let done = crate::upgrade::upgrade(&layout)?;
+            let done = crate::upgrade::upgrade_with_roots(&layout, roots)?;
             println!("{}", store::upgrade_report(&layout.db(), &done));
             Ok(())
         }

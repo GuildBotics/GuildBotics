@@ -269,15 +269,6 @@ mod tests {
         fn owner_token(&self, token: &str) -> bool {
             token == "host-owner-token"
         }
-        fn navigation(&self) -> crate::host::Navigation {
-            crate::host::Navigation {
-                label: "Host".into(),
-                url: "/host/".into(),
-            }
-        }
-        fn entry_path(&self) -> &str {
-            "/host-entry"
-        }
     }
 
     #[tokio::test]

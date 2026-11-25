@@ -94,6 +94,8 @@ impl Token {
 pub struct Workspace {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub execution_root: Option<std::path::PathBuf>,
     pub created_at: String,
 }
 

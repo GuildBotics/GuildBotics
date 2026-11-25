@@ -102,6 +102,7 @@ async fn frozen_remote_and_pull_address_population() {
     );
     let base = running.data.base_url();
     let repo = "acme/demo";
+    let (workspace, name) = repo.split_once('/').unwrap();
     let remote = service.clone_url(repo).await.unwrap();
     assert_eq!(remote, format!("{base}/git/{repo}.git"));
     for url in [&remote, &remote.trim_end_matches(".git").to_owned()] {
@@ -109,7 +110,7 @@ async fn frozen_remote_and_pull_address_population() {
     }
     assert_eq!(
         service.commit_url(repo, "abc"),
-        format!("{base}/{repo}/-/commits/abc")
+        format!("{base}/workspaces/{workspace}/repos/{name}/commits/abc")
     );
     for url in [
         format!("http://127.0.0.1:7879/git/{repo}.git"),
@@ -121,10 +122,10 @@ async fn frozen_remote_and_pull_address_population() {
     }
     for url in [
         format!("https://github.com/{repo}/pull/1"),
-        format!("http://127.0.0.1:7879/{repo}/-/pulls/1"),
-        format!("{base}/{repo}/-/tickets/1"),
-        format!("{base}/{repo}/-/pulls/0"),
-        format!("{base}/{repo}/-/pulls/1?x=1"),
+        format!("http://127.0.0.1:7879/workspaces/{workspace}/repos/{name}/pulls/1"),
+        format!("{base}/workspaces/{workspace}/repos/{name}/tickets/1"),
+        format!("{base}/workspaces/{workspace}/repos/{name}/pulls/0"),
+        format!("{base}/workspaces/{workspace}/repos/{name}/pulls/1?x=1"),
         format!("{base}/demo/-/pulls/1"),
     ] {
         // Validation answers before the API is reached.

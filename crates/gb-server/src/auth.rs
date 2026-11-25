@@ -180,7 +180,7 @@ impl ServerAuth {
     /// server. The code travels in the URL fragment.
     pub fn entry_link(&self, next: &str) -> EntryLink {
         let code = self.state.lock().unwrap().entries.issue((), Instant::now());
-        let query = if next == "/-/guildbotics/" {
+        let query = if next == "/" {
             String::new()
         } else {
             let mut url = url::Url::parse("http://x/").expect("a URL");
@@ -188,7 +188,7 @@ impl ServerAuth {
             format!("?{}", url.query().unwrap_or_default())
         };
         EntryLink {
-            url: format!("{}/-/guildbotics/-/enter{query}#{code}", self.base_url),
+            url: format!("{}/enter{query}#{code}", self.base_url),
             expires_at: iso(now() + CODE_SECONDS as f64),
         }
     }
@@ -440,15 +440,6 @@ impl branvil::host::Host for ServerAuth {
     fn owner_token(&self, token: &str) -> bool {
         self.known_token(token, false)
     }
-    fn navigation(&self) -> branvil::host::Navigation {
-        branvil::host::Navigation {
-            label: "GuildBotics".into(),
-            url: "/-/guildbotics/".into(),
-        }
-    }
-    fn entry_path(&self) -> &str {
-        "/-/guildbotics/-/enter?next=%2F"
-    }
 }
 
 /// A fresh token: its public id, its secret's digest, and its text.
@@ -545,7 +536,7 @@ mod tests {
         use super::*;
         let data = tempfile::tempdir().unwrap();
         let auth = ServerAuth::open(data.path(), 8765).unwrap();
-        let link = auth.entry_link("/-/guildbotics/");
+        let link = auth.entry_link("/");
         let before = now();
         let (cookie, csrf) = auth
             .start_session(link.url.split_once('#').unwrap().1)
@@ -742,7 +733,7 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         let auth = ServerAuth::open(data.path(), 8765).unwrap();
         let old = std::fs::read_to_string(auth.owner_token_path()).unwrap();
-        let link = auth.entry_link("/-/guildbotics/");
+        let link = auth.entry_link("/");
         let code = link.url.split_once('#').unwrap().1;
         let (cookie, _) = auth.start_session(code).unwrap().unwrap();
         std::fs::write(auth.owner_token_path(), "something else").unwrap();
@@ -765,9 +756,8 @@ mod tests {
         let auth = ServerAuth::open(data.path(), 8765).unwrap();
         let link = auth.entry_link("/commands?x=1");
         assert!(
-            link.url.starts_with(
-                "http://127.0.0.1:8765/-/guildbotics/-/enter?next=%2Fcommands%3Fx%3D1#"
-            ),
+            link.url
+                .starts_with("http://127.0.0.1:8765/enter?next=%2Fcommands%3Fx%3D1#"),
             "{}",
             link.url
         );
@@ -803,12 +793,8 @@ mod tests {
             Err(Denied::Unauthorized)
         );
         assert_eq!(
-            auth.entry_link("/-/guildbotics/")
-                .url
-                .split_once('#')
-                .unwrap()
-                .0,
-            "http://127.0.0.1:8765/-/guildbotics/-/enter"
+            auth.entry_link("/").url.split_once('#').unwrap().0,
+            "http://127.0.0.1:8765/enter"
         );
     }
 

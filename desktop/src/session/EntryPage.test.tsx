@@ -83,7 +83,7 @@ const REQUEST = {
   state: "s&1",
   code_challenge: CHALLENGE,
 };
-const AUTHORIZE = `/-/guildbotics/-/authorize?${new URLSearchParams({ ...REQUEST, code_challenge_method: "S256" })}`;
+const AUTHORIZE = `/authorize?${new URLSearchParams({ ...REQUEST, code_challenge_method: "S256" })}`;
 
 beforeEach(() => {
   localStorage.clear();
@@ -101,7 +101,7 @@ describe("a page the server serves", () => {
       "GET /-/guildbotics/api/config/status": ok({ cwd: "/ws" }),
     });
 
-    renderPage("/-/guildbotics/");
+    renderPage("/");
 
     expect(await screen.findByText("Screen read /ws")).toBeInTheDocument();
   });
@@ -109,7 +109,7 @@ describe("a page the server serves", () => {
   it("says how to enter, on the server machine or from another, without a session", async () => {
     serve({ "GET /-/guildbotics/api/session": NO_SESSION });
 
-    renderPage("/-/guildbotics/");
+    renderPage("/");
 
     expect(await screen.findByText(t("session.guide.title"))).toBeInTheDocument();
     expect(screen.getByText("guildbotics open")).toBeInTheDocument();
@@ -123,7 +123,7 @@ describe("a page the server serves", () => {
       "GET /-/guildbotics/api/session": SESSION,
       "GET /-/guildbotics/api/config/status": () => config,
     });
-    const view = renderPage("/-/guildbotics/");
+    const view = renderPage("/");
     await screen.findByText("Screen read /ws");
 
     config = NO_SESSION;
@@ -141,7 +141,7 @@ describe("a page the server serves", () => {
       "GET /-/guildbotics/api/config/status": () => config,
     });
     const user = userEvent.setup();
-    renderPage("/-/guildbotics/");
+    renderPage("/");
     await screen.findByText("Screen read /ws");
     config = OFFLINE;
     session = OFFLINE;
@@ -149,7 +149,7 @@ describe("a page the server serves", () => {
     const notice = await screen.findByRole("dialog", { name: t("session.unreachable.title") });
 
     session = NO_SESSION;
-    await user.click(within(notice).getByRole("button", { name: t("session.retry") }));
+    await user.click(within(notice).getByRole("button", { name: t("common.retry") }));
 
     expect(await screen.findByText(t("session.guide.title"))).toBeInTheDocument();
     expect(screen.queryByText(/Screen read/)).not.toBeInTheDocument();
@@ -161,7 +161,7 @@ describe("a page the server serves", () => {
       "GET /-/guildbotics/api/session": SESSION,
       "GET /-/guildbotics/api/config/status": () => config,
     });
-    renderPage("/-/guildbotics/");
+    renderPage("/");
     await screen.findByText("Screen read /ws");
     config = NO_SESSION;
     void getConfigStatus().catch(() => undefined);
@@ -183,7 +183,7 @@ describe("a page the server serves", () => {
       "GET /-/guildbotics/api/config/status": () => config,
     });
     const user = userEvent.setup();
-    renderPage("/-/guildbotics/");
+    renderPage("/");
     await screen.findByText("Screen read /ws");
 
     config = OFFLINE;
@@ -195,13 +195,13 @@ describe("a page the server serves", () => {
     const sessionReads = () =>
       calls.filter((call) => call.url === "/-/guildbotics/api/session").length;
     const before = sessionReads();
-    await user.click(within(notice).getByRole("button", { name: t("session.retry") }));
+    await user.click(within(notice).getByRole("button", { name: t("common.retry") }));
     await waitFor(() => expect(sessionReads()).toBeGreaterThan(before));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
     config = ok({ cwd: "/ws2" });
     session = SESSION;
-    await user.click(within(notice).getByRole("button", { name: t("session.retry") }));
+    await user.click(within(notice).getByRole("button", { name: t("common.retry") }));
 
     expect(await screen.findByText("Screen read /ws2")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -210,7 +210,7 @@ describe("a page the server serves", () => {
   it("shows the notice alone when the session cannot be read at first", async () => {
     serve({ "GET /-/guildbotics/api/session": OFFLINE });
 
-    renderPage("/-/guildbotics/");
+    renderPage("/");
 
     expect(
       await screen.findByRole("dialog", { name: t("session.unreachable.title") }),
@@ -223,7 +223,7 @@ describe("the entry page", () => {
   it("enters once with the link's code, forgets the code, and opens next", async () => {
     const calls = serve({ "POST /-/guildbotics/api/session": SESSION });
 
-    renderPage("/-/guildbotics/-/enter?next=/index.html#code-1");
+    renderPage("/enter?next=/index.html#code-1");
 
     await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/index.html"));
     // StrictMode runs the effect twice; the code works a single time.
@@ -235,17 +235,17 @@ describe("the entry page", () => {
       }),
     ]);
     expect(window.location.hash).toBe("");
-    expect(window.location.pathname + window.location.search).toBe("/-/guildbotics/-/enter");
+    expect(window.location.pathname + window.location.search).toBe("/enter");
   });
 
   it("resumes the consent page before default next and consumes it once", async () => {
-    const path = "/-/guildbotics/-/authorize?client=CLI";
+    const path = "/authorize?client=CLI";
     serve({ "POST /-/guildbotics/api/session": SESSION });
     window.localStorage.setItem(
       "guildbotics.entryReturn",
       JSON.stringify({ path, expires: Date.now() + 60_000 }),
     );
-    renderPage("/-/guildbotics/-/enter?next=%2F#code-1");
+    renderPage("/enter?next=%2F#code-1");
     await waitFor(() => expect(replacePage).toHaveBeenCalledWith(path));
     expect(window.localStorage.getItem("guildbotics.entryReturn")).toBeNull();
   });
@@ -255,11 +255,11 @@ describe("the entry page", () => {
     window.localStorage.setItem(
       "guildbotics.entryReturn",
       JSON.stringify({
-        path: "/-/guildbotics/-/authorize?client=app",
+        path: "/authorize?client=app",
         expires: Date.now() + 60_000,
       }),
     );
-    renderPage("/-/guildbotics/-/enter?next=%2Fcommands#code-1");
+    renderPage("/enter?next=%2Fcommands#code-1");
     await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/commands"));
     expect(window.localStorage.getItem("guildbotics.entryReturn")).toBeNull();
   });
@@ -267,19 +267,19 @@ describe("the entry page", () => {
   it("opens the App when no page, or a page of another site, is named", async () => {
     serve({ "POST /-/guildbotics/api/session": SESSION });
 
-    renderPage("/-/guildbotics/-/enter?next=//attacker.example/#code-1");
+    renderPage("/enter?next=//attacker.example/#code-1");
 
-    await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/-/guildbotics/"));
+    await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/"));
   });
 
   it("says how to get a new link when the code was used or expired", async () => {
     serve({ "POST /-/guildbotics/api/session": NO_SESSION });
 
-    renderPage("/-/guildbotics/-/enter#code-1");
+    renderPage("/enter#code-1");
 
     expect(await screen.findByText(t("session.guide.expired"))).toBeInTheDocument();
     expect(screen.getByText("guildbotics open")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: t("session.retry") })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: t("common.retry") })).not.toBeInTheDocument();
     expect(replacePage).not.toHaveBeenCalled();
   });
 
@@ -288,19 +288,19 @@ describe("the entry page", () => {
     const calls = serve({ "POST /-/guildbotics/api/session": () => answer });
     const user = userEvent.setup();
 
-    renderPage("/-/guildbotics/-/enter#code-1");
+    renderPage("/enter#code-1");
 
     expect(await screen.findByText("Failed to fetch")).toBeInTheDocument();
     answer = SESSION;
-    await user.click(screen.getByRole("button", { name: t("session.retry") }));
-    await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/-/guildbotics/"));
+    await user.click(screen.getByRole("button", { name: t("common.retry") }));
+    await waitFor(() => expect(replacePage).toHaveBeenCalledWith("/"));
     expect(calls).toHaveLength(2);
   });
 
   it("without a code only says how to enter", async () => {
     const calls = serve({});
 
-    renderPage("/-/guildbotics/-/enter");
+    renderPage("/enter");
 
     expect(await screen.findByText(t("session.guide.title"))).toBeInTheDocument();
     expect(calls).toEqual([]);
@@ -414,7 +414,7 @@ describe("the consent page", () => {
     expect(screen.queryByRole("button", { name: t("session.authorize.allow") })).toBeNull();
 
     first.unmount();
-    renderPage("/-/guildbotics/-/enter#code-1");
+    renderPage("/enter#code-1");
 
     await waitFor(() => expect(replacePage).toHaveBeenCalledWith(AUTHORIZE));
   });

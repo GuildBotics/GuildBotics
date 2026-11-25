@@ -4179,7 +4179,79 @@ mod tests {
         .unwrap()
     }
 
+    fn cached(sha: &str) -> Registration {
+        let mut reg = same_tree(sha);
+        if let PipelineState::Jobs { jobs } = &mut reg.pipeline {
+            jobs[0].cache = Some(super::super::pipeline::CacheDef {
+                paths: vec!["target".into()],
+                key_files: vec![],
+            });
+        }
+        reg
+    }
+
     const CACHE_KEY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn cached_source(s: &Store) -> Attempt {
+        s.write_sync(|w| {
+            register(w, cached("source"), 10, T0)?;
+            let c = claim(w, "runner", 60, T0)?.unwrap();
+            finish(
+                w,
+                &c.attempt.id,
+                &c.lease,
+                "success",
+                None,
+                ResultInfo {
+                    image_digest: Some(DIGEST.into()),
+                    cache_key: Some(CACHE_KEY.into()),
+                    ..Default::default()
+                },
+                T1,
+            )
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn workspace_upgrade_keeps_ci_executions_and_pending_attempts() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = crate::config::Layout::new(dir.path());
+        let path = layout.db();
+        let db = Store::open(&path, 1 << 20, 1).unwrap();
+        let source = cached_source(&db);
+        let pending = db
+            .write_sync(|w| {
+                register(w, cached("pending"), 10, T1)?;
+                let pending = attempts_of(w, &source.repo, "pending")?.remove(0);
+                w.put(
+                    store::META,
+                    &Key::new().s("schema_version").bytes(),
+                    &crate::upgrade::FROM,
+                )?;
+                Ok(pending)
+            })
+            .unwrap();
+        drop(db);
+        assert!(store::check_version(&path).is_err());
+        let changed = crate::upgrade::upgrade(&layout).unwrap().unwrap();
+        assert!(changed.copy.is_file());
+        let db = Store::open(&path, 1 << 20, 1).unwrap();
+        db.read_sync(|r| {
+            assert_eq!(get_attempt(r, &source.id)?.unwrap(), source);
+            assert_eq!(get_attempt(r, &pending.id)?.unwrap(), pending);
+            for sha in ["source", "pending"] {
+                assert_eq!(
+                    get_run(r, &source.repo, sha)?.unwrap().pipeline,
+                    cached(sha).pipeline
+                );
+            }
+            assert_eq!(pending_count(r, 10)?, 1);
+            assert!(crate::model::index_problems(r)?.is_empty());
+            Ok(())
+        })
+        .unwrap();
+    }
 
     #[test]
     fn reuse_requires_the_same_repo_tree_definition_network_and_an_actual_success() {

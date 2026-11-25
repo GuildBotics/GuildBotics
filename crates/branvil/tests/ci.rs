@@ -572,7 +572,7 @@ async fn previous_schema_upgrade_preserves_records() {
     let repos = records(&db, "repos");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let indexed_memory = tables(&db)["ix_ci_memory"].clone();
-    as_schema_44(&db);
+    as_schema_45(&db);
     let prior_runs = records(&db, "ci_runs");
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
@@ -584,7 +584,7 @@ async fn previous_schema_upgrade_preserves_records() {
     );
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 44 to 45"), "{output}");
+    assert!(output.contains("from schema version 45 to 46"), "{output}");
     assert_eq!(
         tables(&db).get("ix_repair_unnotified"),
         before.get("ix_repair_unnotified")
@@ -618,8 +618,7 @@ async fn previous_schema_upgrade_preserves_records() {
     assert_eq!(admin("upgrade").0, 0);
     assert_eq!(tables(&db), upgraded);
     w.restart(&[]);
-    let report = checks(&w, 1).await;
-    assert!(report["merge_checks"].is_object(), "{report}");
+    assert!(checks(&w, 1).await["merge_checks"].is_null());
 }
 
 #[tokio::test]
@@ -1862,7 +1861,7 @@ async fn a_head_runs_its_own_pipeline_and_reports_logs_and_artifacts() {
     let id = t["attempt_id"].as_str().unwrap();
     assert_eq!(
         t["details_url"].as_str().unwrap(),
-        format!("{}/{REPO}/-/jobs/{id}", w.server.url)
+        format!("{}/workspaces/acme/repos/demo/jobs/{id}", w.server.url)
     );
     let job = w
         .server
@@ -3090,7 +3089,7 @@ async fn a_commit_shows_its_checks_with_or_without_a_pull_request() {
         (Some("completed"), Some("success"))
     );
     assert!(
-        t["details_url"].as_str().unwrap().contains("/-/jobs/att_"),
+        t["details_url"].as_str().unwrap().contains("/jobs/att_"),
         "{t}"
     );
 
@@ -4110,10 +4109,13 @@ async fn verification_api_auth_first_parent_and_cursor_pages() {
             .contains(last["attempt_id"].as_str().unwrap())
     );
     let failed = w.server.ok(&url, &w.owner).await;
-    assert_eq!(
-        failed["repair"]["url"],
-        format!("{}/{path}/-/tickets/1", w.server.url)
-    );
+    assert_eq!(failed["repair"]["url"], {
+        let (workspace, name) = path.split_once('/').unwrap();
+        format!(
+            "{}/workspaces/{workspace}/repos/{name}/tickets/1",
+            w.server.url
+        )
+    });
     assert_eq!(failed["failing_since"], failed["tip"]);
     assert_eq!(
         w.server.ok(&format!("{url}/commits"), &w.aiko).await["items"][0]["mark"],

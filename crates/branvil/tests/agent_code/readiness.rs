@@ -361,6 +361,7 @@ pub(super) async fn retry_main_verification(
     runner: &str,
 ) {
     let repo = "acme/retry-main".to_string();
+    let (workspace, name) = repo.split_once('/').unwrap();
     owner
         .repos_create(input(json!({"path":repo})))
         .await
@@ -413,18 +414,21 @@ pub(super) async fn retry_main_verification(
         attempt = claim_head(base, selected, &head).await;
     }
     let url = format!(
-        "{base}/{repo}/-/jobs/{}",
+        "{base}/workspaces/{workspace}/repos/{name}/jobs/{}",
         attempt["attempt_id"].as_str().unwrap()
     );
     assert!(
-        code.retry_job(&format!("{base}/{repo}/-/jobs/missing"), Default::default())
-            .await
-            .unwrap_err()
-            .is_not_found()
+        code.retry_job(
+            &format!("{base}/workspaces/{workspace}/repos/{name}/jobs/missing"),
+            Default::default()
+        )
+        .await
+        .unwrap_err()
+        .is_not_found()
     );
     assert!(matches!(
         code.retry_job(
-            &format!("{base}/elsewhere/repo/-/jobs/missing"),
+            &format!("{base}/workspaces/elsewhere/repos/repo/jobs/missing"),
             Default::default()
         )
         .await,

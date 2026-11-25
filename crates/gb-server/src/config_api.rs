@@ -248,6 +248,11 @@ pub(crate) async fn init(
         Err(refused) => return refused_location(refused, &headers, "invalid_workspace_location"),
     };
     let (form, data) = (request.form, api.data.clone());
+    let branvil = api.branvil.get().cloned();
+    let name = headers
+        .get(crate::workspace::WORKSPACE_HEADER)
+        .and_then(|header| header.to_str().ok())
+        .map(str::to_owned);
     written(
         with_setup(&api, workspace.clone(), move |setup| {
             // The form is checked before the workspace is registered.
@@ -255,6 +260,11 @@ pub(crate) async fn init(
             gb_workspace::selection::register(&data, &workspace).map_err(|error| {
                 SetupError::text("invalid_workspace_location", format!("{error:#}"))
             })?;
+            wait(crate::workspace::register_execution(
+                branvil.as_ref(),
+                &workspace,
+                name,
+            ))?;
             setup.init_project(&form)
         })
         .await,
@@ -421,6 +431,12 @@ fn registry_unreadable(error: anyhow::Error, api: &Shared, headers: &HeaderMap) 
 
 /// The workspaces this machine has registered.
 pub(crate) async fn workspaces(State(api): State<Shared>, headers: HeaderMap) -> Response {
+    if let Some(data) = api.branvil.get() {
+        return match data.execution_roots() {
+            Ok(roots) => Json(roots).into_response(),
+            Err(error) => failure(error.into(), &headers),
+        };
+    }
     match gb_workspace::selection::registered(&api.data) {
         Ok(found) => Json(found).into_response(),
         Err(error) => registry_unreadable(error, &api, &headers),
@@ -460,8 +476,17 @@ pub(crate) async fn forget_workspace(
             .locale("safe_paths.active_workspace", vec![])
             .into_response();
     }
+    if let Some(data) = api.branvil.get()
+        && let Err(error) = data.unassign_execution_root(named.clone()).await
+    {
+        return failure(error.into(), &headers);
+    }
     match gb_workspace::selection::unregister(&api.data, &named) {
-        Ok(left) => Json(left).into_response(),
+        Ok(left) => match api.branvil.get().map(|data| data.execution_roots()) {
+            Some(Ok(roots)) => Json(roots).into_response(),
+            Some(Err(error)) => failure(error.into(), &headers),
+            None => Json(left).into_response(),
+        },
         Err(error) => registry_unreadable(error, &api, &headers),
     }
 }

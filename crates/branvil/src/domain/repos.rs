@@ -8,7 +8,7 @@ use crate::auth::Caller;
 use crate::domain::{Page, PageReq, repo_by_path, workspace_by_name};
 use crate::error::{AppError, AppResult};
 use crate::model::{self, LANES, Repo, Workspace};
-use crate::store::{self, Rd};
+use crate::store::{self, Rd, Wtx};
 use crate::util;
 
 #[derive(Serialize, Debug, Clone)]
@@ -459,22 +459,74 @@ pub async fn create_workspace(
                     input.name
                 )));
             }
-            let x = Workspace {
-                id: util::new_id("ws"),
-                name: input.name,
-                created_at: util::now(),
-            };
-            model::put_indexed(
-                w,
-                store::WORKSPACES,
-                &Workspace::key(&x.id),
-                None,
-                &x,
-                model::workspace_index(&x),
-            )?;
-            Ok(workspace_view(&x))
+            Ok(workspace_view(&insert_workspace(w, input.name, None)?))
         })
         .await
+}
+
+pub(crate) fn insert_workspace(
+    w: &Wtx,
+    name: String,
+    execution_root: Option<std::path::PathBuf>,
+) -> AppResult<Workspace> {
+    if !util::valid_name(&name) {
+        return Err(AppError::invalid(format!(
+            "'{name}' is not a valid workspace name."
+        )));
+    }
+    let x = Workspace {
+        id: util::new_id("ws"),
+        name,
+        execution_root,
+        created_at: util::now(),
+    };
+    model::put_indexed(
+        w,
+        store::WORKSPACES,
+        &Workspace::key(&x.id),
+        None,
+        &x,
+        model::workspace_index(&x),
+    )?;
+    Ok(x)
+}
+
+pub(crate) fn assign_execution_root(
+    w: &Wtx,
+    name: String,
+    root: std::path::PathBuf,
+) -> AppResult<Workspace> {
+    let workspaces = w.prefix_all::<Workspace>(store::WORKSPACES, &[])?;
+    if workspaces.iter().any(|ws| {
+        util::fold(&ws.name) != util::fold(&name) && ws.execution_root.as_ref() == Some(&root)
+    }) {
+        return Err(AppError::conflict(
+            "The execution settings already belong to another workspace.",
+        ));
+    }
+    let Some(mut workspace) = workspaces
+        .into_iter()
+        .find(|ws| util::fold(&ws.name) == util::fold(&name))
+    else {
+        return insert_workspace(w, name, Some(root));
+    };
+    match &workspace.execution_root {
+        Some(existing) if *existing != root => {
+            return Err(AppError::conflict(format!(
+                "Workspace {} already has execution settings.",
+                workspace.name
+            )));
+        }
+        Some(_) => return Ok(workspace),
+        None => {}
+    }
+    workspace.execution_root = Some(root);
+    w.put(
+        store::WORKSPACES,
+        &Workspace::key(&workspace.id),
+        &workspace,
+    )?;
+    Ok(workspace)
 }
 
 pub async fn verification(

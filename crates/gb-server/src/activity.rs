@@ -202,10 +202,13 @@ pub(crate) async fn history(
         Ok(w) => w,
         Err(e) => return e.into_response(),
     };
-    let selected = api.selected();
-    let Some(workspace) = selected.workspace.clone() else {
-        return ApiError::new(StatusCode::BAD_REQUEST, "config_not_found", &headers)
-            .into_response();
+    let workspace = match crate::workspace::for_request(&api, &headers).await {
+        Ok(Some(workspace)) => workspace,
+        Ok(None) => {
+            return ApiError::new(StatusCode::BAD_REQUEST, "config_not_found", &headers)
+                .into_response();
+        }
+        Err(refused) => return refused,
     };
     let project = workspace.join(".guildbotics/config/team/project.yml");
     if !project.exists() {
@@ -390,17 +393,20 @@ async fn sync(
                 .map(|v| crate::member::native::public(&v, api.branvil.get()))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
+    let workspace_name = crate::workspace::execution_name(api.branvil.get(), workspace)?;
     let mut tickets = None;
     for person in &roster {
-        if person.person_type != "agent"
-            || !person.is_active
-            || crate::member::native::service_workspace(&project, "ticket_service").is_empty()
-        {
+        if person.person_type != "agent" || !person.is_active {
             continue;
         }
-        tickets = Some(
-            crate::member::Agents::new(api.branvil.get(), &project, person, &roster).tickets()?,
+        let agents = crate::member::Agents::new(
+            api.branvil.get(),
+            &project,
+            workspace_name.as_deref(),
+            person,
+            &roster,
         );
+        tickets = agents.has_tickets().then(|| agents.tickets()).transpose()?;
         break;
     }
     let Some(tickets) = tickets else {

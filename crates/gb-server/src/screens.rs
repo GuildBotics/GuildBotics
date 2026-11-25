@@ -7,32 +7,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use gb_config::{commands::CommandRoots, team::Team};
+use gb_config::team::Team;
 use gb_observability::Diagnostics;
 use serde::Deserialize;
 use serde_json::{Value, json};
-
-fn roots(api: &Shared) -> Option<CommandRoots> {
-    Some(CommandRoots {
-        config: api
-            .selected()
-            .workspace
-            .as_ref()?
-            .join(".guildbotics/config"),
-        templates: gb_base::home::python_package().join("templates"),
-    })
-}
-
-fn loaded(api: &Shared) -> anyhow::Result<Team> {
-    Team::load(
-        &api.selected()
-            .workspace
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No workspace"))?
-            .join(".guildbotics/config"),
-        &gb_base::home::identity_root()?,
-    )
-}
 
 fn error_is_missing(e: &anyhow::Error) -> bool {
     e.downcast_ref::<std::io::Error>()
@@ -56,15 +34,32 @@ pub(crate) fn answer(result: anyhow::Result<Value>, headers: &HeaderMap) -> Resp
 pub(crate) async fn config_status(
     State(api): State<Shared>,
     axum::Extension(host): axum::Extension<crate::api::EmbeddedHost>,
+    headers: HeaderMap,
 ) -> Response {
-    Json(status(&api, host).await).into_response()
+    match crate::workspace::for_request(&api, &headers).await {
+        Ok(workspace) => Json(status_for(&api, host, workspace.as_deref()).await).into_response(),
+        Err(refused) => refused,
+    }
 }
 
 /// Where the selected workspace keeps what, as the setup screens show it.
 pub(crate) async fn status(api: &crate::api::Api, host: crate::api::EmbeddedHost) -> Value {
+    status_for(api, host, api.selected().workspace.as_deref()).await
+}
+
+async fn status_for(
+    api: &crate::api::Api,
+    host: crate::api::EmbeddedHost,
+    workspace: Option<&std::path::Path>,
+) -> Value {
     let input_store_problem = api.inputs.problem().await;
-    let workspace = &api.selected().workspace;
-    let config = workspace.as_ref().map(|w| w.join(".guildbotics/config"));
+    let workspace_name = match workspace {
+        Some(root) => crate::workspace::execution_name(api.branvil.get(), root)
+            .ok()
+            .flatten(),
+        None => None,
+    };
+    let config = workspace.map(|w| w.join(".guildbotics/config"));
     let project = config.as_ref().map(|c| c.join("team/project.yml"));
     let language = crate::client::language().await;
     let workspace_problem = gb_workspace::selection::registered(&api.data)
@@ -73,7 +68,7 @@ pub(crate) async fn status(api: &crate::api::Api, host: crate::api::EmbeddedHost
         .unwrap_or_default();
     json!({"branvil_available":host.0,"workspace_problem":workspace_problem,"input_store_problem":input_store_problem,
         "cwd":"",
-        "workspace":workspace,"config_dir":config,"project_file":project,
+        "workspace":workspace,"workspace_name":workspace_name,"config_dir":config,"project_file":project,
         "project_file_exists":project.as_ref().is_some_and(|p| p.exists()),"storage_dir":workspace,
         "machine_state_dir":api.data,
         "workspace_state_dir":workspace.as_ref().map(|w|w.join(".guildbotics/state")),
@@ -85,8 +80,10 @@ pub(crate) async fn status(api: &crate::api::Api, host: crate::api::EmbeddedHost
 /// have, is listed too, and the `problem` says why, so that it can be
 /// repaired or taken out.
 pub(crate) async fn team(State(api): State<Shared>, headers: HeaderMap) -> Response {
-    let Some(workspace) = api.selected().workspace.clone() else {
-        return Json(empty_team()).into_response();
+    let workspace = match crate::workspace::for_request(&api, &headers).await {
+        Ok(Some(workspace)) => workspace,
+        Ok(None) => return Json(empty_team()).into_response(),
+        Err(refused) => return refused,
     };
     let config = workspace.join(".guildbotics/config");
     let language = crate::i18n::language(
@@ -169,11 +166,12 @@ fn empty_team() -> Value {
 }
 
 pub(crate) async fn files(State(api): State<Shared>, headers: HeaderMap) -> Response {
+    let workspace = match crate::command_catalog::workspace(&api, &headers).await {
+        Ok(workspace) => workspace,
+        Err(refused) => return refused,
+    };
     answer(
-        (|| {
-            let team = loaded(&api)?;
-            roots(&api).unwrap().shared_files(&team.language)
-        })(),
+        workspace.roots.shared_files(&workspace.team.language),
         &headers,
     )
 }
@@ -183,11 +181,11 @@ pub(crate) async fn file(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let team = match loaded(&api) {
-        Ok(t) => t,
-        Err(e) => return answer(Err(e), &headers),
+    let workspace = match crate::command_catalog::workspace(&api, &headers).await {
+        Ok(workspace) => workspace,
+        Err(refused) => return refused,
     };
-    let roots = roots(&api).unwrap();
+    let (roots, team) = (workspace.roots, workspace.team);
     let Some(path) = roots.selected_file(&id, &team.language) else {
         return ApiError::new(StatusCode::NOT_FOUND, "command_file_not_found", &headers)
             .key("command_file_not_found.unknown", vec![("file_id", id)])
@@ -204,6 +202,8 @@ pub(crate) struct Filters {
     attr_key: Option<String>,
     attr_value: Option<String>,
     limit: Option<usize>,
+    #[serde(default)]
+    prefer_running: bool,
 }
 
 pub(crate) async fn traces(
@@ -222,11 +222,13 @@ pub(crate) async fn traces(
             .into_response();
         }
     };
-    let Some(workspace) = &api.selected().workspace else {
-        return Json(json!({"traces":[]})).into_response();
+    let workspace = match crate::workspace::for_request(&api, &headers).await {
+        Ok(Some(workspace)) => workspace,
+        Ok(None) => return Json(json!({"traces":[]})).into_response(),
+        Err(refused) => return refused,
     };
     answer(
-        Diagnostics::open(workspace)
+        Diagnostics::open(&workspace)
             .search_traces_formatted(
                 gb_observability::TraceSearch {
                     source: filters.source.as_deref(),
@@ -236,6 +238,7 @@ pub(crate) async fn traces(
                     attr_value: filters.attr_value.as_deref(),
                     limit: filters.limit.unwrap_or(200),
                     include_assistant: true,
+                    prefer_running_in: filters.prefer_running.then_some(api.instance_id.as_str()),
                     include_system: true,
                     search_transcripts: false,
                 },
@@ -251,14 +254,18 @@ pub(crate) async fn trace(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(workspace) = &api.selected().workspace else {
-        return Json(
-            json!({"trace_id":id,"summary":null,"records":[],"transcript_available":false}),
-        )
-        .into_response();
+    let workspace = match crate::workspace::for_request(&api, &headers).await {
+        Ok(Some(workspace)) => workspace,
+        Ok(None) => {
+            return Json(
+                json!({"trace_id":id,"summary":null,"records":[],"transcript_available":false}),
+            )
+            .into_response();
+        }
+        Err(refused) => return refused,
     };
     answer(
-        Diagnostics::open(workspace)
+        Diagnostics::open(&workspace)
             .trace_detail_formatted(&id, &|provider| chat_trigger(&headers, provider))
             .map_err(Into::into),
         &headers,

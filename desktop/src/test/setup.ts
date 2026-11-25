@@ -3,6 +3,7 @@ import { createElement, forwardRef } from "react";
 import { afterEach, vi } from "vitest";
 import { cleanup, configure } from "@testing-library/react";
 import type { TextareaProps } from "@mantine/core";
+import { setCsrfToken } from "../api/client";
 
 // A findBy* wait, which defaults to 1 s: a render takes longer than that when
 // CI runs the suite beside other jobs on the same CPUs.
@@ -10,6 +11,10 @@ configure({ asyncUtilTimeout: 5_000 });
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
+  setCsrfToken(null);
+  window.history.replaceState(null, "", "/");
+  window.localStorage.clear();
 });
 
 // Reduced motion is reported as the user's preference so that Mantine runs its

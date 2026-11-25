@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import i18n from "../../i18n";
 import "../../i18n";
-import { branvilCodeHosting, branvilTickets } from "./branvil/BranvilServices";
 import { isSlackChannel, slackAccount, type SlackForm } from "./slack/SlackAccount";
 import type { MemberContext } from "./types";
 
@@ -123,26 +122,5 @@ describe("isSlackChannel", () => {
     for (const channel of ["Dev", "_dev", "-dev", "#_dev", "#-dev", ""]) {
       expect(isSlackChannel(channel)).toBe(false);
     }
-  });
-});
-
-describe("branvil services", () => {
-  it("start from the workspace the other kind names", () => {
-    expect(branvilTickets.initial({})).toEqual({ workspace: "" });
-    expect(
-      branvilCodeHosting.initial({ ticket_service: { name: "branvil", workspace: "acme" } }),
-    ).toEqual({ workspace: "acme" });
-  });
-
-  it("refuse what names no workspace", () => {
-    const value = { name: "branvil", workspace: "acme/team" };
-
-    expect(branvilTickets.errors(value, t)).toEqual({
-      workspace: t("setup.branvil.workspaceInvalid"),
-    });
-    expect(branvilCodeHosting.errors({ ...value, workspace: " " }, t)).toEqual({
-      workspace: t("setup.branvil.workspaceRequired"),
-    });
-    expect(branvilTickets.errors({ name: "branvil", workspace: "acme" }, t)).toEqual({});
   });
 });

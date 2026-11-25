@@ -31,6 +31,8 @@ pub struct TraceSearch<'a> {
     pub attr_key: Option<&'a str>,
     pub attr_value: Option<&'a str>,
     pub include_assistant: bool,
+    /// Prioritize live runs and label unfinished runs from older instances as interrupted.
+    pub prefer_running_in: Option<&'a str>,
     pub include_system: bool,
     pub search_transcripts: bool,
     pub limit: usize,
@@ -89,6 +91,7 @@ impl Diagnostics {
             attr_value,
             limit,
             include_assistant: true,
+            prefer_running_in: None,
             include_system: true,
             search_transcripts: false,
         })
@@ -111,6 +114,7 @@ impl Diagnostics {
             attr_value,
             limit,
             include_assistant,
+            prefer_running_in,
             include_system,
             search_transcripts,
         } = search;
@@ -125,7 +129,7 @@ impl Diagnostics {
         let mut summaries = Vec::new();
         let completions = std::cell::OnceCell::new();
         for (id, records) in groups {
-            let summary = summary(&id, &records, trigger, |attrs, person| {
+            let mut summary = summary(&id, &records, trigger, |attrs, person| {
                 completed_title(
                     completions.get_or_init(|| self.completion_summaries()),
                     attrs,
@@ -177,6 +181,12 @@ impl Diagnostics {
                     continue;
                 }
             }
+            if let Some(instance) = prefer_running_in
+                && summary["status"] == "running"
+                && summary["attributes"]["server.instance_id"] != instance
+            {
+                summary["status"] = "interrupted".into();
+            }
             summaries.push(summary);
         }
         if include_system && source.is_none() && person.is_none() && attr_key.is_none() {
@@ -193,7 +203,12 @@ impl Diagnostics {
                 matches_query(s, &records, query)
             }));
         }
-        summaries.sort_by_key(|s| std::cmp::Reverse(stamp(&json!({"timestamp":s["started_at"]}))));
+        summaries.sort_by_key(|s| {
+            std::cmp::Reverse((
+                prefer_running_in.is_some() && s["status"] == "running",
+                stamp(&json!({"timestamp":s["started_at"]})),
+            ))
+        });
         summaries.truncate(limit);
         Ok(json!({"traces":summaries}))
     }

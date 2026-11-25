@@ -210,7 +210,7 @@ backendEnv = Object.fromEntries(
     ].includes(key.toUpperCase()),
   ),
 );
-if (stackName === "setup" || stackName === "branvil" || shouldSeed) {
+if (stackName === "setup" || controlPort || shouldSeed) {
   backendEnv.GUILDBOTICS_BROWSER_TEST_BRANVIL = "1";
   backendEnv.GUILDBOTICS_CODE_HOST_DATA_DIR = join(homeDir, "branvil");
 }
@@ -326,10 +326,10 @@ async function waitForHealth() {
   throw new Error(`${tag} backend did not become healthy: ${lastError}`);
 }
 
-async function postJson(path, body) {
+async function postJson(path, body, headers = {}) {
   const response = await fetch(`${baseUrl}/-/guildbotics/api${path}`, {
     method: "POST",
-    headers: ownerHeaders(),
+    headers: { ...ownerHeaders(), ...headers },
     body: JSON.stringify(body),
   });
   if (!response.ok) {
@@ -356,11 +356,11 @@ async function seedWorkspace() {
     // Ticket and code operations use this stack's embedded Branvil.
     // Chat retains the local provider, so no hosted service is contacted.
     services: {
-      code_hosting_service: { name: "branvil", workspace: "acme" },
-      ticket_service: { name: "branvil", workspace: "acme" },
+      code_hosting_service: { name: "branvil" },
+      ticket_service: { name: "branvil" },
       chat_service: { name: "local" },
     },
-  });
+  }, { "X-GuildBotics-Workspace": "acme" });
   await postJson("/config/members", {
     config_dir: configDir,
     person_type: "agent",
@@ -382,7 +382,7 @@ async function seedWorkspace() {
 // Control server for the "down" journey (⑥): the spec takes the REAL backend
 // down under a loaded screen, and brings it back up. Each answer comes only
 // once the backend is gone, or answers again, so the spec's next step (the
-// screen noticing the loss, a retry) cannot race the backend.
+// screen noticing the loss, reconnecting) cannot race the backend.
 function startControlServer() {
   const actions = {
     "/control/stop-backend": stopBackend,
@@ -423,7 +423,7 @@ function startControlServer() {
 
 async function main() {
   await startBackend();
-  if (stackName === "branvil" || shouldSeed) {
+  if (shouldSeed) {
     const link = await postJson("/session/links", {});
     const entered = await fetch(`${baseUrl}/-/guildbotics/api/session`, {
       method: "POST",

@@ -186,8 +186,16 @@ impl Native {
             &public_person,
         );
         let factory = ServiceIntegrationFactory::new(config.clone(), &secrets, Arc::new(|_| {}))?;
+        let workspace_name =
+            crate::workspace::execution_name(self.branvil.as_ref(), &self.workspace)?;
         let services = Services {
-            agents: super::Agents::new(self.branvil.as_ref(), &project, &public_person, &roster),
+            agents: super::Agents::new(
+                self.branvil.as_ref(),
+                &project,
+                workspace_name.as_deref(),
+                &public_person,
+                &roster,
+            ),
             factory,
             code: OnceLock::new(),
             tickets: OnceLock::new(),
@@ -214,6 +222,7 @@ impl Native {
         let result: anyhow::Result<Reply> = async {
         let peer = Peers {
             project: &project,
+            workspace_name: workspace_name.as_deref(),
             workspace: &self.workspace,
             branvil: self.branvil.clone(),
             roster: &roster,
@@ -878,11 +887,6 @@ pub(crate) fn public(member: &Value, branvil: Option<&branvil::api::DataApi>) ->
         accounts,
     }
 }
-pub(crate) fn service_workspace<'a>(project: &'a Value, kind: &str) -> &'a str {
-    project["services"][kind]["workspace"]
-        .as_str()
-        .unwrap_or("")
-}
 pub(crate) fn integration(
     workspace: &Path,
     identity: &Path,
@@ -1007,6 +1011,7 @@ impl crate::member::git::Guest for Guest<'_> {
 }
 struct Peers<'a> {
     project: &'a Value,
+    workspace_name: Option<&'a str>,
     workspace: &'a Path,
     branvil: Option<branvil::api::DataApi>,
     roster: &'a [PublicMember],
@@ -1027,8 +1032,13 @@ impl Recipients for Peers<'_> {
                 .iter()
                 .find(|v| v.person_id == person)
                 .ok_or(ServiceError::InvalidParameters)?;
-            let agents =
-                super::Agents::new(self.branvil.as_ref(), self.project, person, self.roster);
+            let agents = super::Agents::new(
+                self.branvil.as_ref(),
+                self.project,
+                self.workspace_name,
+                person,
+                self.roster,
+            );
             let result = match agents.code() {
                 Ok(code) => {
                     let result = code.can_receive_work(subject).await;
@@ -1124,7 +1134,7 @@ pub(crate) mod tests {
         for (path, value) in [
             (
                 workspace.join(".guildbotics/config/team/project.yml"),
-                json!({"name":"fixture","language":"en","services":{"ticket_service":{"name":"branvil","workspace":"acme"},"code_hosting_service":{"name":"branvil","workspace":"acme"},"chat_service":{"name":"local"}}}),
+                json!({"name":"fixture","language":"en","services":{"ticket_service":{"name":"branvil"},"code_hosting_service":{"name":"branvil"},"chat_service":{"name":"local"}}}),
             ),
             (
                 workspace.join(".guildbotics/config/team/members/aiko/member.yml"),
@@ -1137,6 +1147,25 @@ pub(crate) mod tests {
         ] {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+        }
+        if embedded
+            .data
+            .workspace_for_execution(&workspace)
+            .unwrap()
+            .is_none()
+        {
+            let owner = embedded.owner.clone();
+            let path = workspace.clone();
+            std::thread::spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(owner.assign_execution_root("acme".into(), path))
+                    .unwrap();
+            })
+            .join()
+            .unwrap();
         }
         let keys = embedded.keys.clone();
         Native {
@@ -5043,9 +5072,10 @@ pub(crate) mod tests {
             speaking_style: String::new(),
             accounts: BTreeMap::from([("branvil".into(), "aiko".into())]),
         }];
-        let project = json!({"services":{"ticket_service":{"workspace":"acme"},"code_hosting_service":{"workspace":"acme"}}});
+        let project = json!({"services":{"ticket_service":{"name":"branvil"},"code_hosting_service":{"name":"branvil"}}});
         let mut peers = Peers {
             project: &project,
+            workspace_name: Some("acme"),
             workspace: &native.workspace,
             branvil: native.branvil.clone(),
             roster: &roster,

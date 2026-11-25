@@ -10,7 +10,7 @@ import { ownerApi, readStackContext, test, type StackContext } from "./stack-con
 // The "down" stack's spec takes the REAL backend down and brings it back up
 // through a control server (see start-stack.mjs `GUILDBOTICS_E2E_CONTROL_PORT`).
 // Each control answer comes only once the backend is gone, or answers again, so
-// neither the screen noticing the loss nor the retry can race the backend. The
+// neither the screen noticing the loss nor the reconnection can race the backend. The
 // session survives the restart: the server keeps it beside the owner token,
 // which still authenticates.
 
@@ -21,23 +21,22 @@ async function control(ctx: StackContext, action: "stop-backend" | "start-backen
   expect(response.ok).toBe(true);
 }
 
-test("keeps the screen under a notice while the server is unreachable, then recovers on retry", async ({
+test("warns on a lost event stream and refreshes the screen after the server restarts", async ({
   page,
 }) => {
   test.setTimeout(150_000);
 
   const ctx = readStackContext("down");
-  await page.goto("/-/guildbotics/");
-  await expect(page.getByRole("navigation")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("heading", { name: "First setup" })).toBeVisible();
 
   await control(ctx, "stop-backend");
-  // The next request the screen makes finds nobody: opening another screen
-  // makes one at once.
-  await page.evaluate(() => (window.location.hash = "#/diagnostics"));
+  const streamWarning = page.getByText(/The connection to the server is lost/);
+  await expect(streamWarning).toBeVisible();
+  // The shared Hub status poll can detect the loss before the stream warning.
   const unreachable = page.getByRole("dialog", { name: "Cannot reach GuildBotics" });
-  await expect(unreachable).toBeVisible({ timeout: 30_000 });
+  await expect(unreachable).toBeVisible({ timeout: 45_000 });
   // What was on the screen stays under the notice.
-  await expect(page.getByRole("navigation")).toBeAttached();
+  await expect(page.getByRole("navigation", { name: "Main", exact: true })).toBeAttached();
 
   // The service must also remain recoverable when selection encounters a
   // corrupt device registry; this exercises real startup and its HTTP contract.
@@ -45,14 +44,24 @@ test("keeps the screen under a notice while the server is unreachable, then reco
   mkdirSync(machineState, { recursive: true });
   const registry = join(machineState, "workspaces.json");
   writeFileSync(registry, "{");
+  const stream = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/v1/events" && response.ok(),
+  );
   await control(ctx, "start-backend");
 
-  // Retry reaches the server again and reloads what the screen shows.
-  await unreachable.getByRole("button", { name: "Retry" }).click();
+  await stream;
+  await expect(streamWarning).toBeHidden();
   await expect(unreachable).toHaveCount(0, { timeout: 60_000 });
-  await expect(page.getByRole("navigation")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main", exact: true })).toBeVisible();
   await expect(page.getByRole("alert").filter({ hasText: "workspace registry" })).toHaveCount(1);
-  await expect(page.getByRole("link", { name: "Setup" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Settings" })).toBeVisible();
+
+  const preparing = await ownerApi(ctx, "/hub-status", {
+    method: "POST",
+    body: JSON.stringify({ phase: "preparing", commit: "a".repeat(40), subject: "E2E update" }),
+  });
+  expect(preparing.ok).toBe(true);
+  await expect(page.getByText(/Preparing an automatic/)).toBeVisible({ timeout: 10_000 });
 
   writeFileSync(registry, "[]\n");
   const sharedGrant = join(
@@ -88,6 +97,6 @@ test("keeps the screen under a notice while the server is unreachable, then reco
   expect(recovered.ok).toBe(true);
   expect((await recovered.json()).input_store_problem).toBe("");
   await page.reload();
-  await expect(page.getByRole("navigation")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main", exact: true })).toBeVisible();
   await expect(page.getByText(/Cannot read the workspace registry/)).toHaveCount(0);
 });

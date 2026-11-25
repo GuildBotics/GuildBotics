@@ -663,12 +663,6 @@ async fn answer_git_credential_input(
     Ok(())
 }
 
-/// A single-use link into the screens of the server on this machine's port,
-/// or the sentence saying why there is none.
-pub async fn entry_link() -> Result<String, String> {
-    entry_link_for("/-/guildbotics/").await
-}
-
 /// The server of this machine and its owner's token, read from disk, once the
 /// listener has proven it holds the token's digest.
 pub async fn local_owner() -> anyhow::Result<(String, String)> {
@@ -684,7 +678,9 @@ pub async fn local_owner() -> anyhow::Result<(String, String)> {
     ))
 }
 
-pub async fn entry_link_for(next: &str) -> Result<String, String> {
+/// A single-use link into the screens of the server on this machine's port,
+/// or the sentence saying why there is none.
+pub async fn entry_link() -> Result<String, String> {
     let port = crate::endpoint::port().map_err(|e| e.to_string())?;
     let data = gb_base::home::data().map_err(|e| format!("{e:#}"))?;
     let language = language().await;
@@ -694,11 +690,7 @@ pub async fn entry_link_for(next: &str) -> Result<String, String> {
         .ok_or_else(|| i18n::t(language, "cli.server.unreachable", &[]))?;
     let refused = |reason: String| i18n::t(language, "cli.server.refused", &[("reason", &reason)]);
     let answer = owner
-        .post(
-            "/session/links",
-            Some(&json!({"next": next})),
-            Some(TIMEOUT),
-        )
+        .post("/session/links", Some(&json!({"next": "/"})), Some(TIMEOUT))
         .await
         .map_err(|e| refused(e.to_string()))?;
     answer["url"]

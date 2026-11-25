@@ -663,7 +663,10 @@ async fn ticket_lifecycle_and_board() {
     let s = &w.server;
     let t = w.ticket("Fix login").await;
     assert_eq!(t["key"], "1");
-    assert_eq!(t["url"], format!("{}/{REPO}/-/tickets/1", s.url));
+    assert_eq!(
+        t["url"],
+        format!("{}/workspaces/acme/repos/demo/tickets/1", s.url)
+    );
     assert_eq!(t["repository"], REPO);
     // Created at the end of new unless another lane is given.
     assert_eq!(t["lane"], "new");
@@ -719,7 +722,7 @@ async fn ticket_lifecycle_and_board() {
         c["url"]
             .as_str()
             .unwrap()
-            .ends_with(&format!("/-/tickets/1#{}", c["id"].as_str().unwrap()))
+            .ends_with(&format!("/tickets/1#{}", c["id"].as_str().unwrap()))
     );
     let (st, r) = s
         .post(
@@ -885,7 +888,10 @@ async fn tickets_are_numbered_and_labelled_per_repository() {
     assert_eq!(st, 201, "{t}");
     assert_eq!(t["key"], "1");
     assert_eq!(t["repository"], "acme/other");
-    assert_eq!(t["url"], format!("{}/acme/other/-/tickets/1", s.url));
+    assert_eq!(
+        t["url"],
+        format!("{}/workspaces/acme/repos/other/tickets/1", s.url)
+    );
     assert_eq!(w.ticket("Second here").await["key"], "2");
     for key in ["01", "0", "x", "1x"] {
         assert_eq!(
@@ -1134,10 +1140,22 @@ async fn the_board_lists_the_closed_items_of_its_workspace() {
     };
     let mut acme = closed("acme").await;
     acme.sort();
-    assert_eq!(acme, ["acme/demo/-/pulls/1", "acme/demo/-/tickets/1"]);
+    assert_eq!(
+        acme,
+        [
+            "workspaces/acme/repos/demo/pulls/1",
+            "workspaces/acme/repos/demo/tickets/1"
+        ]
+    );
     let mut beta = closed("beta").await;
     beta.sort();
-    assert_eq!(beta, ["beta/x/-/pulls/1", "beta/x/-/tickets/1"]);
+    assert_eq!(
+        beta,
+        [
+            "workspaces/beta/repos/x/pulls/1",
+            "workspaces/beta/repos/x/tickets/1"
+        ]
+    );
 }
 
 /// How many open tickets `assignee=<name>` lists.
@@ -1579,15 +1597,15 @@ async fn relations_are_shown_from_both_sides_and_never_make_tickets_wait_on_each
         (&parent, json!({"parent": elsewhere["url"]})),
         (
             &parent,
-            json!({"add_blocked_by": ["https://example.com/acme/demo/-/tickets/2"]}),
+            json!({"add_blocked_by": ["https://example.com/workspaces/acme/repos/demo/tickets/2"]}),
         ),
         (
             &parent,
-            json!({"parent": format!("{}/acme/demo/-/tickets/99", s.url)}),
+            json!({"parent": format!("{}/workspaces/acme/repos/demo/tickets/99", s.url)}),
         ),
         (
             &parent,
-            json!({"parent": format!("{}/acme/demo/-/pulls/1", s.url)}),
+            json!({"parent": format!("{}/workspaces/acme/repos/demo/pulls/1", s.url)}),
         ),
     ] {
         let before = s.ok(&path_of(t), &w.aiko).await;
@@ -2055,7 +2073,7 @@ async fn a_ticket_moves_to_another_repository_of_its_workspace_with_what_names_i
         .await;
     assert_eq!(st, 200, "{moved}");
     let t = &moved["ticket"];
-    let url = format!("{}/acme/other/-/tickets/2", s.url);
+    let url = format!("{}/workspaces/acme/repos/other/tickets/2", s.url);
     assert_eq!(t["url"], url.as_str());
     assert_eq!(
         (&t["repository"], &t["key"]),
@@ -2167,7 +2185,7 @@ async fn a_ticket_moves_to_another_repository_of_its_workspace_with_what_names_i
         )
         .await;
     assert_eq!(st, 200, "{rendered}");
-    let now = format!("href=\"{}/{REPO}/-/tickets/5\"", s.url);
+    let now = format!("href=\"{}/workspaces/acme/repos/demo/tickets/5\"", s.url);
     assert_eq!(
         rendered["markdown"].as_str().unwrap().matches(&now).count(),
         4,

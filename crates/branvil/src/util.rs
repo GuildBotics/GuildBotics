@@ -34,9 +34,42 @@ pub fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
         && name != "."
         && name != ".."
-        // `-` separates an item's path from its kind in web URLs (`/-/pulls/3`).
         && name != "-"
         && !fold(name).ends_with(".git")
+}
+
+/// The screen for a repository identified by its workspace and name.
+pub(crate) fn repository_page(repo: &str) -> String {
+    let (workspace, name) = repo.split_once('/').expect("validated repository path");
+    format!("/workspaces/{workspace}/repos/{name}")
+}
+
+pub(crate) fn item_path(repo: &str, kind: &str, item: impl std::fmt::Display) -> String {
+    format!("{}/{kind}/{item}", repository_page(repo))
+}
+
+pub(crate) fn item_url(base: &str, repo: &str, kind: &str, item: impl std::fmt::Display) -> String {
+    format!("{base}{}", item_path(repo, kind, item))
+}
+
+pub(crate) fn parse_item_url(base: &str, url: &str, kind: &str) -> Option<(String, String)> {
+    let mut parts = url
+        .strip_prefix(base)?
+        .strip_prefix("/workspaces/")?
+        .split('/');
+    let workspace = parts.next()?;
+    if parts.next()? != "repos" {
+        return None;
+    }
+    let name = parts.next()?;
+    if !valid_name(workspace) || !valid_name(name) || parts.next()? != kind {
+        return None;
+    }
+    let item = parts.next()?;
+    if item.is_empty() || item.contains(['?', '#', '%']) || parts.next().is_some() {
+        return None;
+    }
+    Some((format!("{workspace}/{name}"), item.to_owned()))
 }
 
 /// Validates a repository path: `<workspace>/<name>`, two names.

@@ -281,11 +281,19 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     );
     assert!(text(&out).contains(&serves), "{}", text(&out));
 
-    // A backup of the previous schema version: what version 44 wrote.
+    // A backup of the previous schema version with the old local ticket URL.
     let previous = out_dir.path().join("previous");
     copy_backup(&backup, &previous, &manifest);
     let db = previous.join("branvil.redb");
-    as_schema_44(&db);
+    as_schema_45(&db);
+    edit_records(&db, "pulls", |pull| {
+        if let Some(ticket) = pull["tickets"]
+            .as_array_mut()
+            .and_then(|links| links.first_mut())
+        {
+            ticket["url"] = json!(format!("{}/{REPO}/-/tickets/1", s.url));
+        }
+    });
     let mut old = manifest.clone();
     old["schema_version"] = json!(PREVIOUS_SCHEMA_VERSION);
     // Refresh the checksum of the database rewritten by the fixture.
@@ -323,12 +331,12 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("from schema version 44 to 45"),
+        text(&out).contains("from schema version 45 to 46"),
         "{}",
         text(&out)
     );
     assert!(
-        text(&out).contains("no repository had post-merge only jobs in its settings"),
+        text(&out).contains("updated local links in 1 pull requests"),
         "{}",
         text(&out)
     );

@@ -307,7 +307,7 @@ pub(crate) async fn upload(
             Ok(path) => path,
             Err(_) => return failed(),
         };
-        return Json(json!({"id":destination.parent().unwrap().file_name().unwrap(),"path":destination,"guest_path":guest})).into_response();
+        return Json(json!({"id":destination.parent().unwrap().file_name().unwrap().to_string_lossy(),"path":destination,"guest_path":guest})).into_response();
     }
 }
 
@@ -342,5 +342,66 @@ mod tests {
         let reopened = InputFileStore::new(root.path()).unwrap();
         assert_eq!(reopened.mounts(&[id]).await.unwrap().len(), 1);
         assert!(reopened.mounts(&["../outside".into()]).await.is_err());
+    }
+
+    /// The screen sends back the `id` an upload answers as the run's selection.
+    #[tokio::test]
+    async fn upload_answers_the_id_a_run_selects_it_by() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+        struct Untouchable;
+        impl gb_config::secrets::Keychain for Untouchable {
+            fn read(&self) -> anyhow::Result<Option<String>> {
+                panic!("the keychain was reached")
+            }
+            fn create(&self, _: &str) -> anyhow::Result<()> {
+                panic!("the keychain was reached")
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let data = gb_base::host_path::normalize(root.path())
+            .unwrap()
+            .join("data");
+        let auth = crate::auth::ServerAuth::open(&data, 38763).unwrap();
+        let token = std::fs::read_to_string(auth.owner_token_path()).unwrap();
+        let store = InputFileStore::deferred(&data.join("inputs"));
+        let mut api = crate::api::Api::new(
+            crate::api::Selected::default(),
+            store.clone(),
+            auth,
+            "fixture".into(),
+            data,
+        );
+        api.keychain = std::sync::Arc::new(Untouchable);
+        let response = crate::api::router(std::sync::Arc::new(api))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/-/guildbotics/api/commands/input-files")
+                    .header("host", "127.0.0.1:38763")
+                    .header("authorization", format!("Bearer {}", token.trim()))
+                    .header("content-type", "multipart/form-data; boundary=fixture")
+                    .body(Body::from(
+                        "--fixture\r\nContent-Disposition: form-data; name=\"file\"; \
+                         filename=\"clipboard.png\"\r\nContent-Type: image/png\r\n\r\n\
+                         e2e-image\r\n--fixture--\r\n",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let id = body["id"].as_str().unwrap_or_else(|| panic!("{body}"));
+        let path = Path::new(body["path"].as_str().unwrap());
+        assert_eq!(path.parent().unwrap().file_name().unwrap(), id);
+        assert_eq!(std::fs::read(path).unwrap(), b"e2e-image");
+        let mounts = store.mounts(&[id.to_owned()]).await.unwrap();
+        assert_eq!(mounts[0].host.as_deref(), path.parent());
     }
 }

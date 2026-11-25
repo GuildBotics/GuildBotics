@@ -350,13 +350,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn logs_are_recorded_in_the_current_trace_or_system_and_never_streamed() {
+    async fn logs_are_recorded_in_the_current_trace_or_system() {
         let root = tempfile::tempdir().unwrap();
         let store = Diagnostics::open(root.path());
         store.start_system_session("test").unwrap();
         let bus = Arc::new(EventBus::default());
         bus.record_in(Some(store.clone()));
-        let mut subscriber = bus.subscribe();
         let tracing = tracing_subscriber::registry().with(DiagnosticLayer::for_bus(bus.clone()));
         let dispatch = tracing::Dispatch::new(tracing);
         tracing::dispatcher::with_default(&dispatch, || tracing::warn!("disk almost full"));
@@ -393,11 +392,6 @@ mod tests {
         assert_eq!(logs[0]["level"], "ERROR");
         assert_eq!(logs[0]["trace_id"], "trace-42");
         assert!(bus.snapshot().is_empty());
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(200), subscriber.next())
-                .await
-                .is_err()
-        );
         store.finish_system_session().unwrap();
     }
     struct TestFailure;

@@ -1,6 +1,6 @@
 # GuildBotics の画面（`desktop/`）
 
-画面の外枠は npm workspace の `@guildbotics/ui`（`../packages/ui`）に置きます。
+画面の外枠は `src/ui`に置きます。
 `AppShell`、Mantine のテーマ、トークン・部品の CSS、フォーム部品、i18next の初期化、
 Markdown の安全な HTML 化・表示・図の描画を共有します。ルート、API、翻訳辞書と
 provider ごとの設定は各アプリ側が持ちます。CSS は Mantine、共有トークン、アプリ固有、
@@ -48,7 +48,7 @@ scripts/dev.sh --data-dir /absolute/path/to/dev-data --no-open
 GUILDBOTICS_SERVER_PORT=8866 scripts/desktop-dev-frontend.sh
 ```
 
-ブラウザ preview では、Vite dev server（`http://127.0.0.1:1420/-/guildbotics/`）が画面を配り、`/-/guildbotics/api`（`/-/guildbotics/api/events` の WebSocket を含む）を backend へ転送します。ブラウザのセッションは入口リンクからしか始まりません。`guildbotics open --print`（同じ `GUILDBOTICS_SERVER_PORT` で実行）が表示する入口リンクの `http://127.0.0.1:<port>` を `http://127.0.0.1:1420` に置き換えて、60 秒以内に開きます。
+ブラウザ preview では、Vite dev server（`http://127.0.0.1:1420/`）が画面を配り、`/-/guildbotics/api`、`/api`、`/git` をバックエンドへ転送します。ブラウザのセッションは入口リンクからしか始まりません。`guildbotics open --print`（同じ `GUILDBOTICS_SERVER_PORT` で実行）が表示する入口リンクの `http://127.0.0.1:<port>` を `http://127.0.0.1:1420` に置き換えて、60 秒以内に開きます。
 
 コマンド画面の「新規作成」は、ダイアログ内で「AIに作成させる」と「自分で作成する」を切り替えます。AIアシスタントは質問には回答だけを返し、エディタやファイルを変更しません。ソース変更を依頼した場合は、現在のコマンドの更新と必要な補助コマンドの新規作成をまとめて提案します。提案ソースはチャット履歴には展開せず、エディタ側の読み取り専用ファイルタブへ「現在」「新規作成」「更新」を区別して表示します。「更新」タブは追加行と削除行を行番号付きの差分として表示し、「新規作成」タブは完成版ソースを表示します。各表示は領域内で縦横にスクロールできます。内容を確認して「変更を適用」を押した時点で、リビジョン競合と全ソースの妥当性を確認したうえで反映されます。新規ファイルだけを適用した場合、開いていた既存コマンドは切り替えません。自力作成ではコマンド名と形式を指定して従来どおり初期ファイルを作成します。通常の手動編集ではバリデーションエラーのある途中のソースも保存できますが、有効なソースへ直すまでは実行できません。自由記述本文を処理するコマンドは、個別の `text` 引数ではなく実行画面の「入力文」を使います。
 
@@ -94,13 +94,13 @@ npm run quality       # format:check + lint + typecheck + duplicates + test（E2
 
 ### E2E（Playwright・実ブラウザ + 実 Local API backend）
 
-Branvil の画面の検証も同じ構成で動かします。`npm run e2e -- --project=branvil`
+Branvil の画面の検証も同じ構成で動かします。`npm run e2e -- --project=configured`
 でチケットの作成・移動・イベント反映、セッションの復帰と表示の検証を実行します。
 一時サーバーの共有セッションを使い、単体の Branvil バイナリは起動しません。
 1 枚のカードだけの一時盤面の計測には `GUILDBOTICS_E2E_PERF=1` を指定します。
 大規模盤面の性能比較には使えません。
 
-jsdom では検証できない「実ブラウザ engine + 実 `client.ts ↔ Rust Local API ↔ /-/guildbotics/api/events` + 実ファイル書き込み」を貫く critical user journey を検証します。browser-preview mode で実 backend に接続し、journeyごとに専用の一時ワークスペースとloopbackポートを使います。ブラウザはテストサーバーが同じポートで配る画面を開きます。
+jsdom では検証できない「実ブラウザ engine + 実 `client.ts ↔ Rust Local API ↔ /api/v1/events` + 実ファイル書き込み」を貫く critical user journey を検証します。browser-preview mode で実 backend に接続し、journeyごとに専用の一時ワークスペースとloopbackポートを使います。ブラウザはテストサーバーが同じポートで配る画面を開きます。
 
 前提:
 
@@ -131,7 +131,7 @@ npm run e2e
 | `e2e/diagnostics.spec.ts` | ⑤ verify / scenario diagnostics 実行 → 結果描画、トラブルシューティングAIドロワー → 実 `/diagnostics/troubleshoot` → エラー描画                                                                                                      |
 | `e2e/decisions.spec.ts`   | チャット判定の共通 brain 割り当て → 保存 → reload 後も復元                                                                                                                                                                           |
 | `e2e/failure.spec.ts`     | ⑥ 画面を開いたまま backend が止まる → 「届かない」通知 → 再起動 → retry で復帰                                                                                                                                                       |
-| `e2e/environment.spec.ts` | ⑪ `GUILDBOTICS_E2E_ENVIRONMENT_FROM` を指定したときだけ: 自力作成したコマンドに貼り付けた添付を渡して実行 → 実 microVM で動き、結果が `/events` で画面に届く                                                                         |
+| `e2e/environment.spec.ts` | ⑪ `GUILDBOTICS_E2E_ENVIRONMENT_FROM` を指定したときだけ: 自力作成したコマンドに貼り付けた添付を渡して実行 → 実 microVM で動き、`/api/v1/events` の通知で別タブにも結果が表示される                                                                         |
 
 補足:
 

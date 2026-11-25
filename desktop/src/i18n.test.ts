@@ -82,6 +82,18 @@ describe("app language storage", () => {
     expect(i18n.language).toBe("ja");
   });
 
+  it("updates the desktop, repository and shared resources on the same language change", async () => {
+    await setAppLanguage("ja");
+    expect(i18n.t("app.nav.setup")).toBe("設定");
+    expect(i18n.t("nav.main", { ns: "repository" })).toBe("メイン");
+    for (const ns of ["desktop", "repository"]) {
+      expect(i18n.t("hub.versionLabel", { ns, sha: "abc123", subject: "更新" })).toBe(
+        "abc123（更新）",
+      );
+    }
+    expect(document.documentElement.lang).toBe("ja");
+  });
+
   it("updates both localStorage and i18next state when switching back", async () => {
     await setAppLanguage("ja");
     await setAppLanguage("en");
@@ -112,8 +124,8 @@ describe("i18n resources", () => {
   }
 
   it("has identical translation keys between en and ja", () => {
-    const en = i18n.getResourceBundle("en", "translation") as Record<string, unknown>;
-    const ja = i18n.getResourceBundle("ja", "translation") as Record<string, unknown>;
+    const en = i18n.getResourceBundle("en", "desktop") as Record<string, unknown>;
+    const ja = i18n.getResourceBundle("ja", "desktop") as Record<string, unknown>;
 
     const enKeys = collectKeys(en).sort();
     const jaKeys = collectKeys(ja).sort();
@@ -133,7 +145,13 @@ describe("i18n resources", () => {
     });
     const keys = new Set<string>();
     for (const [path, source] of Object.entries(sources)) {
-      if (/\.(test|spec)\./.test(path) || path.startsWith("./test/")) continue;
+      if (
+        /\.(test|spec)\./.test(path) ||
+        path.startsWith("./test/") ||
+        path.startsWith("./repository/") ||
+        path.startsWith("./ui/")
+      )
+        continue;
       const tree = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
       const visit = (node: ts.Node) => {
         if (ts.isCallExpression(node)) {
@@ -153,8 +171,9 @@ describe("i18n resources", () => {
       for (const language of ["en", "ja"]) {
         // Plural calls use a base key whose resources end in _one or _other.
         const resource =
-          i18n.getResource(language, "translation", key) ??
-          i18n.getResource(language, "translation", `${key}_other`);
+          i18n.getResource(language, "desktop", key) ??
+          i18n.getResource(language, "shared", key) ??
+          i18n.getResource(language, "desktop", `${key}_other`);
         expect(resource, `${language}:${key}`).toBeTypeOf("string");
       }
     }
@@ -163,7 +182,7 @@ describe("i18n resources", () => {
   it("gives every assistant chat namespace the same leaf keys", () => {
     // AssistantChatPanel resolves its labels as `${namespace}.${leaf}`, so a
     // namespace missing a leaf would render a raw key at runtime.
-    const bundle = i18n.getResourceBundle("en", "translation") as Record<
+    const bundle = i18n.getResourceBundle("en", "desktop") as Record<
       string,
       Record<string, unknown>
     >;

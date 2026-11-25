@@ -18,8 +18,8 @@ class BranvilProvider:
     @property
     def services(self):
         return {
-            "code_hosting_service": {"name": "branvil", "workspace": "acme"},
-            "ticket_service": {"name": "branvil", "workspace": "acme"},
+            "code_hosting_service": {"name": "branvil"},
+            "ticket_service": {"name": "branvil"},
             "chat_service": {"name": "local"},
         }
 
@@ -45,7 +45,18 @@ class BranvilProvider:
                 break
             assert ready.status_code == 503 and time.monotonic() < deadline, ready.text
             time.sleep(0.05)
-        self.post("workspaces", {"name": "acme"})
+        # As the setup screen does: creating the project binds this workspace
+        # to the code host's workspace the header names.
+        created = stack.api.post(
+            "config/init",
+            json={
+                "config_dir": stack.config_dir,
+                "language": "en",
+                "services": self.services,
+            },
+            headers={"X-GuildBotics-Workspace": "acme"},
+        )
+        assert created.is_success, (created.status_code, created.text)
         repo = self.post("repos", {"path": self.repository})
         self.clone_url = repo["clone_url"]
         owner = self.api.get("me").json()["name"]

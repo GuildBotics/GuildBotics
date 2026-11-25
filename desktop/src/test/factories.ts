@@ -1,26 +1,4 @@
-import type { RuntimeEvent, TraceRecord } from "../api/client";
-
-const CORRELATION_DEFAULTS = {
-  trace_id: null,
-  span_id: null,
-  parent_id: null,
-  source: null,
-  person_id: "",
-  command: "",
-  workflow: "",
-  attributes: {},
-};
-
-export function makeRuntimeEvent(overrides: Partial<RuntimeEvent> = {}): RuntimeEvent {
-  return {
-    kind: "event",
-    ...CORRELATION_DEFAULTS,
-    type: "command.started",
-    payload: {},
-    timestamp: "2026-06-04T01:00:00Z",
-    ...overrides,
-  };
-}
+import type { TraceRecord } from "../api/client";
 
 export function makeTraceRecord(overrides: Partial<TraceRecord> = {}): TraceRecord {
   const record: TraceRecord = {

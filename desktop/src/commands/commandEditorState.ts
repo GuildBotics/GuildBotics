@@ -1,3 +1,4 @@
+import { readStored, writeStored } from "../ui/storage";
 import type {
   CommandArgumentOption,
   CommandFileBlockingCode,
@@ -23,23 +24,12 @@ export function clampEditorRatio(ratio: number): number {
 }
 
 export function loadEditorRatio(): number {
-  try {
-    const raw = window.localStorage.getItem(COMMAND_EDITOR_RATIO_KEY);
-    if (!raw) {
-      return DEFAULT_EDITOR_RATIO;
-    }
-    return clampEditorRatio(Number.parseFloat(raw));
-  } catch {
-    return DEFAULT_EDITOR_RATIO;
-  }
+  const raw = readStored(COMMAND_EDITOR_RATIO_KEY);
+  return raw ? clampEditorRatio(Number.parseFloat(raw)) : DEFAULT_EDITOR_RATIO;
 }
 
 export function saveEditorRatio(ratio: number): void {
-  try {
-    window.localStorage.setItem(COMMAND_EDITOR_RATIO_KEY, String(clampEditorRatio(ratio)));
-  } catch {
-    // Ignore persistence failures (e.g. storage disabled or full).
-  }
+  writeStored(COMMAND_EDITOR_RATIO_KEY, String(clampEditorRatio(ratio)));
 }
 
 // Per-workspace UI state persisted between sessions. Draft source content,
@@ -94,7 +84,7 @@ export function loadEditorState(storageDir?: string): CommandEditorPersisted {
     return { ...EMPTY_EDITOR_STATE };
   }
   try {
-    const raw = window.localStorage.getItem(storageKey(storageDir));
+    const raw = readStored(storageKey(storageDir));
     if (!raw) {
       return { ...EMPTY_EDITOR_STATE };
     }
@@ -118,11 +108,7 @@ export function saveEditorState(value: CommandEditorPersisted, storageDir?: stri
   if (!storageDir) {
     return;
   }
-  try {
-    window.localStorage.setItem(storageKey(storageDir), JSON.stringify(value));
-  } catch {
-    // Ignore persistence failures (e.g. storage disabled or full).
-  }
+  writeStored(storageKey(storageDir), JSON.stringify(value));
 }
 
 export type SaveStatus = "clean" | "dirty" | "saving" | "error" | "conflict";

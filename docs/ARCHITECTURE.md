@@ -921,10 +921,10 @@ browser; the repository is a monorepo on purpose. The server runs from a checkou
 Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
 [`scripts/hub-server.sh`](hub-server.md) installs. The LaunchAgent runs a signed copy of the locally built Rust executable, at one fixed path so that macOS keeps the access it granted, with Branvil in the same process.
 
-- **Local API boundary**: the browser calls the Rust backend (`gb-server`), which serves both the API under `/-/guildbotics/api` (REST,
-  and the `/-/guildbotics/api/events` WebSocket) and the screens themselves (the Vite build of
-  `desktop/`: `/-/guildbotics/`, `/-/guildbotics/assets/*`, and `/-/guildbotics/-/enter` and `/-/guildbotics/-/authorize`, which
-  the main page tells apart by path; `gb-server/src/ui.rs`). It listens on loopback only, on
+- **Local API boundary**: the browser calls the Rust backend (`gb-server`), which serves both the API under `/-/guildbotics/api`,
+  the shared `/api/v1/events` change stream, and the screens themselves (the Vite build of
+  `desktop/` served from `gb-server/src/ui.rs`). Assets are under `/assets/`, and the SPA
+  is served on page paths such as `/workspaces/{workspace}/task-flow`, `/enter`, and `/authorize`. It listens on loopback only, on
   one fixed port (`GUILDBOTICS_SERVER_PORT`, 7878 by default), which every program of
   the machine reads from the environment: the server, its CLI clients, and the Vite dev
   server that proxies `/-/guildbotics/api` to it. GuildBotics runs
@@ -940,7 +940,7 @@ Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
     one. Only the process that bound the port opens these records, so a second
     backend whose bind fails changes nothing.
   - A client holding an owner token (`Authorization: Bearer`) asks
-    `POST /-/guildbotics/api/session/links` for an entry link, `{base}/-/guildbotics/-/enter#<code>` (32 random
+    `POST /-/guildbotics/api/session/links` for an entry link, `{base}/enter#<code>` (32 random
     bytes, single use, 60 s, in memory as its hash; `?next=` names a page of this
     server). The code is in the fragment, so it is in no request line, log, or
     `Referer`. The page removes it from the address bar and exchanges it at
@@ -954,7 +954,7 @@ Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
     line.
   - A machine that cannot read `owner.token` gets an owner token of its own through the
     consent screen: `guildbotics connect` listens on a loopback port and opens
-    `/-/guildbotics/-/authorize` with its name, that `redirect_uri`, a `state`, and a PKCE `S256`
+    `/authorize` with its name, that `redirect_uri`, a `state`, and a PKCE `S256`
     challenge; the owner allows it with a session (`POST /-/guildbotics/api/apps/authorizations`), and
     the CLI exchanges the single-use, 60-second code bound to its name, address, and
     challenge at `POST /-/guildbotics/api/apps/token` for a token labelled `app:<client>`, replacing

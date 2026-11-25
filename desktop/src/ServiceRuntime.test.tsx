@@ -47,7 +47,6 @@ vi.mock("./api/client", async (importOriginal) => {
     startScheduler: vi.fn(),
     stopScheduler: vi.fn(),
     resetChatReceiveState: vi.fn(),
-    subscribeEvents: vi.fn(() => () => {}),
   };
 });
 
@@ -737,7 +736,7 @@ describe("App routing and layout", () => {
     await screen.findByRole("heading", { name: t("service.title") });
 
     await user.click(screen.getByRole("combobox", { name: t("app.language.label") }));
-    await user.click(await screen.findByText(t("app.language.japanese")));
+    await user.click(await screen.findByRole("option", { name: "日本語" }));
 
     await waitFor(() => expect(changeSpy).toHaveBeenCalledWith("ja"));
     changeSpy.mockRestore();
