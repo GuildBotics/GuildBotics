@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import re
 import shlex
+import subprocess
 import tomllib
 from pathlib import Path, PurePosixPath
+
+import pytest
+
+pytestmark = pytest.mark.repo_policy
 
 ROOT = Path(__file__).parents[1]
 
@@ -22,7 +27,7 @@ def test_the_blackbox_ci_selects_every_ordinary_journey() -> None:
     )
     selected = {word for command in job["commands"] for word in shlex.split(command)}
     # These journeys require an attending owner or an offline production copy.
-    optional = {"test_run.py", "test_record_golden.py"}
+    optional = {"test_run.py"}
     expected = {
         path.relative_to(ROOT).as_posix()
         for path in (ROOT / "tests/blackbox").glob("test_*.py")
@@ -367,3 +372,78 @@ def test_branvil_contracts_only_run_in_the_workspace_rust_test_job() -> None:
         and "-E" not in command
         for command in commands
     )
+
+
+def test_python_ci_covers_its_inputs_and_skips_rust_and_desktop_sources() -> None:
+    jobs = {job["name"]: job for job in _load(".guildbotics-ci.toml")["jobs"]}
+    python = jobs["test"]
+    policy = jobs["repo-policy"]
+    assert python["required"] and not python.get("post_merge")
+    assert policy["required"] and not policy.get("post_merge")
+    assert not policy.get("paths")
+
+    words = shlex.split("\n".join(python["commands"]))
+    assert "cargo" not in words
+    assert "not repo_policy" in words
+    inputs = {
+        "guildbotics",
+        "tests",
+        "scripts",
+        ".cargo",
+        "wire",
+        "records/golden",
+        "skills/guildbotics",
+        ".agents/skills",
+        ".claude/skills",
+        "docs/custom_command_guide.en.md",
+        "docs/custom_command_guide.ja.md",
+        "docker/agent-environment/cargo-wrapper.sh",
+        "rust-toolchain.toml",
+        "pyproject.toml",
+        "uv.lock",
+        ".python-version",
+        "AGENTS.md",
+        "README.md",
+        "LICENSE",
+        "third_party_licenses",
+        ".gitattributes",
+        ".gitignore",
+        ".guildbotics-ci.toml",
+    }
+    inputs.update(
+        word for word in words if not word.startswith("-") and (ROOT / word).exists()
+    )
+
+    def tracked(*pathspecs: str) -> set[str]:
+        return set(
+            subprocess.check_output(
+                ["git", "ls-files", "-z", "--", *pathspecs], cwd=ROOT
+            )
+            .decode()
+            .split("\0")
+        ) - {""}
+
+    # Use the same Git glob pathspecs as PR-head job selection.
+    selected = tracked(*(f":(glob){pattern}" for pattern in python["paths"]))
+    assert selected
+    expected = tracked(*sorted(inputs))
+    assert expected <= selected, sorted(expected - selected)
+    assert not selected & tracked("crates", "desktop/src")
+
+
+def test_repo_policy_runs_all_repository_wide_checks() -> None:
+    job = next(
+        job
+        for job in _load(".guildbotics-ci.toml")["jobs"]
+        if job["name"] == "repo-policy"
+    )
+    words = shlex.split("\n".join(job["commands"]))
+    assert "repo_policy" in words
+    assert {
+        "tests/test_cargo_workspace.py",
+        "tests/test_npm_workspace.py",
+        "tests/test_retired_names.py",
+        "tests/guildbotics/test_layer_boundaries.py",
+        "tests/guildbotics/test_no_compat_code.py",
+        "tests/scripts/test_check_schema_raise.py::test_repository_itself",
+    } <= set(words)

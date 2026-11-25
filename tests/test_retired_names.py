@@ -1,9 +1,14 @@
 """Keep the retired Branvil names out of the repository and of the text people read."""
 
+import json
 import re
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.repo_policy
 
 import yaml
 
@@ -15,7 +20,6 @@ RETIRED_DIRECTORY = ".branvil/"
 STORED_SECRETS = {"BRANVIL_ADMIN_TOKEN", "BRANVIL_TOKEN", "BRANVIL_TOKEN_ID"}
 STORED_SECRET_FILES = {
     "crates/gb-server/src/hub_data.rs": STORED_SECRETS,
-    "crates/gb-server/tests/support/commands-frozen-map.md": STORED_SECRETS,
     "docs/hub-server.md": STORED_SECRETS,
 }
 GIT_TOKEN_FILES = {"docs/secret_migration.md", "records/golden/secret_migration.json"}
@@ -135,3 +139,30 @@ def test_the_ci_reads_the_current_configuration_file() -> None:
     assert ".guildbotics-ci.toml" in tracked_files()
     pipeline = (ROOT / "crates/branvil/src/ci/pipeline.rs").read_text("utf-8")
     assert 'pub const PIPELINE_PATH: &str = ".guildbotics-ci.toml";' in pipeline
+
+
+def test_guest_entry_instructions_use_the_snapshot_interpreter():
+    catalog = json.loads(
+        (ROOT / "guildbotics/templates/member/catalog.json").read_text(encoding="utf-8")
+    )
+    interpreter = f"{catalog['guest_venv']}/bin/python"
+    required = {
+        "guildbotics/templates/member/reference.md",
+        "guildbotics/templates/commands/functions/handle_ticket.en.md",
+        "guildbotics/templates/commands/functions/handle_ticket.ja.md",
+    }
+    pattern = re.compile(r"([^\s`\"']+)[`\"']?\s+-m\s+guildbotics\.guest\.entry\b")
+    documented = set()
+    for name in tracked_files():
+        if name.startswith("tests/") or Path(name).suffix not in {
+            ".md",
+            ".py",
+            ".yaml",
+            ".yml",
+        }:
+            continue
+        paths = pattern.findall((ROOT / name).read_text(encoding="utf-8"))
+        if paths:
+            documented.add(name)
+            assert all(path == interpreter for path in paths), (name, paths)
+    assert required <= documented

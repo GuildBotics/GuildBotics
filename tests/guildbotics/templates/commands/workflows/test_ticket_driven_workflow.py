@@ -5,25 +5,18 @@ status comments of a failed or rate-limited run belong to the host's
 ``TicketSelector`` (``tests/guildbotics/drivers/test_ticket_selector.py``).
 """
 
-import asyncio
-import importlib
-import json
-from pathlib import Path
-
 import os
+from pathlib import Path
 
 import pytest
 
-from guildbotics.entities.task import Task
 from guildbotics.intelligences.common import AgentResponse
-from guildbotics.runtime.member_invocation import MemberInvocation, Work
-from guildbotics.runtime.person_lease import PersonExecutionLease
+from guildbotics.runtime.member_invocation import Work
 from guildbotics.runtime.workflow_invocation import (
     WORKFLOW_INVOCATION_KEY,
     WorkflowInvocation,
 )
 from guildbotics.templates.commands.workflows import ticket_driven_workflow
-from guildbotics.utils.correlation import trace_scope
 
 ISSUE_URL = "https://github.com/GuildBotics/GuildBotics/issues/1"
 PR_URL = "https://github.com/GuildBotics/GuildBotics/pull/2"

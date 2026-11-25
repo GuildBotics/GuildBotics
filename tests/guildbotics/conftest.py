@@ -1,22 +1,6 @@
 """Shared fixtures for workflow presentation tests."""
 
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
-import i18n  # type: ignore
 import pytest
-
-from guildbotics.utils.i18n_tool import set_language
-
-
-@pytest.fixture
-def notice_language(request):
-    previous_locale = i18n.get("locale")
-    previous_fallback = i18n.get("fallback")
-    set_language(request.param)
-    yield request.param
-    i18n.set("locale", previous_locale)
-    i18n.set("fallback", previous_fallback)
 
 
 @pytest.fixture

@@ -1,4 +1,3 @@
-import os
 from enum import Enum
 from typing import Any, ClassVar
 
@@ -6,7 +5,7 @@ import langcodes
 from langcodes import Language
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
-from guildbotics.utils.person_id import person_secret_prefix, validate_person_id
+from guildbotics.utils.person_id import validate_person_id
 
 KNOWN_LANGUAGE_NAMES = {
     "en": "English",
@@ -80,16 +79,6 @@ class Project(BaseModel):
         """
         config = self.get_service_config(service)
         return str(config.get("name", "")).lower()
-
-    def is_available_service(self, service: Service) -> bool:
-        """
-        Check if a specific service is available in the project.
-        Args:
-            service (Service): The service enum to check availability for.
-        Returns:
-            bool: True if the service is available, False otherwise.
-        """
-        return self.get_service_name(service) != ""
 
     def _get_language(self) -> Language:
         if self._language is None:
@@ -299,9 +288,6 @@ class Person(BaseModel):
         """Return hash based on person_id."""
         return hash(self.person_id)
 
-    def to_person_env_key(self, key) -> str:
-        return person_secret_prefix(self.person_id) + key.upper()
-
     def get_account_info(self, key: str) -> str:
         """Return a non-secret account identifier from person configuration."""
         value = self.account_info.get(key)
@@ -313,37 +299,6 @@ class Person(BaseModel):
         """True when ``account_info`` has a non-empty value for ``key``."""
         value = self.account_info.get(key)
         return value is not None and str(value) != ""
-
-    def get_secret(self, key: str) -> str:
-        """
-        Get a secret value from the environment variables with the person's ID.
-
-        Args:
-            key (str): The key of the secret to retrieve.
-
-        Returns:
-            str: The value of the secret if it exists, otherwise raises KeyError.
-        """
-        env_key = self.to_person_env_key(key)
-        if env_key in os.environ:
-            return os.environ[env_key]
-        else:
-            raise KeyError(
-                f"Environment variable '{env_key}' is not set and no default value provided."
-            )
-
-    def has_secret(self, key: str) -> bool:
-        """
-        Check if a secret exists for the given key.
-
-        Args:
-            key (str): The key of the secret to check.
-
-        Returns:
-            bool: True if the secret exists, False otherwise.
-        """
-        env_key = self.to_person_env_key(key)
-        return env_key in os.environ
 
 
 class Team(BaseModel):
@@ -357,25 +312,3 @@ class Team(BaseModel):
 
     project: Project = Field(..., description="The project associated with the team.")
     members: list[Person] = Field(..., description="A list of members in the team.")
-
-    def get_default_person_id(self) -> str:
-        """
-        Get the member used when a command execution names no person.
-
-        The configured default wins. Without one, the first candidate in
-        person ID order keeps the team usable without configuration, so a
-        default is missing only when the team has no member that can execute
-        commands at all.
-
-        Returns:
-            str: The person ID of the default member, or an empty string when
-            the team has no candidate.
-        """
-        if self.project.default_person_id:
-            return self.project.default_person_id
-        candidates = sorted(
-            member.person_id
-            for member in self.members
-            if member.is_active and member.person_type != "human"
-        )
-        return candidates[0] if candidates else ""

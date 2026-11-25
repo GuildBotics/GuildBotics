@@ -91,7 +91,6 @@ uv run --no-sync mypy guildbotics
 uv run --no-sync pylint guildbotics
 uv run --no-sync lint-imports
 uv run --no-sync python scripts/generate-wire-schema.py --check
-cargo build --locked -p gb-base --example worktree-list
 uv run --no-sync pytest tests/ --ignore=tests/blackbox --ignore=tests/integration -n auto
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -103,14 +102,16 @@ lychee --no-progress --scheme file --include-fragments --extensions md './*.md' 
 
 CI は Rust のテストを 2 つのジョブに分ける。`rust-test-branvil` が `branvil` と `loopback-auth` を、`rust-test` が残りの crate を流す。PR の head では `paths` に合う変更があるジョブだけが流れるので、各ジョブの `paths` には、テストする crate がビルドするワークスペースの crate をすべて含める（対象と `paths` は `tests/test_cargo_workspace.py` が固定する）。
 
+Python の静的検査とテストは `test` ジョブで実行する。PR head では Python、wire schema、同梱テンプレートなどの入力が変わったときに実行する。リポジトリ全体を読むポリシー検査は `repo-policy` ジョブで、すべての PR head を確認する。既定ブランチの検証では両方を実行する。
+
 黒箱テストは `GUILDBOTICS_BLACKBOX_SERVER` と `GUILDBOTICS_BLACKBOX_CLI` で
 Rustの入口へ向ける形で残す。サーバーには `cargo build --locked -p gb-server --example browser-test-server`
 で作る `target/debug/examples/browser-test-server` を指定し、API の接頭辞は製品と同じ `/-/guildbotics/api` とする。OS キーチェーンを使わない。
 `GUILDBOTICS_BLACKBOX_MEMBER_CLI` にも example の絶対パスを指定する。member は
 同じ example 内の製品クライアントを使い、実行ファイル hash の照合を保持する。
-その他の CLI 操作は `GUILDBOTICS_BLACKBOX_CLI` の製品バイナリを直接使う。サーバー単独の黒箱テストも CI で実行する。
+その他の CLI 操作は `GUILDBOTICS_BLACKBOX_CLI` の製品バイナリを直接使う。サーバー単独の黒箱テストも CI で実行する。worktree の選定と guest のコピーをつなぐ検査は、マージ後の `rust-cli-blackbox` で `worktree-list` をビルドして実行する。
 desktop journey は Rust HTTP API と一時 vault で実行する。golden の本番コピー比較は
-CI に含めず、ワークフローで実行する。隔離環境を含むjourneyと画面の目視は利用者の立ち会いで行う。
+CI に含めず、新しい本番コピーを用意し、Rust のサーバーで golden を記録してからワークフローで比較する。隔離環境を含むjourneyと画面の目視は利用者の立ち会いで行う。
 Branvilの画面E2Eは継続する。
 
 CLIを変更したら `cargo run --locked -p guildbotics -- generate-cli-reference` で [CLIリファレンス](docs/cli_reference.md) を再生成し、READMEの例も照合する。同梱コマンドの仕様を変更したらカスタムコマンドガイドの両言語を確認する。Hubのスクリプトは `sh -n scripts/hub-server.sh` と `cargo nextest run --locked -p guildbotics --test main -E 'test(/^hub_server::/)'` で検査し、LaunchAgentの実登録は承認を得て行う。Branvilの実microVMは `GUILDBOTICS_REAL_EXECUTOR=1` の任意実行。

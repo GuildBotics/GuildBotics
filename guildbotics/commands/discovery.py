@@ -8,15 +8,9 @@ from guildbotics.commands.registry import get_command_extensions
 from guildbotics.runtime.context import Context
 from guildbotics.utils.fileio import (
     get_primary_config_dir,
-    get_primary_config_path,
     get_template_path,
 )
 from guildbotics.utils.person_id import person_config_directory
-
-
-def get_shared_commands_root() -> Path:
-    """Return the primary (workspace) shared commands directory."""
-    return get_primary_config_path(Path("commands"))
 
 
 def is_command_source_path(path: Path) -> bool:
@@ -35,8 +29,7 @@ def iter_candidate_paths(
     extension, member roots (when ``person_id`` is given) precede the shared
     roots, and each location is tried by locale in ``<language>`` → ``en`` →
     unsuffixed order across the workspace and package template. This is the
-    single definition of command resolution order; both real and prospective
-    resolution pick the first candidate that exists.
+    single definition of command resolution order.
     """
     identifier_path = Path(identifier)
     extensions = [""] if identifier_path.suffix else list(get_command_extensions())
@@ -86,22 +79,6 @@ def resolve_command_path(
     return None
 
 
-def resolve_prospective_shared_command(
-    target: Path, identifier: str, language_code: str
-) -> Path | None:
-    """Resolve as if ``target`` already existed on disk (shared, person-less).
-
-    Used before creating a new command file to confirm the file would actually
-    be the one the runtime executes, rather than being shadowed by a localized
-    template or a higher-priority extension.
-    """
-    resolved_target = target.resolve(strict=False)
-    for path in iter_candidate_paths(identifier, language_code, person_id=None):
-        if path.exists() or path.resolve(strict=False) == resolved_target:
-            return path
-    return None
-
-
 def resolve_named_command(context: Context, identifier: str) -> Path:
     """Resolve a logical command name to an on-disk prompt or script."""
     if context.resolved_commands is not None:
@@ -138,53 +115,6 @@ def iter_command_candidate_names(
                 seen.add(name)
                 names.append(name)
     return names
-
-
-def iter_effective_commands(
-    candidate_roots: Iterable[Path],
-    language_code: str,
-    person_id: str | None = None,
-) -> Iterator[tuple[str, Path]]:
-    """Yield ``(command, effective_path)`` for candidates under the given roots.
-
-    Candidate logical names are collected from ``candidate_roots`` and each is
-    resolved through the shared runtime resolver, so the effective file always
-    matches what the runtime would execute (including template shadowing).
-    """
-    for name in iter_command_candidate_names(candidate_roots, language_code):
-        resolved = resolve_command_path(name, language_code, person_id)
-        if resolved is not None:
-            yield name, resolved
-
-
-def iter_effective_shared_commands(
-    language_code: str,
-) -> Iterator[tuple[str, Path]]:
-    """Yield editor-eligible shared commands.
-
-    Only logical commands whose effective file (as the runtime resolves it) is
-    the shared workspace file itself are returned. Commands shadowed by a
-    localized template or a higher-priority extension are excluded.
-    """
-    shared_root = get_shared_commands_root()
-    for name in iter_command_candidate_names([shared_root], language_code):
-        resolved = resolve_command_path(name, language_code, person_id=None)
-        if resolved is not None and is_within(resolved, shared_root):
-            yield name, resolved
-
-
-def command_source(path: Path) -> str:
-    """Classify a resolved command path as ``template`` or ``workspace``."""
-    return "template" if is_within(path, get_template_path()) else "workspace"
-
-
-def is_within(path: Path, root: Path) -> bool:
-    """Return whether ``path`` resolves to a location under ``root``."""
-    try:
-        path.resolve(strict=False).relative_to(root.resolve(strict=False))
-        return True
-    except ValueError:
-        return False
 
 
 def logical_command_name(root: Path, path: Path, language_code: str) -> str:

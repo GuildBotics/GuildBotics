@@ -3,16 +3,12 @@ import json
 import logging
 import os
 import socket
-import sys
 import threading
-from collections.abc import Callable
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 import pytest
 
-from guildbotics.entities.team import Person, Role
 from guildbotics.intelligences.agent_runtime.wire import (
     COMMAND_ENV,
     HOST_TOKEN_ENV,
@@ -25,8 +21,6 @@ from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
 )
 from guildbotics.utils.i18n_tool import set_language
-from guildbotics.utils.import_utils import ClassResolver
-from tests.git_seed import WorkerGitSeed
 
 _PHASE_DURATION_OUTPUT: Path | None = None
 _PHASE_DURATIONS: list[dict[str, object]] = []
@@ -402,14 +396,6 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
             report.longrepr = message
 
 
-@pytest.fixture(scope="session")
-def worker_git_seed(tmp_path_factory: pytest.TempPathFactory):
-    """Build invariant Git history once in each xdist worker."""
-    seed = WorkerGitSeed.create(tmp_path_factory.mktemp("git-seed"))
-    yield seed
-    seed.assert_unchanged()
-
-
 @pytest.fixture(autouse=True)
 def _isolate_workspace_data(monkeypatch, tmp_path):
     """Keep runtime files created by tests inside each test's temporary tree."""
@@ -432,22 +418,6 @@ def _isolate_machine_home(monkeypatch, tmp_path):
     # both are set wherever a test points the home directory somewhere.
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
-    # The machine's server port is machine state too: a test's server and its
-    # clients use the default one, under this home.
-    monkeypatch.delenv("GUILDBOTICS_SERVER_PORT", raising=False)
-
-
-@pytest.fixture(autouse=True)
-def _ignore_ambient_slack_tokens(monkeypatch):
-    """Keep tests off real Slack tokens configured on the development machine.
-
-    Secret resolution prefers real environment variables, so ambient global or
-    ``<PERSON>_``-prefixed ``SLACK_BOT_TOKEN`` / ``SLACK_APP_TOKEN`` values
-    would win over the values tests stage in the workspace secret store.
-    """
-    for name in list(os.environ):
-        if name.endswith(("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN")):
-            monkeypatch.delenv(name)
 
 
 @pytest.fixture(autouse=True)
@@ -508,51 +478,11 @@ def _restore_logger_handlers(
 
 @pytest.fixture(autouse=True)
 def _restore_guildbotics_log_handlers():
-    """Drop log handlers a test left on the process-wide ``guildbotics`` logger.
-
-    ``cli.main`` installs a ``DiagnosticsLogHandler`` and never removes it.
-    A later test on the same worker that replaces the diagnostics store then
-    records that handler's ``kind: "log"`` lines, so the record sequence
-    depends on which test ran earlier.
-    """
+    """Restore handlers on the process-wide logger after each test."""
     logger = logging.getLogger("guildbotics")
     before = list(logger.handlers)
     yield
     _restore_logger_handlers(logger, before)
-
-
-class _PlatformView:
-    """``sys`` as one module sees it when told it runs on another platform.
-
-    Everything but ``platform`` reads through to the real module, and whatever
-    a test sets on the view stays on the view.
-    """
-
-    def __init__(self, platform: str) -> None:
-        self.platform = platform
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(sys, name)
-
-
-@pytest.fixture
-def fake_platform(monkeypatch) -> Callable[[ModuleType, str], Any]:
-    """Make one module under test believe it runs on ``platform``.
-
-    ``module.sys`` is the interpreter's own ``sys``, so setting ``platform`` on
-    it fakes the platform for every import that happens while the test runs.
-    A library imported for the first time in that window takes the branch for
-    a platform it is not on, and whether the test passes then depends on which tests the
-    same worker ran first. Only the module under test gets the view here; the
-    returned view also takes any other ``sys`` attribute the test needs to set.
-    """
-
-    def fake(module: ModuleType, platform: str) -> Any:
-        view = _PlatformView(platform)
-        monkeypatch.setattr(module, "sys", view)
-        return view
-
-    return fake
 
 
 @pytest.fixture
@@ -581,86 +511,6 @@ def weasyprint_libraries() -> None:
         importlib.import_module("weasyprint")
     except (ImportError, OSError) as exc:
         pytest.skip(f"WeasyPrint's native libraries are not available: {exc}")
-
-
-class FakeProject:
-    """
-    Fake project for testing, returns English language code and name.
-    """
-
-    def get_language_code(self) -> str:
-        return "en"
-
-    def get_language_name(self) -> str:
-        return "English"
-
-
-class FakeContext:
-    """
-    Fake context that holds team, person, task, logger, and a brain registry.
-    """
-
-    def __init__(self):
-        # Minimal team and project for intelligences.functions
-        self.team = type("T", (), {"project": FakeProject()})()
-        # Create a person with "dev" and "pm" roles and account_info
-        self.person = Person(
-            person_id="p1",
-            name="Tester",
-            roles={
-                "dev": Role(id="dev", summary="Developer", description="Writes code"),
-                "pm": Role(id="pm", summary="PM", description="Manages project"),
-            },
-        )
-        # Add account_info to person
-        self.person.account_info = {
-            "git_user": "Test User",
-            "git_email": "test@example.com",
-        }
-        self.logger = logging.getLogger("test.context")
-        # Registry for fake brains
-        self._brains: dict[str, FakeBrain] = {}
-
-    def get_brain(
-        self, name: str, config: dict | None, class_resolver: ClassResolver | None
-    ):
-        return self._brains[name]
-
-
-class FakeBrain:
-    """
-    Fake brain that returns a preset result and optional response_class.
-    """
-
-    def __init__(self, result, response_class=None):
-        self._result = result
-        self.response_class = response_class
-
-    async def run(self, **kwargs):
-        return self._result
-
-
-@pytest.fixture
-def fake_context() -> FakeContext:
-    """
-    Provides a FakeContext for tests.
-    """
-    return FakeContext()
-
-
-@pytest.fixture
-def stub_brain(fake_context):
-    """
-    Provides a helper to register a FakeBrain in the fake_context.
-
-    Usage:
-        stub_brain(name: str, result, response_class=None)
-    """
-
-    def _stub(name: str, result, response_class=None):
-        fake_context._brains[name] = FakeBrain(result, response_class)
-
-    return _stub
 
 
 @contextlib.contextmanager

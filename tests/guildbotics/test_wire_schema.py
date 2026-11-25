@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
-import sys
 from pathlib import Path
 from typing import Annotated, Literal, TypedDict
 
@@ -24,14 +22,6 @@ def generator():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def test_committed_schemas_match_python_types(generator):
-    committed = {
-        path.name: path.read_text(encoding="utf-8", newline="")
-        for path in generator.OUTPUT_PATH.glob("*.json")
-    }
-    assert committed == generator.build_schemas(), generator.REGENERATE_COMMAND
 
 
 def test_host_calls_all_have_both_sides(generator):
@@ -229,30 +219,6 @@ def test_check_rejects_schema_drift(generator, monkeypatch, tmp_path, damage):
     assert generator.main() == 0
     monkeypatch.setattr("sys.argv", ["generate-wire-schema.py", "--check"])
     assert generator.main() == 0
-
-
-def test_schema_generation_never_imports_python_host():
-    probe = r"""
-import importlib.abc
-import runpy
-import sys
-
-class NoHost(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname.split(".")[:2] in [
-            ["guildbotics", package] for package in (
-                "app_api", "cli", "drivers", "setup", "environment",
-                "capabilities", "integrations", "workspace", "observability",
-                "local_git",
-            )
-        ]:
-            raise AssertionError("Schema generator imported host: " + fullname)
-
-sys.meta_path.insert(0, NoHost())
-sys.argv = ["scripts/generate-wire-schema.py", "--check"]
-runpy.run_path(sys.argv[0], run_name="__main__")
-"""
-    subprocess.run([sys.executable, "-c", probe], cwd=ROOT, check=True)
 
 
 def test_decision_evaluated_has_only_metadata_and_null_result(generator):

@@ -46,29 +46,6 @@ def _template(env: SimpleNamespace, name: str, content: str = "body") -> Path:
     return _write(env.template / "commands" / name, content)
 
 
-def _commands(pairs: list[tuple[str, Path]]) -> dict[str, Path]:
-    return {command: path for command, path in pairs}
-
-
-def test_shared_list_only_scans_shared_root(command_env: SimpleNamespace) -> None:
-    shared = _shared(command_env, "review.md")
-    _member(command_env, "bot", "member_only.md")
-
-    result = _commands(list(discovery.iter_effective_shared_commands("en")))
-
-    assert result == {"review": shared}
-
-
-def test_shared_list_returns_nested_command_names(
-    command_env: SimpleNamespace,
-) -> None:
-    nested = _shared(command_env, "workflows/review.yaml", "commands: []\n")
-
-    result = _commands(list(discovery.iter_effective_shared_commands("en")))
-
-    assert result == {"workflows/review": nested}
-
-
 def test_extension_outer_prefers_md_over_localized_py(
     command_env: SimpleNamespace,
 ) -> None:
@@ -89,9 +66,6 @@ def test_localized_template_shadows_workspace_unsuffixed_file(
     resolved = discovery.resolve_command_path("review", "ja")
 
     assert resolved == localized_template
-    # And because it resolves to a template, it is not editor-eligible.
-    result = _commands(list(discovery.iter_effective_shared_commands("ja")))
-    assert "review" not in result
 
 
 def test_unsuffixed_workspace_overrides_unsuffixed_template(
@@ -103,46 +77,14 @@ def test_unsuffixed_workspace_overrides_unsuffixed_template(
     resolved = discovery.resolve_command_path("review", "ja")
 
     assert resolved == shared
-    result = _commands(list(discovery.iter_effective_shared_commands("ja")))
-    assert result == {"review": shared}
 
 
-def test_editor_discovery_matches_runtime_resolver(
-    command_env: SimpleNamespace,
-) -> None:
-    shared = _shared(command_env, "workflows/review.md")
-
-    listed = _commands(list(discovery.iter_effective_shared_commands("en")))
-    resolved = discovery.resolve_command_path("workflows/review", "en")
-
-    assert listed["workflows/review"] == shared == resolved
-
-
-def test_effective_commands_include_member_override(
+def test_resolution_prefers_member_override(
     command_env: SimpleNamespace,
 ) -> None:
     _shared(command_env, "greet.md")
     member = _member(command_env, "bot", "greet.md")
-    roots = [
-        command_env.config / "team" / "members" / "bot" / "commands",
-        discovery.get_shared_commands_root(),
-    ]
-
-    result = _commands(
-        list(discovery.iter_effective_commands(roots, "en", person_id="bot"))
-    )
-
-    assert result["greet"] == member
-
-
-def test_command_source_classifies_template_and_workspace(
-    command_env: SimpleNamespace,
-) -> None:
-    shared = _shared(command_env, "a.md")
-    template = _template(command_env, "b.md")
-
-    assert discovery.command_source(shared) == "workspace"
-    assert discovery.command_source(template) == "template"
+    assert discovery.resolve_command_path("greet", "en", person_id="bot") == member
 
 
 def test_locale_inner_prefers_language_over_english(
@@ -152,14 +94,6 @@ def test_locale_inner_prefers_language_over_english(
     localized = _shared(command_env, "hello.ja.md")
 
     assert discovery.resolve_command_path("hello", "ja") == localized
-
-
-def test_non_matching_locale_is_not_listed(command_env: SimpleNamespace) -> None:
-    _shared(command_env, "only.fr.md")
-
-    result = _commands(list(discovery.iter_effective_shared_commands("ja")))
-
-    assert result == {}
 
 
 @pytest.mark.parametrize(
@@ -176,7 +110,7 @@ def test_reserved_metadata_files_are_not_command_candidates(
     _shared(command_env, filename, "name: Reserved metadata\n")
 
     result = discovery.iter_command_candidate_names(
-        [discovery.get_shared_commands_root()], language
+        [command_env.config / "commands"], language
     )
 
     assert result == []

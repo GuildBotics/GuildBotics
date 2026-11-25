@@ -90,11 +90,6 @@ class CommandArgumentMetadata:
     default: str = ""
 
 
-def default_command_label(command: str) -> str:
-    """Derive a human-readable label from a logical command name."""
-    return command.rsplit("/", 1)[-1].replace("_", " ").replace("-", " ").title()
-
-
 def parse_command_input_policy(value: Any) -> CommandInputPolicy:
     """Parse and validate an ``inputs`` metadata block.
 

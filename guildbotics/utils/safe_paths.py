@@ -1,24 +1,12 @@
-"""Inspect and create host paths without traversing links.
-
-Only fixed operating-system aliases are translated. Every filesystem access
-then opens one component relative to the preceding directory handle. The
-checked spelling is also the spelling passed to the microVM runtime.
-"""
+"""Inspect and create paths without traversing links."""
 
 from __future__ import annotations
 
 import os
 import stat
-import sys
-import unicodedata
-from collections import deque
-from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
-from typing import IO
-
-MAX_HOST_LINKS = 40
+from pathlib import Path
 
 
 def t(key: str, **values: object) -> str:
@@ -47,17 +35,6 @@ class HostPathPermissionError(UnsafePathError):
 
 def filesystem_permission_problem(path: Path) -> str:
     """One permission message for CLI, command execution, and Desktop."""
-    from guildbotics.utils.processes import launching_app_name
-
-    if sys.platform == "darwin" and path.is_relative_to(Path.home() / "Documents"):
-        app = launching_app_name()
-        return t(
-            "intelligences.agent_environment.filesystem.macos_documents",
-            path=path,
-            app=t("intelligences.agent_environment.filesystem.launching_app", app=app)
-            if app
-            else "",
-        )
     return t("intelligences.agent_environment.filesystem.permission_denied", path=path)
 
 
@@ -66,84 +43,7 @@ def normalize_host_path(path: Path) -> Path:
     path = path.expanduser().absolute()
     if ".." in path.parts or "\x00" in str(path):
         raise UnsafePathError(t("safe_paths.invalid", path=path))
-    return _host_alias(path)
-
-
-def _host_alias(path: Path) -> Path:
-    if sys.platform == "darwin":
-        for alias in ("/tmp", "/var", "/etc"):
-            if path.is_relative_to(alias):
-                return Path("/private") / path.relative_to("/")
     return path
-
-
-@dataclass(frozen=True)
-class HostPathResolution:
-    """All names traversed before no-follow inspection, including link loops."""
-
-    path: Path
-    names: tuple[Path, ...]
-    cyclic: bool = False
-
-
-def resolve_host_links(
-    path: Path, *, on_link: Callable[[Path, bool], None] | None = None
-) -> HostPathResolution:
-    """Walk links explicitly, retaining ordinary drive spelling and every hop.
-
-    Admit each link before reading its target. The resulting file must still
-    be opened without following links, using the held ancestry.
-    """
-    path = normalize_host_path(path)
-    names = [path]
-    links = 0
-    pending = deque(path.parts[1:])
-    current = Path(path.anchor)
-    while pending:
-        component = pending.popleft()
-        if component == "..":
-            current = current.parent
-            continue
-        candidate = current / component
-        leaf = not pending
-        try:
-            info = candidate.lstat()
-            linked = stat.S_ISLNK(info.st_mode)
-            if not linked:
-                if not leaf and not stat.S_ISDIR(info.st_mode):
-                    raise NotADirectoryError(str(candidate))
-                inspect_host_path(candidate, directory=not leaf)
-                current = candidate
-                continue
-            names.append(candidate)
-            links += 1
-            if links > MAX_HOST_LINKS:
-                return HostPathResolution(candidate, tuple(dict.fromkeys(names)), True)
-            if on_link is not None:
-                on_link(candidate, leaf)
-            target = os.readlink(candidate)
-            destination = Path(target)
-            if not destination.is_absolute():
-                destination = candidate.parent / destination
-            destination = _host_alias(destination)
-            current = Path(destination.anchor)
-            pending = deque((*destination.parts[1:], *pending))
-        except (FileNotFoundError, NotADirectoryError) as exc:
-            # Keep the untraversed tail for admission to refuse. Only the
-            # inspected prefix belongs in the protected path's facts.
-            untraversable = isinstance(exc, NotADirectoryError) or ".." in pending
-            if untraversable:
-                names.append(candidate)
-            current = candidate
-            for component in pending:
-                current = current / component
-            if untraversable:
-                return HostPathResolution(current, tuple(dict.fromkeys(names)))
-            break
-        except PermissionError as exc:
-            raise HostPathPermissionError(candidate) from exc
-    names.append(current)
-    return HostPathResolution(current, tuple(dict.fromkeys(names)))
 
 
 @dataclass(frozen=True)
@@ -153,28 +53,10 @@ class PathFacts:
     path: Path
     identities: tuple[tuple[int, int], ...]
     missing: tuple[str, ...] = ()
-    case_sensitive: bool = True
 
     @property
     def present(self) -> bool:
         return not self.missing
-
-    def contains(self, other: PathFacts) -> bool:
-        """Compare existing ancestors by identity, never by path spelling."""
-        if self.present:
-            return self.identities[-1] in other.identities
-        if self.identities[-1] != other.identities[-1]:
-            return False
-
-        def names(parts: tuple[str, ...]) -> tuple[str, ...]:
-            return tuple(
-                p
-                if self.case_sensitive and other.case_sensitive
-                else unicodedata.normalize("NFD", p).casefold()
-                for p in parts
-            )
-
-        return names(other.missing[: len(self.missing)]) == names(self.missing)
 
 
 def inspect_host_path(
@@ -188,14 +70,14 @@ def inspect_host_path(
     """Open every component without following links, optionally making dirs.
 
     Args:
-        path: Host name. Only known OS aliases may change its spelling.
+        path: Absolute path to inspect.
         create: Create missing directories relative to checked parent handles.
         missing: Return the existing ancestry of a missing name.
         directory: Require a directory; otherwise also permit a regular file.
     """
     path = normalize_host_path(path)
     try:
-        identities, absent, case_sensitive = _inspect_posix(
+        identities, absent = _inspect_posix(
             path, create, directory, link_as_missing=link_as_missing
         )
     except PermissionError as exc:
@@ -206,18 +88,15 @@ def inspect_host_path(
         ) from exc
     if absent and not missing:
         raise UnsafePathError(t("safe_paths.missing", path=path))
-    return PathFacts(path, identities, absent, case_sensitive)
+    return PathFacts(path, identities, absent)
 
 
 def _inspect_posix(
     path: Path,
     create: bool,
     directory: bool,
-    consume: Callable[[int], None] | None = None,
-    open_file: bool = False,
-    ancestor_of: PathFacts | None = None,
     link_as_missing: bool = False,
-) -> tuple[tuple[tuple[int, int], ...], tuple[str, ...], bool]:
+) -> tuple[tuple[tuple[int, int], ...], tuple[str, ...]]:
     descriptors: list[int] = []
     identities: list[tuple[int, int]] = []
     parts = path.parts[1:]
@@ -230,45 +109,18 @@ def _inspect_posix(
         for index, part in enumerate(parts):
             checked = Path(path.anchor).joinpath(*parts[: index + 1])
             is_directory = directory or index < len(parts) - 1
-            leaf_file = open_file and index == len(parts) - 1
             try:
-                try:
-                    info = os.stat(part, dir_fd=parent, follow_symlinks=False)
-                except FileNotFoundError:
-                    if not leaf_file:
-                        raise
-                    info = None
-                if info is not None and stat.S_ISLNK(info.st_mode):
+                info = os.stat(part, dir_fd=parent, follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode):
                     if link_as_missing:
-                        return tuple(identities), parts[index:], False
+                        return tuple(identities), parts[index:]
                     raise UnsafePathError(t("safe_paths.link", path=path))
-                if ancestor_of is not None:
-                    assert info is not None
-                    identity = _identity(info)
-                    if identity not in ancestor_of.identities:
-                        # This object cannot contain the independently opened
-                        # target. No need to open an unrelated private folder.
-                        return (*identities, identity), (), True
                 handle = os.open(
-                    part,
-                    (os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK)
-                    if leaf_file
-                    else flags | (os.O_DIRECTORY if is_directory else 0),
-                    0o600,
-                    dir_fd=parent,
+                    part, flags | (os.O_DIRECTORY if is_directory else 0), dir_fd=parent
                 )
             except FileNotFoundError:
                 if not create:
-                    # Darwin reports the opened volume's case rules. Elsewhere
-                    # absent protected names are compared conservatively.
-                    sensitive = (
-                        os.fpathconf(parent, 11) if sys.platform == "darwin" else 0
-                    )
-                    if sensitive < 0:
-                        raise OSError(
-                            "The filesystem supplies no case-sensitivity information"
-                        ) from None
-                    return tuple(identities), parts[index:], bool(sensitive)
+                    return tuple(identities), parts[index:]
                 with suppress(FileExistsError):
                     os.mkdir(part, mode=0o700, dir_fd=parent)
                 handle = os.open(part, flags | os.O_DIRECTORY, dir_fd=parent)
@@ -281,9 +133,7 @@ def _inspect_posix(
                 raise OSError(f"Not a directory or regular file: {part}")
             identities.append(_identity(info))
             parent = handle
-        if consume is not None:
-            consume(parent)
-        return tuple(identities), (), True
+        return tuple(identities), ()
     except PermissionError as exc:
         raise HostPathPermissionError(checked) from exc
     finally:
@@ -295,174 +145,3 @@ def _identity(info: os.stat_result) -> tuple[int, int]:
     if not info.st_ino:
         raise OSError("The filesystem supplies no object identity")
     return info.st_dev, info.st_ino
-
-
-def host_path_contains(ancestor: Path, target: PathFacts) -> bool:
-    """Judge ancestry by identity, stopping at the first unrelated object.
-
-    This checks workspace admission without opening unrelated grant contents.
-    Actual bind sources still require inspection of every component.
-    """
-    ancestor = normalize_host_path(ancestor)
-    target = inspect_host_path(target.path, missing=True)
-    try:
-        identities, absent, sensitive = _inspect_posix(
-            ancestor, False, True, ancestor_of=target
-        )
-    except OSError as exc:
-        if isinstance(exc, PermissionError):
-            raise HostPathPermissionError(ancestor) from exc
-        raise UnsafePathError(
-            t("safe_paths.unavailable", path=ancestor, reason=exc)
-        ) from exc
-    return PathFacts(ancestor, identities, absent, sensitive).contains(target)
-
-
-def read_host_file(path: Path) -> bytes:
-    """Read the opened leaf, without reopening its name after inspection."""
-    chunks: list[bytes] = []
-    consume_host_file(path, chunks.append)
-    return b"".join(chunks)
-
-
-def consume_host_file(path: Path, consume: Callable[[bytes], None]) -> None:
-    """Stream an opened regular leaf while its no-follow ancestry is held."""
-    path = normalize_host_path(path)
-
-    def read(handle: int) -> None:
-        while chunk := os.read(handle, 65536):
-            consume(chunk)
-
-    try:
-        _, missing, _ = _inspect_posix(path, False, False, read)
-    except PermissionError as exc:
-        raise HostPathPermissionError(path) from exc
-    if missing:
-        raise FileNotFoundError(str(path))
-
-
-def open_host_file(path: Path) -> IO[str]:
-    """Open/create a regular file relative to checked parents, never a link."""
-    path = normalize_host_path(path)
-    descriptors: list[int] = []
-    try:
-        _inspect_posix(
-            path,
-            False,
-            False,
-            lambda fd: descriptors.append(os.dup(fd)),
-            open_file=True,
-        )
-    except OSError as exc:
-        if isinstance(exc, PermissionError):
-            raise HostPathPermissionError(path) from exc
-        raise UnsafePathError(
-            t("safe_paths.unavailable", path=path, reason=exc)
-        ) from exc
-    if not descriptors:
-        raise UnsafePathError(t("safe_paths.missing", path=path))
-    return os.fdopen(descriptors[0], "r+", encoding="utf-8")
-
-
-def visit_host_directory(path: Path, action: Callable[[int], None]) -> None:
-    """Keep checked ancestors open while acting on a private directory.
-
-    Actions receive a directory descriptor for relative operations.
-    """
-    path = normalize_host_path(path)
-
-    def consume(fd: int) -> None:
-        os.fchmod(fd, 0o700)
-        action(fd)
-
-    try:
-        _, absent, _ = _inspect_posix(path, False, True, consume)
-    except PermissionError as exc:
-        raise HostPathPermissionError(path) from exc
-    if absent:
-        raise UnsafePathError(t("safe_paths.missing", path=path))
-
-
-def visit_host_tree(
-    root: Path,
-    relative: PurePosixPath,
-    action: Callable[[int], None],
-    *,
-    create: bool,
-) -> bool:
-    """Act in the directory ``relative`` under ``root`` while its no-follow
-    ancestry from the filesystem root is held.
-
-    Unlike :func:`visit_host_directory`, this is for a directory of the
-    user's own: what it makes (when ``create``) takes the default
-    permissions, and nothing is made private. Actions receive a directory
-    descriptor for relative operations.
-
-    Returns:
-        Whether the directory was there to act in; without ``create``, a
-        missing one is not acted in.
-    """
-    root = normalize_host_path(root)
-    target = root.joinpath(*relative.parts)
-    acted: list[None] = []
-
-    def act(fd: int) -> None:
-        action(fd)
-        acted.append(None)
-
-    def descend(parent: int) -> None:
-        handles: list[int] = []
-        try:
-            for part in relative.parts:
-                if create:
-                    with suppress(FileExistsError):
-                        os.mkdir(part, dir_fd=parent)
-                try:
-                    parent = os.open(
-                        part,
-                        os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY,
-                        dir_fd=parent,
-                    )
-                except FileNotFoundError:
-                    return
-                except PermissionError:
-                    raise
-                except OSError as exc:
-                    raise UnsafePathError(
-                        t("safe_paths.unavailable", path=target, reason=exc)
-                    ) from exc
-                handles.append(parent)
-            act(parent)
-        finally:
-            for handle in reversed(handles):
-                os.close(handle)
-
-    try:
-        _, absent, _ = _inspect_posix(root, False, True, descend)
-    except PermissionError as exc:
-        raise HostPathPermissionError(target) from exc
-    if absent:
-        raise UnsafePathError(t("safe_paths.missing", path=root))
-    return bool(acted)
-
-
-def host_directory_case_sensitive(path: Path) -> bool:
-    """Whether the file system holding the directory tells names apart by
-    case. Darwin is asked of the directory itself, as it answers per volume;
-    other platforms are assumed to distinguish case.
-
-    Raises:
-        OSError: When Darwin's volume does not answer.
-    """
-    if sys.platform != "darwin":
-        return True
-    answers: list[int] = []
-    visit_host_tree(
-        path,
-        PurePosixPath(),
-        lambda fd: answers.append(os.fpathconf(fd, 11)),
-        create=False,
-    )
-    if answers[0] < 0:
-        raise OSError(f"'{path}' supplies no case-sensitivity information")
-    return answers[0] > 0

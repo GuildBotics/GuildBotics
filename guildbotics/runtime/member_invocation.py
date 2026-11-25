@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Protocol
 
-from guildbotics.runtime.person_lease import PersonExecutionLease
-
 
 class GuestProcessError(RuntimeError):
     """A process could not be run in the command's environment, or ran out of
@@ -165,7 +163,6 @@ class MemberInvocation:
     work: Work | None = None
     participant_labels: str = ""
     trace_id: str = ""
-    lease: PersonExecutionLease | None = None
     guest: CommandGuest | None = None
     #: Absolute time.monotonic deadline; None when the caller has no time budget.
     deadline: float | None = None

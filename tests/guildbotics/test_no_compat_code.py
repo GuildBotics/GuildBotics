@@ -17,10 +17,12 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-import guildbotics
+import pytest
 
-PACKAGE_ROOT = Path(guildbotics.__file__).parent
-REPOSITORY_ROOT = PACKAGE_ROOT.parent
+pytestmark = pytest.mark.repo_policy
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+PACKAGE_ROOT = REPOSITORY_ROOT / "guildbotics"
 
 MARKER_PATTERN = re.compile(
     r"legacy|backwards?[\s_-]*compat|deprecat|migrat", re.IGNORECASE
