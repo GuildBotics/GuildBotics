@@ -381,7 +381,7 @@ guildbotics server hub-data reindex [--data-dir <復元先>]
 
 GuildBotics の記録は、このマシンの `data/workspaces.json` に登録した全ワークスペース（`gb_workspace::selection::registered`）と identity root の `.guildbotics/config`・`state`・`local` です。写しの番号は identity root が 0 で、ワークスペースが続きます。manifest の版は 2 で、ほかの版の退避は扱いません。identity root は `GUILDBOTICS_IDENTITY_ROOT`、未指定なら `GUILDBOTICS_HOME/identity` です。共有書き込みと同じ identity → workspace のロックを取り、通常ファイルをコピーします。リンクと特殊ファイルは拒否し、退避先は所有者だけが開けます。
 
-再作成可能な `local/clones`、`local/cache`、`local/agent_environment/snapshots`、`local/msb` と実行中だけ使う `local/run` は除外します。マシンの `data/msb` にある runtime は対象の外です。秘密の暗号化ファイルは復号せず退避します。OS キーチェーンの鍵は含まれないため、この退避だけでは別のマシンへ秘密を移せません。コードホストの退避に含まれるデータと含まれない資格情報は[コードホストのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
+再作成可能な `local/clones`、`local/cache`、メンバーのビルドのキャッシュ `local/build-cache`、`local/agent_environment/snapshots`、`local/msb` と実行中だけ使う `local/run` は除外します。マシンの `data/msb` にある runtime は対象の外です。秘密の暗号化ファイルは復号せず退避します。OS キーチェーンの鍵は含まれないため、この退避だけでは別のマシンへ秘密を移せません。コードホストの退避に含まれるデータと含まれない資格情報は[コードホストのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
 
 更新は `backups/hub-update-<時刻>.<乱数>/` に退避し、直近3世代を残します。不完全な退避は次の退避時に削除します。更新前の退避には、その後に完了した仕事の書き込みは含まれません。
 
