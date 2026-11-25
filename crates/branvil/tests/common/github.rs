@@ -1075,9 +1075,9 @@ impl FakeGitHub {
         self.state.lock().unwrap().not_modified
     }
 
-    /// Points a data directory's `branvil.toml` at this stand-in.
+    /// Points a data directory's `config.toml` at this stand-in.
     pub fn configure(&self, data: &Path) {
-        let path = data.join("branvil.toml");
+        let path = data.join("config.toml");
         let mut doc: toml::Table =
             toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let upstream = doc

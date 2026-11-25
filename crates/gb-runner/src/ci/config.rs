@@ -1,4 +1,4 @@
-//! The `[ci]` section of `branvil.toml`: service-side limits, the supervised
+//! The `[ci]` section of `config.toml`: service-side limits, the supervised
 //! runner, and the runner's executor settings (read by `guildbotics runner` when it
 //! runs with the same configuration).
 

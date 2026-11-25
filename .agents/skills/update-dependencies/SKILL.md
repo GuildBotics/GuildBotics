@@ -304,7 +304,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo nextest run --locked --workspace
 ```
 
-nextest runs each test in its own process, which Branvil's process-wide Git
+nextest runs each test in its own process, which the code host's (`crates/branvil`) process-wide Git
 lock requires.
 
 When `uv.lock` changed, also run `uv run --no-sync lint-imports` and the whole

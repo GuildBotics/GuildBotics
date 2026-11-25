@@ -2,14 +2,14 @@
 
 [English](https://github.com/GuildBotics/GuildBotics/blob/main/README.md) • [日本語](https://github.com/GuildBotics/GuildBotics/blob/main/README.ja.md)
 
-GuildBotics lets you run AI CLI tools such as Claude Code or Codex as team members who keep working with your development team. Each member has its own name, Branvil / Slack account, roles, and memory. The actual investigation, coding, and judgment are delegated to the AI CLI tool, while every external action the member takes (commits, PR creation, comments, Slack posts, memory writes) goes through a single dedicated CLI (`guildbotics member`), where it is executed and recorded.
+GuildBotics lets you run AI CLI tools such as Claude Code or Codex as team members who keep working with your development team. Each member has its own name, code host and Slack accounts, roles, and memory. The actual investigation, coding, and judgment are delegated to the AI CLI tool, while every external action the member takes (commits, PR creation, comments, Slack posts, memory writes) goes through a single dedicated CLI (`guildbotics member`), where it is executed and recorded.
 
-Branvil is the code host bundled with GuildBotics. It keeps repositories, pull requests, CI, and tickets on the Hub and gives each AI member its own account. You can use it in place of GitHub, or have it follow a GitHub repository and send only finished pull requests to GitHub (→ [Branvil integration guide](docs/branvil_integration.en.md)).
+GuildBotics includes a code host. It keeps repositories, pull requests, CI, and tickets on the Hub and gives each AI member its own account. You can use it in place of GitHub, or have a repository follow a GitHub repository and send only finished pull requests to GitHub (→ [Code Host and CI Guide](docs/code_host.en.md)).
 
 There are two ways to work with the same member:
 
 - **Work together** — invoke the member in your Claude Code or Codex session and pair-program in the repository you currently have open (→ [Work Together with a Member](#work-together-with-a-member))
-- **Delegate** — ask through a Branvil ticket or a Slack message, and the member investigates, implements, opens the pull request, and replies on its own (→ [Delegate Branvil Tickets](#delegate-branvil-tickets) / [Ask for Work in Slack](#ask-for-work-in-slack))
+- **Delegate** — ask through a ticket or a Slack message, and the member investigates, implements, opens the pull request, and replies on its own (→ [Delegate Tickets](#delegate-tickets) / [Ask for Work in Slack](#ask-for-work-in-slack))
 
 Both ways drive the same member — same identity, same memory. What you teach while working together is kept as memory and carries over to the work you delegate.
 
@@ -27,7 +27,7 @@ You configure, run, and monitor GuildBotics in its screens, which the GuildBotic
 - [What You Can Do](#what-you-can-do)
 - [Getting Started](#getting-started)
 - [Work Together with a Member](#work-together-with-a-member)
-- [Delegate Branvil Tickets](#delegate-branvil-tickets)
+- [Delegate Tickets](#delegate-tickets)
 - [Ask for Work in Slack](#ask-for-work-in-slack)
 - [Automate Recurring Work](#automate-recurring-work)
 - [Create Your Own Commands](#create-your-own-commands)
@@ -41,7 +41,7 @@ You configure, run, and monitor GuildBotics in its screens, which the GuildBotic
 - **Multiple members**: Define multiple AI members with distinct roles, personalities, and memory (the identifier in configuration files is `person`)
 
 - **Slack integration**: Members watch configured channels and handle the requests they receive there as themselves
-- **Branvil integration**: Use [Branvil](docs/branvil_integration.en.md), a code host and board you run yourself on the Hub machine, in place of GitHub for repositories, pull requests, CI, and tickets
+- **Built-in code host**: Use the [code host](docs/code_host.en.md) and task board that run on the Hub in place of GitHub for repositories, pull requests, CI, and tickets
 - **Member memory**: Personal and team memory that members recall and maintain across sessions
 - **Interactive member sessions**: The guildbotics skill lets an AI CLI tool work as a member in your current repository
 - **Scheduled execution**: Per-member patrol commands and cron-based scheduled commands
@@ -87,7 +87,7 @@ Run `guildbotics open` on the Hub. For a workspace without initial settings, the
 4. Under **Members and patrol**, enter a **Member ID**, **Display name**, and **Roles**, then click **Add member**. Add at least one active member.
 5. Click **Create initial settings**. **Initial settings created** confirms the save. Open **Service** in the main menu to view the service status.
 
-Initial setup configures the Hub's built-in code host and ticket service. Use the workspace selector at the top of the main sidebar to select a workspace, and **Settings → Repositories** to manage its repositories. [Code host setup guide](docs/branvil_integration.en.md)
+Initial setup configures the Hub's built-in code host and ticket service. Use the workspace selector at the top of the main sidebar to select a workspace, and **Settings → Repositories** to manage its repositories. [Code Host and CI Guide](docs/code_host.en.md)
 
 In GuildBotics, the folder that holds a project's settings and state is called the **workspace**. Plain text configuration files are written there:
 
@@ -122,7 +122,7 @@ You are set if the translated text appears under **Output**. The default LLM you
 ### What Next
 
 - Pair-program with a member in the repository you have open → [Work Together with a Member](#work-together-with-a-member)
-- Delegate everything from ticket to pull request → [Delegate Branvil Tickets](#delegate-branvil-tickets)
+- Delegate everything from ticket to pull request → [Delegate Tickets](#delegate-tickets)
 - Have a member handle requests in Slack → [Ask for Work in Slack](#ask-for-work-in-slack)
 - Automate recurring work or build your own commands → [Automate Recurring Work](#automate-recurring-work) / [Create Your Own Commands](#create-your-own-commands)
 
@@ -167,9 +167,9 @@ Host `guildbotics run` requires a running server with the same workspace ID sele
 
 On macOS, grant Documents folder access once to the app that launches GuildBotics under **System Settings → Privacy & Security → Files & Folders** (when you run `guildbotics server start` in a terminal, that terminal app). GuildBotics checks directory access when displaying environment status and before a turn, and reports the same refusal in the CLI and on the screens if access is denied.
 
-## Delegate Branvil Tickets
+## Delegate Tickets
 
-The default `ticket_driven_workflow` investigates a ticket on the Hub, implements the change, and opens a pull request. Choose the workspace in the main sidebar. For repository and task flow setup, see the [code host setup guide](docs/branvil_integration.en.md).
+The default `ticket_driven_workflow` investigates a ticket on the Hub, implements the change, and opens a pull request. Choose the workspace in the main sidebar. For repository and task flow setup, see the [Code Host and CI Guide](docs/code_host.en.md).
 
 Under **Settings → Agent execution environment**, confirm that the environment is ready and that the AI CLI login is saved. From a terminal, run `guildbotics environment status`.
 
@@ -187,11 +187,11 @@ To use the ticket-driven workflow, start the service with **Patrol commands** in
 
 You can follow what is happening in the events and logs of the **Global / system** session on the **Diagnostics** screen, and per-member results are collected on the **Activity** screen.
 
-To ask for work, use a Branvil ticket as follows:
+To ask for work, use a ticket as follows:
 
-1. Create a Branvil ticket in the target repository.
+1. Create a ticket in the target repository.
 2. Write the instructions for the member in the ticket (this becomes the prompt, so be as specific as possible)
-3. Assign the ticket to the member in Branvil.
+3. Assign the ticket to the member.
 4. Move the ticket to the ready lane
 
 Once work starts, you interact with the member like this:
@@ -216,21 +216,21 @@ Patrol and scheduled ticket workflows defer only new ready-lane tickets while th
 
 ### Pull Request Patrol
 
-Before looking at the ticket lanes, every patrol run checks the open pull requests under the configured Branvil workspace that involve the member. No ticket is needed for this; the PR itself is the unit of work.
+Before looking at the ticket lanes, every patrol run checks the open pull requests in the workspace's repositories that involve the member. No ticket is needed for this; the PR itself is the unit of work.
 
 In both roles, the member reads everything someone else says, decides what to do only after reading it, and leaves an answer for every statement: a reply saying what it did, a reply with the reason when it does not adopt a point, or a reaction when there is nothing to act on (thanks, LGTM). A statement is an unresolved review thread whose last word is someone else's, a review with a body (approvals included), or a conversation comment. It is answered by a later comment, review, or thread reply from the member, or by the member's reaction on it. Reviews without a body and workflow status notices are not picked up.
 
 - **PRs the member wrote**: statements the member has not answered are picked up. The member fixes the code where the point is valid
 - **Waiting for CI**: a member does not wait for CI inside its run. Whatever started the run (a ticket, a chat thread, a scheduled or manual command), when checks that have not finished are all that keeps its PR from being complete, the run ends with a notice on the PR (a ticket's or a chat thread's run shows "Waiting for CI" on the screens), and the patrol picks the same work up again once the checks finish or new commits land on it. The resumed run fixes the failures, carries on with any of the work still unfinished, and reports the outcome when it ends, on the PR and where the work came from (the ticket, the thread, or where the command reports). A merged or closed PR is not picked up again
 - **PRs the member reviews**: the member starts when a review is requested, when new commits land after its last review, or when there is a statement it has not answered (threads only those it took part in). When statements alone started it and its verdict has not changed, it does not submit a review again, since a review with a body wakes the author's patrol. After a member has reviewed 3 heads, automatic re-review not driven by a request stops when a head that member has never reviewed is pushed: the host ticket selector converts the PR to a draft during candidate selection, records it in Activity, and announces it on the PR and through the owner’s webhook (the author's patrol stops too, as drafts are skipped below). Statements and thread replies on an already reviewed head still start a run after the limit; this includes a head restored by force push and heads reviewed before the count restarted. Explicit review requests remain outside the limit. To go on as it is, mark it **Ready for review**; every reviewer counts its rounds again from the reviews after it is marked ready. To change how it proceeds, give instructions in Slack or an interactive session, and mark it Ready for review once that is settled
-- The verdict is submitted as a Branvil review (approve or request changes), which is what consumes a review request and makes the member the PR's reviewer. Request the first review in Branvil, Slack, or an interactive session (→ [Ask for Work in Slack](#ask-for-work-in-slack)); the patrol follows the PR from then on
+- The verdict is submitted as a review (approve or request changes), which is what consumes a review request and makes the member the PR's reviewer. Request the first review on the pull request, in Slack, or in an interactive session (→ [Ask for Work in Slack](#ask-for-work-in-slack)); the patrol follows the PR from then on
 - **Draft PRs are skipped**, in both roles. Only humans and, at the automatic re-review limit, the host ticket selector convert a PR to a draft, and only humans mark it ready for review again (a member's work cannot change it). To take a PR into your own hands for a while (for example, to rework the approach in an interactive session without another member re-reviewing in the middle), convert it to a draft; the service keeps running for everything else. Mark it **Ready for review** when you are done, and the next patrol picks it up again, including a re-review of the new commits (the automatic re-review rounds, and any member held by a failure, start over from that point)
 
 Clones for assigned tickets and authored PRs stay with their work even when clean and fully pushed. On allocation, the current ticket or PR is read: a closed ticket or a ticket in the done lane, and a merged or closed PR, release the clone if Git has no unfinished state. Author feedback uses the ticket work ID when exactly one linked open ticket is assigned to the author; the same AI CLI also continues its session. With zero or multiple matching tickets it uses the PR work ID. Resuming pending checks preserves the original work ID. Reviews, mentions, chat, manual commands, and scheduled commands retain Git-based reuse. One idle clone per repository is kept and the rest are removed. Cargo artifacts are cleaned on work changes according to `.cargo/before-cargo.sh`.
 
 ## Ask for Work in Slack
 
-A member watches the Slack channels you configure and handles the requests it receives there as itself. Ask something like "please handle the review comments on this PR" and the member identifies the target repository, prepares a working branch, actually investigates, edits code, and performs the Branvil operations, then reports the result back in Slack.
+A member watches the Slack channels you configure and handles the requests it receives there as itself. Ask something like "please handle the review comments on this PR" and the member identifies the target repository, prepares a working branch, actually investigates, edits code, and performs the ticket and pull request operations, then reports the result back in Slack.
 
 How it behaves in Slack (reply with a message / only add a reaction / do nothing / ask a clarifying question / report why it is blocked) is decided by the member (the AI CLI tool) from the message content, its own role and profile, and the per-channel participation policy. It does not force a reply into small talk or into conversations where its role adds nothing.
 
@@ -248,7 +248,7 @@ If you already have a Slack App, choose **Use a registered app** and start from 
 
 The tokens are stored with the member's credentials, shared by every workspace. The channels are stored in the workspace's `member.yml` for the member (`message_channels`).
 
-When ticket or PR work stops for a person's response, Branvil sends one notice to the owner's webhook with a link to the item and, when available, its comment. Set the destination in **Settings → Notifications**. For Slack, choose a channel that no member watches.
+When ticket or PR work stops for a person's response, GuildBotics sends one notice to the owner's webhook with a link to the item and, when available, its comment. Set the destination in **Settings → Notifications**. For Slack, choose a channel that no member watches.
 
 To receive chat events, start the service with **Event triggers** included on the **Service** screen. Scheduled posts at fixed times (a news digest, for example) go through a separate path: configure `workflows/chat_post_command` as a scheduled command.
 
@@ -261,13 +261,13 @@ To configure the two kinds of automated execution, edit the member under **Setti
 - **Patrol commands**: turn on "Configure patrol commands for this member" and choose the saved commands. Members with it turned off do not run patrol work. The ticket-driven workflow (`workflows/ticket_driven_workflow`) wakes on changes and continues without waiting for the patrol interval while candidates remain. Other commands run one at a time in round-robin order at each interval. With the default shortened to 3 minutes, members configured with those other commands run them more often
 - **Scheduled commands**: use **Add schedule** to choose a command and its execution time (for example, periodic reports or cleanup). The time can be an Hourly / Daily / Weekly preset, or a **Detailed schedule** (five-field cron notation)
 
-Ticket patrol wakes when a member run finishes (including manual runs, excluding the member that just finished), on Branvil changes (writes by non-agents, CI checks, main verification, and upstream changes), and when events could not all be received (`Reset`). These triggers wake only the ticket-driven workflow.
+Ticket patrol wakes when a member run finishes (including manual runs, excluding the member that just finished), on code host changes (writes by non-agents, CI checks, main verification, and upstream changes), and when events could not all be received (`Reset`). These triggers wake only the ticket-driven workflow.
 
 The interval recheck picks up member CLI writes from interactive sessions (comments, reviews, and pushes), and expired usage-limit waits. Interactive writes are agent writes, so they do not trigger a wake, and there is no run ending to trigger one either. If you subsequently run a command such as `guildbotics run repository/pr_checks`, that run's completion wakes other members' ticket patrols.
 
 When configured alongside other commands, the ticket-driven workflow takes one turn in the rotation, so rechecks occur every command count × patrol interval, plus the commands’ execution time. For example, two commands with a 3-minute interval recheck every 6 minutes, excluding execution time. Patrols triggered by changes run outside that rotation.
 
-A shorter interval responds sooner to work that only the recheck can find. A ticket patrol with no work only reads Branvil inside the server; it starts no run, isolated environment, or LLM. Environments with an interval already set in `.guildbotics/local/service.yml` keep that value.
+A shorter interval responds sooner to work that only the recheck can find. A ticket patrol with no work only reads the code host inside the server; it starts no run, isolated environment, or LLM. Environments with an interval already set in `.guildbotics/local/service.yml` keep that value.
 
 The patrol interval and the number of consecutive failures that stops a worker are set on the **Service** screen.
 
@@ -448,7 +448,7 @@ Run `guildbotics server start` on the Hub. Leave that terminal open to see start
 
 To update from a newly built checkout, stop the server with `guildbotics server stop`. Build the screens and the Rust executable as in [Installation](#installation), run the new executable's `install` command, and start the server again.
 
-For a macOS Hub that runs GuildBotics and Branvil at login, follow the [Hub installation and update guide](docs/hub-server.md).
+For a macOS Hub that runs GuildBotics at login, follow the [Hub installation and update guide](docs/hub-server.md).
 
 ### Use It from a Browser
 
@@ -504,7 +504,7 @@ Uninstall the old GuildBotics Desktop application first. Keep human checkouts an
 
    `~/.guildbotics/bin/guildbotics` is the managed binary. Re-run `guildbotics install` from a newly built binary to update it.
 
-4. Forward the port. The forwarding service in the [Branvil Integration Guide](docs/branvil_integration.en.md#set-up-ssh-forwarding-on-another-machine) keeps it forwarded from login on; install it with `--port 7878`. For a single session, `ssh -L 7878:127.0.0.1:7878 <Hub>` also works.
+4. Forward the port. The forwarding service in the [Code Host and CI Guide](docs/code_host.en.md#set-up-ssh-forwarding-on-another-machine) keeps it forwarded from login on; install it with `--port 7878`. For a single session, `ssh -L 7878:127.0.0.1:7878 <Hub>` also works.
 5. Print an entry link on the Hub and paste it into your browser:
 
    ```bash
@@ -538,10 +538,10 @@ The member keys below (`{PERSON_ID}_...`) are kept in the identities' store, sha
 - `{PERSON_ID}_SLACK_APP_TOKEN`: Slack App-Level Token
 
 
-**Branvil access**:
+**Code host access**:
 
 - A member's git token: issued by the server for each run in which the member pushes or fetches with git (labelled `guildbotics-git`) and revoked when that run ends; it is kept in no store
-- Your own git's Branvil token: one owner token per machine, issued by the running GuildBotics server the first time your own git asks `guildbotics git-credential` for one and kept in that machine's OS keychain only, never shared (→ [Use Branvil from your own checkouts](docs/branvil_integration.en.md#use-branvil-from-your-own-checkouts))
+- Your own git's code host token: one owner token per machine, issued by the running GuildBotics server the first time your own git asks `guildbotics git-credential` for one and kept in that machine's OS keychain only, never shared (→ [Use the code host from your own checkouts](docs/code_host.en.md#use-the-code-host-from-your-own-checkouts))
 
 GuildBotics reads the encrypted stores automatically. GuildBotics does not read a workspace `.env`.
 
@@ -579,8 +579,8 @@ GuildBotics stores three kinds of local data:
 - `description`: short project description used as agent context
 - `language`: project language
 - `services.ticket_service`: ticket service settings
-- `services.code_hosting_service`: code hosting service settings (the Branvil workspace used for repository operations)
-- With Branvil, both services are `name: branvil` with a `workspace` (members write only to its repositories and take tickets from its board). No workspace sets the URL it is reached at (→ [Branvil Integration Guide](docs/branvil_integration.en.md))
+- `services.code_hosting_service`: code hosting service settings (the built-in code host used for repository operations)
+- With the built-in code host, both services are `name: branvil`. Members write only to the workspace's repositories and take tickets from its board. No workspace sets the URL it is reached at (→ [Code Host and CI Guide](docs/code_host.en.md))
 - `services.chat_service`: chat service settings (`name: slack`; `base_url` only when Slack is reached through a proxy)
 
 **Member identity** (`~/.guildbotics/identity/.guildbotics/config/team/members/<person_id>/identity.yml`, the same in every workspace; the avatar sits beside it):
@@ -624,7 +624,7 @@ For the complete list of CLI commands and options, see the [CLI Reference](docs/
 | `guildbotics` command not found | Run `~/.guildbotics/bin/guildbotics` and check `~/.local/bin` in PATH. If neither exists, install them again (→ [Installation](#installation)) |
 | The server does not start, or has stopped | Read the output of `guildbotics server start` (see [Run the Server in a Terminal](#run-the-server-in-a-terminal)) |
 | Not sure which workspace is in use | Check and change it under **Settings → Workspace**. From the CLI, use `guildbotics workspace status` / `guildbotics workspace use <path>` |
-| A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, Branvil, and Slack settings under **Settings → Verification** |
+| A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, code host, and Slack settings under **Settings → Verification** |
 | Slack events are not received | Check Socket Mode, the App-Level Token, and the bot events, and whether **Event triggers** is included on the **Service** screen (every start of the services uses those settings) |
 | A command execution failed | Open the session on the **Diagnostics** screen and read the logs. You can also ask the AI assistant to investigate the cause |
 | The scheduler stopped | The worker stops when **Stop after consecutive failures** (default: 3) is reached. Check the failure on the **Diagnostics** screen before restarting |

@@ -1,6 +1,6 @@
 //! The owner's CI settings (`/api/v1/admin/ci`, Settings → CI) against a real
 //! service: only the owner reads or changes them, the runner mode and the job
-//! limits are written to `branvil.toml` and survive a restart, an image the
+//! limits are written to `config.toml` and survive a restart, an image the
 //! default branches' pipelines name and the cache lacks is listed with its
 //! repositories, and
 //! image operations refuse what is not an image reference or a regular file.
@@ -31,7 +31,7 @@ async fn land_pipeline(w: &World) {
 }
 
 fn config_text(w: &World) -> String {
-    std::fs::read_to_string(w.server.data.join("branvil.toml")).unwrap()
+    std::fs::read_to_string(w.server.data.join("config.toml")).unwrap()
 }
 
 async fn settings(w: &World) -> Value {
@@ -59,7 +59,7 @@ async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
     let mut w = World::new().await;
     // A setting of the file before the owner changes any.
     std::fs::write(
-        w.server.data.join("branvil.toml"),
+        w.server.data.join("config.toml"),
         "# kept\n[limits]\ngit_concurrency = 8\n",
     )
     .unwrap();
@@ -157,8 +157,7 @@ async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
         let w = &w;
         async move {
             let v = settings(w).await;
-            v["runner"]["state"] == "no_runner"
-                && row(&v, "branvil-runner")["connection"] == "offline"
+            v["runner"]["state"] == "no_runner" && row(&v, "hub-runner")["connection"] == "offline"
         }
     })
     .await;
@@ -179,7 +178,7 @@ fn row<'a>(view: &'a Value, name: &str) -> &'a Value {
 async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
     let mut w = World::new().await;
     std::fs::write(
-        w.server.data.join("branvil.toml"),
+        w.server.data.join("config.toml"),
         "[ci.executor]\nmax_cpus = 6\n",
     )
     .unwrap();
@@ -357,7 +356,7 @@ async fn runner_connected(w: &World) {
         let v = settings(w).await;
         if v["runner"]["runners"].as_array().is_some_and(|r| {
             r.iter()
-                .any(|r| r["name"] == "branvil-runner" && r["connection"] == "online")
+                .any(|r| r["name"] == "hub-runner" && r["connection"] == "online")
         }) {
             return;
         }

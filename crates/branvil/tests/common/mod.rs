@@ -814,28 +814,22 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
     txn.commit().unwrap();
 }
 
-pub const PREVIOUS_SCHEMA_VERSION: u64 = 45;
+pub const PREVIOUS_SCHEMA_VERSION: u64 = 46;
+/// The configuration file's name in the previous schema version's data.
+pub const PREVIOUS_CONFIG_FILE: &str = "branvil.toml";
 
-/// Recreates the immediately preceding schema in a stopped database.
-pub fn as_schema_45(db: &Path) {
+/// Recreates the immediately preceding schema in a stopped database and its
+/// data directory.
+pub fn as_previous_schema(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
             *v = json!(PREVIOUS_SCHEMA_VERSION);
         }
     });
-    edit_records(db, "workspaces", |v| {
-        v.as_object_mut().unwrap().remove("execution_root");
-    });
-    // Version 45 databases may predate merge check recording.
-    edit_records(db, "pulls", |v| {
-        v.as_object_mut().unwrap().remove("merge_checks");
-        if let Some(upstream) = v["upstream"].as_object_mut() {
-            upstream.remove("pushed_checks");
-        }
-    });
-    edit_records(db, "ci_runs", |v| {
-        v.as_object_mut().unwrap().remove("before_verification");
-    });
+    let data = db.parent().unwrap();
+    if data.join("config.toml").exists() {
+        std::fs::rename(data.join("config.toml"), data.join(PREVIOUS_CONFIG_FILE)).unwrap();
+    }
 }
 
 pub fn previous_schema_backup(data: &Path) -> PathBuf {

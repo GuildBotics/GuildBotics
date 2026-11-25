@@ -215,7 +215,7 @@ async fn repository_hooks_never_run() {
 async fn a_push_completes_with_one_git_slot_of_each_kind() {
     let dir = tempfile::tempdir().unwrap();
     let owner = init(dir.path(), "alice");
-    let config = dir.path().join("data").join("branvil.toml");
+    let config = dir.path().join("data").join("config.toml");
     let mut file: toml::Table = std::fs::read_to_string(&config).unwrap().parse().unwrap();
     let limits = file
         .entry("limits")

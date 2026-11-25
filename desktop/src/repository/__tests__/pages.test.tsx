@@ -80,7 +80,7 @@ it.each([
       details: null,
     }),
     "GET /api/v1/repos/acme/demo/jobs/att_skip/log": json(200, {
-      log: "[branvil] skipped: no file matching paths changed since merge-base",
+      log: "[guildbotics] skipped: no file matching paths changed since merge-base",
       log_bytes: 70,
       truncated: false,
     }),
@@ -892,7 +892,7 @@ describe("pages", () => {
     const warnings = await screen.findByRole("region", { name: "Warnings" });
     expect(
       await within(warnings).findByText(
-        /Branvil is stopping for an update or a restart once the running CI jobs finish/,
+        /GuildBotics is stopping for an update or a restart once the running CI jobs finish/,
       ),
     ).toBeInTheDocument();
   });
@@ -911,7 +911,7 @@ describe("pages", () => {
     const warnings = await screen.findByRole("region", { name: "Warnings" });
     expect(
       within(warnings).getByText(
-        /Branvil is stopping for an update or a restart once the running CI jobs finish/,
+        /GuildBotics is stopping for an update or a restart once the running CI jobs finish/,
       ),
     ).toBeInTheDocument();
   });

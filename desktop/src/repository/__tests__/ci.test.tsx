@@ -37,7 +37,7 @@ const LIMITS = {
   cpu_multiplier_percent: 0,
 };
 const HUB_RUNNER: CiRunner = {
-  name: "branvil-runner",
+  name: "hub-runner",
   connection: "online",
   last_seen_at: "2026-10-18T05:00:00.000Z",
   executor: "microsandbox",
@@ -153,14 +153,14 @@ describe("CI settings", () => {
       "href",
       "/workspaces/acme/repos/demo/jobs/att_waiting",
     );
-    expect(queue).toHaveTextContent("branvil-runner is short by 2 vCPUs and 2048 MiB of memory");
+    expect(queue).toHaveTextContent("hub-runner is short by 2 vCPUs and 2048 MiB of memory");
   });
   it.each([
-    ["en", 1, 0, "branvil-runner has a vCPU shortfall of 1"],
-    ["en", 2, 0, "branvil-runner has a vCPU shortfall of 2"],
-    ["en", 0, 2048, "branvil-runner is short by 2048 MiB of memory"],
-    ["ja", 2, 0, "branvil-runner で vCPU 2 不足"],
-    ["ja", 0, 2048, "branvil-runner でメモリ 2048 MiB 不足"],
+    ["en", 1, 0, "hub-runner has a vCPU shortfall of 1"],
+    ["en", 2, 0, "hub-runner has a vCPU shortfall of 2"],
+    ["en", 0, 2048, "hub-runner is short by 2048 MiB of memory"],
+    ["ja", 2, 0, "hub-runner で vCPU 2 不足"],
+    ["ja", 0, 2048, "hub-runner でメモリ 2048 MiB 不足"],
   ] as const)(
     "shows only missing resources in %s when short by %i vCPUs and %i MiB",
     async (language, cpu_shortfall, memory_shortfall_mib, label) => {
@@ -202,7 +202,7 @@ describe("CI settings", () => {
     renderApp("/settings/repositories/ci");
     const link = await screen.findByRole("link", { name: "acme/demo · rust-test" });
     expect(link.parentElement?.textContent).toBe(
-      "acme/demo · rust-test — branvil-runner is short by 4096 MiB of commit headroom",
+      "acme/demo · rust-test — hub-runner is short by 4096 MiB of commit headroom",
     );
   });
   it("shows each part of the settings in its own card to the owner", async () => {
@@ -225,7 +225,7 @@ describe("CI settings", () => {
       within(runner).getByRole("switch", { name: /^Run the runner on the Hub/ }),
     ).toBeChecked();
     expect(
-      within(within(runner).getByRole("list", { name: "Runners" })).getByText("branvil-runner"),
+      within(within(runner).getByRole("list", { name: "Runners" })).getByText("hub-runner"),
     ).toBeInTheDocument();
 
     const executor = screen.getByRole("region", { name: "Executor" });

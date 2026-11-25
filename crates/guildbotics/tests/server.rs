@@ -183,7 +183,7 @@ impl Server {
                 .recv_timeout(Duration::from_secs(30))
                 .expect("the code host says it is ready");
             self.ready
-                .set(line.contains("Branvil ready on the shared listener"));
+                .set(line.contains("Code host ready on the shared listener"));
         }
         self.url("")
     }
@@ -1221,7 +1221,7 @@ fn ctrl_c_while_starting_reports_drain_then_cancellation_and_stops_branvil() {
 fn branvil_failing_to_start_stops_the_server() {
     let dir = tempfile::tempdir().unwrap();
     let data = code_host_data(dir.path());
-    std::fs::write(data.join("branvil.toml"), "invalid = true").unwrap();
+    std::fs::write(data.join("config.toml"), "invalid = true").unwrap();
     let mut child = server_command(dir.path(), free_port())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -1937,7 +1937,7 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
     for mode in ["deadline", "finish", "force-ci", "force-work"] {
         let dir = tempfile::tempdir().unwrap();
         let data = code_host_data(dir.path());
-        let config = data.join("branvil.toml");
+        let config = data.join("config.toml");
         let configure = |seconds| {
             std::fs::write(&config, format!("[ci]\nstop_wait_secs = {seconds}\n")).unwrap();
         };

@@ -666,7 +666,7 @@ each member command; that git starts with the facts of the host every
 environment gets and the member's name, and with none of the turn's variables,
 the broker's token, or a login stand-in.
 
-The member's Branvil token is used only on the host, by a bare repository of the
+The member's code host token is used only on the host, by a bare repository of the
 host's own per repository of the code host under
 `<workspace>/.guildbotics/local/member_git/<person_id>/` that no environment
 mounts, toward the URL the host derives. `prepare` places a clone at

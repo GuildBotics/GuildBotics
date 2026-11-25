@@ -186,7 +186,7 @@ async fn remove_credential(app: &App, member: &str, provider: &str) -> AppResult
 fn require_account(member: &Member, host: &Host) -> Result<(), String> {
     if !member.accounts.iter().any(|a| a.provider == host.name()) {
         return Err(format!(
-            "{} has no {} account in Branvil.",
+            "{} has no {} account in GuildBotics.",
             member.name,
             host.display_name()
         ));
@@ -503,7 +503,7 @@ pub async fn poll_repo(app: &App, repo: &Repo) -> bool {
     };
     let Some(reader_member) = reader_member else {
         let why = format!(
-            "No member has a {} account in Branvil to read the upstream with; set one (an agent's bot account is enough).",
+            "No member has a {} account in GuildBotics to read the upstream with; set one (an agent's bot account is enough).",
             host.display_name()
         );
         note(app, repo, |f| f.error = Some(why));
@@ -675,7 +675,7 @@ async fn follow_once(at: Place<'_>, reader: As<'_>) -> Result<(String, bool), St
                 return Err(Stop::Stopped(
                     theirs,
                     format!(
-                        "Branvil's {branch} has commits {}'s lacks; following stopped and nothing was overwritten.",
+                        "This server's {branch} has commits {}'s lacks; following stopped and nothing was overwritten.",
                         host.display_name()
                     ),
                 ));

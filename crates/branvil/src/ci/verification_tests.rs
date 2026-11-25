@@ -163,7 +163,7 @@ impl Fixture {
             "http://127.0.0.1:7878".into(),
             layout,
             config,
-            "/nonexistent/branvil.toml".into(),
+            "/nonexistent/config.toml".into(),
         );
         self
     }

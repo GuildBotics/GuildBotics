@@ -1530,7 +1530,9 @@ describe("pull request review", () => {
       "https://github.com/octo/demo/pull/42",
     );
     expect(
-      screen.getByText("Published. People review and merge it on GitHub; Branvil follows."),
+      screen.getByText(
+        "Published. People review and merge it on GitHub; the merge is brought back here.",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -1544,7 +1546,7 @@ describe("pull request review", () => {
     );
     renderApp("/workspaces/acme/repos/demo/pulls/3");
     expect(
-      await screen.findByText("aiko has no GitHub account in Branvil; set it under Members."),
+      await screen.findByText("aiko has no GitHub account; set it under Members."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Publish to GitHub" })).toBeDisabled();
   });
@@ -1689,7 +1691,7 @@ describe("pull request review", () => {
     await user.click(screen.getByRole("button", { name: "Edit title and body" }));
     const form = screen.getByRole("form", { name: "Edit title and body" });
     expect(
-      within(form).getByText(/They are Branvil's: GitHub gets them as previewed/),
+      within(form).getByText(/They come from the pull request here: GitHub gets them as previewed/),
     ).toBeInTheDocument();
     await user.clear(within(form).getByRole("textbox", { name: "Title" }));
     await user.type(within(form).getByRole("textbox", { name: "Title" }), "Fix the login page");

@@ -11,7 +11,7 @@ one process -- until Ctrl-C, on data of its own, and open the application once i
 is ready.
   --data-dir PATH  Data directory (default: ~/.gbb/dev): GuildBotics' machine
                    root in its home/ (GUILDBOTICS_HOME), the code host's data
-                   in its branvil/ (GUILDBOTICS_CODE_HOST_DATA_DIR, created at the first
+                   in its code-host/ (GUILDBOTICS_CODE_HOST_DATA_DIR, created at the first
                    start), and the server's log of the latest start in its
                    server.log.
   --no-open        Start the server without opening a browser.
@@ -50,7 +50,7 @@ if [[ -n "$workspace" && "$workspace" != /* ]]; then
   export GUILDBOTICS_WORKSPACE_ROOT="$PWD/$workspace"
 fi
 export GUILDBOTICS_HOME="$data_dir/home"
-export GUILDBOTICS_CODE_HOST_DATA_DIR="$data_dir/branvil"
+export GUILDBOTICS_CODE_HOST_DATA_DIR="$data_dir/code-host"
 export GUILDBOTICS_SERVER_PORT="${GUILDBOTICS_SERVER_PORT:-8866}"
 # The identities are the data's own too; the workspace is the one named.
 unset GUILDBOTICS_IDENTITY_ROOT GUILDBOTICS_CONFIG_DIR
@@ -85,7 +85,7 @@ fi
 
 mkdir -p "$data_dir"
 # What the server says on stdout -- only that GuildBotics listens -- and its
-# log, where Branvil says it listens, which still reaches the terminal.
+# log, where the code host says it listens, which still reaches the terminal.
 notice="$data_dir/server.out"
 log="$data_dir/server.log"
 : >"$notice"
@@ -96,11 +96,11 @@ log="$data_dir/server.log"
 # where it does not, a server that stopped opens no screen.
 open_application() {
   local deadline=$((SECONDS + 60))
-  until grep -q '^GUILDBOTICS_APP_API_PORT=' "$notice" && grep -q 'Branvil ready on the shared listener' "$log"; do
+  until grep -q '^GUILDBOTICS_APP_API_PORT=' "$notice" && grep -q 'Code host ready on the shared listener' "$log"; do
     # Ended, even before whoever started the launcher reaps it.
     case "$(ps -o stat= -p "$server" 2>/dev/null)" in ""|Z*) return 0 ;; esac
     if (( SECONDS >= deadline )); then
-      echo "The server did not say within 60 seconds that GuildBotics and Branvil listen." >&2
+      echo "The server did not say within 60 seconds that GuildBotics and its code host listen." >&2
       return 0
     fi
     sleep 0.2

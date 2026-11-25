@@ -328,7 +328,7 @@ pub fn resolve_ticket_url(
     url.strip_prefix(base_url)?.strip_prefix('/')?;
     let Some((repo_path, key)) = util::parse_item_url(base_url, url, "tickets") else {
         return Some(Err(AppError::not_found(format!(
-            "{url} is not a ticket URL of this Branvil."
+            "{url} is not a ticket URL of this server."
         ))));
     };
     Some((|| {
@@ -510,7 +510,7 @@ fn related_ticket(r: &impl Rd, base_url: &str, repo: &Repo, url: &str) -> AppRes
         Some(Err(e)) if e.code != "not_found" => return Err(e),
         _ => {
             return Err(AppError::invalid(format!(
-                "{url} is not a ticket of this Branvil."
+                "{url} is not a ticket of this server."
             )));
         }
     };

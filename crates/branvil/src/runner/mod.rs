@@ -621,7 +621,7 @@ fi
             let data = dir.path().join("data");
             std::fs::create_dir_all(&data).unwrap();
             std::fs::write(
-                data.join("branvil.toml"),
+                data.join("config.toml"),
                 format!("[ci]\nlease_secs = {lease_secs}\n"),
             )
             .unwrap();
@@ -1637,24 +1637,24 @@ esac
             let digest = digest_of("alpine");
             assert_eq!(job(&id).await["image_digest"], digest.as_str());
             let (log, _) = app.ci.log_tail(&id, 1 << 20).await.unwrap();
-            let (first, rest) = log.split_once("\n[branvil] queued for ").unwrap();
+            let (first, rest) = log.split_once("\n[guildbotics] queued for ").unwrap();
             assert_eq!(
                 first,
                 format!(
-                    "[branvil] attempt 1 of job ok on acme/demo {sha} (executor fake, image alpine, 3 cpu, 2048 MiB, timeout 100 s, network off)"
+                    "[guildbotics] attempt 1 of job ok on acme/demo {sha} (executor fake, image alpine, 3 cpu, 2048 MiB, timeout 100 s, network off)"
                 )
             );
             assert!(
                 rest.split_once(" s\n")
                     .is_some_and(|(secs, rest)| secs.parse::<u64>().is_ok()
-                        && rest.starts_with(&format!("[branvil] image alpine is {digest}\n"))),
+                        && rest.starts_with(&format!("[guildbotics] image alpine is {digest}\n"))),
                 "{log}"
             );
             // Each step of the runner's own says how long it took.
             for step in [
-                "[branvil] source fetched in ",
-                "[branvil] checked out in ",
-                "[branvil] artifacts handled in ",
+                "[guildbotics] source fetched in ",
+                "[guildbotics] checked out in ",
+                "[guildbotics] artifacts handled in ",
             ] {
                 assert!(log.contains(step), "{step} in {log}");
             }
@@ -1723,7 +1723,7 @@ esac
             let (log, _) = app.ci.log_tail(&slow_id, 1 << 20).await.unwrap();
             assert!(
                 log.contains(
-                    "[branvil] timeout_secs 5000 exceeds the runner limit 100; using 100\n"
+                    "[guildbotics] timeout_secs 5000 exceeds the runner limit 100; using 100\n"
                 ),
                 "{log}"
             );
@@ -1744,7 +1744,7 @@ esac
             // Its log still names the attempt it was.
             let (log, _) = app.ci.log_tail(&waiting_id, 1 << 20).await.unwrap();
             assert!(
-                log.starts_with("[branvil] attempt 2 of job slow on acme/demo ")
+                log.starts_with("[guildbotics] attempt 2 of job slow on acme/demo ")
                     && log.contains("job ended: cancelled while waiting for the image cache"),
                 "{log}"
             );

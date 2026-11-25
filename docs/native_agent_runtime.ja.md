@@ -515,7 +515,7 @@ member modeの`member git prepare` / `commit` / `push` / `publish`は、cloneの
 すべての環境に渡すhostの事実とメンバーの名前だけで、turnの環境変数、brokerのtoken、ログインの
 置換用の値は渡しません。
 
-メンバーのBranvil tokenを使うのはhostだけで、`<workspace>/.guildbotics/local/member_git/<person_id>/`
+メンバーのコードホストのtokenを使うのはhostだけで、`<workspace>/.guildbotics/local/member_git/<person_id>/`
 の下にコードホストのリポジトリごとに持つhost専用のbare repository（どの環境にもmountしません）から、
 hostが導出したURLへ送ります。`prepare` は `clones/<person_id>/<slot digest>` に clone を置き、
 リポジトリ・作業の digest・作業対象 URL・要求されたブランチを host に記録します。

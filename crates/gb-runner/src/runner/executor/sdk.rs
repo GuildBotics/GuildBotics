@@ -247,7 +247,7 @@ impl Microsandbox {
                     _ = async { let _ = cancel.wait_for(|stop| *stop).await; } => ram_workspace::cancelled_outcome(ram, has_artifacts),
                     flushed = tokio::time::timeout(timeout, flush) => {
                         if !flushed.is_ok_and(|result| result.is_ok_and(|out| out.status().success)) {
-                            let _ = log.send(b"[branvil] flushing the job at its timeout failed: returned files may be incomplete\n".to_vec()).await;
+                            let _ = log.send(b"[guildbotics] flushing the job at its timeout failed: returned files may be incomplete\n".to_vec()).await;
                         }
                         Outcome::TimedOut
                     }
@@ -301,7 +301,7 @@ async fn stream_job(
             event = exec.recv() => match event {
                 Some(ExecEvent::Started {..}) => {
                     started = Some(Instant::now());
-                    let _ = log.send(format!("[branvil] sandbox started in {} ms\n", boot_started.elapsed().as_millis()).into_bytes()).await;
+                    let _ = log.send(format!("[guildbotics] sandbox started in {} ms\n", boot_started.elapsed().as_millis()).into_bytes()).await;
                 }
                 Some(ExecEvent::Stdout(bytes) | ExecEvent::Stderr(bytes)) => {
                     let _ = log.send(bytes.to_vec()).await;
@@ -317,7 +317,7 @@ async fn stream_job(
         let _ = log
             .send(
                 format!(
-                    "[branvil] commands ran for {} ms\n",
+                    "[guildbotics] commands ran for {} ms\n",
                     at.elapsed().as_millis()
                 )
                 .into_bytes(),

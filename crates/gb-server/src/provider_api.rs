@@ -25,7 +25,7 @@ fn owner(api: &Shared) -> Result<branvil::api::MemberApi, gb_setup::SetupError> 
 }
 pub(crate) async fn providers() -> Json<Value> {
     Json(json!([
-    {"name":"branvil","title":"Branvil","kinds":["ticket_service","code_hosting_service"],"avatar":false},
+    {"name":"branvil","title":"GuildBotics","kinds":["ticket_service","code_hosting_service"],"avatar":false},
     {"name":"slack","title":"Slack","kinds":["chat_service"],"avatar":true}
     ]))
 }

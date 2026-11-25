@@ -32,7 +32,7 @@ async fn reader_of(app: &App, setting: &Setting) -> AppResult<Member> {
 fn no_reader() -> AppError {
     AppError::conflict_code(
         "no_account",
-        "No member has an account on that host in Branvil to read it with; set one first (an agent's bot account is enough).",
+        "No member has an account on that host in GuildBotics to read it with; set one first (an agent's bot account is enough).",
     )
 }
 
@@ -77,7 +77,7 @@ pub async fn set(
                 return Err(AppError::conflict_code(
                     "no_account",
                     format!(
-                        "{} has no {} account in Branvil.",
+                        "{} has no {} account in GuildBotics.",
                         m.name,
                         host.display_name()
                     ),
@@ -555,7 +555,7 @@ async fn publish_op(
     } else {
         let t = theirs.clone().unwrap_or_default();
         Some(format!(
-            "{} already has a branch {} (at {}) that Branvil did not push for this pull request; publishing again replaces it.",
+            "{} already has a branch {} (at {}) that GuildBotics did not push for this pull request; publishing again replaces it.",
             host.display_name(),
             p.head,
             &t[..t.len().min(12)]
@@ -594,7 +594,7 @@ async fn publish_op(
     }
     if let Some(why) = failed {
         return Err(AppError::unavailable(format!(
-            "The branch is on {}, but opening the pull request failed: {why} Branvil tries again.",
+            "The branch is on {}, but opening the pull request failed: {why} GuildBotics tries again.",
             host.display_name()
         )));
     }
@@ -670,7 +670,7 @@ async fn alerts_upstream<'a>(
     let repo = repos::visible(app, caller, path).await?;
     let setting = repo.upstream.ok_or_else(|| {
         AppError::unsupported(format!(
-            "{} has no upstream, so Branvil has no dependency alerts of it.",
+            "{} has no upstream, so it has no dependency alerts.",
             repo.path
         ))
     })?;

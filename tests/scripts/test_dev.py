@@ -4,7 +4,7 @@ The launcher runs in a copy of the repository's layout with fake tools:
 ``npm``, ``rustc``, a ``cargo`` that answers ``metadata`` the way Cargo does
 for the workspace and builds a fake ``guildbotics``, and that ``guildbotics``,
 which records its calls and the signals it gets, says what ``guildbotics
-server start`` says once GuildBotics and Branvil listen, and serves until the
+server start`` says once GuildBotics and its code host listen, and serves until the
 test releases it or a signal stops it. The build goes through the development
 image's cargo wrapper and repository hook, copied as they are.
 """
@@ -125,7 +125,7 @@ elif tool == "guildbotics":
         while not release.exists():
             if not CODE_HOST_LISTENED.exists() and time.monotonic() >= branvil_at:
                 CODE_HOST_LISTENED.touch()
-                print("INFO gb_server: Branvil ready on the shared listener", file=sys.stderr, flush=True)
+                print("INFO gb_server: Code host ready on the shared listener", file=sys.stderr, flush=True)
             try:
                 for signum in os.read(wakeup, 64):
                     record(signal=signal.Signals(signum).name)
@@ -419,12 +419,12 @@ def test_the_server_runs_on_data_and_a_port_of_its_own(launcher: Launcher) -> No
     default, chosen = (e["env"] for e in launcher.calls("server", "start"))
     assert default["GUILDBOTICS_HOME"] == str(launcher.home / ".gbb/dev/home")
     assert default["GUILDBOTICS_CODE_HOST_DATA_DIR"] == str(
-        launcher.home / ".gbb/dev/branvil"
+        launcher.home / ".gbb/dev/code-host"
     )
     assert default["GUILDBOTICS_SERVER_PORT"] == "8866"
     assert chosen["GUILDBOTICS_HOME"] == str(launcher.root / "relative data/home")
     assert chosen["GUILDBOTICS_CODE_HOST_DATA_DIR"] == str(
-        launcher.root / "relative data/branvil"
+        launcher.root / "relative data/code-host"
     )
     assert chosen["GUILDBOTICS_SERVER_PORT"] == "9911"
 

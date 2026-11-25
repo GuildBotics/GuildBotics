@@ -1,26 +1,25 @@
-# Branvil Integration Guide
+# Code Host and CI Guide
 
-Branvil is a code host you run yourself. It provides Git repositories over Smart HTTP in
+GuildBotics keeps a code host on the Hub. It provides Git repositories over Smart HTTP in
 workspaces, pull requests with reviews and CI, and a task flow for each workspace's
-tickets. GuildBotics uses it through the `branvil` provider as the code host
-(`services.code_hosting_service`) and the tickets (`services.ticket_service`), in place of
-GitHub. The chat stays whatever the
+tickets. GuildBotics uses it as the code host (`services.code_hosting_service`) and the
+tickets (`services.ticket_service`), in place of GitHub. The chat stays whatever the
 project chooses (Slack, for example).
 
-This guide covers what GuildBotics needs of Branvil. The server runs it; its runner and
-data maintenance are `guildbotics runner` and `guildbotics server hub-data` (see the
-[CLI reference](cli_reference.md)).
+This guide covers how to prepare and use the code host and CI. The server runs the code
+host; its runner and data maintenance are `guildbotics runner` and `guildbotics server hub-data`
+(see the [CLI reference](cli_reference.md)).
 
-Ticket mention selection uses the `mentions` lists Branvil returns on bodies
-and comments. Branvil resolves names against its members when a body is saved.
+Ticket mention selection uses the `mentions` lists returned on bodies
+and comments. Names are resolved against the members when a body is saved.
 Patrols also read `GET /workspaces/{workspace}/tickets?mentions=me` to find
 unanswered mentions outside the member's assignment, without scanning every
 ticket's comments. These runs respond on the ticket and leave its lane and
 assignee unchanged. Comments addressed only to other members do not wake the
 assignee; a response that affects their work should mention them.
 
-A ticket a human marks interactive (`interactive` on Branvil's tickets), and every
-descendant of it (a ticket with an interactive ancestor, Branvil's
+A ticket a human marks interactive (the ticket's `interactive`), and every
+descendant of it (a ticket with an interactive ancestor, the ticket's
 `interactive_ancestor`), is theirs to work on with an agent: the patrol never
 selects it, by any trigger (the ready or working lane, a comment, or a mention,
 assigned or not). A pull request that links it is still reviewed, but the member
@@ -34,23 +33,23 @@ Hub machine                                 another machine
 ┌──────────────────────────────┐            ┌──────────────────────────────┐
 │ guildbotics server start     │            │ OpenSSH (OS user service)    │
 │   http://127.0.0.1:7878      │◀── SSH ────│   http://127.0.0.1:7878      │
-│ GuildBotics and Branvil      │            │                              │
+│ GuildBotics and code host    │            │                              │
 └──────────────────────────────┘            └──────────────────────────────┘
 ```
 
-- Branvil runs once, on the Hub (the machine where GuildBotics runs), and listens on
+- The code host runs once, on the Hub (the machine where GuildBotics runs), and listens on
   loopback only.
-- Every machine reaches it at the same base URL, `http://127.0.0.1:7878` by default.
-  On the Hub machine that is Branvil itself. On another machine, set up the
+- Every machine reaches the GuildBotics server at the same base URL, `http://127.0.0.1:7878` by default.
+  On the Hub machine that is the server itself. On another machine, set up the
   [SSH forwarding service](#set-up-ssh-forwarding-on-another-machine) once. OpenSSH
   starts at login and forwards the loopback ports over one connection, independently
-  of GuildBotics and Branvil's client. The browser, git and Branvil's CLI on that
+  of the GuildBotics client. The browser, git and the GuildBotics CLI on that
   machine use it.
 - The same base URL everywhere is what keeps recorded URLs valid: a ticket is
   `{base}/{repository}/-/tickets/{n}` and a pull request `{base}/{repository}/-/pulls/{n}`
   on every machine. A repository numbers its tickets (`#1`) apart from its pull requests (`!1`).
 
-The GuildBotics server calls the service directly, in its own process. While the embedded
+The GuildBotics server calls the code host directly, in its own process. While the embedded
 service is not running, for example while the server stops, every ticket and pull request
 operation fails, and **Settings → Verification** reports that the workspace cannot be read.
 
@@ -62,7 +61,7 @@ again and resumes work once the service runs. A manual command still returns its
 Other failures remain failures; they are never silently retried as unavailable work.
 An unavailable scheduled occurrence stays due and is retried on a later scheduler cycle.
 
-## Prepare Branvil
+## Prepare the code host
 
 Follow the [GuildBotics installation steps](../README.md#installation) on the Hub:
 
@@ -71,9 +70,9 @@ Follow the [GuildBotics installation steps](../README.md#installation) on the Hu
    the screens and merges pull requests. Set up SSH forwarding on the other machines as
    described below.
 2. Create the repositories the members work in (`acme/demo`, with the labels its tickets
-   may carry) in Branvil's GUI. A workspace (`acme`) holds repositories and has one board;
+   may carry) under **Settings → Repositories**. A workspace (`acme`) holds repositories and has one board;
    a repository holds its tickets; a merge closes only tickets of the pull request's
-   repository. GuildBotics can create the workspace itself (below).
+   repository. You can create the workspace at the top of the sidebar (below).
 
 Members are not created on the screens: GuildBotics creates each AI member ([Members](#members)).
 
@@ -102,19 +101,19 @@ Uninstall the old GuildBotics Desktop application first. Keep human checkouts an
 
 Run the bundled script from a checkout on each machine other than the Hub. It
 needs only OpenSSH and the OS service manager; Python and the GuildBotics CLI are
-not needed. No setup is needed on the Hub itself, beyond accepting your SSH key. Both services share port 7878, including the GuildBotics
-[browser](../README.md#use-it-from-a-browser). Forward that one port.
+not needed. No setup is needed on the Hub itself, beyond accepting your SSH key. The
+GuildBotics [browser](../README.md#use-it-from-a-browser) screens and the code host share
+port 7878. Forward that one port.
 
-1. Stop any `branvil tunnel` you run manually or as a service.
-2. Connect once with `ssh my-hub` (replace `my-hub` with your SSH config alias or
+1. Connect once with `ssh my-hub` (replace `my-hub` with your SSH config alias or
    `[user@]host`) and accept the verified host key. Configure keys and hostnames
    in your existing OpenSSH configuration. Do **not** put `LocalForward` in that
    host entry: an ordinary `ssh my-hub` would then compete with the service.
-3. Use an unencrypted key or an unlocked ssh-agent key. The unencrypted
+2. Use an unencrypted key or an unlocked ssh-agent key. The unencrypted
    `~/.ssh/id_ed25519` is a common choice. The service uses
    `BatchMode=yes` and strict host-key checking, so it never prompts. On Windows,
    enable the OpenSSH client and, if used, the OpenSSH Authentication Agent service.
-4. Install the service using the commands below, then inspect its status.
+3. Install the service using the commands below, then inspect its status.
 
 macOS (launchd user agent) and Linux (systemd user service):
 
@@ -162,14 +161,14 @@ All forwards bind only `127.0.0.1` and target the same port on the Hub's
 `127.0.0.1`. A dropped connection is detected by SSH keepalives and restarted.
 Linux and Windows wait 15 seconds after ssh exits; macOS's `ThrottleInterval`
 limits how often launchd starts it to once per 15 seconds. Status reports the OS process/task and its last result, not an
-end-to-end health check of Branvil. On Windows, a running task may be between SSH
-attempts. Check `http://127.0.0.1:7878` in the browser to verify Branvil too.
+end-to-end health check of the server. On Windows, a running task may be between SSH
+attempts. Open `http://127.0.0.1:7878` in the browser to check that the server is reached.
 
 Do not run a second forwarding service for the same ports. The scripts themselves
 contain no application names or default ports.
 
-Several GuildBotics workspaces can use one Branvil. The members are the same in every
-workspace, and each GuildBotics workspace chooses the code host's workspace its members work in.
+The Hub has one code host, used by every workspace. The members are the same in every
+workspace.
 
 The server uses one browser entry and session for all of its screens.
 `guildbotics open` issues a link to `/enter`. The sidebar gives access to all screens.
@@ -215,10 +214,10 @@ An AI member needs nothing done on the code host after it is added.
 - Removing a member from a workspace, or deleting it, keeps its member on the code host:
   its history names it.
 
-## Use Branvil from your own checkouts
+## Use the code host from your own checkouts
 
-You, the human member, are Branvil's owner, and you can make Branvil the `origin` of your own
-checkouts on the Hub. Branvil's git asks for a member's name and
+You, the human member, are the code host's owner, and you can make a code host repository the
+`origin` of your own checkouts on the Hub. The code host's git asks for a member's name and
 token. GuildBotics hands git yours, so git never asks for a name or a password:
 
 1. Copy the credential helper configuration from **Settings → This machine → Git authentication**.
@@ -232,7 +231,7 @@ token. GuildBotics hands git yours, so git never asks for a name or a password:
    ```
 
    The empty `helper =` stops git from asking the helpers configured before it (the OS
-   keychain, Git Credential Manager) for Branvil. A helper configured after these lines would
+   keychain, Git Credential Manager) for the code host's credentials. A helper configured after these lines would
    be asked to store the token, so keep them last.
 3. `git fetch origin` and `git push origin <branch>` now work without a prompt.
 
@@ -241,7 +240,7 @@ for the requesting machine. A valid cached token is checked directly at its own 
 the GuildBotics API; issuance requires the server to be running. The token is labelled `git:<device name> (<last 8 characters of the device ID>)`
 and kept in the machine's OS keychain only. It is never written to a URL, a git configuration,
 your shell history, or a workspace file. You can revoke it under **Settings → Review and authentication →
-owner → Tokens**. Once Branvil no longer accepts the token, the next request issues a new one in
+owner → Tokens**. Once the code host no longer accepts the token, the next request issues a new one in
 its place and revokes the machine's other `git:` tokens.
 
 The token is a full owner token, with the owner's permissions. Revoking it does not lock the
@@ -256,7 +255,7 @@ configured helper.
 
 ## How members work with it
 
-The ticket workflow and pull request patrol read the Branvil board and conversations:
+The ticket workflow and pull request patrol read the workspace's board and conversations:
 
 - A ticket has at most one assignee: the agent that works on it. Assigning another
   member replaces the assignee, so two members never take up the same ticket.
@@ -285,33 +284,68 @@ The ticket workflow and pull request patrol read the Branvil board and conversat
   the checks finish or new commits land.
 - Draft pull requests are left alone. Only the owner makes a draft ready for review.
 - A run that fails or is rate-limited leaves a status notice on the ticket or the pull
-  request; Branvil shows it as a notice, and it holds the item until someone acts on it.
+  request; the screens show it as a notice, and it holds the item until someone acts on it.
 
 ## Repositories with an upstream on GitHub
 
-A Branvil repository may follow a GitHub repository (its *upstream*; see the Branvil
-README). GitHub then stays the place of record, and Branvil is where the members try
-things:
+A repository on the Hub may follow a GitHub repository (its *upstream*). GitHub then stays the
+place of record: its protected default branch, people's approvals and merges, its CI
+(Windows included), releases, and the pull requests people outside see. The Hub is where the
+members try things: many pushes, review rounds, and CI runs, locally and without cost. The Hub
+never pushes GitHub's default branch; it follows it.
 
-- Members work in Branvil exactly as above. Nothing reaches GitHub while they do.
-- When a pull request is done, the owner publishes it from Branvil's GUI instead of
-  merging: Branvil pushes the branch and opens a pull request on GitHub with the final
-  title and body as the author's GitHub account. Configure each account in
-  Branvil's member settings. [Upstream setup](../crates/branvil/README.md#upstream-github)
+1. Give every agent a GitHub account: under **Settings → Review and authentication**, edit the
+   member and open **Accounts on code hosts**. The account is checked with GitHub and publishes
+   the pull requests that member authors. It is a GitHub App (its app ID, the ID of its
+   installation on the account that owns the repositories, and its private key; it acts as
+   `<app>[bot]`, and its short-lived tokens are made automatically) or a token of a bot account.
+   One of them also reads GitHub, so your own token is not needed; set the owner's account only
+   to publish pull requests you author yourself.
+2. Point the repository at its GitHub repository under **Upstream** in its settings. An empty
+   repository is filled with GitHub's default branch; an existing one must be the same or
+   behind. The settings show whose account reads it and let you choose another.
+
+From then on:
+
+- Members work on the Hub exactly as above. Nothing reaches GitHub while they do.
+- When a pull request is done, the owner uses **Publish to GitHub** where the merge button was.
+  It shows exactly what will be posted (title, body, and `Closes #12` for linked tickets that
+  name a GitHub issue), then pushes the branch and opens a pull request on GitHub with the
+  final title and body as the author's GitHub account. Later pushes and edits follow.
+- With **Land automatically** on in the repository's settings, a pull request is published by
+  itself once it meets the conditions. Once the published head's GitHub checks succeed and no
+  more can arrive, the webhook is told once per PR head, with links to both pull requests.
+  Failed GitHub checks are reported in a comment. The owner enters the webhook URL under
+  **Settings → Notifications**. For Slack, use an Incoming Webhook for a channel that no member
+  watches. The URL is kept like a credential and never shown again. Creating a repair ticket
+  after main verification fails sends one notice with the failed jobs, commit range, ticket URL
+  and assignee to this webhook.
 - GitHub's checks of the published head appear among the pull request's checks
   (`github/<name>`) with their logs, so a failure on GitHub (Windows, for example) keeps
-  the pull request from being ready, and the member fixes it in Branvil; later pushes
+  the pull request from being ready, and the member fixes it on the Hub; later pushes
   reach GitHub on their own.
-- People approve and merge on GitHub. Branvil then follows GitHub's default branch and
+- People approve and merge on GitHub. The Hub's repository then follows GitHub's default branch and
   marks its pull request merged, so the patrol moves the ticket to **Done** as usual.
-- A ticket can name the GitHub issue it stands for; the published pull request then
-  closes that issue.
-- GitHub's Dependabot alerts of the upstream are read through Branvil
+- A ticket can name the GitHub issue it stands for in its **GitHub issue** field; the published
+  pull request then closes that issue. Without it, nothing about the ticket is written on GitHub.
+- The Hub's references in the title and body (`#3`, `acme/demo#3`, `!3`, their URLs) mean
+  something else on GitHub, so publishing rewrites them: to the GitHub issue or pull request
+  they stand for, or to a code span that GitHub does not link. The preview shows the result;
+  when it still needs a hand, the owner edits the title and body in the publish panel.
+- Conversation, reviews, threads, tickets, and boards stay on the Hub; back them up with
+  `guildbotics server hub-data backup`.
+- GitHub's Dependabot alerts of the upstream can be read
   (`member repo-info read --resource dependency_alerts`,
-  `repository/security_alerts`): Branvil reads them with the account that reads GitHub
-  for it, which then needs **Dependabot alerts: Read-only** and access to the
-  repository (a GitHub App's added permission approved on its installation). A
-  repository without an upstream has no alerts and refuses the read as unsupported.
+  `repository/security_alerts`). They are read with the account that reads GitHub and are
+  not kept. A repository without an upstream has no alerts and refuses the read as unsupported.
+
+The reading account needs the following permissions: for a GitHub App, Repository permissions;
+for a token, the same permissions (fine-grained) or the scope in parentheses (classic). A
+permission added to an installed GitHub App takes effect once the account that installed it
+approves it.
+
+- **Checks: Read-only** and **Actions: Read-only** (checks, workflow runs, and job logs; classic: `repo`)
+- **Dependabot alerts: Read-only** (Dependabot alerts, enabled for the repository; classic: `security_events`)
 
 ### Initial ticket state
 

@@ -81,7 +81,7 @@ pub fn hint(w: &Wtx, repo: &str, failed_sha: &str, job: &str, narrowing: Hint) -
                 .filter(|p| p.merged && p.merge_sha.as_ref() == Some(&sha))
                 .min_by_key(|p| p.number);
             let origin = pull.map_or_else(
-                || "not from a pull request of this Branvil".into(),
+                || "not from a pull request of this server".into(),
                 |p| {
                     format!(
                         "[!{}]({root}/pulls/{}) by {}",

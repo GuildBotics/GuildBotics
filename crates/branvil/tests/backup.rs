@@ -281,23 +281,20 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     );
     assert!(text(&out).contains(&serves), "{}", text(&out));
 
-    // A backup of the previous schema version with the old local ticket URL.
+    // A backup of the previous schema version, with its configuration file
+    // under the previous name.
     let previous = out_dir.path().join("previous");
     copy_backup(&backup, &previous, &manifest);
     let db = previous.join("branvil.redb");
-    as_schema_45(&db);
-    edit_records(&db, "pulls", |pull| {
-        if let Some(ticket) = pull["tickets"]
-            .as_array_mut()
-            .and_then(|links| links.first_mut())
-        {
-            ticket["url"] = json!(format!("{}/{REPO}/-/tickets/1", s.url));
-        }
-    });
+    let settings = std::fs::read_to_string(previous.join("config.toml")).unwrap();
+    as_previous_schema(&db);
     let mut old = manifest.clone();
     old["schema_version"] = json!(PREVIOUS_SCHEMA_VERSION);
     // Refresh the checksum of the database rewritten by the fixture.
     for f in old["files"].as_array_mut().unwrap() {
+        if f["path"] == "config.toml" {
+            f["path"] = json!(PREVIOUS_CONFIG_FILE);
+        }
         if f["path"] == "branvil.redb" {
             let bytes = std::fs::read(previous.join(f["path"].as_str().unwrap())).unwrap();
             f["bytes"] = json!(bytes.len());
@@ -331,15 +328,22 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("from schema version 45 to 46"),
+        text(&out).contains("from schema version 46 to 47"),
         "{}",
         text(&out)
     );
     assert!(
-        text(&out).contains("updated local links in 1 pull requests"),
+        text(&out).contains("copied branvil.toml to config.toml"),
         "{}",
         text(&out)
     );
+    let restored_data = target.path().join("data");
+    for name in ["config.toml", PREVIOUS_CONFIG_FILE] {
+        assert_eq!(
+            std::fs::read_to_string(restored_data.join(name)).unwrap(),
+            settings
+        );
+    }
     // Upgraded on the way: it has to pass its check before it serves.
     let checks_first = format!(
         "restored into {}; `guildbotics server hub-data check` has to pass before the server opens {}",

@@ -52,8 +52,9 @@ describe("ticket view", () => {
       }),
     );
     renderApp("/workspaces/acme/repos/demo/tickets/1");
-    expect(await screen.findByRole("img", { name: "Branvil" })).toBeInTheDocument();
-    expect(screen.getByText("branvil", { selector: "strong" })).toBeInTheDocument();
+    expect(await screen.findByRole("img", { name: "GuildBotics" })).toBeInTheDocument();
+    expect(screen.getByText("GuildBotics", { selector: "strong" })).toBeInTheDocument();
+    expect(screen.queryByText(/branvil/i)).not.toBeInTheDocument();
   });
 
   it.each(["en", "ja"] as const)(

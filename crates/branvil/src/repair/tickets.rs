@@ -213,7 +213,7 @@ async fn evidence(
     let commit_link = |sha: &str| format!("[{}]({root}/commits/{sha})", short(sha));
     let branch = text(pending.branch.as_deref().unwrap_or(&repo.default_branch));
     let mut body = format!(
-        "Branvil created this repair ticket because verification of {branch} failed at {}. Restore passing verification of {branch}, regardless of whose change caused the failure. Branvil will close this ticket when verification of {branch} passes.\n\n## Failed jobs\n",
+        "GuildBotics created this repair ticket because verification of {branch} failed at {}. Restore passing verification of {branch}, regardless of whose change caused the failure. GuildBotics will close this ticket when verification of {branch} passes.\n\n## Failed jobs\n",
         commit_link(&pending.sha)
     );
     for f in &pending.failures {
@@ -297,7 +297,7 @@ async fn evidence(
                 .run_ok(Some(&dir), &["show", "-s", "--format=%an", sha, "--"])
                 .await?;
             format!(
-                "Not from a pull request of this Branvil | {}",
+                "Not from a pull request of this server | {}",
                 text(author.trim())
             )
         };
@@ -425,7 +425,7 @@ fn create(
         let responder = super::responder_for(w, repo, active)?;
         let why = first.map_or_else(
             || {
-                "no commit after the last verified commit is from a pull request of this Branvil"
+                "no commit after the last verified commit is from a pull request of this server"
                     .into()
             },
             |p| {
@@ -848,7 +848,7 @@ mod tests {
                         assert_eq!(c.author, "branvil");
                         assert_eq!(c.meta, Some(json!({"repair_hint":{"sha":n.failed_sha,"job":"test"}})));
                         match state {
-                            "found" => assert!(c.body.contains("passes at aaaaaaa and fails at bbbbbbb, the first commit where it fails (not from a pull request of this Branvil)")),
+                            "found" => assert!(c.body.contains("passes at aaaaaaa and fails at bbbbbbb, the first commit where it fails (not from a pull request of this server)")),
                             "outside" => assert!(c.body.contains("also fails at aaaaaaa, the last verified commit")),
                             "inconsistent" => assert!(c.body.contains("aaaaaaa: success [Job](/workspaces/acme/repos/demo/jobs/pass), bbbbbbb: failure [Job](/workspaces/acme/repos/demo/jobs/fail)")),
                             "not_reproduced" => assert_eq!(c.body, "Hint: Main verification marked test as failed at fffffff. Narrowing observed no failing result for the job and stopped after two successful diagnostic runs at that commit."),

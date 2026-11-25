@@ -182,7 +182,7 @@ fn parse_file(text: &str) -> Result<ParsedFile, String> {
         toml::from_str(text).map_err(|e| format!("{PIPELINE_PATH} is not valid: {e}"))?;
     if file.version != 1 {
         return Err(format!(
-            "{PIPELINE_PATH}: version {} is not supported (this Branvil reads version 1).",
+            "{PIPELINE_PATH}: version {} is not supported (this server reads version 1).",
             file.version
         ));
     }

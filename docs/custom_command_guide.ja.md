@@ -349,7 +349,7 @@ guildbotics run repository/security_alerts --person alice repo=org/repo alert=42
 guildbotics run repository/security_alerts --person alice repo=org/repo state=resolved page_size=10 output=json
 ```
 
-コマンドは `services.code_hosting_service` で選んだBranvilを使い、隔離環境で読み取り専用で動きます。LLMは呼び出しません。Branvilが上流のGitHubからDependabotアラートを読むので、上流の設定と読み取り権限が必要です。上流のないリポジトリでは未対応として失敗します。[Branvil連携ガイド](branvil_integration.ja.md#上流が-github-のリポジトリ)
+コマンドは `services.code_hosting_service` で選んだコードホストを使い、隔離環境で読み取り専用で動きます。LLMは呼び出しません。コードホストが上流のGitHubからDependabotアラートを読むので、上流の設定と読み取り権限が必要です。上流のないリポジトリでは未対応として失敗します。[上流が GitHub のリポジトリ](code_host.ja.md#上流が-github-のリポジトリ)
 
 `output=json` は `{ "repo": "org/repo", "alerts": [...], "continuation": null }` という JSON テキストを返し、空配列と `null` を保持します。各アラートは文字列の `id`、URL、状態、パッケージ、エコシステム、マニフェストパス、重要度、アドバイザリの `identifiers`（`{ "type": "CVE", "value": "..." }` の配列）、概要、説明、`affected_versions`、`patched_version`、作成・更新日時を持ちます。未提供の任意項目は `null`、識別子は空配列になります。Markdown では未提供の任意項目を省略し、修正版の報告がない場合だけ明示します。見出しには取得する状態と、各アラートの ID・パッケージ・重要度を表示します。一覧には概要を、個別表示には他の項目の後ろに引用ブロックで説明の全文を表示します。対象は依存ライブラリの脆弱性です。
 
@@ -993,7 +993,7 @@ effort:
 
 ## 10. チャットの新着を確認してから公開する
 
-チャットワークフローでは、返信・リアクション・Git push・Branvilへの書き込みの直前に、元のスレッドの新着を確認します。
+チャットワークフローでは、返信・リアクション・Git push・チケットやPRへの書き込みの直前に、元のスレッドの新着を確認します。
 
 ```bash
 guildbotics member chat updates --person alice
@@ -1001,6 +1001,6 @@ guildbotics member chat updates --person alice
 
 このコマンドはSlack APIを呼ばず、永続化されたイベントキューを読みます。`new_messages` は、この実行の入力または前回の確認以降に届いたメッセージを返します。全件を読んで作業や返信内容を再検討し、確定操作の直前に再確認してください。`up_to_date` なら操作を進められます。`catching_up` は、ほかの書き込みが終わるのを待っている受信メッセージの保存待ちです。数秒待って再確認し、この状態だけを理由に公開や `blocked` 完了を行わないでください。`unavailable` は受信状態を確認できないことを意味します。公開操作を見送り、そのturn内に復旧しなければ `blocked` で完了します。
 
-書き込みコマンド側でも、確認漏れや確認後の新着があれば操作を拒否します。Branvilや別チャンネルへの書き込みでも、確認対象は依頼元のチャットスレッドです。確認したメッセージのIDを実行に記録します。追加の新着は、その配信後に返信・投稿・リアクション・Branvilへの書き込み・Gitの公開操作が記録された場合だけ done/asking 完了時に処理済みにします。blockedやno-opだけで終わった実行の新着は、次の実行に向けてキューに残します。最終確認の後に届くメッセージまで防ぐものではありません。
+書き込みコマンド側でも、確認漏れや確認後の新着があれば操作を拒否します。チケットやPR、別チャンネルへの書き込みでも、確認対象は依頼元のチャットスレッドです。確認したメッセージのIDを実行に記録します。追加の新着は、その配信後に返信・投稿・リアクション・チケットやPRへの書き込み・Gitの公開操作が記録された場合だけ done/asking 完了時に処理済みにします。blockedやno-opだけで終わった実行の新着は、次の実行に向けてキューに残します。最終確認の後に届くメッセージまで防ぐものではありません。
 
 workflow の turn は member の clone で作業します。利用者向けの成果物は、別途マウントされているプロンプトの `Artifact directory` の絶対パスへ保存します。

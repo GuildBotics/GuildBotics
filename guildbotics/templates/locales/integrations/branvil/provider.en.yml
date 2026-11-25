@@ -1,5 +1,5 @@
 en:
   workspace: "The workspace %{workspace} was read."
-  ci_load_failed: "Branvil's CI runner did not load %{archive}: %{detail}"
-  ci_load_lost: "Branvil restarted while its CI runner was loading %{archive}, and the load's outcome is lost. Load the archive again."
-  ci_load_superseded: "Another image operation began on Branvil's CI runner before the load of %{archive} was seen to finish, so its outcome is unknown. Load the archive again."
+  ci_load_failed: "The CI runner did not load %{archive}: %{detail}"
+  ci_load_lost: "GuildBotics restarted while the CI runner was loading %{archive}, and the load's outcome is lost. Load the archive again."
+  ci_load_superseded: "Another image operation began on the CI runner before the load of %{archive} was seen to finish, so its outcome is unknown. Load the archive again."

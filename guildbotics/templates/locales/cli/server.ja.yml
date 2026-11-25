@@ -1,5 +1,5 @@
 ja:
-  unreachable: "このポートの GuildBotics サーバーが受け付ける資格情報がこのマシンにないか、そこで待ち受けているものがそのサーバーであることを確かめられませんでした。サーバーのマシンでは GuildBotics を起動してください。他のマシンでは、ポートをサーバーへ転送してから、先に `guildbotics connect` を実行してください。 転送が未設定の場合は、docs/branvil_integration.ja.md の「Hub 以外のマシンで SSH 転送を設定する」に従って初回設定を行ってください。Windows では scripts/hub-forward.ps1 を使います。"
+  unreachable: "このポートの GuildBotics サーバーが受け付ける資格情報がこのマシンにないか、そこで待ち受けているものがそのサーバーであることを確かめられませんでした。サーバーのマシンでは GuildBotics を起動してください。他のマシンでは、ポートをサーバーへ転送してから、先に `guildbotics connect` を実行してください。 転送が未設定の場合は、docs/code_host.ja.md の「Hub 以外のマシンで SSH 転送を設定する」に従って初回設定を行ってください。Windows では scripts/hub-forward.ps1 を使います。"
   refused: "GuildBotics サーバーがリクエストを拒否しました: %{reason}"
   consent: "ブラウザの同意画面で、このマシンを許可してください。開かなかったときは、次のアドレスを開いてください:\n%{url}"
   callback_received: "GuildBotics が応答を受け取りました。このページは閉じてかまいません。"

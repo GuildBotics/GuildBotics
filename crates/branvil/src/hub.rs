@@ -105,7 +105,7 @@ async fn verification_history(
             .map_err(|e| e.without_url())?;
         anyhow::ensure!(
             response.status().is_success(),
-            "Branvil HTTP {}",
+            "GuildBotics HTTP {}",
             response.status()
         );
         Ok(response.json().await.map_err(|e| e.without_url())?)
@@ -176,7 +176,7 @@ pub async fn artifact(
         .map_err(|e| e.without_url())?;
     anyhow::ensure!(
         response.status().is_success(),
-        "Branvil artifact HTTP {}",
+        "GuildBotics artifact HTTP {}",
         response.status()
     );
     Ok(response

@@ -4,7 +4,14 @@ import { Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { PullRequest } from "../api/types";
 import { Header } from "../../ui/Header";
-import { ErrorMessage, Loading, MemberAvatar, StateBadge, Time } from "../components/common";
+import {
+  ErrorMessage,
+  Loading,
+  MemberAvatar,
+  shownName,
+  StateBadge,
+  Time,
+} from "../components/common";
 import { useT } from "../i18n";
 import { useChecks, useMemberKinds, useRepos } from "../query/hooks";
 import { usePullList } from "../query/pullList";
@@ -173,8 +180,14 @@ export function PullsView({ workspace, repo }: { workspace: string; repo: string
                     </span>
                     <Group gap={6} role="cell" wrap="nowrap">
                       <MemberAvatar name={p.author} kind={kindOf(p.author)} size={24} />
-                      <Text span size="sm" truncate style={{ minWidth: 0 }} title={p.author}>
-                        {p.author}
+                      <Text
+                        span
+                        size="sm"
+                        truncate
+                        style={{ minWidth: 0 }}
+                        title={shownName(p.author)}
+                      >
+                        {shownName(p.author)}
                       </Text>
                     </Group>
                     <span role="cell">

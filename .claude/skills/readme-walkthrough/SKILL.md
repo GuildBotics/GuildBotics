@@ -88,10 +88,10 @@ actually show, and a verdict of match, mismatch, unverified, or out of scope.
   `crates/guildbotics/src/install_cli.rs` and
   `guildbotics/templates/environment/cli_provision.json`. The actual
   installation and LaunchAgent registration are outside the walkthrough.
-- **Branvil and Slack.** Check controls up to connection and compare required
+- **Code host and Slack.** Check controls up to connection and compare required
   scopes and saved settings with the Rust setup providers. Use disposable
-  loopback Branvil data for any end-to-end Branvil checks. Do not contact a
-  live Branvil, GitHub or Slack instance, open consent pages for a real
+  loopback code host data for any end-to-end code host checks. Do not contact a
+  live code host, GitHub or Slack instance, open consent pages for a real
   account, or supply real tokens. To exercise Slack's local rejection, enter
   obviously fake values **without** the `xoxb-` and `xapp-` prefixes. Check
   that the screen reports a wrong token type for both. Values with the correct

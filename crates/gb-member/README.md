@@ -2,8 +2,8 @@
 
 member のコマンドの解析、memory、member context/help、成果物と出力の共通処理と、
 Windows のクライアントも使う部分（archive・output・`MemberError`）。
-クライアントのビルドに Branvil を含めないため、チケット・PR・repository 情報・chat・git を
-扱う処理は [gb-server の member](../gb-server/src/member/) に置き、Branvil の agent モジュールを
+クライアントのビルドにコードホスト（`crates/branvil`）を含めないため、チケット・PR・repository 情報・chat・git を
+扱う処理は [gb-server の member](../gb-server/src/member/) に置き、コードホストの agent モジュールを
 直接呼ぶ。資格情報の取得と guest への転送はこの crate の責務に含まない。
 
 `gb-server` の `RepositoryServices` はサービスを遅延取得する。ticket の人による承認、入力の検証、

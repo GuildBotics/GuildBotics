@@ -1,6 +1,6 @@
 # macOS Hubの起動と更新
 
-Hubのチェックアウトで、オーナーがmacOSのデスクトップにログインしてから実行します。Git、リポジトリの `rust-toolchain.toml` が指定するRust、Node.js 24、npmを `PATH` に入れておきます。コードホスト（リポジトリ、チケット、プルリクエスト、CI）のデータは `GUILDBOTICS_CODE_HOST_DATA_DIR` の絶対パスに置き、初回の起動時に作られます。既存のHubを切り替える場合は、これまでの方法でGuildBoticsとBranvilを停止し、両方の旧LaunchAgentの登録を解除してから、既存のBranvilデータを指定します。
+Hubのチェックアウトで、オーナーがmacOSのデスクトップにログインしてから実行します。Git、リポジトリの `rust-toolchain.toml` が指定するRust、Node.js 24、npmを `PATH` に入れておきます。コードホスト（リポジトリ、チケット、プルリクエスト、CI）のデータは `GUILDBOTICS_CODE_HOST_DATA_DIR` の絶対パスに置き、初回の起動時に作られます。既存のHubを切り替える場合は、これまでの方法でGuildBoticsと単体で動かしていたコードホストを停止し、両方の旧LaunchAgentの登録を解除してから、既存のコードホストのデータを指定します。
 
 ## 署名の識別を用意する
 
@@ -45,11 +45,11 @@ scripts/hub-server.sh status
 
 インストール後の最初の起動時、macOSの確認が出たらオーナーが回答してください。スクリプトは最大20分間、起動を待ちます。同じ識別で署名した更新では、これらの確認は出ません。
 
-- **キーチェーンへのアクセス**：GuildBoticsのSecretを暗号化・復号する端末共通の鍵（サービス名 `GuildBotics`、アカウント名 `agent-environment-credentials`）への許可です。「常に許可」を選ぶと、同じTeam IDで署名したビルドには再び確認が出ません。`guildbotics connect` が保存する `guildbotics-server` の項目はCLIの接続用トークンで、この暗号化の鍵とは別です。Branvilの秘密はデータディレクトリにあり、Branvil用の鍵の確認がもう1回出るわけではありません。
+- **キーチェーンへのアクセス**：GuildBoticsのSecretを暗号化・復号する端末共通の鍵（サービス名 `GuildBotics`、アカウント名 `agent-environment-credentials`）への許可です。「常に許可」を選ぶと、同じTeam IDで署名したビルドには再び確認が出ません。`guildbotics connect` が保存する `guildbotics-server` の項目はCLIの接続用トークンで、この暗号化の鍵とは別です。コードホストの秘密はデータディレクトリにあり、コードホスト用の鍵の確認がもう1回出るわけではありません。
 - **「書類」フォルダへのアクセス**：macOSのプライバシー保護（TCC）の確認です。「書類」の下にワークスペースや明示的な許可先を置いた場合に必要です。キーチェーンとは別に許可してください。
 
 ```sh
-scripts/hub-server.sh restart    # GuildBoticsの作業とBranvilのCIを待ってから再起動
+scripts/hub-server.sh restart    # GuildBoticsの作業とCIを待ってから再起動
 scripts/hub-server.sh uninstall  # 停止してLaunchAgentの登録を解除
 ```
 
@@ -90,7 +90,7 @@ GuildBotics の CI では、ランナーが受け持つ各ジョブの最新世�
 
 ## 手動更新
 
-Hubのチェックアウトで、オーナーがBranvilのmainの表示にある確認済みのコミットを確認してから実行します。保存形式を上げる場合は、稼働中の版から1段ずつ進めてください。
+Hubのチェックアウトで、オーナーがプルリクエスト一覧のmainの表示にある確認済みのコミットを確認してから実行します。保存形式を上げる場合は、稼働中の版から1段ずつ進めてください。
 
 ```sh
 git fetch origin main
@@ -98,7 +98,7 @@ git merge --ff-only <確認済みのコミットのSHA>
 scripts/hub-server.sh update
 ```
 
-更新は Branvil の main で確認済みのコミットを対象とし、同じコミットの
+更新は Hub のコードホストの main で確認済みのコミットを対象とし、同じコミットの
 `client-windows` と `client-linux` の成果物を照合してから切り替えます。
 `client-linux` は `.guildbotics-ci.toml` の `post_merge = true` で PR では流れず、マージ後に流れます。
 arm64 でこのジョブを引き取るランナーでは、x86_64 GNU のクロスツールチェーンを
@@ -106,7 +106,7 @@ arm64 でこのジョブを引き取るランナーでは、x86_64 GNU のクロ
 
 1. `update` は更新するコミットから画面と実行ファイルを作り、インストール時に記録した識別で署名します。現在のサーバーは稼働を続けます。
 2. 現行ビルドの `server hub-data backup` で、稼働中のサーバーからGuildBoticsの記録とコードホストのデータを退避します。新ビルドの `server hub-data restore` でその退避を別のディレクトリへ復元し、写しに `server hub-data upgrade`（検査を含む）を実行します。
-3. 検査が通ると、GuildBoticsの実行中の作業と後処理を待ちます。その間もBranvilはCIジョブをランナーへ渡し続けます。作業と後処理が終わってから、新しいCIジョブの配布を止め、実行中のCI（`ci.stop_wait_secs` の上限まで）を待って、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
+3. 検査が通ると、GuildBoticsの実行中の作業と後処理を待ちます。その間もCIはジョブをランナーへ渡し続けます。作業と後処理が終わってから、新しいCIジョブの配布を止め、実行中のCI（`ci.stop_wait_secs` の上限まで）を待って、統合サーバーが停止します。新ビルドで実データをアップグレードして検査し、LaunchAgentの起動先を切り替えます。
 4. 新ビルドを起動し、起動を確認できると、新ビルドからCLIとスキルを導入します。
 
 手動更新でも停止時のサービス再開の意図を保存します。自動更新を登録している場合は、その次の回が記録に従ってサービスを再開します。
@@ -154,7 +154,7 @@ scripts/hub-server.sh recover
    ```sh
    git merge --ff-only "$change"
    scripts/hub-server.sh uninstall
-   export GUILDBOTICS_CODE_HOST_DATA_DIR="/absolute/path/to/branvil-data"
+   export GUILDBOTICS_CODE_HOST_DATA_DIR="/absolute/path/to/code-host-data"
    export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
    scripts/hub-server.sh install
    ```
@@ -182,7 +182,7 @@ scripts/hub-server.sh recover
 実機への適用は #177 で行う。既存のチケット・PR・Git remote の 7878 の URL は変えない。
 入口リンクとブラウザセッションは GuildBotics を正として共用する。更新後は
 `guildbotics open` の新しい入口リンクで一度入り直す。
-古い Branvil セッションは統合サーバーで使えない。単体の `guildbotics branvil serve` は従来どおり。
+旧版のコードホストの画面のセッションは統合サーバーで使えない。単体のコードホスト（`guildbotics branvil serve`）は従来どおり。
 
 ### Hub
 
@@ -194,7 +194,7 @@ scripts/hub-server.sh recover
 3. `connections/branvil.yml` の `base_url` が共通の URL と一致することを確認する。
    既定の 7878 なら変更不要。独自ポートなら GuildBotics の接続設定も同じ URL にする。
    統合サーバーと `guildbotics branvil` のクライアントは `GUILDBOTICS_SERVER_PORT` を使い、
-   Branvil の `listen` は単体の `guildbotics branvil serve` だけで使う。
+   コードホストの設定の `listen` は単体の `guildbotics branvil serve` だけで使う。
 4. 新しい接続を確認後、古い `~/.guildbotics/data/server/8765/` を削除する。
    キーチェーンアクセスで service `guildbotics-server`、account `127.0.0.1:8765` の
    古い同意トークンを削除する。別の項目や新しい 7878 の記録は削除しない。
@@ -207,14 +207,14 @@ scripts/hub-server.sh recover
    `my-hub` は実際の SSH 設定の別名に置き換える。
 2. ブラウザで `guildbotics open` の新しい入口を開く。`guildbotics connect` を使っていた
    マシンでは同じコマンドで同意を取り直す。古い 8765 の同意トークンと記録を上記と同様に削除する。
-3. GuildBotics と Branvil の画面、チケット URL、Git fetch / push を確認する。
+3. GuildBotics とコードホストの画面、チケット URL、Git fetch / push を確認する。
    8765 の転送では GuildBotics の画面を開けない。
 
 ### 開発用データ
 
 `scripts/dev.sh` は両方を 8866（変更時は `GUILDBOTICS_SERVER_PORT`）で起動する。
-既存の開発用 Branvil のデータはそのまま使う。`branvil.toml` の 7879 の `listen` や
-`base_url` は統合サーバーでは使わない。開発ワークスペースの Branvil 接続設定も共通 URL に変更する。
+既存の開発用のコードホストのデータはそのまま使う。`branvil.toml` の 7879 の `listen` や
+`base_url` は統合サーバーでは使わない。開発ワークスペースのコードホストの接続設定も共通 URL に変更する。
 
 
 ## 確認済みのコミットを追う自動更新
@@ -238,7 +238,7 @@ HEADより先にある確認済みのコミットのうち、保存形式の版�
 読み込み済みのときだけfast-forwardして通常の `update` を実行します。
 独自イメージとスナップショットはCLIで選択中のワークスペースについて確認します。
 保存形式の版を1段ずつたどり、次の回でさらに先の確認済みのコミットへ進みます。候補がなければ待ちます。
-本番がmainからどれだけ遅れているかは、BranvilのPR一覧の見出しのmainの状態（「確認済みから n 本進んでいる」、失敗時は待っている修復チケット）で確認します。
+本番がmainからどれだけ遅れているかは、プルリクエスト一覧の見出しのmainの状態（「確認済みから n 本進んでいる」、失敗時は待っている修復チケット）で確認します。
 
 更新がサーバーを止めた時点でサービスが動いていた場合だけ、更新後やロールバック後に
 `guildbotics service start` で再開します。ビルド中に開始したサービスは再開し、ビルド中に止めたサービス（作業の終わりを待っている途中を含む）は再開しません。途中で停止した場合も、再開の意図を保存しておき、
@@ -295,9 +295,9 @@ scripts/hub-server.sh auto-install
 
 ## 作業停止の通知を webhook に切り替える
 
-`hub-update.json` の `manual_update_version` 10 の手作業です。メンバーのチケットや PR の作業停止は、Branvil の通知用 webhook に届くようになります。webhook が未設定の場合、作業停止の通知は届きません。
+`hub-update.json` の `manual_update_version` 10 の手作業です。メンバーのチケットや PR の作業停止は、**設定 → 通知** の webhook に届くようになります。webhook が未設定の場合、作業停止の通知は届きません。
 
-1. 更新前の Hub で、オーナーとして **設定 → 通知** を開きます。設定画面が分かれている版では、Branvil 側の **設定 → 通知** を使います。設定状況と送り先のホストを確認します。Slack で受け取る場合は、Slack 側で送り先を確認し、どのメンバーも監視していないチャンネルを使います。未設定の場合や送り先を変える場合は、受け取り先の Incoming Webhook の URL を入力して保存します。
+1. 更新前の Hub で、オーナーとして **設定 → 通知** を開きます。設定画面が分かれている版では、コードホスト側の **設定 → 通知** を使います。設定状況と送り先のホストを確認します。Slack で受け取る場合は、Slack 側で送り先を確認し、どのメンバーも監視していないチャンネルを使います。未設定の場合や送り先を変える場合は、受け取り先の Incoming Webhook の URL を入力して保存します。
 2. [手動更新](#手動更新)の手順で、版 10 の確認済みコミットへ更新します。
 3. **設定 → 通知** を開き直し、「設定済み」と送り先のホストを確認します。次に作業が人の対応を待って止まったとき、送り先にメンバー名と対象へのリンクが届くことを確認します。送信の失敗は同じ画面に表示されます。
 
@@ -433,13 +433,13 @@ CLI は手元の稼働中サーバー（`app-api.lock`）があればオーナ�
 
 ### 画面で見る更新の段階と版
 
-GuildBotics と組み込み Branvil は、すべてのページの上部に Hub の更新・再起動・停止の段階を表示します。帯は段階が変わるまで閉じられます。
+GuildBotics は、すべてのページの上部に Hub の更新・再起動・停止の段階を表示します。帯は段階が変わるまで閉じられます。
 
 - 準備中（ビルド・退避・リハーサル）は通常どおり使えます。まもなく新しい実行の受け付けを止めることを知らせます。
 - 受け付けの停止中は巡回・定期実行・チャットの受信が止まります。手動実行・コマンド作成・確認・診断・実行環境のビルド・利用枠の確認・ワークスペースの切り替えは断ります。新しい CI ジョブは始めず、画面と CLI の閲覧、実行中の作業と CI ジョブは続きます。帯には残る作業とジョブの件数を表示します。
 - 切り替え中は画面と CLI も接続できなくなり、起動後に接続し直します。自動更新では、停止を受け付けた時点でサービスが動いていた場合に再開します。手動の再起動・停止の帯にはサービス再開の案内を出しません。
 
-今の版は GuildBotics のサービス画面に常時表示し、帯には今の版と受け取った更新先の版を表示します。SHA の先頭 8 桁と題名を示し、ワークスペースのコードホストがリモートを解決できればコミットへのリンクにします。開発用起動などビルド情報がない場合は今の版を表示しません。Branvil 単体では従来の CI 停止の案内を使います。
+今の版は GuildBotics のサービス画面に常時表示し、帯には今の版と受け取った更新先の版を表示します。SHA の先頭 8 桁と題名を示し、ワークスペースのコードホストがリモートを解決できればコミットへのリンクにします。開発用起動などビルド情報がない場合は今の版を表示しません。
 
 更新スクリプトは現行ビルドの `server stop` に新しい引数を渡さず、`GUILDBOTICS_HUB_STOP_REASON` をシェルから継承しない形で設定します（`update` / `restart`、指定しなければ `stop`）。`server hub-phase` の準備・解除の通知は表示用で、古いビルドが受け付けない場合もログに残して更新を続けます。最初の更新で帯が出なくても、対応版の次の更新から表示します。
 
@@ -502,6 +502,36 @@ git show 148f4f56508088e96299a009428dd787fab123e4:docs/hub-server.md
 
 移行後の実行設定は、その設定が属するワークスペースのリポジトリを巡回します。旧版でチケット用とコードホスト用に別々のワークスペースを選んでいる場合は、旧版の設定でどちらを使うか選び、両方の指定をそろえてから移行します。同じワークスペースに複数の実行設定が結び付いている場合は、引き継ぐ実行設定の指定を残します。再実行前に設定変更を含むバックアップを取得します。
 
-移行時に Branvil のワークスペース指定がない実行設定（上の手順ですべての指定を外したものを含む）は、`workspace-` に 16 桁の 16 進数が続く名前で登録されます。選択欄と画面の URL にはこの名前が表示されます。この名前でワークスペースが新規に作られた場合、移行直後に巡回するリポジトリはありません。
+移行時にコードホストのワークスペース指定がない実行設定（上の手順ですべての指定を外したものを含む）は、`workspace-` に 16 桁の 16 進数が続く名前で登録されます。選択欄と画面の URL にはこの名前が表示されます。この名前でワークスペースが新規に作られた場合、移行直後に巡回するリポジトリはありません。
 
 チケット、PR、コメントの新しいリンクは `/workspaces/{workspace}/repos/{repo}/` の下を指します。既存の本文とコメントはそのまま保存されます。
+
+## コードホストの設定ファイルの名前を変える更新（手作業の版 13）
+
+この版から、コードホストとランナーの設定ファイルの名前が `branvil.toml` から `config.toml` に変わります。新しい版は `config.toml` だけを読み、ファイルが無ければ既定値で動きます。
+
+先に Hub 以外のランナーのマシンで設定を写します。ランナーは Hub の版に追従して再起動し、新しい版は `GUILDBOTICS_HOME/runner/config.toml` を読みます。このファイルが無いと、msb のホームと作業場所が既定の場所に戻り、それまでのイメージとキャッシュが見えなくなります。古いファイルは、ランナーが新しい版になるまで前の版が読むので残します。`branvil.toml` が無いマシンでは何もしません。
+
+```sh
+cp ~/.guildbotics/runner/branvil.toml ~/.guildbotics/runner/config.toml
+```
+
+```powershell
+Copy-Item "$env:USERPROFILE\.guildbotics\runner\branvil.toml" "$env:USERPROFILE\.guildbotics\runner\config.toml"
+```
+
+`GUILDBOTICS_HOME` を変えているマシンでは、そのディレクトリの `runner` を使います。
+
+次に、[手動更新](#手動更新)の手順で Hub を更新します。`hub-data upgrade` の変換で、コードホストの保存形式の版は 47 になります。前の版のバックアップを復元するときも、同じ変換を行います。変換は次のことを行います。
+
+- コードホストのデータディレクトリ（`GUILDBOTICS_CODE_HOST_DATA_DIR`、未指定なら `GUILDBOTICS_HOME/data/code-host`）の `branvil.toml` を `config.toml` に写します。`branvil.toml` は、更新に失敗して前のビルドへ戻ったときに前のビルドが読むので残ります。
+- 自動ランナーのメンバー名を `branvil-runner` から `hub-runner` に変え、保存したランナーごとの上限も新しい名前へ移します。過去の実行の記録は古い名前のままです。
+- 手動で発行したトークンを持つ `branvil-runner` は、人が登録したランナーなので名前を変えません。`hub-runner` という名前のメンバーがすでにあるときも、どちらも名前を変えません。この場合、自動ランナーはその `hub-runner` として動き、ランナーでなければ起動できません。そのような Hub では、ランナーの動かし方を「自動」にしません。
+
+自動ランナーを名前で指定して待っている再試行は、古い名前のままになります。そのような再試行は、更新の前に取り消します。
+
+更新のあと、Hub と各ランナーが新しい版で動き、ランナーが試行を取りに行くことを確かめてから、Hub のデータディレクトリと各ランナーのマシンの古い `branvil.toml` を消します。
+
+開発用の `scripts/dev.sh` は、コードホストのデータを `--data-dir` の `branvil/` ではなく `code-host/` に置きます。既存の開発用データを使い続ける場合は、サーバーを止めて `branvil/` を `code-host/` に名前を変えます。続けて、`GUILDBOTICS_HOME` を `--data-dir` の `home`、`GUILDBOTICS_CODE_HOST_DATA_DIR` を `--data-dir` の `code-host` にし、`scripts/dev.sh` と同じく `GUILDBOTICS_IDENTITY_ROOT` と `GUILDBOTICS_CONFIG_DIR` を外して、このチェックアウトのビルドで `guildbotics server hub-data upgrade` を実行してから起動します。
+
+上流アカウントの資格情報と通知の webhook は、データディレクトリの場所に結び付けて保存されています。改名したデータディレクトリからは見えないので、起動後に **設定 → メンバー** の各メンバーのコードホストのアカウントと、**設定 → 通知** の webhook を設定し直します。

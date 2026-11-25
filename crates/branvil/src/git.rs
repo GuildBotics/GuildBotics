@@ -541,10 +541,10 @@ impl Git {
                 Some(dir),
                 &["commit-tree", &tree, "-p", base, "-p", head, "-m", message],
                 &[
-                    ("GIT_AUTHOR_NAME", "Branvil"),
-                    ("GIT_AUTHOR_EMAIL", "branvil@localhost"),
-                    ("GIT_COMMITTER_NAME", "Branvil"),
-                    ("GIT_COMMITTER_EMAIL", "branvil@localhost"),
+                    ("GIT_AUTHOR_NAME", "GuildBotics"),
+                    ("GIT_AUTHOR_EMAIL", "guildbotics@localhost"),
+                    ("GIT_COMMITTER_NAME", "GuildBotics"),
+                    ("GIT_COMMITTER_EMAIL", "guildbotics@localhost"),
                 ],
             )
             .await?;
@@ -1051,7 +1051,7 @@ mod tests {
         let dir = work.join(".git");
         let head = commit_file(&git, &work, "feature.txt", "feature\n").await;
         let MergeCommit::Ready { sha, .. } = git
-            .merge_commit(&dir, &initial, &head, "Branvil landing gate !7")
+            .merge_commit(&dir, &initial, &head, "landing gate !7")
             .await
             .unwrap()
         else {
@@ -1069,7 +1069,7 @@ mod tests {
         .unwrap();
         let base = commit_file(&git, &work, "main.txt", "main\n").await;
         let MergeCommit::Ready { sha, tree } = git
-            .merge_commit(&dir, &base, &head, "Branvil landing gate !7")
+            .merge_commit(&dir, &base, &head, "landing gate !7")
             .await
             .unwrap()
         else {
@@ -1077,12 +1077,12 @@ mod tests {
         };
         assert_ne!(sha, head);
         let (_, author, _, parents, _) = git.commit_info(&dir, &sha).await.unwrap().unwrap();
-        assert_eq!(author, "Branvil");
+        assert_eq!(author, "GuildBotics");
         assert_eq!(
             git.run_ok(Some(&dir), &["show", "-s", "--format=%s", &sha])
                 .await
                 .unwrap(),
-            "Branvil landing gate !7"
+            "landing gate !7"
         );
         assert_eq!(parents, vec![base.clone(), head]);
         let identities = git
@@ -1094,7 +1094,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             identities,
-            "Branvil <branvil@localhost>\nBranvil <branvil@localhost>"
+            "GuildBotics <guildbotics@localhost>\nGuildBotics <guildbotics@localhost>"
         );
         for file in ["feature.txt", "main.txt"] {
             assert!(
@@ -1127,7 +1127,7 @@ mod tests {
             .filter(|kind| *kind == "commit")
             .count();
         assert_eq!(
-            git.merge_commit(&dir, &base, &head, "Branvil landing gate !7")
+            git.merge_commit(&dir, &base, &head, "landing gate !7")
                 .await
                 .unwrap(),
             MergeCommit::Conflicts {
@@ -1192,7 +1192,7 @@ mod tests {
         );
         assert!(git.merge_tree(&dir, &base, &head).await.is_err());
         assert!(
-            git.merge_commit(&dir, &base, &head, "Branvil landing gate !7")
+            git.merge_commit(&dir, &base, &head, "landing gate !7")
                 .await
                 .is_err()
         );

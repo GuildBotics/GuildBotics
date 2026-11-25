@@ -162,7 +162,7 @@ def collect(paths, layers, before):
     except OSError as error:
         part.unlink(missing_ok=True)
         print(
-            f"[branvil] packing RAM workspace artifacts failed: {error}",
+            f"[guildbotics] packing RAM workspace artifacts failed: {error}",
             file=sys.stderr,
         )
 
@@ -183,7 +183,7 @@ def use_disk(error, args, *, detach=False):
         # Remove the return mount before an unprivileged process starts.
         run("umount", "-l", RETURN)
     print(
-        f"[branvil] RAM workspace disabled: {error}; using disk",
+        f"[guildbotics] RAM workspace disabled: {error}; using disk",
         file=sys.stderr,
         flush=True,
     )
@@ -258,7 +258,7 @@ def main(mib, paths, artifacts, uid, keep_cache, command):
         use_disk(error, drop + shell)
 
     (RETURN / "pid").write_text(str(os.getpid()), encoding="ascii")
-    print(f"[branvil] RAM workspace enabled ({mib} MiB)", file=sys.stderr, flush=True)
+    print(f"[guildbotics] RAM workspace enabled ({mib} MiB)", file=sys.stderr, flush=True)
     before = {
         path: identity(path)
         for path in files(artifacts)
@@ -295,7 +295,7 @@ def main(mib, paths, artifacts, uid, keep_cache, command):
             save_cache(keep_cache)
         except (OSError, subprocess.CalledProcessError) as error:
             print(
-                f"[branvil] saving the RAM workspace cache failed: {error}",
+                f"[guildbotics] saving the RAM workspace cache failed: {error}",
                 file=sys.stderr,
             )
     (RETURN / "finished").touch()

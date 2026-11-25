@@ -21,11 +21,13 @@ use crate::model::{Member, MemberKind, Repo};
 use crate::util::fold;
 
 fn challenge() -> Response<Body> {
-    let mut resp = Response::new(Body::from("Branvil needs your member name and a token.\n"));
+    let mut resp = Response::new(Body::from(
+        "GuildBotics needs your member name and a token.\n",
+    ));
     *resp.status_mut() = StatusCode::UNAUTHORIZED;
     resp.headers_mut().insert(
         header::WWW_AUTHENTICATE,
-        HeaderValue::from_static("Basic realm=\"Branvil\", charset=\"UTF-8\""),
+        HeaderValue::from_static("Basic realm=\"GuildBotics\", charset=\"UTF-8\""),
     );
     resp
 }
@@ -81,7 +83,7 @@ pub async fn handle(
     body: Body,
 ) -> Response<Body> {
     let Some((repo_path, service_path)) = split(&rest) else {
-        return plain(StatusCode::NOT_FOUND, "Not a Branvil Git URL.");
+        return plain(StatusCode::NOT_FOUND, "Not a GuildBotics Git URL.");
     };
     let query = uri.query().unwrap_or("").to_string();
     match (method.as_str(), service_path) {

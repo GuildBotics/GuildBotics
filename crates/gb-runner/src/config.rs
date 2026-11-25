@@ -9,7 +9,7 @@ impl Config {
     pub fn load(path: Option<&Path>, data: &Path) -> anyhow::Result<Self> {
         let file = path
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| data.join("branvil.toml"));
+            .unwrap_or_else(|| data.join("config.toml"));
         #[derive(serde::Deserialize, Default)]
         struct File {
             #[serde(default)]

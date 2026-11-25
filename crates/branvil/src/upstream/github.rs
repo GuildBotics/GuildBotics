@@ -101,14 +101,19 @@ fn next_after(headers: &reqwest::header::HeaderMap) -> HostResult<Option<String>
         .ok_or_else(|| {
             host_error(
                 None,
-                "GitHub sent a next page of Dependabot alerts that Branvil cannot follow.",
+                "GitHub sent a next page of Dependabot alerts that GuildBotics cannot follow.",
             )
         })
 }
 
 /// A Dependabot alert in Branvil's words.
 fn alert(v: &Value) -> HostResult<DependencyAlert> {
-    let unreadable = || host_error(None, "GitHub sent a Dependabot alert Branvil cannot read.");
+    let unreadable = || {
+        host_error(
+            None,
+            "GitHub sent a Dependabot alert GuildBotics cannot read.",
+        )
+    };
     let id = v["number"]
         .as_u64()
         .filter(|n| *n > 0)

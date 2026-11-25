@@ -23,7 +23,7 @@ pub type Tbl = TableDefinition<'static, &'static [u8], &'static [u8]>;
 /// The schema version this build reads and writes. A database of any other
 /// version is refused instead of being misread; one of the previous version
 /// is upgraded by `upgrade` (`guildbotics server hub-data upgrade` and `restore`).
-pub const SCHEMA_VERSION: u64 = 46;
+pub const SCHEMA_VERSION: u64 = 47;
 
 pub const META: Tbl = TableDefinition::new("meta");
 pub const COUNTERS: Tbl = TableDefinition::new("counters");
@@ -899,7 +899,7 @@ fn open_db(path: &Path, cache_bytes: usize) -> anyhow::Result<Database> {
         .create(path)
         .map_err(|e| match e {
             redb::DatabaseError::DatabaseAlreadyOpen => anyhow::anyhow!(
-                "{} is already open by another Branvil process (stop the server first)",
+                "{} is already open by another GuildBotics process (stop the server first)",
                 path.display()
             ),
             other => anyhow::anyhow!("cannot open {}: {other}", path.display()),

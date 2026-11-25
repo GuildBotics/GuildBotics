@@ -293,7 +293,7 @@ impl Api {
     }
 
     fn net(e: reqwest::Error) -> ApiError {
-        ApiError::Other(format!("Branvil is not reachable: {e}"))
+        ApiError::Other(format!("The GuildBotics server is not reachable: {e}"))
     }
 
     pub async fn health(&self) -> Result<RunnerHealth, ApiError> {
@@ -692,10 +692,12 @@ pub fn install_msb(from: &Path) -> anyhow::Result<()> {
 /// Runs the runner until the process is stopped.
 pub async fn run(settings: Settings) -> anyhow::Result<()> {
     let api = settings.api()?;
-    let me = api
-        .me()
-        .await
-        .map_err(|e| anyhow::anyhow!("cannot reach Branvil at {}: {e}", settings.url))?;
+    let me = api.me().await.map_err(|e| {
+        anyhow::anyhow!(
+            "cannot reach the GuildBotics server at {}: {e}",
+            settings.url
+        )
+    })?;
     if me["kind"] != "runner" {
         bail!(
             "the token belongs to a {} member; the runner needs a runner member's token (`guildbotics runner register`)",
@@ -1091,7 +1093,9 @@ impl Runner {
         let say = |text: String| {
             let log = log.clone();
             async move {
-                let _ = log.send(format!("[branvil] {text}\n").into_bytes()).await;
+                let _ = log
+                    .send(format!("[guildbotics] {text}\n").into_bytes())
+                    .await;
             }
         };
         if !health.ready {
@@ -1584,7 +1588,7 @@ mod tests {
     #[test]
     fn machine_work_dir_precedes_the_clients_default() {
         let root = tempfile::tempdir().unwrap();
-        let file = root.path().join("branvil.toml");
+        let file = root.path().join("config.toml");
         std::fs::write(&file, "[ci.executor]\nwork_dir = 'local'\n").unwrap();
         let config = crate::config::Config::load(Some(&file), root.path()).unwrap();
         for (flag, configured, expected) in [

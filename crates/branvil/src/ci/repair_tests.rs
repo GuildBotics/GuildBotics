@@ -848,7 +848,7 @@ async fn assignments_evidence_and_lifecycle() {
         assert!(t.body.contains("No record"));
         assert!(t.body.contains("[Job]("));
         assert!(t.body.contains("[Commit]("));
-        if t.body.contains("Not from a pull request of this Branvil") {
+        if t.body.contains("Not from a pull request of this server") {
             assert!(t.body.contains("| Test |"));
         }
         assert!(!t.body.contains('@'));

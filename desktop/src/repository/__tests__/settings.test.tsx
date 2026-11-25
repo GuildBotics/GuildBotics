@@ -256,7 +256,7 @@ describe("settings", () => {
     const network = screen.getByRole("switch", { name: /^Network for jobs/ });
     expect(network).not.toBeChecked();
     expect(
-      screen.getByText(/public destinations only, never the Branvil machine or private networks/),
+      screen.getByText(/public destinations only, never the Hub or private networks/),
     ).toBeInTheDocument();
     await user.click(network);
     const approvals = screen.getByRole("textbox", { name: "Required approvals" });
@@ -289,7 +289,7 @@ describe("settings", () => {
     {
       lang: "en",
       upstream: false,
-      help: "During a verification failure, Branvil allows only repair PRs to merge into the affected default or collection branch.",
+      help: "During a verification failure, only repair PRs can merge into the affected default or collection branch.",
     },
     {
       lang: "ja",
@@ -299,12 +299,12 @@ describe("settings", () => {
     {
       lang: "en",
       upstream: true,
-      help: "PRs without a repair ticket stay unpublished to GitHub until main verification passes. Branvil cannot stop merges on GitHub for PRs already published to GitHub. Those PRs are shown as held. Branvil also holds local merges into failing collection branches except for their repair PRs.",
+      help: "PRs without a repair ticket stay unpublished to GitHub until main verification passes. Merges on GitHub of PRs already published to GitHub cannot be stopped from here. Those PRs are shown as held. Local merges into failing collection branches are also held except for their repair PRs.",
     },
     {
       lang: "ja",
       upstream: true,
-      help: "修復チケットにつながっていない PR は、main の確認が通るまで GitHub に出しません。すでに GitHub に出ている PR は、GitHub でのマージを Branvil は止められません。その PR は保留中と表示します。確認が失敗している集約ブランチへのマージも、その修復 PR に限ります。",
+      help: "修復チケットにつながっていない PR は、main の確認が通るまで GitHub に出しません。すでに GitHub に出ている PR の GitHub でのマージは、ここからは止められません。その PR は保留中と表示します。確認が失敗している集約ブランチへのマージも、その修復 PR に限ります。",
     },
   ] as const)(
     "explains hold behavior ($lang, upstream=$upstream)",
@@ -355,7 +355,7 @@ describe("settings", () => {
   );
 
   it.each([
-    { upstream: null, says: /Branvil merges automatically/ },
+    { upstream: null, says: /it is merged automatically/ },
     {
       upstream: {
         provider: "github",
@@ -365,7 +365,7 @@ describe("settings", () => {
         reader: { member: "aiko", chosen: false },
         following: {},
       },
-      says: /Branvil publishes to GitHub automatically as the author/,
+      says: /it is published to GitHub automatically in its author's name/,
     },
   ])(
     "turns automatic landing on from the CI tab and says what it does ($says)",
