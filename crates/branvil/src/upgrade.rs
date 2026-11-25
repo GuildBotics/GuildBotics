@@ -63,8 +63,9 @@ pub(crate) fn upgrade_with_roots(
 /// Moves the automatic runner to its new name. Its tokens go: the service
 /// mints the automatic token again at every start. Its past attempts keep the
 /// name they ran under. Members the previous build let anyone name keep their
-/// names: an agent called `branvil-runner`, or both runners when a member
-/// `hub-runner` exists.
+/// names: a `branvil-runner` that is not a runner or holds a token issued by
+/// hand (a runner the owner created under that name), or both runners when a
+/// member `hub-runner` exists.
 fn rename_auto_runner(w: &Wtx) -> anyhow::Result<bool> {
     let new = Member::key(AUTO_RUNNER);
     let old = Member::key(FROM_AUTO_RUNNER);
@@ -74,13 +75,17 @@ fn rename_auto_runner(w: &Wtx) -> anyhow::Result<bool> {
     else {
         return Ok(false);
     };
-    if w.exists(store::MEMBERS, &new)? {
+    let tokens: Vec<Token> = w
+        .prefix_all::<Token>(store::TOKENS, &[])?
+        .into_iter()
+        .filter(|t| crate::util::fold(&t.member) == FROM_AUTO_RUNNER)
+        .collect();
+    if w.exists(store::MEMBERS, &new)? || tokens.iter().any(|t| t.label != crate::auth::AUTO_LABEL)
+    {
         return Ok(false);
     }
-    for token in w.prefix_all::<Token>(store::TOKENS, &[])? {
-        if crate::util::fold(&token.member) == FROM_AUTO_RUNNER {
-            crate::auth::revoke(w, &token)?;
-        }
+    for token in &tokens {
+        crate::auth::revoke(w, token)?;
     }
     if let Some(avatar) = w.get_raw(store::AVATARS, &old)? {
         w.put_raw(store::AVATARS, &new, &avatar)?;
@@ -236,7 +241,13 @@ mod tests {
 
     #[test]
     fn upgrade_keeps_the_names_of_members_the_previous_build_let_anyone_choose() {
-        for (old_kind, existing_new) in [("agent", false), ("runner", true)] {
+        // Each case is kept by one condition alone: the kind, an existing
+        // `hub-runner`, or a token issued by hand.
+        for (old_kind, existing_new, label) in [
+            ("agent", false, None),
+            ("runner", true, Some(crate::auth::AUTO_LABEL)),
+            ("runner", false, Some("runner")),
+        ] {
             let temporary = tempfile::tempdir().unwrap();
             let layout = Layout::new(temporary.path());
             let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
@@ -247,7 +258,9 @@ mod tests {
                     .unwrap();
                 old["kind"] = old_kind.into();
                 w.put(store::MEMBERS, &Member::key(FROM_AUTO_RUNNER), &old)?;
-                crate::auth::issue_token(w, FROM_AUTO_RUNNER, "laptop")?;
+                if let Some(label) = label {
+                    crate::auth::issue_token(w, FROM_AUTO_RUNNER, label)?;
+                }
                 if existing_new {
                     crate::domain::members::insert_member(
                         w,
@@ -298,8 +311,8 @@ mod tests {
                 existing.map(|m| m.display_name),
                 existing_new.then(|| AUTO_RUNNER.to_string())
             );
-            assert_eq!(tokens.len(), 1, "{old_kind}");
-            assert_eq!(tokens[0].member, FROM_AUTO_RUNNER, "{old_kind}");
+            let labels: Vec<_> = tokens.iter().map(|t| t.label.as_str()).collect();
+            assert_eq!(labels, label.into_iter().collect::<Vec<_>>(), "{old_kind}");
         }
     }
 

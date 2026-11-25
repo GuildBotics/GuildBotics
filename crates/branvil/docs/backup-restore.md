@@ -208,8 +208,10 @@ mints the automatic token at every start), its saved limits in `config.toml`
 move to the new name, and its display name becomes "GuildBotics runner
 (automatic)" unless the owner changed it. Past attempts keep the name they
 ran under, and so does a queued retry that selects or excludes the runner by
-name (cancel it). A `branvil-runner` that is not a runner (the previous build
-let an agent take the name) is not the automatic runner and stays as it is;
+name (cancel it). A `branvil-runner` that is not a runner, or that holds a
+token issued by hand (the previous build let anyone take the name, and
+registering a runner issues a `runner` token), is not the automatic runner and
+stays as it is;
 when a member `hub-runner` already exists, both keep their names. The
 automatic runner then runs as that member (or cannot start when it is not a
 runner), so such a Hub keeps the runner mode off. `branvil.toml` stays for the previous build, which a rolled
