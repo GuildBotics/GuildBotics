@@ -1506,6 +1506,7 @@ pub struct ClaimRunner {
     pub images: Vec<super::images::Image>,
     pub limits: JobLimits,
     pub machine: Option<Machine>,
+    pub has_free_slot: bool,
     pub ram_fresh: bool,
     pub cache_groups: Option<BTreeSet<String>>,
     pub ram_unsupported_images: BTreeSet<String>,
@@ -1529,21 +1530,54 @@ impl ClaimRunner {
     }
 
     fn ram_allows(&self, a: &Attempt, machine: Option<&Machine>) -> bool {
-        let (Some(ram), Some(cache), Some(machine)) = (&a.job.ram_workspace, &a.job.cache, machine)
-        else {
-            return false;
-        };
-        ram.memory_allows(
-            a.job.tmpfs_mib,
-            self.limits.max_memory_mib,
-            self.limits,
-            machine,
-        ) && self.cache_groups.as_ref().is_none_or(|groups| {
-            groups.contains(&CacheOwner::for_job(&a.repo_path, &a.job, cache).fingerprint())
+        a.job
+            .ram_workspace
+            .as_ref()
+            .zip(machine)
+            .is_some_and(|(ram, machine)| {
+                ram.memory_allows(
+                    a.job.tmpfs_mib,
+                    self.limits.max_memory_mib,
+                    self.limits,
+                    machine,
+                )
+            })
+            && self.ram_cache_available(a)
+    }
+
+    fn ram_cache_available(&self, a: &Attempt) -> bool {
+        a.job.cache.as_ref().is_some_and(|cache| {
+            self.cache_groups.as_ref().is_none_or(|groups| {
+                groups.contains(&CacheOwner::for_job(&a.repo_path, &a.job, cache).fingerprint())
+            })
         })
     }
 
+    fn ram_capable(&self, a: &Attempt) -> bool {
+        a.job
+            .ram_workspace
+            .as_ref()
+            .zip(self.machine.as_ref())
+            .is_some_and(|(ram, machine)| {
+                ram.memory_capacity_allows(
+                    a.job.tmpfs_mib,
+                    self.limits.max_memory_mib,
+                    self.limits,
+                    machine.total_memory_mib,
+                ) && capacity(machine, self.limits, &[]).0.cpus >= u64::from(self.limits.max_cpus)
+            })
+            && self
+                .images
+                .iter()
+                .find(|image| image.supports(&a.job.image))
+                .is_some_and(|image| !self.ram_unsupported_images.contains(&image.digest))
+            && self.ram_cache_available(a)
+    }
+
     fn budget(&self, active: &[Attempt]) -> Option<Budget> {
+        if !self.has_free_slot {
+            return None;
+        }
         let Some(machine) = &self.machine else {
             return Some(Budget::default());
         };
@@ -1657,7 +1691,7 @@ pub fn claim_images(
     let Some(&first) = choices.first() else {
         return Ok((None, waiting));
     };
-    let chosen = if first.allocation.is_some() && choices.len() > 1 && !first.ram {
+    let chosen = if first.allocation.is_some() && choices.len() > 1 {
         scan.prefer_ram(w, &choices, &peers)?
     } else {
         first
@@ -1801,7 +1835,10 @@ impl ClaimScan<'_> {
         peers: &[ClaimRunner],
     ) -> AppResult<ClaimChoice> {
         let first = choices[0];
-        if let Some(&ram) = choices.iter().find(|choice| choice.ram) {
+        if let Some(ram) = self.preferred_ram(choices) {
+            if ram.index == first.index {
+                return Ok(first);
+            }
             // If the peer would otherwise execute this job and cannot start
             // ours, keep both slots working.
             for peer in peers {
@@ -1824,9 +1861,8 @@ impl ClaimScan<'_> {
                 .filter(|peer| peer.ram_fresh && peer.machine.is_some())
             {
                 let (other, _) = self.choices(r, peer)?;
-                if other
-                    .iter()
-                    .find(|choice| choice.ram)
+                if self
+                    .preferred_ram(&other)
                     .is_some_and(|choice| choice.index == first.index)
                 {
                     return Ok(choices[1..]
@@ -1842,6 +1878,22 @@ impl ClaimScan<'_> {
             }
         }
         Ok(first)
+    }
+
+    fn preferred_ram(&self, choices: &[ClaimChoice]) -> Option<ClaimChoice> {
+        // Every RAM choice already includes the runner choosing it. Counting
+        // that runner as well leaves the ranking and the queue-order tie break intact.
+        choices
+            .iter()
+            .copied()
+            .filter(|choice| choice.ram)
+            .min_by_key(|choice| {
+                let a = &self.ordered[choice.index].0;
+                self.runners
+                    .iter()
+                    .filter(|runner| runner.ram_capable(a))
+                    .count()
+            })
     }
 }
 
@@ -2620,6 +2672,7 @@ mod tests {
                 images: images.to_vec(),
                 limits,
                 machine,
+                has_free_slot: true,
                 ram_fresh: false,
                 cache_groups: None,
                 ram_unsupported_images: BTreeSet::new(),
@@ -2656,6 +2709,7 @@ mod tests {
                 available_memory_mib: 18_000,
                 commit: None,
             }),
+            has_free_slot: true,
             ram_fresh: true,
             cache_groups: None,
             ram_unsupported_images: BTreeSet::new(),
@@ -2890,6 +2944,96 @@ mod tests {
     }
 
     #[test]
+    fn ram_preference_claims_the_job_with_fewest_capable_runners() {
+        use gb_runner::ci::pipeline::{CacheDef, RamWorkspace};
+
+        for (name, vm, expected) in [
+            ("hub", 6144, "client-windows"),
+            ("windows", 8192, "rust-test"),
+            ("linux", 16384, "rust-cli-blackbox"),
+        ] {
+            for hub_state in ["free", "full", "low-memory"] {
+                if name == "hub" && hub_state != "free" {
+                    continue;
+                }
+                for disk_first in [true, false] {
+                    let (_dir, store) = store();
+                    store
+                        .write_sync(|w| {
+                            let mut names = vec![
+                                "client-windows",
+                                "rust-test",
+                                "rust-test-branvil",
+                                "rust-cli-blackbox",
+                            ];
+                            if disk_first {
+                                names.insert(0, "disk");
+                            }
+                            let mut registration = reg("head", "main", &names);
+                            let PipelineState::Jobs { jobs } = &mut registration.pipeline else {
+                                unreachable!();
+                            };
+                            for job in jobs.iter_mut().filter(|job| job.name != "disk") {
+                                let (max_mib, tmpfs_mib) = match job.name.as_str() {
+                                    "client-windows" => (3072, None),
+                                    "rust-cli-blackbox" => (7200, None),
+                                    _ => (4608, Some(2048)),
+                                };
+                                job.tmpfs_mib = tmpfs_mib;
+                                job.ram_workspace = Some(RamWorkspace {
+                                    paths: vec!["target".into()],
+                                    max_mib,
+                                });
+                                job.cache = Some(CacheDef {
+                                    paths: vec!["target".into()],
+                                    key_files: vec![],
+                                });
+                            }
+                            let groups =
+                                published_cache_groups(&registration, &registration.repo_path);
+                            register(w, registration, 10, T0)?;
+                            let report = |name, vm| {
+                                let mut report = runner(name, vm);
+                                report.cache_groups = Some(groups.clone());
+                                let machine = report.machine.as_mut().unwrap();
+                                machine.total_memory_mib = 32_768;
+                                machine.available_memory_mib = 28_000;
+                                if name == "hub" {
+                                    report.has_free_slot = hub_state != "full";
+                                    if hub_state == "low-memory" {
+                                        machine.available_memory_mib = 0;
+                                    }
+                                }
+                                report
+                            };
+                            let requester = report(name, vm);
+                            let (claim, _) =
+                                super::claim_images(w, requester.clone(), 60, T0, || {
+                                    Ok([("hub", 6144), ("windows", 8192), ("linux", 16384)]
+                                        .into_iter()
+                                        .filter(|(peer, _)| *peer != name)
+                                        .map(|(peer, vm)| report(peer, vm))
+                                        .collect())
+                                })?;
+                            let attempt = claim
+                                .unwrap_or_else(|| {
+                                    panic!("no claim for {name}, {hub_state}, {disk_first}")
+                                })
+                                .attempt;
+                            assert_eq!(
+                                attempt.job.name, expected,
+                                "{name}, {hub_state}, {disk_first}"
+                            );
+                            assert!(requester.ram_allows(&attempt, requester.machine.as_ref()));
+                            Ok(())
+                        })
+                        .unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
     fn ram_preference_improves_adoption_without_delaying_the_check_group() {
         // A two-slot workload with a warm cache and a supported guest. Keep
         // the command durations and both poll orders fixed across policies.
@@ -3059,6 +3203,7 @@ mod tests {
                     images: vec![held_image()],
                     limits: limits(),
                     machine,
+                    has_free_slot: true,
                     ram_fresh: false,
                     cache_groups: None,
                     ram_unsupported_images: BTreeSet::new(),

@@ -154,6 +154,16 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   paths; "Trust") come first, then registration sequence (`seq`);
   without a reusable result, sequence decides. Reuse is assessed after taking
   the run's current cache scope; retries with `allow_reuse = false` execute.
+  For checks of the same repository and commit in the same class and reuse
+  tier, a runner prefers jobs it can start with a [RAM workspace](#ram-workspace).
+  It chooses the job that the fewest other online, accepting runners can run
+  in RAM, with queue order breaking ties. This count uses their reported
+  machine capacity, VM limits, cache inventory, and image support, including
+  runners with full slots or low available memory. A runner can still take
+  its first job to keep both slots working if another runner would take the
+  RAM choice and cannot start that first job. A runner with only disk choices
+  can take another job in the group to leave its first job for a peer that can
+  start it in RAM.
   Class 4a runs only when no class 1–3 attempt waits, and 4b only when no other
   class waits. Priority changes alone neither cancel nor hold attempts.
   When the author starts addressing PR feedback, running checks of a deferred/last

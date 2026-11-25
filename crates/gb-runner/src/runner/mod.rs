@@ -896,7 +896,8 @@ impl Runner {
                     .map_or(sync.clone(), |cache| format!("{sync}; {cache}")),
             );
         }
-        let cache_groups = if accept && health.ready && running_jobs < max_jobs as usize {
+        // The Hub ranks RAM jobs using the inventories of busy runners too.
+        let cache_groups = if accept && health.ready {
             let cache = self.cache.clone();
             match blocking(move || cache.published_groups()).await {
                 Ok(groups) => groups,
