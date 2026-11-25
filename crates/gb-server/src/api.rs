@@ -146,6 +146,28 @@ impl Api {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_test(root: &std::path::Path, selected: Selected) -> Self {
+        Self::for_test_with(root, selected, root, 8765, "fixture")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_with(
+        root: &std::path::Path,
+        selected: Selected,
+        data: &std::path::Path,
+        port: u16,
+        instance_id: &str,
+    ) -> Self {
+        Self::new(
+            selected,
+            crate::input_files::InputFileStore::deferred(&root.join("inputs")),
+            ServerAuth::open(data, port).unwrap(),
+            instance_id.into(),
+            data.to_owned(),
+        )
+    }
+
     /// Admits work for the selected workspace: a command, a member run or the
     /// service's start, none of which a switch may overtake while it holds
     /// the guard. None while a switch is under way.
@@ -1258,13 +1280,7 @@ mod tests {
     async fn runner_consent_issues_only_runner_access_and_rejoin_revokes_previous() {
         let fixture = branvil::test_support::Fixture::new("ownerfixture").await;
         let root = tempfile::tempdir().unwrap();
-        let api = Arc::new(Api::new(
-            Selected::default(),
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            ServerAuth::open(root.path(), 8765).unwrap(),
-            "fixture".into(),
-            root.path().into(),
-        ));
+        let api = Arc::new(Api::for_test(root.path(), Selected::default()));
         api.branvil.set(fixture.data()).ok().unwrap();
         let id = "0123456789abcdef0123456789abcdef";
         let mut tokens = Vec::new();
@@ -1309,13 +1325,7 @@ mod tests {
     async fn consent_downloads_only_the_running_builds_verified_client() {
         use tower::ServiceExt;
         let root = tempfile::tempdir().unwrap();
-        let api = Api::new(
-            Selected::default(),
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            ServerAuth::open(root.path(), 8765).unwrap(),
-            "fixture".into(),
-            root.path().into(),
-        );
+        let api = Api::for_test(root.path(), Selected::default());
         let consent = api.auth.test_consent();
         let entry = api.auth.entry_link("/");
         let url = url::Url::parse(&entry.url).unwrap();
@@ -1422,13 +1432,7 @@ mod tests {
         }
         for embedded in [false, true] {
             let root = tempfile::tempdir().unwrap();
-            let mut api = Api::new(
-                Selected::default(),
-                crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-                ServerAuth::open(root.path(), 8765).unwrap(),
-                "fixture".into(),
-                root.path().into(),
-            );
+            let mut api = Api::for_test(root.path(), Selected::default());
             api.keychain = Arc::new(EmptyKeychain);
             let api = Arc::new(api);
             assert!(api.branvil.get().is_none());
@@ -1501,15 +1505,12 @@ mod tests {
         use loopback_auth::RouteAuth;
         use tower::ServiceExt;
         let root = tempfile::tempdir().unwrap();
-        let mut api = Api::new(
+        let mut api = Api::for_test(
+            root.path(),
             Selected {
                 workspace: Some(root.path().join("workspace")),
                 ..Default::default()
             },
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            ServerAuth::open(root.path(), 8765).unwrap(),
-            "fixture".into(),
-            root.path().into(),
         );
         api.identity_root = root.path().join("identity");
         let config = api.identity_root.join(".guildbotics/config");
@@ -1590,13 +1591,7 @@ mod tests {
         use loopback_auth::{Route, RouteAuth};
         use tower::ServiceExt;
         let root = tempfile::tempdir().unwrap();
-        let api = Arc::new(Api::new(
-            Selected::default(),
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            ServerAuth::open(root.path(), 8765).unwrap(),
-            "fixture".into(),
-            root.path().into(),
-        ));
+        let api = Arc::new(Api::for_test(root.path(), Selected::default()));
         let host = Router::new().fallback(|| async { StatusCode::IM_A_TEAPOT });
         let link = api.auth.entry_link("/");
         let (cookie, _) = api
@@ -1736,12 +1731,12 @@ mod tests {
     async fn old_routes_are_absent_and_root_is_under_the_guard() {
         use tower::ServiceExt;
         let root = tempfile::tempdir().unwrap();
-        let api = Arc::new(Api::new(
+        let api = Arc::new(Api::for_test_with(
+            root.path(),
             Selected::default(),
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            ServerAuth::open(root.path(), 8765).unwrap(),
-            "instance".into(),
-            root.path().into(),
+            root.path(),
+            8765,
+            "instance",
         ));
         let app = router(api);
         let variable = regex::Regex::new(r"\{[^}]+\}").unwrap();
@@ -1794,12 +1789,12 @@ mod tests {
         use super::*;
         use tower::ServiceExt;
         let root = tempfile::tempdir().unwrap();
-        let api = Arc::new(Api::new(
+        let api = Arc::new(Api::for_test_with(
+            root.path(),
             Selected::default(),
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            ServerAuth::open(root.path(), 8765).unwrap(),
-            "instance".into(),
-            root.path().into(),
+            root.path(),
+            8765,
+            "instance",
         ));
         let app = router(api);
         let variable = regex::Regex::new(r"\{[^}]+\}").unwrap();
@@ -2029,12 +2024,12 @@ mod tests {
             }
         }
         let root = tempfile::tempdir().unwrap();
-        let mut api = Api::new(
+        let mut api = Api::for_test_with(
+            root.path(),
             Selected::default(),
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            ServerAuth::open(root.path(), 8765).unwrap(),
-            "instance".into(),
-            root.path().into(),
+            root.path(),
+            8765,
+            "instance",
         );
         api.keychain = Arc::new(Untouchable);
         let api = Arc::new(api);

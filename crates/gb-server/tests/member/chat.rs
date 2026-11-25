@@ -1,7 +1,7 @@
+use crate::support::Current;
 use branvil::agent::port::*;
 use branvil::agent::{CodeAgent, TicketAgent};
 use gb_integrations::chat::*;
-use gb_member::WriteGuard;
 use gb_server::member::chat::{Chat, Reference};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Mutex};
@@ -152,12 +152,6 @@ async fn chat_service_errors_are_preserved() {
 fn page() -> ChatEventPage {
     ChatEventPage{events:[2,1].into_iter().map(|n|serde_json::from_value(json!({"event_id":format!("e{n}"),"channel_id":"C1","message_id":n.to_string(),"thread_id":"root",
         "occurred_at":format!("2026-01-01T00:00:0{n}Z"),"author_id":"U2","text":"hello","status":null})).unwrap()).collect(),cursor:Some("next".into())}
-}
-struct Current;
-impl WriteGuard for Current {
-    fn ensure_current(&self) -> gb_member::Result<()> {
-        Ok(())
-    }
 }
 #[tokio::test]
 async fn member_chat_identity_posts_replies_reactions_and_sorted_inspections() {

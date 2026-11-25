@@ -8,11 +8,12 @@ use gb_observability::redaction::Redactor;
 use serde_json::{Value, json};
 use tracing::{Instrument, info_span};
 
-use super::{OwnerClient, checked};
+use super::{OwnerClient, PROOF_TIMEOUT, checked};
 use crate::{
     i18n,
     member_protocol::{MemberRequest, Result as Reply},
 };
+use std::time::Duration;
 
 mod git;
 
@@ -177,8 +178,16 @@ pub async fn run(mut arguments: Vec<String>) -> anyhow::Result<u8> {
 }
 
 async fn remote_workspace_id(owner: &OwnerClient, language: &str) -> anyhow::Result<String> {
+    remote_workspace_id_with_timeout(owner, language, PROOF_TIMEOUT).await
+}
+
+async fn remote_workspace_id_with_timeout(
+    owner: &OwnerClient,
+    language: &str,
+    timeout: Duration,
+) -> anyhow::Result<String> {
     let health = owner
-        .health()
+        .health_with_timeout(timeout)
         .await
         .ok_or_else(|| anyhow::anyhow!(i18n::t(language, "cli.server.unreachable", &[])))?;
     health["workspace_id"]
@@ -515,7 +524,7 @@ mod tests {
                 "/-/guildbotics/api/health",
                 get(move || async move {
                     if body == "slow" {
-                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        tokio::time::sleep(Duration::from_millis(400)).await;
                     }
                     (status, body).into_response()
                 }),
@@ -534,8 +543,13 @@ mod tests {
                 token: "fixture".into(),
                 language: "en",
             };
-            for language in ["en", "ja"] {
-                let result = remote_workspace_id(&owner, language).await;
+            let (languages, timeout) = if body == "slow" {
+                (&["en"][..], Duration::from_millis(200))
+            } else {
+                (&["en", "ja"][..], PROOF_TIMEOUT)
+            };
+            for &language in languages {
+                let result = remote_workspace_id_with_timeout(&owner, language, timeout).await;
                 if expected.is_empty() {
                     assert_eq!(result.unwrap(), "hub-workspace");
                 } else {

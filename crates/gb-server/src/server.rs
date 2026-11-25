@@ -654,15 +654,15 @@ mod tests {
                 .unwrap();
             }
         }
-        let mut api = Api::new(
+        let mut api = Api::for_test_with(
+            root.path(),
             Selected {
                 workspace: Some(workspace),
                 ..Default::default()
             },
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            ServerAuth::open(root.path(), 7878).unwrap(),
-            "fixture".into(),
-            root.path().into(),
+            root.path(),
+            7878,
+            "fixture",
         );
         api.identity_root = identity;
         let (server, _) = Server::for_test(Arc::new(api)).await;
@@ -680,12 +680,12 @@ mod tests {
     #[tokio::test]
     async fn forced_shutdown_does_not_wait_for_start_gate_to_cancel() {
         let root = tempfile::tempdir().unwrap();
-        let api = Arc::new(Api::new(
+        let api = Arc::new(Api::for_test_with(
+            root.path(),
             Selected::default(),
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            ServerAuth::open(root.path(), 7878).unwrap(),
-            "fixture".into(),
-            root.path().into(),
+            root.path(),
+            7878,
+            "fixture",
         ));
         let selected = api.selected();
         let gate = selected.service.hold_start_for_test().await;
@@ -711,12 +711,12 @@ mod tests {
     #[tokio::test]
     async fn shutdown_waits_for_start_and_refuses_new_starts_before_sampling() {
         let root = tempfile::tempdir().unwrap();
-        let api = Arc::new(api::Api::new(
+        let api = Arc::new(api::Api::for_test_with(
+            root.path(),
             api::Selected::default(),
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            crate::auth::ServerAuth::open(root.path(), 7878).unwrap(),
-            "fixture".into(),
-            root.path().into(),
+            root.path(),
+            7878,
+            "fixture",
         ));
         let selected = api.selected();
         let gate = selected.service.hold_start_for_test().await;
@@ -782,12 +782,12 @@ mod tests {
             }
         }
         let root = tempfile::tempdir().unwrap();
-        let api = Arc::new(api::Api::new(
+        let api = Arc::new(api::Api::for_test_with(
+            root.path(),
             api::Selected::default(),
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            crate::auth::ServerAuth::open(root.path(), 7878).unwrap(),
-            "fixture".into(),
-            root.path().into(),
+            root.path(),
+            7878,
+            "fixture",
         ));
         let selected = api.selected();
         let worker = Arc::new(Worker(tokio_util::sync::CancellationToken::new()));
@@ -876,12 +876,12 @@ mod tests {
             .await
             .unwrap();
         let port = listener.local_addr().unwrap().port();
-        let api = Arc::new(Api::new(
+        let api = Arc::new(Api::for_test_with(
+            root.path(),
             Selected::default(),
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            ServerAuth::open(root.path(), port).unwrap(),
-            "fixture".into(),
-            root.path().into(),
+            root.path(),
+            port,
+            "fixture",
         ));
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
         let server = Server {
@@ -993,16 +993,16 @@ mod tests {
             .await
             .unwrap();
         let port = listener.local_addr().unwrap().port();
-        let api = Arc::new(Api::new(
+        let api = Arc::new(Api::for_test_with(
+            root.path(),
             Selected {
                 workspace: Some(native.workspace.clone()),
                 member: None,
                 service: crate::service_runtime::Controller::new(native.clone(), host),
             },
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            ServerAuth::open(&native.data, port).unwrap(),
-            "fixture".into(),
-            native.data.clone(),
+            &native.data,
+            port,
+            "fixture",
         ));
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
         let selected = api.selected();
@@ -1052,12 +1052,12 @@ mod tests {
                 .await
                 .unwrap();
             let port = listener.local_addr().unwrap().port();
-            let api = Arc::new(Api::new(
+            let api = Arc::new(Api::for_test_with(
+                root.path(),
                 Selected::default(),
-                crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-                ServerAuth::open(root.path(), port).unwrap(),
-                "fixture".into(),
-                root.path().into(),
+                root.path(),
+                port,
+                "fixture",
             ));
             let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
             let (started, entered) = tokio::sync::oneshot::channel();
@@ -1147,13 +1147,7 @@ mod tests {
         let path = gb_workspace::identity::workspace_identity_path(workspace.path());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "not json").unwrap();
-        let api = Api::new(
-            Selected::default(),
-            crate::input_files::InputFileStore::deferred(&data.path().join("inputs")),
-            ServerAuth::open(data.path(), 8765).unwrap(),
-            "fixture".into(),
-            data.path().into(),
-        );
+        let api = Api::for_test(data.path(), Selected::default());
         let selected = Selected::open(Some(workspace.path().into()), &api, None);
         assert!(selected.member.is_none());
         assert_eq!(selected.workspace.as_deref(), Some(workspace.path()));

@@ -13,7 +13,7 @@ use std::{
     process::Stdio,
     time::{Duration, Instant},
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 const MAX_OUTPUT: usize = 1 << 24;
 const PUBLIC: &str = "refs/guildbotics/published/";
@@ -226,14 +226,11 @@ impl Origin {
             .await?;
         Ok(origin)
     }
-    async fn command_at(
-        &self,
+    fn command(
         cwd: &Path,
-        args: Vec<String>,
+        args: impl IntoIterator<Item: AsRef<std::ffi::OsStr>>,
         env: BTreeMap<String, String>,
-        stdin: Vec<u8>,
-        limit: usize,
-    ) -> Result<Output> {
+    ) -> tokio::process::Command {
         let mut command = tokio::process::Command::new("git");
         command
             .args(["-c", "fetch.fsckObjects=true"])
@@ -256,6 +253,18 @@ impl Origin {
         ] {
             command.env_remove(name);
         }
+        command
+    }
+
+    async fn command_at(
+        &self,
+        cwd: &Path,
+        args: Vec<String>,
+        env: BTreeMap<String, String>,
+        stdin: Vec<u8>,
+        limit: usize,
+    ) -> Result<Output> {
+        let mut command = Self::command(cwd, args, env);
         let mut child = command.spawn().map_err(io_error)?;
         let mut input = child.stdin.take().unwrap();
         let output = child.stdout.take().unwrap();
@@ -593,77 +602,211 @@ impl Origin {
         self.git(&["update-ref", &remote, head], vec![]).await?;
         Ok(true)
     }
-    async fn show_path(&self, commit: &str, path: &str) -> Result<Value> {
-        let (name, kind) = if path == "." {
-            (format!("{commit}^{{tree}}"), "directory")
-        } else {
-            let listed = self
-                .git(
-                    &["--literal-pathspecs", "ls-tree", "-z", commit, "--", path],
-                    vec![],
-                )
-                .await?;
-            if listed.stdout.is_empty() {
-                return Ok(json!({"path":path,"kind":"missing"}));
+    async fn show_paths(&self, commit: &str, paths: &[String], mut result: Value) -> Result<Value> {
+        let normalized: Vec<_> = paths
+            .iter()
+            .map(|path| {
+                Path::new(path)
+                    .components()
+                    .filter_map(|part| match part {
+                        std::path::Component::Normal(name) => Some(name.to_string_lossy()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("/")
+            })
+            .collect();
+        // -t retains a requested directory when a second path descends into it.
+        let mut args = vec!["--literal-pathspecs", "ls-tree", "-tz", commit, "--"];
+        let root = format!("{commit}^{{tree}}");
+        args.extend(
+            normalized
+                .iter()
+                .map(String::as_str)
+                .filter(|path| !path.is_empty()),
+        );
+        let mut names = BTreeMap::new();
+        if args.len() > 5 {
+            let listing = self.git(&args, vec![]).await?;
+            for entry in listing
+                .stdout
+                .split(|&byte| byte == 0)
+                .filter(|entry| !entry.is_empty())
+            {
+                let tab = entry
+                    .iter()
+                    .position(|&byte| byte == b'\t')
+                    .ok_or_else(|| failure("bundle"))?;
+                let header = std::str::from_utf8(&entry[..tab]).map_err(|_| failure("bundle"))?;
+                let (mode, rest) = header.split_once(' ').ok_or_else(|| failure("bundle"))?;
+                let (_, name) = rest.split_once(' ').ok_or_else(|| failure("bundle"))?;
+                names.insert(
+                    entry[tab + 1..].to_vec(),
+                    (object(name)?.to_owned(), tree_kind(mode)),
+                );
             }
-            let header = listed.stdout.split(|v| *v == b'\t').next().unwrap();
-            let fields = std::str::from_utf8(header)
-                .map_err(|_| failure("bundle"))?
-                .split_whitespace()
-                .collect::<Vec<_>>();
-            if fields.len() != 3 {
+        }
+        let mut child = Self::command(
+            &self.directory,
+            ["cat-file", "--batch-command"],
+            BTreeMap::new(),
+        )
+        .spawn()
+        .map_err(io_error)?;
+        let mut input = child.stdin.take().unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        let stderr = child.stderr.take().unwrap();
+        let used = serde_json::to_vec(&result).unwrap().len();
+        let items = result["items"].as_array_mut().unwrap();
+        let read = async {
+            let mut used = used;
+            for normalized in normalized {
+                let (path, entry) = if normalized.is_empty() {
+                    (".", Some((root.as_str(), "directory")))
+                } else {
+                    (
+                        normalized.as_str(),
+                        names
+                            .get(normalized.as_bytes())
+                            .map(|(name, kind)| (name.as_str(), *kind)),
+                    )
+                };
+                let mut item = match entry {
+                    None => json!({"path":path,"kind":"missing"}),
+                    Some((name, "submodule")) => {
+                        json!({"path":path,"kind":"submodule","commit":name})
+                    }
+                    Some((name, kind)) => {
+                        let size = batch_header(&mut input, &mut output, "info", name).await?;
+                        let mut item = json!({"path":path,"kind":kind,"size":size});
+                        if size > branvil::agent::port::MAX_PAGE_BYTES / 2 {
+                            item["status"] = "too_large".into();
+                        } else {
+                            if batch_header(&mut input, &mut output, "contents", name).await?
+                                != size
+                            {
+                                return Err(failure("bundle"));
+                            }
+                            let mut bytes = vec![0; size];
+                            output.read_exact(&mut bytes).await.map_err(io_error)?;
+                            if output.read_u8().await.map_err(io_error)? != b'\n' {
+                                return Err(failure("bundle"));
+                            }
+                            item["status"] = "ok".into();
+                            if kind == "directory" {
+                                item["entries"] = tree_entries(&bytes, commit.len() / 2)?;
+                            } else {
+                                match String::from_utf8(bytes) {
+                                    Ok(text) if !text.contains('\0') => {
+                                        item["content"] = text.into()
+                                    }
+                                    _ => item["status"] = "binary".into(),
+                                }
+                            }
+                        }
+                        item
+                    }
+                };
+                let size = serde_json::to_vec(&item).unwrap().len();
+                if used + size > branvil::agent::port::MAX_PAGE_BYTES * 3 / 4
+                    && (item.get("content").is_some() || item.get("entries").is_some())
+                {
+                    let fields = item.as_object_mut().unwrap();
+                    fields.remove("content");
+                    fields.remove("entries");
+                    item["status"] = "too_large".into();
+                }
+                used += serde_json::to_vec(&item).unwrap().len() + 2;
+                items.push(item);
+            }
+            drop(input);
+            Ok::<_, MemberError>(())
+        };
+        let errors = async {
+            let mut bytes = vec![];
+            stderr
+                .take(MAX_OUTPUT as u64 + 1)
+                .read_to_end(&mut bytes)
+                .await
+                .map_err(io_error)?;
+            if bytes.len() > MAX_OUTPUT {
                 return Err(failure("bundle"));
             }
-            (object(fields[2])?.to_owned(), tree_kind(fields[0]))
+            Ok(bytes)
         };
-        if kind == "submodule" {
-            return Ok(json!({"path":path,"kind":kind,"commit":name}));
-        }
-        let size = self
-            .git(&["cat-file", "-s", &name], vec![])
-            .await?
-            .text()
-            .parse::<usize>()
-            .map_err(|_| failure("bundle"))?;
-        let mut result = json!({"path":path,"kind":kind,"size":size});
-        if size > branvil::agent::port::MAX_PAGE_BYTES / 2 {
-            result["status"] = "too_large".into();
-            return Ok(result);
-        }
-        if kind == "directory" {
-            let output = self.git(&["ls-tree", "-z", &name], vec![]).await?;
-            let mut entries = vec![];
-            for entry in output.stdout.split(|v| *v == 0).filter(|v| !v.is_empty()) {
-                let (header, file) = entry.split_at(
-                    entry
-                        .iter()
-                        .position(|v| *v == b'\t')
-                        .ok_or_else(|| failure("bundle"))?,
-                );
-                let mode = std::str::from_utf8(header)
-                    .map_err(|_| failure("bundle"))?
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("");
-                entries.push(
-                    json!({"name":String::from_utf8_lossy(&file[1..]),"kind":tree_kind(mode)}),
-                );
+        tokio::time::timeout(remaining(self.deadline)?, async {
+            let (_, stderr) = tokio::try_join!(read, errors)?;
+            Output {
+                code: child.wait().await.map_err(io_error)?.code().unwrap_or(1),
+                stderr,
+                ..Default::default()
             }
-            result["status"] = "ok".into();
-            result["entries"] = entries.into();
-        } else {
-            let output = self.git(&["cat-file", "blob", &name], vec![]).await?;
-            match String::from_utf8(output.stdout) {
-                Ok(text) if !text.contains('\0') => {
-                    result["status"] = "ok".into();
-                    result["content"] = text.into();
-                }
-                _ => result["status"] = "binary".into(),
-            }
-        }
+            .checked()
+        })
+        .await
+        .map_err(|_| failure("timeout"))??;
         Ok(result)
     }
+
+    #[cfg(test)]
+    async fn show_path(&self, commit: &str, path: &str) -> Result<Value> {
+        let mut result = self
+            .show_paths(commit, &[path.into()], json!({"items":[]}))
+            .await?;
+        Ok(result["items"][0].take())
+    }
 }
+
+async fn batch_header(
+    input: &mut tokio::process::ChildStdin,
+    output: &mut BufReader<tokio::process::ChildStdout>,
+    command: &str,
+    name: &str,
+) -> Result<usize> {
+    input
+        .write_all(format!("{command} {name}\n").as_bytes())
+        .await
+        .map_err(io_error)?;
+    let mut header = Vec::new();
+    (&mut *output)
+        .take(256)
+        .read_until(b'\n', &mut header)
+        .await
+        .map_err(io_error)?;
+    let header = std::str::from_utf8(&header).map_err(|_| failure("bundle"))?;
+    let mut fields = header
+        .strip_suffix('\n')
+        .ok_or_else(|| failure("bundle"))?
+        .split(' ');
+    object(fields.next().unwrap_or_default())?;
+    fields
+        .nth(1)
+        .and_then(|size| size.parse().ok())
+        .ok_or_else(|| failure("bundle"))
+}
+
+fn tree_entries(mut tree: &[u8], oid_bytes: usize) -> Result<Value> {
+    let mut entries = Vec::new();
+    // A raw tree stores mode, a space, the NUL-terminated name, and a binary object ID.
+    while !tree.is_empty() {
+        let end = tree
+            .iter()
+            .position(|&byte| byte == 0)
+            .ok_or_else(|| failure("bundle"))?;
+        let space = tree[..end]
+            .iter()
+            .position(|&byte| byte == b' ')
+            .ok_or_else(|| failure("bundle"))?;
+        let mode = std::str::from_utf8(&tree[..space]).map_err(|_| failure("bundle"))?;
+        let name = String::from_utf8_lossy(&tree[space + 1..end]);
+        entries.push(json!({"name":name,"kind":tree_kind(mode)}));
+        tree = tree
+            .get(end + 1 + oid_bytes..)
+            .ok_or_else(|| failure("bundle"))?;
+    }
+    Ok(entries.into())
+}
+
 fn repository_path(repository: &str) -> Result<()> {
     if branvil::agent::port::valid_repository_path(repository) {
         Ok(())
@@ -676,7 +819,7 @@ fn repository_path(repository: &str) -> Result<()> {
 }
 fn tree_kind(mode: &str) -> &'static str {
     match mode {
-        "040000" => "directory",
+        "040000" | "40000" => "directory",
         "120000" => "symlink",
         "160000" => "submodule",
         _ => "file",
@@ -1189,7 +1332,16 @@ impl Workspace<'_> {
         {
             return Ok(false);
         }
-        let script = "for s in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD MERGE_AUTOSTASH rebase-merge rebase-apply sequencer BISECT_LOG index.lock HEAD.lock packed-refs.lock config.lock shallow.lock; do p=$(git rev-parse --git-path \"$s\") || exit 2; [ ! -e \"$p\" ] || exit 1; done";
+        let script = r#"paths=$(git rev-parse --git-path MERGE_HEAD --git-path CHERRY_PICK_HEAD \
+            --git-path REVERT_HEAD --git-path MERGE_AUTOSTASH --git-path rebase-merge \
+            --git-path rebase-apply --git-path sequencer --git-path BISECT_LOG \
+            --git-path index.lock --git-path HEAD.lock --git-path packed-refs.lock \
+            --git-path config.lock --git-path shallow.lock) || exit 2
+while IFS= read -r path; do
+    [ ! -e "$path" ] || exit 1
+done <<EOF
+$paths
+EOF"#;
         if self
             .guest
             .run(
@@ -1340,35 +1492,56 @@ impl Workspace<'_> {
             }
         }
         self.send(&origin, &path, &refs).await?;
-        let old = self
+        let existing = self
             .git(
                 &path,
                 &[
                     "for-each-ref",
-                    "--format=delete %(refname)",
+                    "--format=%(refname)",
                     "refs/remotes/origin/",
+                    "refs/tags/",
                 ],
                 vec![],
             )
             .await?
-            .stdout;
-        self.git(&path, &["update-ref", "--no-deref", "--stdin"], old)
-            .await?;
-        let existing_tags = self
-            .git(
-                &path,
-                &["for-each-ref", "--format=%(refname)", "refs/tags/"],
-                vec![],
-            )
-            .await?
             .text();
-        let updates = refs
-            .iter()
-            .filter(|(r, _)| {
-                !r.starts_with("refs/tags/") || !existing_tags.lines().any(|old| old == r.as_str())
-            })
-            .map(|(r, n)| format!("update {r} {n}\n"))
-            .collect::<String>();
+        let existing: std::collections::BTreeSet<_> = existing.lines().collect();
+        let mut updates = String::new();
+        let mut blocking = String::new();
+        for &reference in &existing {
+            if !reference.starts_with("refs/remotes/origin/") || refs.contains_key(reference) {
+                continue;
+            }
+            // Git's files backend cannot delete a ref and create a ref at a
+            // parent or child path in the same transaction.
+            let prefix = format!("{reference}/");
+            let has_child = refs
+                .range(prefix.clone()..)
+                .next()
+                .is_some_and(|(name, _)| name.starts_with(&prefix));
+            let has_parent = reference
+                .match_indices('/')
+                .any(|(end, _)| refs.contains_key(&reference[..end]));
+            let batch = if has_child || has_parent {
+                &mut blocking
+            } else {
+                &mut updates
+            };
+            batch.push_str(&format!("delete {reference}\n"));
+        }
+        if !blocking.is_empty() {
+            self.git(
+                &path,
+                &["update-ref", "--no-deref", "--stdin"],
+                blocking.into_bytes(),
+            )
+            .await?;
+        }
+        for (reference, name) in &refs {
+            if !reference.starts_with("refs/tags/") || !existing.contains(reference.as_str()) {
+                updates.push_str(&format!("update {reference} {name}\n"));
+            }
+        }
         self.git(
             &path,
             &["update-ref", "--no-deref", "--stdin"],
@@ -1663,40 +1836,9 @@ async fn show_default(
         .await?
         .text();
     object(&commit)?;
-    let mut result =
+    let result =
         json!({"repository":repository,"default_branch":branch,"commit":commit,"items":[]});
-    let mut used = serde_json::to_vec(&result).unwrap().len();
-    for path in paths {
-        let normalized = Path::new(path)
-            .components()
-            .filter_map(|v| match v {
-                std::path::Component::Normal(v) => Some(v.to_string_lossy().into_owned()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("/");
-        let mut item = origin
-            .show_path(
-                &commit,
-                if normalized.is_empty() {
-                    "."
-                } else {
-                    &normalized
-                },
-            )
-            .await?;
-        let size = serde_json::to_vec(&item).unwrap().len();
-        if used + size > branvil::agent::port::MAX_PAGE_BYTES * 3 / 4
-            && (item.get("content").is_some() || item.get("entries").is_some())
-        {
-            item.as_object_mut().unwrap().remove("content");
-            item.as_object_mut().unwrap().remove("entries");
-            item["status"] = "too_large".into();
-        }
-        used += serde_json::to_vec(&item).unwrap().len() + 2;
-        result["items"].as_array_mut().unwrap().push(item);
-    }
-    Ok(result)
+    origin.show_paths(&commit, paths, result).await
 }
 
 #[derive(Serialize, Deserialize)]

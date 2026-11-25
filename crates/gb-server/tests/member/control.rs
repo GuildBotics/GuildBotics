@@ -1,6 +1,7 @@
 use crate::support;
+use crate::support::{Current, Unused};
+use branvil::agent::TicketAgent;
 use branvil::agent::port::*;
-use branvil::agent::{CodeAgent, TicketAgent};
 use gb_base::shared_writes::SharedWrites;
 use gb_member::{MemberError, WriteGuard, command};
 use gb_observability::{
@@ -9,27 +10,11 @@ use gb_observability::{
 };
 use gb_server::member::{
     control::{Identity, Recipients, RunControl},
-    repository::{Repository, RepositoryServices},
+    repository::Repository,
     session::Control,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
-/// Completions without pull request work never reach a service.
-struct Unused;
-impl RepositoryServices for Unused {
-    fn code(&self) -> gb_member::Result<&CodeAgent> {
-        panic!("unexpected provider access")
-    }
-    fn tickets(&self) -> gb_member::Result<&TicketAgent> {
-        panic!("unexpected provider access")
-    }
-}
-struct Current;
-impl WriteGuard for Current {
-    fn ensure_current(&self) -> gb_member::Result<()> {
-        Ok(())
-    }
-}
 struct Receives;
 impl Recipients for Receives {
     fn receives<'a>(&'a self, _: &'a str, _: &'a str) -> gb_server::member::git::Pending<'a, bool> {
@@ -866,6 +851,7 @@ async fn repair_report_only_runs_require_a_current_open_repair_pr() {
 
 #[tokio::test]
 async fn ticket_completion_records_work_outcome_with_run_identity() {
+    let services = support::Embedded::new().await;
     for (remains, link) in [
         (false, "none"),
         (true, "none"),
@@ -878,10 +864,11 @@ async fn ticket_completion_records_work_outcome_with_run_identity() {
         let writes = SharedWrites::new(temp.path().join("identity"), Some(workspace.clone()));
         let redactor = Redactor::default();
         seed_kind(&writes, &workspace, &redactor, "ticket");
-        let services = support::Embedded::new().await;
-        let ticket = services.ticket("Outcome").await;
+        let ticket = services.ticket(&format!("Outcome {remains}-{link}")).await;
         if link != "none" {
-            let pull = services.pull("feature", true, &[&ticket]).await;
+            let pull = services
+                .pull(&format!("feature-{link}"), true, &[&ticket])
+                .await;
             if link == "merged" {
                 let view = services.code.pull_view(&pull).await.unwrap();
                 services
@@ -950,7 +937,6 @@ async fn ticket_completion_records_work_outcome_with_run_identity() {
                     .result
                     .is_none()
             );
-            services.stop().await;
             continue;
         }
         let result = result.unwrap();
@@ -977,8 +963,8 @@ async fn ticket_completion_records_work_outcome_with_run_identity() {
                 .iter()
                 .any(|e| e["type"] == "ticket_work" && e["payload"]["status"] == *status)
         );
-        services.stop().await;
     }
+    services.stop().await;
 }
 
 #[tokio::test]
@@ -1018,24 +1004,40 @@ async fn remaining_work_flag_rejects_other_work_and_waiting_outcomes() {
 
 #[tokio::test]
 async fn remaining_work_admission_reads_all_link_pages_and_propagates_failures() {
-    use gb_server::member::repository::has_open_linked_pull;
+    use gb_server::member::repository::has_open_linked_pull_with_page_size;
     let services = support::Embedded::new().await;
     let ticket = services.ticket("Pagination").await;
-    // The first 30 linked pulls fill a page, but none authorizes admission.
-    for index in 0..30 {
+    // Traverse more than one page before finding an open pull.
+    for index in 0..2 {
         let pull = services
             .pull(&format!("closed-{index}"), false, &[&ticket])
             .await;
         services.close_pull(&pull).await;
     }
-    assert!(!has_open_linked_pull(&services.code, &ticket).await.unwrap());
+    assert!(
+        !has_open_linked_pull_with_page_size(&services.code, &ticket, Some(1))
+            .await
+            .unwrap()
+    );
     let pull = services.pull("open", false, &[&ticket]).await;
-    assert!(has_open_linked_pull(&services.code, &ticket).await.unwrap());
+    assert!(
+        has_open_linked_pull_with_page_size(&services.code, &ticket, Some(1))
+            .await
+            .unwrap()
+    );
     services.close_pull(&pull).await;
     let unrelated = services.pull("unrelated", false, &[]).await;
-    assert!(!has_open_linked_pull(&services.code, &ticket).await.unwrap());
+    assert!(
+        !has_open_linked_pull_with_page_size(&services.code, &ticket, Some(1))
+            .await
+            .unwrap()
+    );
     services.code.faults.fail("read", ServiceError::Unsupported);
-    assert!(has_open_linked_pull(&services.code, &ticket).await.is_err());
+    assert!(
+        has_open_linked_pull_with_page_size(&services.code, &ticket, Some(1))
+            .await
+            .is_err()
+    );
     services.code.faults.clear();
     services.close_pull(&unrelated).await;
     services.stop().await;

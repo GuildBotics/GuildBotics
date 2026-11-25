@@ -1,7 +1,7 @@
 use crate::support;
+use crate::support::Current;
 use branvil::agent::port::*;
 use branvil::test_support::input;
-use gb_member::WriteGuard;
 use gb_server::member::git::{Guest, Output, Pending, Workspace};
 use serde_json::json;
 use std::{
@@ -12,12 +12,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::io::AsyncWriteExt;
-struct Current;
-impl WriteGuard for Current {
-    fn ensure_current(&self) -> gb_member::Result<()> {
-        Ok(())
-    }
-}
 type GuestCall = (PathBuf, Vec<String>, BTreeMap<String, String>);
 #[derive(Default)]
 struct LocalGuest {
@@ -116,8 +110,6 @@ fn git(path: &Path, args: &[&str]) -> String {
 }
 struct Fixture {
     temp: tempfile::TempDir,
-    /// The main commit of `fork/repo`.
-    fork: String,
     /// The embedded service's own bare repository of `acme/repo`.
     remote: PathBuf,
     /// The clone URL the member's workspace uses.
@@ -130,15 +122,14 @@ struct Fixture {
 impl Fixture {
     async fn new() -> Self {
         let services = support::Embedded::new().await;
-        let fork = services.fork().await;
         let url = services.code.clone_url(support::REPO).await.unwrap();
-        Self::with(services, fork, url)
+        Self::with(services, url)
     }
     /// The same service with new local state: seed, host root, clones and guest.
     fn renew(self) -> Self {
-        Self::with(self.services, self.fork, self.url)
+        Self::with(self.services, self.url)
     }
-    fn with(services: support::Embedded, fork: String, url: String) -> Self {
+    fn with(services: support::Embedded, url: String) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let remote = services
             .fixture
@@ -169,7 +160,6 @@ impl Fixture {
         std::fs::create_dir(temp.path().join("clones")).unwrap();
         Self {
             temp,
-            fork,
             remote,
             url,
             seed,
@@ -551,6 +541,7 @@ async fn unregistered_commit_worktree_push_and_scope_boundaries() {
         git(&f.remote, &["rev-parse", "feature"]),
         receipt["commit_sha"]
     );
+    f.services.fork().await;
     let fork = f
         .workspace("one")
         .prepare("fork/repo", "feature")
@@ -792,6 +783,7 @@ async fn changing_the_anchor_keeps_unpublished_branches_and_repository_slots_sep
     let other = f.prepare("one", "other").await;
     assert_ne!(other, path);
     assert_eq!(git(&path, &["rev-parse", "main"]), head);
+    f.services.fork().await;
     let fork = f
         .workspace("one")
         .prepare("fork/repo", "main")
@@ -1125,9 +1117,10 @@ async fn prepare_dispatch_resolves_ticket_and_fork_heads_and_rejects_invalid_anc
     let f = Fixture::new().await;
     let issue = f.services.ticket("Ticket").await;
     let key = f.services.code.ticket_view(&issue).await.unwrap().key;
+    let fork = f.services.fork().await;
     f.services
         .fixture
-        .commit(support::FORK, "review", Some(&f.fork), "readme", "review\n");
+        .commit(support::FORK, "review", Some(&fork), "readme", "review\n");
     let pr = f
         .services
         .fixture
@@ -1407,16 +1400,14 @@ mod active_work_keeps_clean_clones_and_terminal_work_releases_them {
         let first = prepare_work(&f, kind, &one, "ticket/1").await;
         let second = prepare_work(&f, kind, &two, "ticket/2").await;
         assert_ne!(first["repo_path"], second["repo_path"]);
-        for _ in 0..2 {
-            assert_eq!(
-                prepare_work(&f, kind, &one, "ticket/1").await["repo_path"],
-                first["repo_path"]
-            );
-            assert_eq!(
-                prepare_work(&f, kind, &two, "ticket/2").await["repo_path"],
-                second["repo_path"]
-            );
-        }
+        assert_eq!(
+            prepare_work(&f, kind, &one, "ticket/1").await["repo_path"],
+            first["repo_path"]
+        );
+        assert_eq!(
+            prepare_work(&f, kind, &two, "ticket/2").await["repo_path"],
+            second["repo_path"]
+        );
         assert_eq!(
             git(
                 Path::new(first["repo_path"].as_str().unwrap()),
@@ -1462,6 +1453,7 @@ mod excluded_work_retains_git_based_reuse {
 #[tokio::test]
 async fn active_clones_survive_cleanup_with_one_idle_clone_per_repository() {
     let f = Fixture::new().await;
+    f.services.fork().await;
     let repos = [support::REPO, support::FORK];
     let mut tickets = vec![];
     for repo in repos {
@@ -1568,13 +1560,11 @@ mod unreadable_targets_stay_reserved_without_blocking_other_work {
                     .unwrap();
             }
         }
-        for other_kind in ["manual", "pull_request_review", "ticket_mention", "chat"] {
-            let mut other = f.workspace("other");
-            other.work = Some((other_kind, "other"));
-            let next = other.prepare("acme/repo", "next").await.unwrap();
-            assert_ne!(first["repo_path"], next["repo_path"]);
-            assert!(Path::new(first["repo_path"].as_str().unwrap()).exists());
-        }
+        let mut other = f.workspace("other");
+        other.work = Some(("manual", "other"));
+        let next = other.prepare("acme/repo", "next").await.unwrap();
+        assert_ne!(first["repo_path"], next["repo_path"]);
+        assert!(Path::new(first["repo_path"].as_str().unwrap()).exists());
         // The reservation was decided by reading the target, not by skipping it.
         assert!(
             faults

@@ -359,11 +359,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_request_for_another_workspace_leaves_the_active_workspace_in_place() {
-        use crate::{
-            api::{Api, Selected},
-            auth::ServerAuth,
-            input_files::InputFileStore,
-        };
+        use crate::api::{Api, Selected};
         use axum::http::HeaderMap;
         let root = tempfile::tempdir().unwrap();
         let host = root.path().join("code-host");
@@ -384,15 +380,12 @@ mod tests {
         register_execution(Some(&running.data), &viewed, Some("viewed".into()))
             .await
             .unwrap();
-        let api = Api::new(
+        let api = Api::for_test(
+            root.path(),
             Selected {
                 workspace: Some(active.clone()),
                 ..Selected::default()
             },
-            InputFileStore::deferred(&root.path().join("inputs")),
-            ServerAuth::open(root.path(), 8765).unwrap(),
-            "fixture".into(),
-            root.path().into(),
         );
         api.branvil.set(running.data.clone()).ok().unwrap();
         let mut headers = HeaderMap::new();
