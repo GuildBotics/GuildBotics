@@ -15,7 +15,7 @@ export function useCurrentWorkspace(
   useEffect(() => {
     if (fromRoute) remember(fromRoute);
   }, [fromRoute, remember]);
-  return { name, names, query };
+  return { name, names, query, rememberedName: last };
 }
 
 export type CurrentWorkspace = ReturnType<typeof useCurrentWorkspace>;

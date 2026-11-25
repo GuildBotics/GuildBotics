@@ -205,6 +205,87 @@ it.each(["/acme/-/relations", "/acme/-/board"])(
 );
 
 describe("shared navigation", () => {
+  it.each([
+    ["/", "/activity"],
+    ["/activity", "/activity"],
+    ["/service", "/service"],
+    ["/overview", "/service"],
+    ["/commands", "/commands"],
+    ["/diagnostics", "/diagnostics"],
+    ["/setup?section=members&tab=patrol#focus", "/setup?section=members&tab=patrol#focus"],
+    ["/settings/repositories/members", "/settings/repositories/members"],
+  ])("opens %s in the remembered workspace after the list loads", async (entry, target) => {
+    let release!: (value: ReturnType<typeof json>) => void;
+    const list = new Promise<ReturnType<typeof json>>((resolve) => {
+      release = resolve;
+    });
+    const fake = fakeApi({
+      "GET /-/guildbotics/api/config/status": json(200, {
+        branvil_available: true,
+        project_file_exists: true,
+        workspace_name: "acme",
+      }),
+      "GET /api/v1/workspaces": () => list,
+    });
+    window.localStorage.setItem("branvil.workspace", "beta");
+    renderApp(entry);
+    await waitFor(() => expect(fake.calls("GET", "/api/v1/workspaces")).toHaveLength(1));
+    expect(window.location.pathname + window.location.search + window.location.hash).toBe(entry);
+    expect(fake.calls("GET", "/-/guildbotics/api/team")).toHaveLength(0);
+    const main = screen.getByRole("navigation", { name: "Main" });
+    expect(within(main).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/setup");
+    expect(within(main).queryByRole("link", { name: "Task flow" })).not.toBeInTheDocument();
+    release(page([workspace("acme"), workspace("beta")]));
+    await waitFor(() =>
+      expect(window.location.pathname + window.location.search + window.location.hash).toBe(
+        "/workspaces/beta" + target,
+      ),
+    );
+    if (entry.startsWith("/setup") || entry.startsWith("/settings/")) {
+      const nav = screen.getByRole("navigation", { name: "Main" });
+      await within(nav).findByRole("link", { name: "Settings", current: "page" });
+      expect(await screen.findByRole("combobox", { name: "Workspace" })).toHaveValue("beta");
+      await waitFor(() => expect(fake.calls("GET", "/-/guildbotics/api/team")).toHaveLength(1));
+      expect(
+        fake.calls("GET", "/-/guildbotics/api/team")[0]?.headers["X-GuildBotics-Workspace"],
+      ).toBe("beta");
+    }
+  });
+
+  it("keeps the remembered workspace until a failed list can be retried", async () => {
+    fakeApi({
+      "GET /-/guildbotics/api/config/status": json(200, {
+        branvil_available: true,
+        project_file_exists: true,
+        workspace_name: "acme",
+      }),
+      "GET /api/v1/workspaces": [
+        json(503, {}),
+        json(503, {}),
+        json(503, {}),
+        page([workspace("acme"), workspace("beta")]),
+      ],
+    });
+    window.localStorage.setItem("branvil.workspace", "beta");
+    renderApp("/setup");
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(window.location.pathname).toBe("/setup");
+    expect(window.localStorage.getItem("branvil.workspace")).toBe("beta");
+    await userEvent.click(retry);
+    await waitFor(() => expect(window.location.pathname).toBe("/workspaces/beta/setup"));
+  });
+
+  it("keeps the settings section and drops the previous workspace's member editor state", async () => {
+    setup();
+    renderApp("/workspaces/acme/setup?section=members&tab=patrol&person_id=alice");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Workspace" })).toBeEnabled());
+    await choose(userEvent.setup(), "Workspace", "beta");
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/workspaces/beta/setup");
+      expect(window.location.search).toBe("?section=members");
+    });
+  });
+
   it("shows the workspace from a deep link and uses it throughout the sidebar", async () => {
     setup();
     window.localStorage.setItem("branvil.workspace", "beta");

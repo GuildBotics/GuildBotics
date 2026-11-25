@@ -55,6 +55,14 @@ test("uses one sidebar and session when changing screens and workspaces", async 
   const ctx = readStackContext(testInfo.project.name);
   const status = await ownerApi(ctx, "/config/status");
   expect((await status.json()).workspace_name).toBe("acme");
+
+  await page.goto("/setup?section=verification");
+  await expect(page).toHaveURL(/\/workspaces\/navigation-test\/setup\?section=verification$/);
+  await expect(workspace).toHaveValue("navigation-test");
+  await expect(nav.getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "page");
+  await workspace.click();
+  await page.getByRole("option", { name: "acme", exact: true }).click();
+  await expect(page).toHaveURL(/\/workspaces\/acme\/setup\?section=verification$/);
 });
 
 test("opens the repository list and editor in the same settings layout", async ({ page }) => {
@@ -78,4 +86,21 @@ test("opens the repository list and editor in the same settings layout", async (
   await project.click();
   await expect(project).toHaveAttribute("aria-current", "page");
   await expect(page).toHaveURL(/\/workspaces\/acme\/setup\?section=project$/);
+});
+
+test("chooses the landing page using the viewed workspace's configuration", async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("branvil.workspace", "acme"));
+  await page.route("**/-/guildbotics/api/config/status", async (route) => {
+    if (route.request().headers()["x-guildbotics-workspace"]) {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      json: { ...(await response.json()), project_file_exists: false, workspace_name: "other" },
+    });
+  });
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/workspaces\/acme\/activity$/);
 });

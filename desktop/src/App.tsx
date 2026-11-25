@@ -134,6 +134,7 @@ import { isTerminalTraceStatus, traceStatusColor } from "./traceStatus";
 const EXECUTION_LIMIT = 200;
 const MEMORY_EVENT_LIMIT = 500;
 const MEMORY_FILTER_ALL = "__all__";
+const WORKSPACE_PAGES = new Set(["/activity", "/service", "/commands", "/diagnostics", "/setup"]);
 type DiagnosticsTab = "executions" | "memory" | "settings";
 const DIAGNOSTICS_TABS = new Set<DiagnosticsTab>(["executions", "memory", "settings"]);
 type NavRuntimeState = "running" | "stopping" | "stopped";
@@ -175,44 +176,80 @@ export function App() {
   const configured = Boolean(config.data?.project_file_exists);
   const hosted = config.data?.branvil_available !== false;
   const current = useCurrentWorkspace(workspace, config.data?.workspace_name, hosted);
+  const page =
+    (workspace ? pathname.replace(/^\/workspaces\/[^/]+/, "") : pathname).replace(/\/+$/, "") ||
+    "/";
+  const selectsWorkspace =
+    !workspace &&
+    (route.name === "home" ||
+      Boolean(repositorySettings) ||
+      page === "/overview" ||
+      WORKSPACE_PAGES.has(page));
+  // A failed list cannot tell us whether the remembered workspace still exists.
+  const rememberedWorkspaceUnresolved =
+    current.query.isError &&
+    Boolean(current.rememberedName) &&
+    current.rememberedName !== config.data?.workspace_name;
+  const waitingForWorkspace =
+    selectsWorkspace &&
+    (config.isPending || (hosted && (current.query.isPending || rememberedWorkspaceUnresolved)));
+  const visibleWorkspace = waitingForWorkspace ? null : current.name;
+  const scope = visibleWorkspace ? workspacePath(visibleWorkspace) : "";
   const runtimeStatus = useQuery({
     queryKey: ["scheduler"],
     queryFn: getSchedulerStatus,
-    enabled: configured,
+    enabled: configured && !waitingForWorkspace,
     refetchInterval: 5000,
   });
   const serviceNavState = serviceRuntimeNavState(runtimeStatus.data);
   const commandNavState = commandRuntimeNavState(runtimeStatus.data);
-  const scope = current.name ? workspacePath(current.name) : "";
-  const page = workspace ? pathname.replace(/^\/workspaces\/[^/]+/, "") : pathname;
+  let workspaceRedirect: string | undefined;
+  if (selectsWorkspace && visibleWorkspace) {
+    if (repositorySettings)
+      workspaceRedirect = href.settings(repositorySettings.section ?? undefined, visibleWorkspace);
+    else if (page === "/") workspaceRedirect = scope;
+    else if (page === "/overview") workspaceRedirect = scope + "/service";
+    else if (WORKSPACE_PAGES.has(page)) workspaceRedirect = scope + page;
+  }
   const switchWorkspace = (name: string) => {
     const prefix = workspacePath(name);
     let destination = href.workspace(name);
     if (route.name === "pulls") destination = href.pulls(name);
     else if (route.name === "settings")
       destination = href.settings(route.repo ? undefined : (route.section ?? undefined), name);
-    else if (["/activity", "/service", "/commands", "/diagnostics", "/setup"].includes(page)) {
+    else if (WORKSPACE_PAGES.has(page)) {
       destination = prefix + page;
+      if (page === "/setup") {
+        const section = new URLSearchParams(search).get("section");
+        if (section) destination += "?" + new URLSearchParams({ section });
+      }
     }
     requestNavigation(() => navigate(destination));
   };
   return (
     <AppShell
       sidebar={
-        <WorkspaceSelect current={current} available={hosted} onWorkspaceChange={switchWorkspace}>
+        <WorkspaceSelect
+          current={{ ...current, name: visibleWorkspace }}
+          available={hosted}
+          onWorkspaceChange={switchWorkspace}
+        >
           <nav className="nav" aria-label={repositoryT("nav.main")}>
-            {configured || current.name ? (
+            {configured || visibleWorkspace ? (
               <GuardedNavLink to={scope + "/activity"}>
                 <RotateCcwClock size={18} /> {t("app.nav.activity")}
               </GuardedNavLink>
             ) : null}
-            {current.name && hosted && (
+            {visibleWorkspace && hosted && (
               <>
-                <GuardedNavLink to={href.workspace(current.name)} active={route.name === "ticket"}>
+                <GuardedNavLink
+                  to={href.workspace(visibleWorkspace)}
+                  active={route.name === "ticket"}
+                >
                   <Workflow size={18} /> {repositoryT("nav.relations")}
                 </GuardedNavLink>
                 <GuardedNavLink
-                  to={href.pulls(current.name)}
+                  to={href.pulls(visibleWorkspace)}
                   active={["repo", "pull", "commit", "job"].includes(route.name)}
                 >
                   <GitPullRequest size={18} /> {repositoryT("nav.pulls")}
@@ -238,7 +275,10 @@ export function App() {
             <GuardedNavLink to={scope + "/diagnostics"}>
               <TriangleAlert size={18} /> {t("app.nav.diagnostics")}
             </GuardedNavLink>
-            <GuardedNavLink to={scope + "/setup"} active={route.name === "settings"}>
+            <GuardedNavLink
+              to={scope + "/setup"}
+              active={route.name === "settings" || page === "/setup"}
+            >
               <Settings size={18} /> {t("app.nav.setup")}
             </GuardedNavLink>
           </nav>
@@ -263,11 +303,9 @@ export function App() {
       ) : null}
       <HubStatusBand status={hub.data} t={t} />
       {hosted ? <AlertBand hubOperating={Boolean(hub.data?.operation)} /> : null}
-      {configured ? <SystemAlertBand /> : null}
-      {!workspace &&
-      current.name &&
-      ["/activity", "/commands", "/diagnostics", "/service"].includes(page) ? (
-        <Navigate replace to={scope + page + search + hash} />
+      {configured && !waitingForWorkspace ? <SystemAlertBand /> : null}
+      {waitingForWorkspace ? null : workspaceRedirect ? (
+        <Navigate replace to={workspaceRedirect + search + hash} />
       ) : page === "/setup" || repositorySettings ? (
         <SetupPage
           workspace={current.name}

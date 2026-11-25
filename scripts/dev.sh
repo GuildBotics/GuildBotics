@@ -91,10 +91,10 @@ log="$data_dir/server.log"
 : >"$notice"
 : >"$log"
 
-# Says when both listen, and opens their screens: in the background, as the
+# Says when both listen and opens the application in the background, as the
 # launcher becomes the server. A Ctrl-C ends it too where the shell lets it;
 # where it does not, a server that stopped opens no screen.
-open_screens() {
+open_application() {
   local deadline=$((SECONDS + 60))
   until grep -q '^GUILDBOTICS_APP_API_PORT=' "$notice" && grep -q 'Branvil ready on the shared listener' "$log"; do
     # Ended, even before whoever started the launcher reaps it.
@@ -112,9 +112,9 @@ open_screens() {
 }
 server=$$
 # Not the server's child, which nothing would reap.
-(open_screens &)
+(open_application &)
 # The server is this process from here on: a Ctrl-C reaches it once -- the
 # first waits for the commands it runs, a second cancels them -- TERM cancels
 # them, and the launcher ends as it does. The log's copy outlives the signals
 # that stop the server, to its last line.
-exec "$binary" server start >"$notice" 2> >(trap '' INT TERM HUP; exec tee "$log" >&2)
+exec "$binary" server start >"$notice" 2> >(trap '' INT TERM HUP; exec tee -i "$log" >&2)
