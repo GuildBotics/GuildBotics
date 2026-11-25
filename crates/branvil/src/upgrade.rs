@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::ci::supervise::{AUTO_RUNNER, AUTO_RUNNER_DISPLAY_NAME};
 use crate::config::Layout;
-use crate::model::{Member, Token};
+use crate::model::{Member, MemberKind, Token};
 use crate::store::{self, Rd, Store, Upgraded, Upgrading, Wtx};
 
 pub const FROM: u64 = 46;
@@ -41,7 +41,9 @@ pub(crate) fn upgrade_with_roots(
         let legacy = layout.root.join(FROM_CONFIG_FILE);
         let config = match std::fs::copy(&legacy, layout.config_file()) {
             Ok(_) => {
-                rename_runner_limits(&layout.config_file())?;
+                if runner {
+                    rename_runner_limits(&layout.config_file())?;
+                }
                 format!("copied {FROM_CONFIG_FILE} to config.toml")
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -60,17 +62,21 @@ pub(crate) fn upgrade_with_roots(
 
 /// Moves the automatic runner to its new name. Its tokens go: the service
 /// mints the automatic token again at every start. Its past attempts keep the
-/// name they ran under.
+/// name they ran under. Members the previous build let anyone name keep their
+/// names: an agent called `branvil-runner`, or both runners when a member
+/// `hub-runner` exists.
 fn rename_auto_runner(w: &Wtx) -> anyhow::Result<bool> {
     let new = Member::key(AUTO_RUNNER);
-    anyhow::ensure!(
-        !w.exists(store::MEMBERS, &new)?,
-        "the member {AUTO_RUNNER} exists; rename it with the previous build before the upgrade gives the automatic runner that name"
-    );
     let old = Member::key(FROM_AUTO_RUNNER);
-    let Some(mut runner) = w.get::<Member>(store::MEMBERS, &old)? else {
+    let Some(mut runner) = w
+        .get::<Member>(store::MEMBERS, &old)?
+        .filter(|m| m.kind == MemberKind::Runner)
+    else {
         return Ok(false);
     };
+    if w.exists(store::MEMBERS, &new)? {
+        return Ok(false);
+    }
     for token in w.prefix_all::<Token>(store::TOKENS, &[])? {
         if crate::util::fold(&token.member) == FROM_AUTO_RUNNER {
             crate::auth::revoke(w, &token)?;
@@ -229,31 +235,72 @@ mod tests {
     }
 
     #[test]
-    fn upgrade_refuses_to_take_the_name_of_another_member() {
-        let temporary = tempfile::tempdir().unwrap();
-        let layout = Layout::new(temporary.path());
-        let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
-        db.write_sync(|w| {
-            crate::domain::members::insert_member(
-                w,
-                &crate::domain::members::NewMember {
-                    name: AUTO_RUNNER.into(),
-                    display_name: None,
-                    kind: crate::model::MemberKind::Runner,
-                },
-            )?;
-            w.put(
-                store::META,
-                &store::Key::new().s("schema_version").bytes(),
-                &FROM,
-            )?;
-            Ok(())
-        })
-        .unwrap();
-        drop(db);
-        let error = upgrade(&layout).err().unwrap().to_string();
-        assert!(error.contains("the member hub-runner exists"), "{error}");
-        assert!(store::check_version(&layout.db()).is_err());
+    fn upgrade_keeps_the_names_of_members_the_previous_build_let_anyone_choose() {
+        for (old_kind, existing_new) in [("agent", false), ("runner", true)] {
+            let temporary = tempfile::tempdir().unwrap();
+            let layout = Layout::new(temporary.path());
+            let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
+            db.write_sync(|w| {
+                insert_runner(w, FROM_RUNNER_DISPLAY_NAME)?;
+                let mut old: serde_json::Value = w
+                    .get(store::MEMBERS, &Member::key(FROM_AUTO_RUNNER))?
+                    .unwrap();
+                old["kind"] = old_kind.into();
+                w.put(store::MEMBERS, &Member::key(FROM_AUTO_RUNNER), &old)?;
+                crate::auth::issue_token(w, FROM_AUTO_RUNNER, "laptop")?;
+                if existing_new {
+                    crate::domain::members::insert_member(
+                        w,
+                        &crate::domain::members::NewMember {
+                            name: AUTO_RUNNER.into(),
+                            display_name: None,
+                            kind: MemberKind::Runner,
+                        },
+                    )?;
+                }
+                w.put(
+                    store::META,
+                    &store::Key::new().s("schema_version").bytes(),
+                    &FROM,
+                )?;
+                Ok(())
+            })
+            .unwrap();
+            drop(db);
+            let settings = "[ci.runner_limits.branvil-runner]\nmax_cpus = 3\n";
+            std::fs::write(temporary.path().join(FROM_CONFIG_FILE), settings).unwrap();
+            let done = upgrade(&layout).unwrap().unwrap();
+            assert_eq!(
+                done.summary, "copied branvil.toml to config.toml",
+                "{old_kind}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(layout.config_file()).unwrap(),
+                settings,
+                "{old_kind}"
+            );
+            let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
+            let (old, tokens) = db
+                .read_sync(|r| {
+                    Ok((
+                        r.get::<Member>(store::MEMBERS, &Member::key(FROM_AUTO_RUNNER))?,
+                        r.prefix_all::<Token>(store::TOKENS, &[])?,
+                    ))
+                })
+                .unwrap();
+            let old = old.unwrap();
+            assert_eq!(old.display_name, FROM_RUNNER_DISPLAY_NAME, "{old_kind}");
+            assert_eq!(serde_json::to_value(old.kind).unwrap(), old_kind);
+            let existing = db
+                .read_sync(|r| r.get::<Member>(store::MEMBERS, &Member::key(AUTO_RUNNER)))
+                .unwrap();
+            assert_eq!(
+                existing.map(|m| m.display_name),
+                existing_new.then(|| AUTO_RUNNER.to_string())
+            );
+            assert_eq!(tokens.len(), 1, "{old_kind}");
+            assert_eq!(tokens[0].member, FROM_AUTO_RUNNER, "{old_kind}");
+        }
     }
 
     #[test]
