@@ -3,7 +3,7 @@
 //! mode and the limits the child reads can change while the service runs
 //! (Settings → CI, `settings.rs`): the child receives its limits from the Hub on
 //! every claim, so only the mode stops it. The child authenticates as the runner
-//! member `branvil-runner` with a token minted at each start (the previous
+//! member `hub-runner` with a token minted at each start (the previous
 //! automatic token is revoked), passed through the environment, never the
 //! command line.
 
@@ -19,7 +19,7 @@ use crate::runner::executor::Executor;
 use crate::store::{self, Rd};
 use crate::util;
 
-pub const AUTO_RUNNER: &str = "branvil-runner";
+pub const AUTO_RUNNER: &str = "hub-runner";
 pub const AUTO_RUNNER_DISPLAY_NAME: &str = "GuildBotics runner (automatic)";
 
 /// Mints the token of the next child. The previous child is gone (it ends with

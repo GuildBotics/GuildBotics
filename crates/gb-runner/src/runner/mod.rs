@@ -1093,7 +1093,9 @@ impl Runner {
         let say = |text: String| {
             let log = log.clone();
             async move {
-                let _ = log.send(format!("[branvil] {text}\n").into_bytes()).await;
+                let _ = log
+                    .send(format!("[guildbotics] {text}\n").into_bytes())
+                    .await;
             }
         };
         if !health.ready {

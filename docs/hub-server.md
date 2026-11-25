@@ -522,8 +522,10 @@ Copy-Item "$env:USERPROFILE\.guildbotics\runner\branvil.toml" "$env:USERPROFILE\
 
 `GUILDBOTICS_HOME` を変えているマシンでは、そのディレクトリの `runner` を使います。
 
-次に、[手動更新](#手動更新)の手順で Hub を更新します。`hub-data upgrade` が、コードホストのデータディレクトリ（`GUILDBOTICS_CODE_HOST_DATA_DIR`、未指定なら `GUILDBOTICS_HOME/data/code-host`）の `branvil.toml` を `config.toml` に写します。コードホストの保存形式の版は 47 になります。前の版のバックアップを復元するときも、同じ変換で写します。`branvil.toml` は、更新に失敗して前のビルドへ戻ったときに前のビルドが読むので残ります。
+次に、[手動更新](#手動更新)の手順で Hub を更新します。`hub-data upgrade` が、コードホストのデータディレクトリ（`GUILDBOTICS_CODE_HOST_DATA_DIR`、未指定なら `GUILDBOTICS_HOME/data/code-host`）の `branvil.toml` を `config.toml` に写します。同じ変換で、自動ランナーのメンバー名が `branvil-runner` から `hub-runner` に変わり、保存したランナーごとの上限も新しい名前へ移ります。過去の実行の記録と、自動ランナーを名前で指定して待っている再試行は古い名前のままなので、そのような再試行は更新の前に取り消します。コードホストの保存形式の版は 47 になります。前の版のバックアップを復元するときも、同じ変換を行います。`branvil.toml` は、更新に失敗して前のビルドへ戻ったときに前のビルドが読むので残ります。
 
 更新のあと、Hub と各ランナーが新しい版で動き、ランナーが試行を取りに行くことを確かめてから、Hub のデータディレクトリと各ランナーのマシンの古い `branvil.toml` を消します。
 
-開発用の `scripts/dev.sh` は、コードホストのデータを `--data-dir` の `branvil/` ではなく `code-host/` に置きます。既存の開発用データを使い続ける場合は、サーバーを止めて `branvil/` を `code-host/` に名前を変えます。続けて、`GUILDBOTICS_HOME` を `--data-dir` の `home`、`GUILDBOTICS_CODE_HOST_DATA_DIR` を `--data-dir` の `code-host` にして、このチェックアウトのビルドで `guildbotics server hub-data upgrade` を実行してから起動します。
+開発用の `scripts/dev.sh` は、コードホストのデータを `--data-dir` の `branvil/` ではなく `code-host/` に置きます。既存の開発用データを使い続ける場合は、サーバーを止めて `branvil/` を `code-host/` に名前を変えます。続けて、`GUILDBOTICS_HOME` を `--data-dir` の `home`、`GUILDBOTICS_CODE_HOST_DATA_DIR` を `--data-dir` の `code-host` にし、`scripts/dev.sh` と同じく `GUILDBOTICS_IDENTITY_ROOT` と `GUILDBOTICS_CONFIG_DIR` を外して、このチェックアウトのビルドで `guildbotics server hub-data upgrade` を実行してから起動します。
+
+上流アカウントの資格情報と通知の webhook は、データディレクトリの場所に結び付けて保存されています。改名したデータディレクトリからは見えないので、起動後に **設定 → メンバー** の各メンバーのコードホストのアカウントと、**設定 → 通知** の webhook を設定し直します。

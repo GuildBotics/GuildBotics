@@ -157,8 +157,7 @@ async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
         let w = &w;
         async move {
             let v = settings(w).await;
-            v["runner"]["state"] == "no_runner"
-                && row(&v, "branvil-runner")["connection"] == "offline"
+            v["runner"]["state"] == "no_runner" && row(&v, "hub-runner")["connection"] == "offline"
         }
     })
     .await;
@@ -357,7 +356,7 @@ async fn runner_connected(w: &World) {
         let v = settings(w).await;
         if v["runner"]["runners"].as_array().is_some_and(|r| {
             r.iter()
-                .any(|r| r["name"] == "branvil-runner" && r["connection"] == "online")
+                .any(|r| r["name"] == "hub-runner" && r["connection"] == "online")
         }) {
             return;
         }

@@ -1178,7 +1178,7 @@ impl JobLog<'_> {
                 let _ = self.log.send(self.pending[..pos].to_vec()).await;
             }
             let note = format!(
-                "[branvil] sandbox started in {} ms\n",
+                "[guildbotics] sandbox started in {} ms\n",
                 self.started_at.elapsed().as_millis()
             );
             let _ = self.log.send(note.into_bytes()).await;
@@ -1337,7 +1337,7 @@ impl Executor for Microsandbox {
     ) -> Result<(Option<String>, ImageLock), String> {
         let mut lock = self
             .lock_images(false, || {
-                let note = "[branvil] waiting for an image pull or load to finish\n";
+                let note = "[guildbotics] waiting for an image pull or load to finish\n";
                 let _ = log.try_send(note.as_bytes().to_vec());
             })
             .await?;
@@ -1393,7 +1393,9 @@ impl Executor for Microsandbox {
         let say = |text: String| {
             let log = log.clone();
             async move {
-                let _ = log.send(format!("[branvil] {text}\n").into_bytes()).await;
+                let _ = log
+                    .send(format!("[guildbotics] {text}\n").into_bytes())
+                    .await;
             }
         };
         let checkout = std::fs::metadata(job.io.join(CHECKOUT)).map_or(0, |m| m.len());
@@ -2088,13 +2090,13 @@ impl Microsandbox {
         job_log.read_from(&mut output).await;
         job_log.flush().await;
         if unflushed {
-            let note = "[branvil] flushing the job at its timeout failed: returned files may be incomplete\n";
+            let note = "[guildbotics] flushing the job at its timeout failed: returned files may be incomplete\n";
             let _ = log.send(note.into()).await;
         }
         err_reader.abort();
         if let Some(at) = job_log.started {
             let note = format!(
-                "[branvil] commands ran for {} ms\n",
+                "[guildbotics] commands ran for {} ms\n",
                 at.elapsed().as_millis()
             );
             let _ = log.send(note.into_bytes()).await;
@@ -2108,7 +2110,7 @@ impl Microsandbox {
 /// process can exit before a sample sees it; zero is not a measured peak.
 async fn log_peak_memory(log: &mpsc::Sender<Vec<u8>>, peak_kib: u64) -> Option<u64> {
     let mib = (peak_kib > 0).then(|| peak_kib.div_ceil(1024))?;
-    let note = format!("[branvil] peak memory: {mib} MiB\n");
+    let note = format!("[guildbotics] peak memory: {mib} MiB\n");
     let _ = log.send(note.into_bytes()).await;
     Some(mib)
 }
@@ -2349,7 +2351,7 @@ pub(crate) mod tests {
             drop(log);
             assert_eq!(
                 logs.recv().await,
-                expected.map(|mib| format!("[branvil] peak memory: {mib} MiB\n").into_bytes()),
+                expected.map(|mib| format!("[guildbotics] peak memory: {mib} MiB\n").into_bytes()),
                 "peak {peak_kib} KiB"
             );
             assert_eq!(logs.recv().await, None);
@@ -2618,10 +2620,10 @@ esac
             text.push_str(&String::from_utf8_lossy(&bytes));
         }
         for line in [
-            "[branvil] /work prepared in ",
-            "[branvil] sandbox started in ",
-            "[branvil] commands ran for ",
-            "[branvil] sandbox removed in ",
+            "[guildbotics] /work prepared in ",
+            "[guildbotics] sandbox started in ",
+            "[guildbotics] commands ran for ",
+            "[guildbotics] sandbox removed in ",
         ] {
             assert!(text.contains(line), "{line} in {text}");
         }
@@ -2693,7 +2695,7 @@ esac
                 .await
                 .expect("the job's log tells it waits")
                 .unwrap(),
-            b"[branvil] waiting for an image pull or load to finish\n"
+            b"[guildbotics] waiting for an image pull or load to finish\n"
         );
         drop(load);
         let (digest, _lock) = runner.resolve_image("img:dev", &log).await.unwrap();
@@ -3615,7 +3617,7 @@ esac
                 assert_eq!(kept_data, Some(1024));
                 assert_eq!(&head(&cache_disk)[..9], b"collected");
             }
-            let line = format!("[branvil] packing {ARTIFACTS} failed\n");
+            let line = format!("[guildbotics] packing {ARTIFACTS} failed\n");
             assert_eq!(
                 text.matches(&line).count(),
                 usize::from(matches!(case, "missing" | "link" | "timeout")),

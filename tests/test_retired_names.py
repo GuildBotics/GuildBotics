@@ -19,6 +19,10 @@ STORED_SECRET_FILES = {
     "docs/hub-server.md": STORED_SECRETS,
 }
 GIT_TOKEN_FILES = {"docs/secret_migration.md", "records/golden/secret_migration.json"}
+# The prefix of the notices the code host and its runners add to job logs.
+RETIRED_LOG_PREFIX = "[branvil]"
+# Measurements recorded with the logs of their time.
+LOG_RECORD_FILES = {"crates/branvil/docs/performance.md"}
 # The code host's former product name. Code keeps it; the docs, the screens and
 # the messages call the code host by GuildBotics and its features.
 PRODUCT_NAME = "Branvil"
@@ -41,6 +45,8 @@ def retired_names(name: str, text: str) -> set[str]:
         found = {item for item in found if not item.startswith("BRANVIL_GIT_TOKEN_")}
     if RETIRED_DIRECTORY in text:
         found.add(RETIRED_DIRECTORY)
+    if RETIRED_LOG_PREFIX in text and name not in LOG_RECORD_FILES:
+        found.add(RETIRED_LOG_PREFIX)
     return found
 
 
@@ -73,6 +79,9 @@ def test_a_retired_name_is_found() -> None:
         "BRANVIL_DATA_DIR"
     }
     assert not retired_names("docs/hub-server.md", "`BRANVIL_TOKEN_ID`")
+    assert retired_names("a.rs", 'format!("[branvil] {text}")') == {RETIRED_LOG_PREFIX}
+    assert not retired_names("crates/branvil/docs/performance.md", "[branvil] sandbox")
+    assert not retired_names("a.rs", "[guildbotics] sandbox started")
     assert not retired_names("a.rs", "ALICE_BRANVIL_TOKEN BRANVIL:KEEP /.branvil-log")
 
 

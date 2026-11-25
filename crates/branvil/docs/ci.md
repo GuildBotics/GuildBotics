@@ -382,7 +382,7 @@ ends `cancelled` ("Stopped: the commit became a protected branch's; it runs
 again as one.") and a new attempt takes its place in the queue.
 
 Service path skips are completed `skipped` attempts with `path_skip`
-metadata and a `[branvil] skipped: no file matching paths changed since …`
+metadata and a `[guildbotics] skipped: no file matching paths changed since …`
 log line naming the PR/base/merge-base snapshot. They satisfy required head
 checks, never supply reusable results or duration estimates, and a manual
 retry executes the job. On reselection, a newly path-excluded queued attempt
@@ -444,7 +444,7 @@ Selection records the post-merge jobs; a head is reselected when they change.
 Newly excluded queued jobs complete as `skipped`, not `cancelled`; running jobs finish
 and manual retries remain executable. A job that stops being post-merge only returns
 to normal path selection and queues a real attempt when it is selected again.
-The log for this decision is `[branvil] skipped: post-merge only`.
+The log for this decision is `[guildbotics] skipped: post-merge only`.
 
 Repair PR landing requires success of every head job as well as all required
 checks. A pending, skipped, or failed optional job blocks publication and merging.
@@ -754,7 +754,7 @@ GUILDBOTICS_RUNNER_TOKEN=<runner token> guildbotics runner --url http://127.0.0.
 
 Or let the service supervise one: `[ci] runner = "auto"` in `config.toml`
 makes the server start `guildbotics runner` as a child (member
-`branvil-runner`, a token minted at every start and passed through the
+`hub-runner`, a token minted at every start and passed through the
 environment; the previous automatic token is revoked) and restart it when it
 exits. The child reads its work directory (`[ci.executor] work_dir`) and
 microsandbox settings (`[ci.microsandbox]`) from the service configuration.

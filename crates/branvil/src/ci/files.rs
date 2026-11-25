@@ -46,7 +46,7 @@ impl Ci {
                     let temporary = path.with_extension("tmp");
                     tokio::fs::write(
                         &temporary,
-                        format!("[branvil] skipped: {}\n", skip.reason()),
+                        format!("[guildbotics] skipped: {}\n", skip.reason()),
                     )
                     .await
                     .map_err(AppError::internal)?;
@@ -89,7 +89,7 @@ impl Ci {
             .map(|m| m.len())
             .unwrap_or(0);
         let max = self.log_max();
-        let notice = format!("\n[branvil] log truncated at {max} bytes\n");
+        let notice = format!("\n[guildbotics] log truncated at {max} bytes\n");
         if current >= max {
             return Ok((current, true));
         }

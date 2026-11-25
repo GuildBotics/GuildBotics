@@ -202,9 +202,14 @@ at the previous version, and `guildbotics server hub-data upgrade --data-dir <it
 it once the cause is fixed).
 
 Version 46 → 47 (`src/upgrade.rs`): the configuration file `branvil.toml` in
-the data directory is copied to `config.toml`, and the automatic runner's
-stored display name changes to "GuildBotics runner (automatic)" unless the
-owner renamed it. `branvil.toml` stays for the previous build, which a rolled
+the data directory is copied to `config.toml`. The automatic runner's member
+`branvil-runner` becomes `hub-runner`: its tokens are revoked (the service
+mints the automatic token at every start), its saved limits in `config.toml`
+move to the new name, and its display name becomes "GuildBotics runner
+(automatic)" unless the owner changed it. Past attempts keep the name they
+ran under, and so does a queued retry that selects or excludes the runner by
+name (cancel it). The upgrade fails when a member `hub-runner` already
+exists. `branvil.toml` stays for the previous build, which a rolled
 back update runs again; the owner removes it once the update is confirmed. A
 backup of version 46 holds the file under its old name; restore places it as
 it is, and its upgrade copies it. Every upgrade also binds the GuildBotics

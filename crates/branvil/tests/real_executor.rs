@@ -379,7 +379,7 @@ async fn jobs_run_in_microvms_without_network_or_host_files() {
     );
     let startup_ms: u64 = probe_log
         .lines()
-        .find_map(|l| l.strip_prefix("[branvil] sandbox started in "))
+        .find_map(|l| l.strip_prefix("[guildbotics] sandbox started in "))
         .and_then(|r| r.strip_suffix(" ms"))
         .and_then(|n| n.parse().ok())
         .expect("startup time line");
@@ -419,7 +419,8 @@ async fn jobs_run_in_microvms_without_network_or_host_files() {
     let cached_log = job_log(&w, &cached).await;
     assert_eq!(cached["conclusion"], "success", "{cached}\n{cached_log}");
     assert!(
-        cached_log.contains("[branvil] cache restored in ") && cached_log.contains("cached 1 2\n"),
+        cached_log.contains("[guildbotics] cache restored in ")
+            && cached_log.contains("cached 1 2\n"),
         "{cached_log}"
     );
 

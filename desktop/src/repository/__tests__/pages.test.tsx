@@ -80,7 +80,7 @@ it.each([
       details: null,
     }),
     "GET /api/v1/repos/acme/demo/jobs/att_skip/log": json(200, {
-      log: "[branvil] skipped: no file matching paths changed since merge-base",
+      log: "[guildbotics] skipped: no file matching paths changed since merge-base",
       log_bytes: 70,
       truncated: false,
     }),

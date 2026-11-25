@@ -141,7 +141,7 @@ async fn post_merge_jobs_skip_on_heads_but_execute_after_merge() {
             &w.owner,
         )
         .await;
-    assert_eq!(log["log"], "[branvil] skipped: post-merge only\n");
+    assert_eq!(log["log"], "[guildbotics] skipped: post-merge only\n");
     let (status, result) = w
         .server
         .post(
@@ -959,7 +959,7 @@ async fn paths_land(auto: bool) {
             .ok(&format!("{}/jobs/{id}/log", w.repo_path()), &w.owner)
             .await;
         assert!(log["log"].as_str().unwrap().starts_with(&format!(
-            "[branvil] skipped: no file matching paths changed since {base}"
+            "[guildbotics] skipped: no file matching paths changed since {base}"
         )));
         assert!(log["log"].as_str().unwrap().contains(&base));
     }
@@ -3357,7 +3357,7 @@ async fn the_automatic_runner_starting_again_queues_the_jobs_its_predecessor_hel
     set_ci_config(&w, &[("lease_secs", 600.into())]);
     w.restart(&[]);
     // As the automatic runner, which dies with its service.
-    let runner = Runner::new(&w, "branvil-runner").await;
+    let runner = Runner::new(&w, "hub-runner").await;
     let held = running_test_and_queued_lint(&w, &runner).await;
     set_ci_config(&w, &[("runner", "auto".into())]);
     // A home of its own: without msb the automatic runner leaves work queued
@@ -3427,7 +3427,7 @@ async fn the_automatic_runner_starting_again_queues_the_jobs_its_predecessor_hel
         .ok(&format!("{}/jobs/{test_id}", w.repo_path()), &w.aiko)
         .await;
     assert_eq!(rerun["runner"], "ready-runner");
-    assert_eq!(w.server.ok(&url, &w.aiko).await["runner"], "branvil-runner");
+    assert_eq!(w.server.ok(&url, &w.aiko).await["runner"], "hub-runner");
     let at = |id: String| {
         let w = &w;
         async move {
