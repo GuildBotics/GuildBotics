@@ -56,25 +56,35 @@ impl OwnerClient {
         port: u16,
         language: &'static str,
     ) -> anyhow::Result<Option<Self>> {
+        Self::connect_with_timeout(data, port, language, PROOF_TIMEOUT).await
+    }
+
+    async fn connect_with_timeout(
+        data: &Path,
+        port: u16,
+        language: &'static str,
+        timeout: Duration,
+    ) -> anyhow::Result<Option<Self>> {
         let token =
             match std::fs::read_to_string(auth::directory(data, port).join(auth::OWNER_TOKEN)) {
                 Ok(token) => token,
                 Err(_) => return Ok(None),
             };
-        Self::with_token(port, language, token).await
+        Self::with_token(port, language, token, timeout).await
     }
 
     async fn with_token(
         port: u16,
         language: &'static str,
         token: String,
+        timeout: Duration,
     ) -> anyhow::Result<Option<Self>> {
         let base = format!("http://127.0.0.1:{port}/-/guildbotics/api");
         let http = http()?;
         let Some((id, secret)) = auth::parse_token(&token) else {
             return Ok(None);
         };
-        if !proves(&http, &base, id, &loopback_auth::digest(secret)).await {
+        if !proves(&http, &base, id, &loopback_auth::digest(secret), timeout).await {
             return Ok(None);
         }
         Ok(Some(Self {
@@ -93,8 +103,12 @@ impl OwnerClient {
     }
 
     pub(crate) async fn health(&self) -> Option<Value> {
+        self.health_with_timeout(PROOF_TIMEOUT).await
+    }
+
+    async fn health_with_timeout(&self, timeout: Duration) -> Option<Value> {
         self.request(reqwest::Method::GET, "/health")
-            .timeout(PROOF_TIMEOUT)
+            .timeout(timeout)
             .send()
             .await
             .ok()?
@@ -705,11 +719,21 @@ async fn entry_client(
     language: &'static str,
     consent: impl FnOnce(u16) -> Option<String>,
 ) -> anyhow::Result<Option<OwnerClient>> {
-    if let Some(owner) = OwnerClient::connect(data, port, language).await? {
+    entry_client_with_timeout(data, port, language, consent, PROOF_TIMEOUT).await
+}
+
+async fn entry_client_with_timeout(
+    data: &Path,
+    port: u16,
+    language: &'static str,
+    consent: impl FnOnce(u16) -> Option<String>,
+    timeout: Duration,
+) -> anyhow::Result<Option<OwnerClient>> {
+    if let Some(owner) = OwnerClient::connect_with_timeout(data, port, language, timeout).await? {
         return Ok(Some(owner));
     }
     match consent(port) {
-        Some(token) => OwnerClient::with_token(port, language, token).await,
+        Some(token) => OwnerClient::with_token(port, language, token, timeout).await,
         None => Ok(None),
     }
 }
@@ -735,7 +759,7 @@ pub(crate) async fn consent_client(
 ) -> anyhow::Result<OwnerClient> {
     let unavailable = || anyhow::anyhow!(i18n::t(language, "cli.server.unreachable", &[]));
     let token = consent(port).ok_or_else(unavailable)?;
-    OwnerClient::with_token(port, language, token)
+    OwnerClient::with_token(port, language, token, PROOF_TIMEOUT)
         .await?
         .ok_or_else(unavailable)
 }
@@ -772,11 +796,17 @@ fn caller_path(path: &Path) -> std::io::Result<PathBuf> {
 
 /// Whether the listener on the port answers a fresh nonce as only the holder
 /// of the token's digest can.
-async fn proves(http: &reqwest::Client, base: &str, id: &str, digest: &str) -> bool {
+async fn proves(
+    http: &reqwest::Client,
+    base: &str,
+    id: &str,
+    digest: &str,
+    timeout: Duration,
+) -> bool {
     let nonce = loopback_auth::hex(&loopback_auth::random_bytes::<32>());
     let answer = http
         .post(format!("{base}/local-api/proof"))
-        .timeout(PROOF_TIMEOUT)
+        .timeout(timeout)
         .json(&json!({"token_id": id, "nonce": nonce}))
         .send()
         .await
@@ -791,6 +821,51 @@ async fn proves(http: &reqwest::Client, base: &str, id: &str, digest: &str) -> b
 #[cfg(test)]
 mod tests {
     use super::read_git_credential;
+    #[test]
+    fn command_submission_allows_time_for_full_history() {
+        use super::*;
+
+        let owner = OwnerClient {
+            http: http().unwrap(),
+            base: "http://127.0.0.1:8765/-/guildbotics/api".into(),
+            token: "fixture".into(),
+            language: "en",
+        };
+        let input = serde_json::from_value(json!({"command":"ask"})).unwrap();
+        let request = owner.command_submission(&input).build().unwrap();
+        assert_eq!(
+            request.timeout().copied(),
+            Some(crate::command_protocol::HISTORY_TIMEOUT + TIMEOUT)
+        );
+    }
+
+    #[tokio::test]
+    async fn response_errors_preserve_usable_messages_and_otherwise_report_status() {
+        use super::*;
+
+        let status = reqwest::StatusCode::CONFLICT;
+        for (body, expected) in [
+            (
+                r#"{"message":"サーバーは終了中です。"}"#,
+                "サーバーは終了中です。",
+            ),
+            ("{}", "HTTP 409 Conflict"),
+            ("[]", "HTTP 409 Conflict"),
+            (r#"{"message":null}"#, "HTTP 409 Conflict"),
+            (r#"{"message":""}"#, "HTTP 409 Conflict"),
+            ("temporarily unavailable", "HTTP 409 Conflict"),
+        ] {
+            let response = axum::http::Response::builder()
+                .status(status)
+                .body(body)
+                .unwrap();
+            assert_eq!(
+                checked(response.into()).await.unwrap_err().to_string(),
+                expected
+            );
+        }
+    }
+
     #[test]
     fn credential_preflight_uses_only_valid_get_fields_and_replay_discards_secrets() {
         for wire in [
@@ -1143,8 +1218,7 @@ mod tests {
                                 "number" => "{\"proof\":42}".into(),
                                 "non-ascii" => "{\"proof\":\"偽\"}".into(),
                                 "slow" => {
-                                    tokio::time::sleep(PROOF_TIMEOUT + Duration::from_secs(1))
-                                        .await;
+                                    tokio::time::sleep(Duration::from_millis(400)).await;
                                     let (_, secret) = auth::parse_token(if id.starts_with("012") {
                                         OWNER
                                     } else {
@@ -1171,11 +1245,22 @@ mod tests {
             let token_path = auth::directory(data.path(), port).join(auth::OWNER_TOKEN);
             std::fs::create_dir_all(token_path.parent().unwrap()).unwrap();
             std::fs::write(token_path, OWNER).unwrap();
+            let timeout = if mode == "slow" {
+                Duration::from_millis(200)
+            } else {
+                PROOF_TIMEOUT
+            };
             assert!(
-                entry_client(data.path(), port, "ja", |_| Some(CONSENT.into()))
-                    .await
-                    .unwrap()
-                    .is_none(),
+                entry_client_with_timeout(
+                    data.path(),
+                    port,
+                    "ja",
+                    |_| Some(CONSENT.into()),
+                    timeout
+                )
+                .await
+                .unwrap()
+                .is_none(),
                 "{mode}"
             );
             assert_eq!(

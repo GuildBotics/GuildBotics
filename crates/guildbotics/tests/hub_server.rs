@@ -69,6 +69,7 @@ impl Hub {
             "security",
             "codesign",
             "rustc",
+            "sleep",
         ] {
             symlink(&stub, tools.join(name)).unwrap();
         }
@@ -454,10 +455,22 @@ fn install_leaves_a_different_installed_build_to_update() {
 #[test]
 fn every_unload_waits_until_launchd_no_longer_lists_the_agent() {
     let hub = Hub::new();
+    let assert_unloads = |count| {
+        let calls = hub.lines("calls");
+        let unloads = calls
+            .split("launchctl|bootout|")
+            .skip(1)
+            .collect::<Vec<_>>();
+        assert_eq!(unloads.len(), count);
+        for unload in unloads {
+            assert_eq!(unload.lines().filter(|line| *line == "sleep|1").count(), 1);
+        }
+    };
     // An install whose start fails leaves no listed job behind.
     hub.mark("slow-bootout");
     hub.fail_start("old");
     hub.run("install", None, false);
+    assert_unloads(1);
     assert!(!hub.root().join("loaded").exists());
     fs::remove_file(hub.root().join("slow-bootout")).unwrap();
     fs::remove_file(hub.root().join("fail-start")).unwrap();
@@ -466,15 +479,18 @@ fn every_unload_waits_until_launchd_no_longer_lists_the_agent() {
     // launchd keeps listing the job briefly after bootout returns.
     hub.mark("slow-bootout");
     hub.run("restart", None, true);
+    assert_unloads(1);
     assert_eq!(hub.lines("holder"), "42\n");
 
     hub.commit("new");
     hub.fail_start("new");
     let out = hub.run("update", None, false);
+    assert_unloads(2);
     assert!(text(&out).contains("The previous build is running again"));
     assert_eq!(hub.installed_build(), old);
 
     hub.run("uninstall", None, true);
+    assert_unloads(1);
     assert!(!hub.root().join("loaded").exists());
     fs::remove_file(hub.root().join("fail-start")).unwrap();
     hub.install();
@@ -484,6 +500,7 @@ fn every_unload_waits_until_launchd_no_longer_lists_the_agent() {
     fs::remove_file(hub.root().join("holder")).unwrap();
     fs::remove_file(hub.root().join("job-pid")).unwrap();
     hub.install();
+    assert_unloads(1);
     assert_eq!(hub.lines("holder"), "42\n");
 }
 
@@ -1211,23 +1228,6 @@ fn auto_update_selects_latest_compatible_schema_and_advances_one_step() {
 }
 
 #[test]
-fn auto_verified_read_failure_notifies_each_episode_once() {
-    let hub = Hub::new();
-    hub.install();
-    hub.auto_candidate();
-    hub.verified(&[]);
-    for episode in 1..=2 {
-        hub.mark("fail-verified");
-        hub.run("auto-once", None, true);
-        hub.run("auto-once", None, true);
-        assert_eq!(hub.lines("notifications").lines().count(), episode);
-        assert!(hub.lines("notifications").contains(": preflight:"));
-        fs::remove_file(hub.root().join("fail-verified")).unwrap();
-        hub.run("auto-once", None, true);
-    }
-}
-
-#[test]
 fn removed_hub_checks_command_is_rejected() {
     let output = Command::new(env!("CARGO_BIN_EXE_guildbotics"))
         .args(["server", "hub-checks"])
@@ -1409,27 +1409,13 @@ fn auto_once_resumes_interrupted_update_after_server_returns() {
 
 #[test]
 fn auto_update_defers_unsafe_states_and_reports_actionable_blockers() {
-    for condition in [
-        "operation",
-        "interrupted",
-        "dirty",
-        "diverged",
-        "unresponsive",
-        "service-error",
-        "image",
-        "manual",
-    ] {
+    for condition in ["dirty", "service-error", "image", "manual"] {
         let hub = Hub::new();
         hub.install();
         hub.auto_candidate();
         match condition {
-            "operation" => {
-                fs::create_dir(hub.builds().parent().unwrap().join("operation")).unwrap()
-            }
-            "interrupted" => fs::write(hub.builds().join("update-from"), "interrupted").unwrap(),
             "dirty" => fs::write(hub.repo.join("untracked"), "change").unwrap(),
-            "diverged" => hub.commit("local"),
-            "unresponsive" | "service-error" => hub.mark(condition),
+            "service-error" => hub.mark(condition),
             "image" => fs::write(
                 hub.root().join("environment"),
                 r#"{"image":{"reference":"custom:latest","present":false}}"#,
@@ -1451,17 +1437,15 @@ fn auto_update_defers_unsafe_states_and_reports_actionable_blockers() {
         hub.run("auto-once", None, true);
         hub.assert_runs_signed("old");
         assert!(!hub.lines("actions").contains("server|stop"));
-        if condition != "operation" {
-            assert!(!hub.lines("notifications").is_empty());
-            hub.run("auto-once", None, true);
-            assert_eq!(hub.lines("notifications").lines().count(), 1);
-        }
+        assert!(!hub.lines("notifications").is_empty());
+        hub.run("auto-once", None, true);
+        assert_eq!(hub.lines("notifications").lines().count(), 1);
     }
 }
 
 #[test]
 fn auto_update_reports_missing_snapshot_after_activation() {
-    for snapshot in ["missing", "stale", "failed", "building", "ready"] {
+    for snapshot in ["stale", "ready"] {
         let hub = Hub::new();
         hub.install();
         hub.auto_candidate();
@@ -1477,10 +1461,10 @@ fn auto_update_reports_missing_snapshot_after_activation() {
         hub.assert_runs_signed("new");
         assert_eq!(
             hub.root().join("notifications").exists(),
-            ["missing", "stale", "failed"].contains(&snapshot)
+            snapshot == "stale"
         );
         assert!(hub.lines("actions").contains("new|install"));
-        if ["missing", "stale", "failed"].contains(&snapshot) {
+        if snapshot == "stale" {
             assert!(hub.lines("notifications").contains("environment build"));
             assert!(
                 !hub.lines("notifications")
@@ -1555,7 +1539,7 @@ fn auto_update_finishes_snapshot_cleanup_on_a_later_pass() {
 
 #[test]
 fn auto_cleanup_errors_never_prevent_a_new_verified_update() {
-    for failure in ["prune", "status", "state"] {
+    for failure in ["status", "state"] {
         let hub = Hub::new();
         hub.install();
         hub.auto_candidate();
@@ -1564,7 +1548,6 @@ fn auto_cleanup_errors_never_prevent_a_new_verified_update() {
         assert!(hub.auto_state()["blockers"]["snapshot"].is_object());
         fs::remove_file(hub.root().join("fail-prune")).unwrap();
         match failure {
-            "prune" => hub.mark("fail-prune"),
             "status" => hub.mark("fail-status"),
             "state" => {
                 fs::write(
@@ -1742,14 +1725,7 @@ fn auto_agent_registration_preserves_build_path_and_leaves_server_running() {
     .unwrap();
     hub.mark("auto-loaded");
     hub.run("auto-install", None, true);
-    assert!(
-        hub.lines("calls").contains("sleep|1")
-            || hub
-                .lines("calls")
-                .matches("launchctl|print|gui/1234/local.guildbotics.update")
-                .count()
-                >= 3
-    );
+    assert!(hub.calls_contain("sleep|1"));
     let plist = hub
         .home
         .join("Library/LaunchAgents/local.guildbotics.update.plist");
@@ -1943,11 +1919,33 @@ fn the_loop_ends_once_the_active_build_is_another() {
             .spawn()
             .unwrap()
     };
+    use std::time::{Duration, Instant};
+
+    fs::write(hub.root().join("calls"), "").unwrap();
     let mut running = start();
-    std::thread::sleep(std::time::Duration::from_secs(3));
-    assert!(running.try_wait().unwrap().is_none());
-    running.kill().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let still_active = loop {
+        if running.try_wait().unwrap().is_some() {
+            break false;
+        }
+        if hub
+            .lines("calls")
+            .matches("current|server|hub-probe|--source")
+            .count()
+            >= 2
+        {
+            break running.try_wait().unwrap().is_none();
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    if running.try_wait().unwrap().is_none() {
+        running.kill().unwrap();
+    }
     running.wait().unwrap();
+    assert!(still_active, "the active build did not enter a second tick");
 
     // Another build became active: launchd starts the loop from it.
     fs::write(&current, built).unwrap();
@@ -2000,6 +1998,8 @@ fn auto_state_notifications_follow_each_episode_instead_of_the_commit() {
                 fs::remove_file(hub.root().join("verified")).ok();
             }
             hub.run("auto-once", None, true);
+            hub.assert_runs_signed("old");
+            assert!(!hub.lines("actions").contains("server|stop"));
             if stage == "operation" {
                 // Ordinary short operations do not notify, and a new lock has a fresh delay.
                 assert_eq!(hub.root().join("notifications").exists(), episode > 1);

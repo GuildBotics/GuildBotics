@@ -1,4 +1,5 @@
 use crate::support;
+use crate::support::Current;
 use branvil::agent::port::*;
 use branvil::agent::{CodeAgent, TicketAgent};
 use gb_member::{MemberError, WriteGuard};
@@ -13,12 +14,6 @@ impl RepositoryServices for Forbidden {
     }
     fn code(&self) -> gb_member::Result<&CodeAgent> {
         panic!("provider must not be created")
-    }
-}
-struct Current;
-impl WriteGuard for Current {
-    fn ensure_current(&self) -> gb_member::Result<()> {
-        Ok(())
     }
 }
 impl WriteGuard for Stale {

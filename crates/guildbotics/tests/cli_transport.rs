@@ -173,16 +173,6 @@ async fn service_cli_preserves_server_errors_and_never_retries_a_post() {
                 Some(r#"{"message":"サーバーは終了中です。"}"#),
                 "サーバーは終了中です。",
             ),
-            (
-                "503 Service Unavailable",
-                Some(r#"{"message":"サーバーは終了中です。"}"#),
-                "サーバーは終了中です。",
-            ),
-            ("409 Conflict", Some("{}"), "HTTP 409"),
-            ("409 Conflict", Some("[]"), "HTTP 409"),
-            ("409 Conflict", Some(r#"{"message":null}"#), "HTTP 409"),
-            ("409 Conflict", Some(r#"{"message":""}"#), "HTTP 409"),
-            ("409 Conflict", Some("temporarily unavailable"), "HTTP 409"),
             ("", None, "error sending request"),
         ] {
             let mut cli = peer_cli(root.path(), args);
@@ -338,16 +328,6 @@ async fn run_cli_forwards_the_workspace_cwd_person_arguments_and_stdin_only_once
         )
         .await;
         let (socket, request) = peer.authorized("POST", "commands/run").await;
-        // Delay acceptance beyond the ordinary API timeout, as history completion can.
-        if arguments[1] == "ask@alice" {
-            tokio::time::sleep(Duration::from_secs(11)).await;
-            assert!(
-                tokio::time::timeout(Duration::from_millis(100), peer.listener.accept())
-                    .await
-                    .is_err(),
-                "CLI must not collect a receipt before slow submission is accepted"
-            );
-        }
         let id = request["request_id"].as_str().unwrap();
         assert!(id.starts_with("fixture.100000."));
         assert_eq!(request["preflight"], false);

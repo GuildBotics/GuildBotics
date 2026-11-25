@@ -9,7 +9,7 @@ name=${0##*/}
 case "$name" in
     uname) cat "$FAKE_ROOT/os" ;;
     id) printf '1234\n' ;;
-    npm) : ;;
+    npm|sleep) : ;;
     # A test links these to record the call; the real tool still does the work.
     rm|tar)
         PATH=${PATH#*:}

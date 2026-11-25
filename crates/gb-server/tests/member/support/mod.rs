@@ -4,6 +4,26 @@ use branvil::agent::{CodeAgent, TicketAgent};
 use branvil::test_support::{Fixture, input};
 use serde_json::json;
 
+pub struct Current;
+
+impl gb_member::WriteGuard for Current {
+    fn ensure_current(&self) -> gb_member::Result<()> {
+        Ok(())
+    }
+}
+
+pub struct Unused;
+
+impl gb_server::member::repository::RepositoryServices for Unused {
+    fn code(&self) -> gb_member::Result<&CodeAgent> {
+        panic!("unexpected provider access")
+    }
+
+    fn tickets(&self) -> gb_member::Result<&TicketAgent> {
+        panic!("unexpected provider access")
+    }
+}
+
 /// Every operation of a code agent and of the ticket agent it derefs to.
 pub const OPERATIONS: &[&str] = &[
     "read",

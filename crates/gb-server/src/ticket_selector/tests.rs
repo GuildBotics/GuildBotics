@@ -93,9 +93,9 @@ fn every_rate_limit_reset_hint_and_retry_guidance_renders_in_both_languages() {
 }
 #[tokio::test]
 async fn rate_limit_envelopes_accept_direct_and_exhausted_cli_errors_but_not_other_categories() {
+    let mut f = Fixture::new().await;
     for wrapped in [false, true] {
         for category in ["rate_limited", "timeout", "unknown"] {
-            let f = Fixture::new().await;
             let task = f.task().await;
             let mut failure = guest(category);
             if wrapped && let DispatchFailure::Guest(error) = &mut failure {
@@ -114,14 +114,16 @@ async fn rate_limit_envelopes_accept_direct_and_exhausted_cli_errors_but_not_oth
                 usize::from(limited)
             );
             assert_eq!(f.runner.stops.lock().unwrap().len(), usize::from(!limited));
+            f.remove_ticket(task.url.as_deref().unwrap()).await;
+            f = f.reset_case();
         }
     }
 }
 
 #[tokio::test]
 async fn default_and_clamped_budgets_reach_the_turn_without_moving_in_progress_work() {
+    let mut f = Fixture::new().await;
     for (raw, expected) in [("", 5), ("0", 1), ("x", 5), ("-10", 1), (" 7 ", 7)] {
-        let f = Fixture::new().await;
         let mut task = f.task().await;
         task.status = "in_progress".into();
         f.ticket.faults.fail("move_ticket", ServiceError::Failed);
@@ -140,7 +142,7 @@ async fn default_and_clamped_budgets_reach_the_turn_without_moving_in_progress_w
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].run_id, trace.id());
         assert_eq!(calls[0].payload["max_completion_attempts"], expected);
-        let stored = f.stored_ticket("1").await;
+        let stored = f.stored_ticket(ticket_key(&task)).await;
         assert_eq!(stored["lane"], "ready");
         assert!(
             f.ticket
@@ -149,6 +151,8 @@ async fn default_and_clamped_budgets_reach_the_turn_without_moving_in_progress_w
                 .iter()
                 .all(|(operation, _)| *operation != "move_ticket")
         );
+        f.remove_ticket(task.url.as_deref().unwrap()).await;
+        f = f.reset_case();
     }
 }
 
@@ -234,9 +238,11 @@ async fn listing_limited_pulls_uses_distinct_traces_and_refresh_limit_still_runs
 }
 #[tokio::test]
 async fn concurrent_reviewers_and_a_prior_human_draft_never_announce_a_second_conversion() {
+    let mut f = Fixture::new().await;
+    let mut next_pull = 0;
     for drafted_by_human in [false, true] {
-        let f = Fixture::new().await;
-        let mut pull = f.pull().await;
+        next_pull += 1;
+        let mut pull = f.pull_branch(&format!("case-{next_pull}"), false).await;
         pull.trigger_reason = Some(REVIEW_LIMIT.into());
         if drafted_by_human {
             assert!(
@@ -258,17 +264,20 @@ async fn concurrent_reviewers_and_a_prior_human_draft_never_announce_a_second_co
             f.runner.stops.lock().unwrap().len(),
             usize::from(!drafted_by_human)
         );
-        let stored = f.stored_pull(1).await;
+        let stored = f.stored_pull(pull_number(&pull)).await;
         assert_eq!(stored["draft"], true);
         assert_eq!(
             stored["comments"].as_array().unwrap().len(),
             if drafted_by_human { 1 } else { 2 }
         );
+        f.close_pull(&pull).await;
+        f = f.reset_case();
     }
 }
 
 #[tokio::test]
 async fn move_errors_preserve_the_ready_lane_and_only_unavailable_autonomous_work_defers() {
+    let mut f = Fixture::new().await;
     for source in ["manual", "scheduled", "routine"] {
         for error in [
             ServiceError::Failed,
@@ -276,7 +285,6 @@ async fn move_errors_preserve_the_ready_lane_and_only_unavailable_autonomous_wor
             ServiceError::Unsupported,
             ServiceError::Unavailable,
         ] {
-            let f = Fixture::new().await;
             let task = f.task().await;
             f.ticket.faults.fail("move_ticket", error.clone());
             let selector = f.selector(source);
@@ -285,7 +293,7 @@ async fn move_errors_preserve_the_ready_lane_and_only_unavailable_autonomous_wor
                 matches!(selector.run(&task,selector.invocation(&task).unwrap(),&trace,5).await,Err(DispatchFailure::Service(e)) if e==error)
             );
             assert!(f.runner.calls.lock().unwrap().is_empty());
-            let stored = f.stored_ticket("1").await;
+            let stored = f.stored_ticket(ticket_key(&task)).await;
             assert_eq!(stored["lane"], "ready");
             let deferred = source != "manual" && error.is_unavailable();
             let comments = f.comments(&task).await;
@@ -297,15 +305,17 @@ async fn move_errors_preserve_the_ready_lane_and_only_unavailable_autonomous_wor
                 f.runner.stops.lock().unwrap().len(),
                 usize::from(!deferred && source != "manual")
             );
+            f.remove_ticket(task.url.as_deref().unwrap()).await;
+            f = f.reset_case();
         }
     }
 }
 #[tokio::test]
 async fn failed_comment_delivery_keeps_rate_limit_evidence_and_an_unaddressed_failure_still_notifies()
  {
+    let mut f = Fixture::new().await;
     for fail_post in [false, true] {
         for limited in [false, true] {
-            let f = Fixture::new().await;
             let task = f.task().await;
             if fail_post {
                 f.ticket.faults.fail("comment", ServiceError::Failed);
@@ -324,12 +334,14 @@ async fn failed_comment_delivery_keeps_rate_limit_evidence_and_an_unaddressed_fa
                 f.runner.activity.lock().unwrap().len(),
                 usize::from(limited)
             );
-            let stops = f.runner.stops.lock().unwrap();
+            let stops = f.runner.stops.lock().unwrap().clone();
             assert_eq!(stops.len(), usize::from(!fail_post && !limited));
             if let Some(stop) = stops.first() {
                 assert_eq!(stop.url, task.url.as_deref().unwrap());
                 assert_eq!(stop.comment_url, comments[0]["url"].as_str().unwrap());
             }
+            f.remove_ticket(task.url.as_deref().unwrap()).await;
+            f = f.reset_case();
         }
     }
 }
@@ -448,6 +460,10 @@ impl Fixture {
         embedded.repository("acme/repo").await;
         embedded.member("yuki").await;
         embedded.member("aiko").await;
+        Self::with(root, embedded)
+    }
+
+    fn with(root: tempfile::TempDir, embedded: branvil::test_support::Fixture) -> Self {
         let ticket = Arc::new(TicketAgent::new(
             embedded.data(),
             "acme".into(),
@@ -474,6 +490,26 @@ impl Fixture {
             diagnostics,
         }
     }
+    fn reset_case(self) -> Self {
+        Self::with(tempfile::tempdir().unwrap(), self.embedded)
+    }
+
+    async fn remove_ticket(&self, url: &str) {
+        self.embedded
+            .owner
+            .tickets_delete_ticket("acme/repo", item_key(url))
+            .await
+            .unwrap();
+    }
+
+    async fn close_pull(&self, pull: &Task) {
+        self.embedded
+            .owner
+            .pulls_set_open("acme/repo", pull_number(pull), false)
+            .await
+            .unwrap();
+    }
+
     fn selector<'a>(&'a self, source: &'a str) -> Selector<'a> {
         Selector {
             roster: &[],
@@ -789,6 +825,20 @@ impl Fixture {
             "member_id":"aiko","device_id":"device","started_at":"2026-11-05T00:00:00Z","safe_summary":summary,"provider_evidence":evidence})).unwrap());
     }
 }
+fn item_key(url: &str) -> &str {
+    url.rsplit('/').next().unwrap()
+}
+
+fn ticket_key(task: &Task) -> &str {
+    item_key(task.url.as_deref().unwrap())
+}
+
+fn pull_number(task: &Task) -> u64 {
+    item_key(task.pull_request_url.as_deref().unwrap())
+        .parse()
+        .unwrap()
+}
+
 fn guest(category: &str) -> DispatchFailure {
     DispatchFailure::Guest(Box::new(serde_json::from_value(json!({"command":false,"type":"CliAgentExecutionError","message":"private path must never appear",
         "cli_agent":"codex","cli_agent_result":{"error_category":category,"error_details":{"retry_after_at":"2027-01-01T00:00:00Z","retry_after_text":"later"}}})).unwrap()))
@@ -822,8 +872,8 @@ async fn ready_ticket_moves_once_and_turn_receives_trace_identity_and_completion
 
 #[tokio::test]
 async fn mention_preserves_lane_and_assignee_and_uses_a_distinct_conversation_kind() {
+    let mut f = Fixture::new().await;
     for lane in ["new", "ready", "in_progress", "done"] {
-        let f = Fixture::new().await;
         let original = f.task().await;
         if lane == "done" {
             f.ticket
@@ -835,7 +885,7 @@ async fn mention_preserves_lane_and_assignee_and_uses_a_distinct_conversation_ki
                 .owner
                 .tickets_put_on_board(
                     "acme/repo",
-                    "1",
+                    ticket_key(&original),
                     branvil::test_support::input(json!({"lane":lane})),
                 )
                 .await
@@ -843,14 +893,14 @@ async fn mention_preserves_lane_and_assignee_and_uses_a_distinct_conversation_ki
         }
         f.embedded
             .owner
-            .tickets_set_assignee("acme/repo", "1", Some("yuki".into()))
+            .tickets_set_assignee("acme/repo", ticket_key(&original), Some("yuki".into()))
             .await
             .unwrap();
         f.embedded
             .owner
             .tickets_add_comment(
                 "acme/repo",
-                "1",
+                ticket_key(&original),
                 branvil::test_support::input(json!({"body":"@aiko Please provide context."})),
             )
             .await
@@ -860,10 +910,11 @@ async fn mention_preserves_lane_and_assignee_and_uses_a_distinct_conversation_ki
         let candidates = selector.candidates().await.unwrap();
         assert_eq!(candidates.len(), 1);
         let task = &candidates[0];
+        assert_eq!(task.url, original.url);
         let invocation = selector.refresh(task).await.unwrap().unwrap();
         assert_eq!(invocation.work.as_ref().unwrap().kind, "ticket_mention");
         selector.run(task, invocation, &trace, 1).await.unwrap();
-        let after = f.stored_ticket("1").await;
+        let after = f.stored_ticket(ticket_key(&original)).await;
         assert_eq!(after["lane"], lane);
         assert_eq!(after["assignees"], json!(["yuki"]));
         f.ticket
@@ -880,6 +931,8 @@ async fn mention_preserves_lane_and_assignee_and_uses_a_distinct_conversation_ki
                 .await
                 .unwrap()
         );
+        f.remove_ticket(original.url.as_deref().unwrap()).await;
+        f = f.reset_case();
     }
 }
 
@@ -1056,13 +1109,13 @@ async fn safe_failure_and_timeout_are_voiced_and_only_autonomous_failures_announ
     language: &str,
     source: &str,
 ) {
+    let mut f = Fixture::new().await;
     for category in ["unknown", "timeout"] {
         for voice in [
             None,
             Some("Member's safe explanation".to_owned()),
             Some(String::new()),
         ] {
-            let f = Fixture::new().await;
             let task = f.task().await;
             *f.runner.failure.lock().unwrap() = Some(guest(category));
             *f.runner.voice.lock().unwrap() = voice.clone();
@@ -1109,7 +1162,7 @@ async fn safe_failure_and_timeout_are_voiced_and_only_autonomous_failures_announ
                     .owner
                     .tickets_add_comment(
                         "acme/repo",
-                        "1",
+                        ticket_key(&task),
                         branvil::test_support::input(json!({"body":"Please continue."})),
                     )
                     .await
@@ -1119,15 +1172,17 @@ async fn safe_failure_and_timeout_are_voiced_and_only_autonomous_failures_announ
                 assert_eq!(f.comments(&task).await.len(), 2);
                 assert_eq!(f.runner.stops.lock().unwrap().len(), 1);
             }
+            f.remove_ticket(task.url.as_deref().unwrap()).await;
+            f = f.reset_case();
         }
     }
 }
 
 #[tokio::test]
 async fn cancellation_and_unavailable_autonomous_work_leave_no_failure_comment() {
+    let mut f = Fixture::new().await;
     for source in ["manual", "routine"] {
         for cancelled in [true, false] {
-            let f = Fixture::new().await;
             let task = f.task().await;
             *f.runner.failure.lock().unwrap() = Some(if cancelled {
                 DispatchFailure::Cancelled
@@ -1145,6 +1200,8 @@ async fn cancellation_and_unavailable_autonomous_work_leave_no_failure_comment()
             let reported = !cancelled && source == "manual";
             assert_eq!(f.comments(&task).await.len(), usize::from(reported));
             assert!(f.runner.stops.lock().unwrap().is_empty());
+            f.remove_ticket(task.url.as_deref().unwrap()).await;
+            f = f.reset_case();
         }
     }
 }
@@ -1304,6 +1361,8 @@ async fn failed_pull_request_runs_report_to_code_host_and_leave_the_ticket_untou
 
 #[tokio::test]
 async fn resumed_checks_restore_work_summary_and_settle_only_when_not_awaited_again() {
+    let mut f = Fixture::new().await;
+    let mut next_pull = 0;
     for (trigger, resumes, completion, awaits, settled) in [
         ("pull_request_checks", true, "done", 0, true),
         ("pull_request_checks", true, "asking", 0, true),
@@ -1313,8 +1372,8 @@ async fn resumed_checks_restore_work_summary_and_settle_only_when_not_awaited_ag
         ("pull_request_feedback", true, "done", 0, true),
         ("pull_request_feedback", false, "done", 0, false),
     ] {
-        let f = Fixture::new().await;
-        let mut pull = f.pull().await;
+        next_pull += 1;
+        let mut pull = f.pull_branch(&format!("case-{next_pull}"), false).await;
         pull.trigger_reason = Some(trigger.into());
         pull.resumes = resumes.then(|| AwaitedRun {
             run_id: "old".into(),
@@ -1364,7 +1423,7 @@ async fn resumed_checks_restore_work_summary_and_settle_only_when_not_awaited_ag
                 pull.url.as_deref().unwrap()
             );
         }
-        let stored = f.stored_pull(1).await;
+        let stored = f.stored_pull(pull_number(&pull)).await;
         assert_eq!(
             stored["comments"].as_array().unwrap().len(),
             if settled { 2 } else { 1 }
@@ -1372,6 +1431,8 @@ async fn resumed_checks_restore_work_summary_and_settle_only_when_not_awaited_ag
         if settled {
             assert_eq!(stored["comments"][1]["meta"]["reason"], "checks_settled");
         }
+        f.close_pull(&pull).await;
+        f = f.reset_case();
     }
 }
 
@@ -1407,20 +1468,22 @@ async fn review_limit_conversion_elects_one_notice_in_its_own_trace_without_an_a
 #[tokio::test]
 async fn review_limit_conversion_failures_notify_but_unavailability_defers_and_retries_without_an_agent()
  {
+    let mut f = Fixture::new().await;
+    let mut next_pull = 0;
     for error in [
         ServiceError::Failed,
         ServiceError::NotFound,
         ServiceError::Unsupported,
         ServiceError::Unavailable,
     ] {
-        let f = Fixture::new().await;
-        let mut pull = f.pull().await;
+        next_pull += 1;
+        let mut pull = f.pull_branch(&format!("case-{next_pull}"), false).await;
         pull.trigger_reason = Some(REVIEW_LIMIT.into());
         f.code
             .faults
             .fail("convert_pull_request_to_draft", error.clone());
         f.selector("manual").hand_over(&pull).await;
-        let stored = f.stored_pull(1).await;
+        let stored = f.stored_pull(pull_number(&pull)).await;
         assert_eq!(stored["draft"], false);
         assert!(f.runner.calls.lock().unwrap().is_empty());
         assert!(f.runner.activity.lock().unwrap().is_empty());
@@ -1459,6 +1522,8 @@ async fn review_limit_conversion_failures_notify_but_unavailability_defers_and_r
             assert_eq!(stored["comments"][1]["meta"]["reason"], "failed");
             assert_eq!(f.runner.stops.lock().unwrap()[0].reason, "failed");
         }
+        f.close_pull(&pull).await;
+        f = f.reset_case();
     }
 }
 #[tokio::test]
@@ -1482,16 +1547,18 @@ async fn review_limit_failed_pr_notice_still_records_and_notifies_with_the_pr_ad
 #[tokio::test]
 async fn cancelled_review_limit_conversion_and_comment_close_the_trace_and_record_any_completed_draft()
  {
+    let mut f = Fixture::new().await;
+    let mut next_pull = 0;
     for phase in ["convert_pull_request_to_draft", "comment"] {
-        let f = Fixture::new().await;
-        let mut pull = f.pull().await;
+        next_pull += 1;
+        let mut pull = f.pull_branch(&format!("case-{next_pull}"), false).await;
         pull.trigger_reason = Some(REVIEW_LIMIT.into());
         let entered = f.code.faults.block(phase);
         let selector = f.selector("manual");
         let mut run = Box::pin(selector.hand_over(&pull));
         tokio::select! {()=entered.notified()=>(),()=&mut run=>panic!("operation did not wait")}
         drop(run);
-        let activity = f.runner.activity.lock().unwrap();
+        let activity = f.runner.activity.lock().unwrap().clone();
         assert_eq!(activity.len(), usize::from(phase == "comment"));
         if phase == "comment" {
             assert_eq!(activity[0]["payload"]["comment_error"], "CancelledError");
@@ -1549,30 +1616,32 @@ async fn cancelled_review_limit_conversion_and_comment_close_the_trace_and_recor
                 .unwrap()
                 .is_empty()
         );
+        f.close_pull(&pull).await;
+        f = f.reset_case();
     }
 }
 
 #[tokio::test]
 async fn author_feedback_uses_the_only_open_owned_ticket_and_preserves_resumes() {
-    for count in [0, 1, 2] {
-        let f = Fixture::new().await;
-        let task = f.task().await;
-        let second = f
-            .ticket
-            .create_ticket(CreateTicket {
-                tracker: "acme/repo".into(),
-                title: "Second".into(),
-                body: String::new(),
-                labels: vec![],
-                interactive: false,
-                assignee: Some(ActorName("aiko".into())),
-                lane: Some(CreateLane::Ready),
-                parent: None,
-                blocked_by: vec![],
-            })
-            .await
-            .unwrap();
-        let pull = f.pull().await;
+    let mut f = Fixture::new().await;
+    let task = f.task().await;
+    let second = f
+        .ticket
+        .create_ticket(CreateTicket {
+            tracker: "acme/repo".into(),
+            title: "Second".into(),
+            body: String::new(),
+            labels: vec![],
+            interactive: false,
+            assignee: Some(ActorName("aiko".into())),
+            lane: Some(CreateLane::Ready),
+            parent: None,
+            blocked_by: vec![],
+        })
+        .await
+        .unwrap();
+    for count in 0..=2 {
+        let pull = f.pull_branch(&format!("case-{count}"), false).await;
         let url = pull.url.as_deref().unwrap();
         let urls = [task.url.as_deref().unwrap(), second.target.url.as_str()];
         f.code
@@ -1604,18 +1673,26 @@ async fn author_feedback_uses_the_only_open_owned_ticket_and_preserves_resumes()
         if count == 1 {
             assert_eq!(Some(work), selector.invocation(&task).unwrap().work);
         }
+        f.close_pull(&pull).await;
+        f = f.reset_case();
     }
 }
 
 #[tokio::test]
 async fn unreadable_author_links_keep_pr_work_selectable() {
+    let mut f = Fixture::new().await;
+    let mut next_pull = 0;
     for missing_ticket in [false, true] {
-        let f = Fixture::new().await;
-        let pull = f.pull().await;
+        next_pull += 1;
+        let pull = f.pull_branch(&format!("case-{next_pull}"), false).await;
         let url = pull.url.clone().unwrap();
-        let (faults, operation, subject) = if missing_ticket {
+        let linked = if missing_ticket {
+            Some(f.task().await.url.unwrap())
+        } else {
+            None
+        };
+        let (faults, operation, subject) = if let Some(ticket) = &linked {
             // Readable, the linked ticket would own the work instead.
-            let ticket = f.task().await.url.unwrap();
             f.code
                 .update_pull_request(
                     &url,
@@ -1630,7 +1707,7 @@ async fn unreadable_author_links_keep_pr_work_selectable() {
                 .await
                 .unwrap();
             f.ticket.faults.fail("ticket_view", ServiceError::NotFound);
-            (&f.ticket.faults, "ticket_view", ticket)
+            (&f.ticket.faults, "ticket_view", ticket.clone())
         } else {
             f.code
                 .faults
@@ -1640,6 +1717,8 @@ async fn unreadable_author_links_keep_pr_work_selectable() {
         let selected = f.selector("routine").next().await.unwrap().unwrap().1;
         assert_eq!(selected.work.unwrap().identity, url);
         assert!(faults.calls().contains(&(operation, subject)));
+        f.close_pull(&pull).await;
+        f = f.reset_case();
     }
 }
 
@@ -1928,92 +2007,90 @@ async fn other_triggers_never_yield_checks() {
 
 async fn check_yields(triggers: &[&str], resume_values: &[bool]) {
     let mut f = Fixture::new().await;
-    let original = f.pull().await;
+    let feedback = triggers == ["pull_request_feedback"];
+    let original = if feedback { None } else { Some(f.pull().await) };
+    let cases: &[_] = if feedback {
+        &[
+            (Ok(1), false),
+            (Ok(1), true),
+            (Ok(0), false),
+            (Err(ServiceError::Unsupported), false),
+            (Err(ServiceError::Unavailable), false),
+            (Err(ServiceError::Unavailable), true),
+        ]
+    } else {
+        &[(Ok(0), false), (Err(ServiceError::Unavailable), false)]
+    };
     let mut case = 0;
     for &trigger in triggers {
         for &resumes in resume_values {
-            for result in [
-                Ok(1),
-                Ok(0),
-                Err(ServiceError::Unsupported),
-                Err(ServiceError::Unavailable),
-            ] {
-                for fail_evidence in [false, true] {
-                    // Keep the service, repository and members, but discard every
-                    // case's fault log and runner observations.
-                    f.code = Arc::new(CodeAgent::new(
-                        f.embedded.data(),
-                        "acme".into(),
-                        "aiko".into(),
-                        "Aiko".into(),
-                    ));
-                    f.runner = FakeRunner {
-                        fail_evidence,
-                        observed: Some(f.code.faults.clone()),
-                        ..Default::default()
-                    };
-                    case += 1;
-                    let branch = format!("case-{case}");
-                    let mut task = if trigger == "pull_request_feedback" {
-                        f.pull_branch(&branch, result == Ok(1)).await
-                    } else {
-                        original.clone()
-                    };
-                    let url = task.pull_request_url.clone().unwrap();
-                    let feedback = trigger == "pull_request_feedback";
-                    match &result {
-                        // Only feedback yields: other work leaves the checks as they are.
-                        Ok(0) => {}
-                        Ok(_) if !feedback => {}
-                        Ok(_) => f.running_check_branch(&url, &branch).await,
-                        Err(error) => f
-                            .code
-                            .faults
-                            .fail("yield_pull_request_checks", error.clone()),
-                    }
-                    task.trigger_reason = Some(trigger.into());
-                    task.resumes = resumes.then(|| AwaitedRun {
-                        run_id: "old".into(),
-                        work_kind: "pull_request".into(),
-                        work_identity: "pull".into(),
-                    });
-                    let selector = f.selector("routine");
-                    let trace = f.trace("routine");
-                    selector
-                        .run(&task, selector.invocation(&task).unwrap(), &trace, 5)
-                        .await
-                        .unwrap();
-                    assert_eq!(f.runner.calls.lock().unwrap().len(), 1);
-                    let yields = |calls: &[(&'static str, String)]| {
-                        calls
-                            .iter()
-                            .filter(|(operation, _)| *operation == "yield_pull_request_checks")
-                            .map(|(_, url)| url.clone())
-                            .collect::<Vec<_>>()
-                    };
-                    let expected = if feedback { vec![url.clone()] } else { vec![] };
-                    // The yield happened once, before the author's turn began.
-                    assert_eq!(yields(&f.code.faults.calls()), expected);
-                    assert_eq!(yields(&f.runner.seen.lock().unwrap()[0]), expected);
-                    let evidence = f.runner.evidence.lock().unwrap().clone();
-                    let yielded = evidence
-                        .iter()
-                        .filter(|e| e["type"] == "checks_yielded")
-                        .collect::<Vec<_>>();
-                    let failed = evidence
-                        .iter()
-                        .filter(|e| e["type"] == "checks_yield_failed")
-                        .count();
-                    assert_eq!(yielded.len(), usize::from(feedback && result == Ok(1)));
-                    assert_eq!(
-                        failed,
-                        usize::from(feedback && result == Err(ServiceError::Unavailable))
-                    );
-                    if let Some(fact) = yielded.first() {
-                        assert_eq!(fact["payload"]["count"], 1);
-                        assert_eq!(fact["payload"]["target"]["url"], url);
-                    }
+            for (result, fail_evidence) in cases.iter().cloned() {
+                f.runner.fail_evidence = fail_evidence;
+                case += 1;
+                let branch = format!("case-{case}");
+                let mut task = if trigger == "pull_request_feedback" {
+                    f.pull_branch(&branch, result == Ok(1)).await
+                } else {
+                    original.clone().unwrap()
+                };
+                let url = task.pull_request_url.clone().unwrap();
+                match &result {
+                    // Only feedback yields: other work leaves the checks as they are.
+                    Ok(0) => {}
+                    Ok(_) if !feedback => {}
+                    Ok(_) => f.running_check_branch(&url, &branch).await,
+                    Err(error) => f
+                        .code
+                        .faults
+                        .fail("yield_pull_request_checks", error.clone()),
                 }
+                task.trigger_reason = Some(trigger.into());
+                task.resumes = resumes.then(|| AwaitedRun {
+                    run_id: "old".into(),
+                    work_kind: "pull_request".into(),
+                    work_identity: "pull".into(),
+                });
+                let selector = f.selector("routine");
+                let trace = f.trace("routine");
+                selector
+                    .run(&task, selector.invocation(&task).unwrap(), &trace, 5)
+                    .await
+                    .unwrap();
+                assert_eq!(f.runner.calls.lock().unwrap().len(), 1);
+                let yields = |calls: &[(&'static str, String)]| {
+                    calls
+                        .iter()
+                        .filter(|(operation, _)| *operation == "yield_pull_request_checks")
+                        .map(|(_, url)| url.clone())
+                        .collect::<Vec<_>>()
+                };
+                let expected = if feedback { vec![url.clone()] } else { vec![] };
+                // The yield happened once, before the author's turn began.
+                assert_eq!(yields(&f.code.faults.calls()), expected);
+                assert_eq!(yields(&f.runner.seen.lock().unwrap()[0]), expected);
+                let evidence = f.runner.evidence.lock().unwrap().clone();
+                let yielded = evidence
+                    .iter()
+                    .filter(|e| e["type"] == "checks_yielded")
+                    .collect::<Vec<_>>();
+                let failed = evidence
+                    .iter()
+                    .filter(|e| e["type"] == "checks_yield_failed")
+                    .count();
+                assert_eq!(yielded.len(), usize::from(feedback && result == Ok(1)));
+                assert_eq!(
+                    failed,
+                    usize::from(feedback && result == Err(ServiceError::Unavailable))
+                );
+                if let Some(fact) = yielded.first() {
+                    assert_eq!(fact["payload"]["count"], 1);
+                    assert_eq!(fact["payload"]["target"]["url"], url);
+                }
+                if feedback {
+                    f.close_pull(&task).await;
+                    assert!(f.code.pull_request_candidates().await.unwrap().is_empty());
+                }
+                f = f.reset_case();
             }
         }
     }
@@ -2021,8 +2098,8 @@ async fn check_yields(triggers: &[&str], resume_values: &[bool]) {
 
 #[tokio::test]
 async fn failed_repairs_keep_the_failure_comment_without_a_work_stop() {
+    let mut f = Fixture::new().await;
     for repair in [false, true] {
-        let f = Fixture::new().await;
         let mut task = f.task().await;
         task.repair = repair;
         *f.runner.failure.lock().unwrap() = Some(guest("timeout"));
@@ -2041,6 +2118,8 @@ async fn failed_repairs_keep_the_failure_comment_without_a_work_stop() {
         assert_eq!(f.runner.stops.lock().unwrap().len(), usize::from(!repair));
         let comments = f.comments(&task).await;
         assert_eq!(comments.len(), 1);
+        f.remove_ticket(task.url.as_deref().unwrap()).await;
+        f = f.reset_case();
     }
 }
 

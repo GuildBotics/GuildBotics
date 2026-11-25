@@ -166,6 +166,7 @@ impl Hub {
         });
         let started = Instant::now();
         let mut noticed = false;
+        let mut pause = Duration::from_millis(1);
         let status = loop {
             if let Some(status) = child.try_wait()? {
                 break status;
@@ -182,7 +183,8 @@ impl Hub {
                     None,
                 );
             }
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(pause);
+            pause = (pause * 2).min(Duration::from_millis(50));
         };
         let output = reader.join().expect("stdout reader")?;
         let name = program.file_name().unwrap_or_default().to_string_lossy();

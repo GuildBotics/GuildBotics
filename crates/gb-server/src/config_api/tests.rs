@@ -85,13 +85,7 @@ fn fixture_with(selected: impl FnOnce(&Path) -> Selected) -> Fixture {
     }
     let data = root.join("machine/data");
     let keys = Arc::new(TestKeychain(Mutex::new(Keys::Fixed)));
-    let mut api = crate::api::Api::new(
-        selected(&root),
-        crate::input_files::InputFileStore::deferred(&root.join("inputs")),
-        crate::auth::ServerAuth::open(&data, 8765).unwrap(),
-        "instance".into(),
-        data,
-    );
+    let mut api = crate::api::Api::for_test_with(&root, selected(&root), &data, 8765, "instance");
     api.home = root.join("home");
     api.identity_root = root.join("identity");
     api.keychain = keys.clone();

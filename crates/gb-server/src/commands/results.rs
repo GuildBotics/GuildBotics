@@ -245,7 +245,7 @@ mod tests {
         for language in ["en", "ja"] {
             let mut headers = HeaderMap::new();
             headers.insert("x-guildbotics-language", language.parse().unwrap());
-            let response = Json(json!({"output":"x".repeat(MAX_RESULT)})).into_response();
+            let response = Response::new(axum::body::Body::from(vec![b'x'; MAX_RESULT + 1]));
             let (status, result) = retain(response, &headers).await;
             assert_eq!(status, 500);
             assert_eq!(result["code"], "command_result_too_large");
@@ -409,16 +409,16 @@ mod tests {
         });
         let count = Arc::new(AtomicUsize::new(0));
         let factory = crate::keep_awake::test_count(&workspace, count);
-        let mut api = crate::api::Api::new(
+        let mut api = crate::api::Api::for_test_with(
+            root.path(),
             crate::api::Selected {
                 workspace: Some(workspace),
                 service: crate::service_runtime::Controller::new(native.clone(), host),
                 ..Default::default()
             },
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            crate::auth::ServerAuth::open(&native.data, 8765).unwrap(),
-            "fixture".into(),
-            native.data.clone(),
+            &native.data,
+            8765,
+            "fixture",
         );
         api.identity_root = native.identity_root.clone();
         api.keychain = native.keychain.clone();
@@ -525,13 +525,12 @@ mod tests {
         assert_eq!(refused.status(), StatusCode::CONFLICT);
         assert_eq!(body(refused).await["code"], "command_history_required");
         assert!(api.command_results.0.lock().unwrap().entries.is_empty());
-        // What the client sends is bounded before any history is completed,
-        // with or without a receipt ID.
-        let mut oversized = data.clone();
-        oversized["upload"]["files"] = json!([{"path":"large", "executable":false,
-            "source":{"content": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, vec![0u8; gb_environment::worktree::transfer::LIMIT + 1])}}]);
+        // Both routes reject invalid uploads before doing work or admitting a receipt.
+        let mut invalid_upload = data.clone();
+        invalid_upload["upload"]["files"] = json!([{"path":"../invalid", "executable":false,
+            "source":{"content":""}}]);
         for receipt in [true, false] {
-            let mut sent = oversized.clone();
+            let mut sent = invalid_upload.clone();
             if !receipt {
                 sent.as_object_mut().unwrap().remove("request_id");
             }

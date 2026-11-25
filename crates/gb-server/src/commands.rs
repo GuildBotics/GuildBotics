@@ -1100,16 +1100,16 @@ mod tests {
         });
         let count = Arc::new(AtomicUsize::new(0));
         let factory = crate::keep_awake::test_count(&workspace, count.clone());
-        let api = Arc::new(crate::api::Api::new(
+        let api = Arc::new(crate::api::Api::for_test_with(
+            root.path(),
             crate::api::Selected {
                 workspace: Some(workspace),
                 service: crate::service_runtime::Controller::new(native.clone(), host),
                 ..Default::default()
             },
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            crate::auth::ServerAuth::open(&native.data, 8765).unwrap(),
-            "fixture".into(),
-            native.data,
+            &native.data,
+            8765,
+            "fixture",
         ));
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
         let response = crate::api::router(api.clone())
