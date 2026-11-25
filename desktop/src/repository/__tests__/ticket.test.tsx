@@ -421,12 +421,16 @@ describe("ticket view", () => {
     });
 
     it("shows a ticket opened at the address it moved from at its new address", async () => {
-      fakeApi(routes({ [`GET ${TICKET}`]: json(200, moved) }));
-      renderApp("/workspaces/acme/repos/demo/tickets/1");
-      await waitFor(() =>
-        expect(window.location.pathname).toBe("/workspaces/acme/repos/other/tickets/7"),
+      fakeApi(
+        routes({
+          [`GET ${TICKET}`]: json(200, moved),
+          [`GET ${MOVED}`]: json(200, { ...moved, title: "Ticket at its new address" }),
+        }),
       );
-      expect(await screen.findByText("#7")).toBeInTheDocument();
+      renderApp("/workspaces/acme/repos/demo/tickets/1");
+      expect(await screen.findByText("Ticket at its new address")).toBeInTheDocument();
+      expect(window.location.pathname).toBe("/workspaces/acme/repos/other/tickets/7");
+      expect(screen.getByText("#7")).toBeInTheDocument();
     });
 
     it.each(["move_upstream_issue", "move_closing_pull", "move_repair"] as const)(

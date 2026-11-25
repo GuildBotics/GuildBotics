@@ -128,7 +128,7 @@ export function TicketView({
     if (moved) relocate(moved);
   }, [moved, relocate]);
 
-  if (ticket.isPending) return <Loading />;
+  if (ticket.isPending || moved) return <Loading />;
   if (ticket.isError) return <ErrorMessage error={ticket.error} />;
   const tk = ticket.data;
   // The revision read when editing began makes a stale edit fail with 409.
