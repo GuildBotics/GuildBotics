@@ -1,6 +1,5 @@
-import { createTheme } from "@mantine/core";
-import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { focusManager } from "@tanstack/react-query";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,13 +14,12 @@ import {
   startScheduler,
   stopScheduler,
   updateServiceSettings,
-  type ConfigStatus,
   type RuntimeStatus,
-  type RuntimeUnitStatus,
   type ServiceSettings,
 } from "./api/client";
 import i18n from "./i18n";
-import { TestMantineProvider } from "./test/TestMantineProvider";
+import { configStatus, runtimeStatus as baseRuntimeStatus, runtimeUnit } from "./test/factories";
+import { renderWithProviders } from "./test/render";
 import "./i18n";
 
 const t = i18n.getFixedT("en");
@@ -744,24 +742,16 @@ describe("App routing and layout", () => {
   });
 });
 
-let queryClient: QueryClient;
-
 function appTree(path: string) {
-  const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
   return (
-    <TestMantineProvider theme={theme}>
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter key={path} initialEntries={[path]}>
-          <App />
-        </MemoryRouter>
-      </QueryClientProvider>
-    </TestMantineProvider>
+    <MemoryRouter key={path} initialEntries={[path]}>
+      <App />
+    </MemoryRouter>
   );
 }
 
 function renderApp(initialPath: string) {
-  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(appTree(initialPath));
+  return renderWithProviders(appTree(initialPath));
 }
 
 function routineSourceSwitch() {
@@ -791,63 +781,14 @@ function panelFor(title: string): HTMLElement {
   return panel;
 }
 
-function configStatus(overrides: Partial<ConfigStatus> = {}): ConfigStatus {
-  return {
-    cwd: "/workspace",
-    workspace: "/workspace",
-    config_dir: "/workspace/.guildbotics/config",
-    project_file: "/workspace/.guildbotics/config/project.yml",
-    project_file_exists: true,
-    storage_dir: "/workspace/.guildbotics",
-    ...overrides,
-  };
-}
-
 function runtimeStatus(overrides: Partial<RuntimeStatus> = {}): RuntimeStatus {
-  const status = {
-    scheduler: runtimeUnit("scheduler"),
-    events: runtimeUnit("events"),
-    ...overrides,
-  };
+  const status = baseRuntimeStatus(overrides);
   // What the backend reports for this state; the app reads it, never derives it.
   return {
-    has_active_work:
-      status.scheduler.running || status.events.running || (status.active_works ?? []).length > 0,
     ...status,
-  };
-}
-
-function runtimeUnit(
-  target: "scheduler" | "events",
-  overrides: Partial<RuntimeUnitStatus> = {},
-): RuntimeUnitStatus {
-  return {
-    target,
-    state: "stopped",
-    running: false,
-    started_at: null,
-    stopped_at: null,
-    error: null,
-    max_consecutive_errors: null,
-    routine_interval_minutes: null,
-    active_member_count: 1,
-    worker_count: 0,
-    scheduled_source_enabled: null,
-    routine_source_enabled: null,
-    event_queue_source_enabled: null,
-    subscription_count: 0,
-    listener_count: 0,
-    cycle_count: 0,
-    cycle_failure_count: 0,
-    events_drained_count: 0,
-    events_auth_failed_count: 0,
-    events_auth_failed_persons: [],
-    events_missing_credential_count: 0,
-    events_missing_credential_persons: [],
-    events_chat_provider: "",
-    member_routines: [],
-    member_pull_requests: {},
-    ...overrides,
+    has_active_work:
+      overrides.has_active_work ??
+      (status.scheduler.running || status.events.running || (status.active_works ?? []).length > 0),
   };
 }
 

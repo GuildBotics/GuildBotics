@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fill } from "./test/fill";
 
 import {
   ApiRequestError,
@@ -24,14 +25,13 @@ import {
   type CommandFileDetail,
   type CommandFileExecutionStatus,
   type CommandFileSummary,
-  type ConfigStatus,
   type TeamSummary,
   type TraceDetailResponse,
   type TraceRecord,
 } from "./api/client";
 import i18n from "./i18n";
 import "./i18n";
-import { makeTraceRecord } from "./test/factories";
+import { configStatus, makeTraceRecord } from "./test/factories";
 import { applyChange } from "./repository/query/events";
 import { TestMantineProvider } from "./test/TestMantineProvider";
 
@@ -132,18 +132,6 @@ const updateCommandFileMock = vi.mocked(updateCommandFile);
 const executionStatusMock = vi.mocked(getCommandFileExecutionStatus);
 const runCommandMock = vi.mocked(runCommand);
 
-function configStatus(overrides: Partial<ConfigStatus> = {}): ConfigStatus {
-  return {
-    cwd: "/workspace",
-    workspace: "/workspace",
-    config_dir: "/workspace/.guildbotics/config",
-    project_file: "/workspace/.guildbotics/config/team/project.yml",
-    project_file_exists: true,
-    storage_dir: "/workspace/.guildbotics",
-    ...overrides,
-  };
-}
-
 function team(overrides: Partial<TeamSummary> = {}): TeamSummary {
   return {
     project: { name: "Demo", language_code: "en", language_name: "English" },
@@ -189,7 +177,11 @@ function status(overrides: Partial<CommandFileExecutionStatus> = {}): CommandFil
 beforeEach(() => {
   notifications.clean();
   window.localStorage.clear();
-  getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
+  getConfigStatusMock
+    .mockReset()
+    .mockResolvedValue(
+      configStatus({ project_file: "/workspace/.guildbotics/config/team/project.yml" }),
+    );
   authorCommandMock.mockReset().mockResolvedValue({
     trace_id: "author-trace-1",
     message: "This is possible.",
@@ -383,7 +375,7 @@ describe("Command editor screen", () => {
     expect(screen.getByText(t("commands.saveState.clean"))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: t("commands.save") })).toBeDisabled();
 
-    await user.type(editor, "!");
+    await fill(user, editor, "!");
 
     expect(await screen.findByText(t("commands.saveState.dirty"))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: t("commands.save") })).toBeEnabled();
@@ -394,7 +386,8 @@ describe("Command editor screen", () => {
     await renderPage();
     const editor = await screen.findByLabelText<HTMLTextAreaElement>("editor");
 
-    await user.type(
+    await fill(
+      user,
       await openAssistant(user),
       "Can this be done? Just tell me whether it is possible.",
     );
@@ -462,7 +455,7 @@ describe("Command editor screen", () => {
     await renderPage();
     await screen.findByLabelText<HTMLTextAreaElement>("editor");
 
-    await user.type(await openAssistant(user), "Make it friendlier");
+    await fill(user, await openAssistant(user), "Make it friendlier");
     await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
 
     const assistant = screen.getByRole("region", { name: t("commands.authoring.title") });
@@ -549,7 +542,7 @@ describe("Command editor screen", () => {
     await renderPage();
     await screen.findByLabelText("editor");
 
-    await user.type(await openAssistant(user), "Create a helper instead of changing this command");
+    await fill(user, await openAssistant(user), "Create a helper instead of changing this command");
     await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
 
     const assistant = screen.getByRole("region", { name: t("commands.authoring.title") });
@@ -598,7 +591,8 @@ describe("Command editor screen", () => {
     );
     await user.click(await screen.findByRole("menuitem", { name: "Aiko" }));
     // Switching members starts a new conversation, so the input is re-mounted.
-    await user.type(
+    await fill(
+      user,
       screen.getByRole("textbox", { name: t("commands.authoring.inputLabel") }),
       "Make it friendlier",
     );
@@ -618,7 +612,7 @@ describe("Command editor screen", () => {
     await renderPage();
     await screen.findByLabelText("editor");
 
-    await user.type(await openAssistant(user), "Update it");
+    await fill(user, await openAssistant(user), "Update it");
     await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
 
     expect(await screen.findByText(t("commands.authoring.errorTitle"))).toBeInTheDocument();
@@ -640,7 +634,7 @@ describe("Command editor screen", () => {
     await renderPage();
     await screen.findByLabelText("editor");
 
-    await user.type(await openAssistant(user), "Update it");
+    await fill(user, await openAssistant(user), "Update it");
     await user.click(screen.getByRole("button", { name: t("commands.authoring.send") }));
     expect(await screen.findByText("Agent unavailable")).toBeInTheDocument();
 
@@ -656,7 +650,7 @@ describe("Command editor screen", () => {
     const user = userEvent.setup();
     await renderPage();
     const editor = await screen.findByLabelText<HTMLTextAreaElement>("editor");
-    await user.type(editor, "X");
+    await fill(user, editor, "X");
 
     await user.click(screen.getByRole("button", { name: "mock-save-shortcut" }));
 
@@ -684,7 +678,7 @@ describe("Command editor screen", () => {
     const user = userEvent.setup();
     await renderPage();
     const editor = await screen.findByLabelText<HTMLTextAreaElement>("editor");
-    await user.type(editor, "X");
+    await fill(user, editor, "X");
     await user.click(screen.getByRole("button", { name: t("commands.save") }));
 
     expect(await screen.findByText(t("commands.saveState.clean"))).toBeInTheDocument();
@@ -706,7 +700,7 @@ describe("Command editor screen", () => {
     const user = userEvent.setup();
     await renderPage();
     const editor = await screen.findByLabelText<HTMLTextAreaElement>("editor");
-    await user.type(editor, "X");
+    await fill(user, editor, "X");
     await user.click(screen.getByRole("button", { name: t("commands.save") }));
 
     expect(await screen.findByText(t("commands.conflictTitle"))).toBeInTheDocument();
@@ -720,7 +714,7 @@ describe("Command editor screen", () => {
     const user = userEvent.setup();
     await renderPage();
     const editor = await screen.findByLabelText<HTMLTextAreaElement>("editor");
-    await user.type(editor, "X");
+    await fill(user, editor, "X");
 
     await user.click(screen.getByRole("combobox", { name: t("commands.editSelectLabel") }));
     await user.click(await screen.findByText("Other (other)"));
@@ -752,7 +746,8 @@ describe("Command editor screen", () => {
 
     await user.click(screen.getByRole("button", { name: t("commands.newFile") }));
     await user.click(await screen.findByText(t("commands.createMethodManual")));
-    await user.type(
+    await fill(
+      user,
       await screen.findByRole("textbox", { name: t("commands.createNameLabel") }),
       "reports/weekly",
     );
@@ -818,7 +813,8 @@ describe("Command editor screen", () => {
     const editor = await screen.findByLabelText<HTMLTextAreaElement>("editor");
 
     await user.click(screen.getByRole("button", { name: t("commands.newFile") }));
-    await user.type(
+    await fill(
+      user,
       await screen.findByRole("textbox", { name: t("commands.createAiRequestLabel") }),
       "Create a weekly report command",
     );
@@ -880,7 +876,8 @@ describe("Command editor screen", () => {
     await screen.findByLabelText("editor");
 
     await user.click(screen.getByRole("button", { name: t("commands.newFile") }));
-    await user.type(
+    await fill(
+      user,
       await screen.findByRole("textbox", { name: t("commands.createAiRequestLabel") }),
       "Create a greeting command",
     );
@@ -957,8 +954,8 @@ describe("Command editor screen", () => {
     const user = userEvent.setup();
     await renderPage();
     const editor = await screen.findByLabelText<HTMLTextAreaElement>("editor");
-    await user.type(editor, "X");
-    await user.type(screen.getByRole("textbox", { name: t("commands.message") }), "hello");
+    await fill(user, editor, "X");
+    await fill(user, screen.getByRole("textbox", { name: t("commands.message") }), "hello");
 
     await user.click(screen.getByRole("button", { name: t("commands.saveAndRun") }));
 
