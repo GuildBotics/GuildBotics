@@ -95,7 +95,7 @@ pub struct LimitsConfig {
     pub git_http_timeout_secs: u64,
     /// Wall-clock limit of one service-side Git command, in seconds.
     pub git_command_timeout_secs: u64,
-    /// Wall-clock limit of one owner webhook request, in seconds.
+    /// Wall-clock limit of a webhook request sent by the running service, in seconds.
     pub webhook_timeout_secs: u64,
     /// Largest accepted push body, in MiB.
     pub git_push_max_mib: u64,

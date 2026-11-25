@@ -173,7 +173,7 @@ scripts/hub-server.sh recover
 - `guildbotics service status`: `server_running`、サービスの `running`、`state` を返します。サーバー停止中はそれぞれ `false`、`false`、`stopped`。サーバーのロックが指すポートへ接続し、オーナーの証明を検証してから状態を読みます。認証できない場合は停止扱いにせずエラーにします。
 - `guildbotics server hub-verified --repo GuildBotics/GuildBotics --since <full-sha>`: `since_on_main` と `verified` を返します。mainのfirst-parent履歴をカーソルでたどり、指定コミットの直前までの確認済みのSHAを新しい順に返します。指定コミットが最後まで見つからなければ `since_on_main` は `false` です。
 - `--repo` の代わりに `--checkout <path>` を渡すと、そのチェックアウトの origin からリポジトリを取得します。origin はコードホストの clone URL（`{base}/git/{repo}.git`）の形で、このマシンのサーバーの URL（`http://127.0.0.1:<GUILDBOTICS_SERVER_PORT>`）と一致する HTTP(S) URL に限ります。認証情報や query を含まないものに限ります。接続先はこのマシンのサーバーに固定し、プロキシやリダイレクトを使いません。トークンはサーバーのオーナーのトークンファイル（`GUILDBOTICS_HOME/data/server/<port>/owner.token`）から直接読み、サーバーがそのダイジェストを持つことを確かめてから送ります。引数や環境変数では受け取りません。
-- `guildbotics server hub-notify`: 標準入力の文を identity の store の webhook へ送り、`sent` を返します。サーバー停止中にも使えます。未設定なら `false`、送信成功なら `true`、送信失敗はエラーです。URL は出力しません。入力する文には秘密を含めないでください。キーチェーンのアクセス権は実行ファイルの署名に従います。
+- `guildbotics server hub-notify`: 標準入力の文を identity の store の webhook へ送り、`sent` を返します。サーバー停止中や設定ファイルが壊れているときにも使えます。送信の上限は既定の 10 秒です。未設定なら `false`、送信成功なら `true`、送信失敗はエラーです。URL は出力しません。入力する文には秘密を含めないでください。キーチェーンのアクセス権は実行ファイルの署名に従います。
 - `guildbotics server hub-migration`: 実行中のバイナリに埋め込まれた `manual_update_version` と `instructions`（手順書の相対パス、不要なら `null`）を返します。ルートの `hub-update.json` が宣言です。宣言のないソースからのビルドでは番号0となります。このコマンド自体のない旧バイナリも更新ループで番号0として扱います。候補の番号が現在の番号より大きければ手作業が必要です。
 
 ## ポートを 7878 にまとめる版への切り替え

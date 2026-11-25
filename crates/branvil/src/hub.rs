@@ -186,8 +186,8 @@ pub async fn artifact(
         .to_vec())
 }
 
-/// Read the same scoped webhook as the server of `data`, including while it is
-/// stopped.
+/// Read the same scoped webhook as the server of `data`. Always use the default
+/// timeout so startup failures can be reported even with an invalid configuration.
 pub async fn notify(
     vault: Arc<dyn vault::Vault>,
     data: &std::path::Path,
@@ -197,9 +197,7 @@ pub async fn notify(
     let Some(url) = vault.get(&secrets.webhook())? else {
         return Ok(false);
     };
-    let timeout = crate::config::Config::load(None, data)?
-        .limits
-        .webhook_timeout_secs;
+    let timeout = crate::config::LimitsConfig::default().webhook_timeout_secs;
     let client = webhook::client(std::time::Duration::from_secs(timeout));
     webhook::send(&client, &url, text)
         .await
@@ -357,6 +355,11 @@ mod tests {
         );
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         assert!(notify(vault.clone(), root.path(), "notice").await.unwrap());
+        for broken_config in ["[limits", "unknown_key = true"] {
+            std::fs::write(root.path().join("config.toml"), broken_config).unwrap();
+            assert!(crate::config::Config::load(None, root.path()).is_err());
+            assert!(notify(vault.clone(), root.path(), "notice").await.unwrap());
+        }
         server.abort();
         let _ = server.await;
         let error = notify(vault, root.path(), "notice")
