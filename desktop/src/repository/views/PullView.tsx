@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router";
 import { Anchor, Button, Group, Stack, Text, Title } from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileDiff } from "lucide-react";
@@ -20,7 +21,7 @@ import {
   usePeople,
 } from "../query/hooks";
 import { keys } from "../query/keys";
-import { Link, navigate } from "../router/Router";
+import { Link } from "../router/Router";
 import { href } from "../router/routes";
 import { CheckDrawer, ChecksCard, drawerTarget } from "./pull/Checks";
 import { Conversation } from "./pull/Conversation";
@@ -38,6 +39,7 @@ export function PullView({
   number: number;
   openJob?: string;
 }) {
+  const navigate = useNavigate();
   const t = useT();
   const client = useQueryClient();
   const pull = usePull(repo, number);

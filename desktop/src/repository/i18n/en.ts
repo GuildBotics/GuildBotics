@@ -35,10 +35,6 @@ export const en = {
   "nav.settings": "Settings",
   "notFound.title": "Page not found",
 
-  "guide.run": "On the Hub machine, print an entry link with:",
-  "guide.why":
-    "Paste the printed URL into the address bar of this same browser. The link works once, for 60 seconds; access applies only to that browser.",
-
   "lane.new": "New",
   "lane.ready": "Ready",
   "lane.in_progress": "In progress",
@@ -364,6 +360,8 @@ export const en = {
   "repo.labels": "Ticket labels",
   "repo.create": "Create repository",
 
+  "settings.reviewSettings": "Review and authentication",
+  "settings.repositoriesWorkspace": "Repositories in {{workspace}}.",
   "settings.sections": "Settings sections",
   "settings.repositories": "Repositories",
   "settings.members": "Members",
@@ -541,6 +539,7 @@ export const en = {
   "pickup.undoGone":
     "The moved tickets have all left the Ready lane meanwhile: there is nothing to put back.",
   "board.assignee": "Assignee of {{key}}: {{name}} — click to change",
+  "workspace.listFailed": "Could not load workspaces.",
   "workspace.label": "Workspace",
   "workspace.new": "New workspace",
   "workspace.newMenu": "+ New workspace…",
@@ -639,9 +638,6 @@ export const en = {
   "repo.createSubmit": "Add",
   "member.createSubmit": "Add",
   "account.noneOn": "No {{host}} account",
-  "settings.workspaceGroup": "Workspace",
-  "settings.branvilGroup": "All of Branvil",
-  "settings.workspaceHelp": "A workspace: one board, and the repositories whose tickets it holds.",
   "settings.noRepos": "No repositories yet.",
   "settings.repoName": "Name",
   "settings.tagsHelp": "Type one and press Enter.",

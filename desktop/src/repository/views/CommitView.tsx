@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router";
 import { Card, Stack, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import type { Check } from "../api/types";
@@ -5,7 +6,7 @@ import { CopyButton, ErrorMessage, Loading, Sha, Time } from "../components/comm
 import { Header } from "../../ui/Header";
 import { useT } from "../i18n";
 import { useCommit } from "../query/hooks";
-import { Link, navigate } from "../router/Router";
+import { Link } from "../router/Router";
 import { href } from "../router/routes";
 import { CheckDrawer, CommitChecksCard, drawerTarget } from "./pull/Checks";
 
@@ -23,6 +24,7 @@ export function CommitView({
   sha: string;
   openJob?: string;
 }) {
+  const navigate = useNavigate();
   const t = useT();
   const commit = useCommit(repo, sha);
   const [job, setJob] = useState<{ attemptId: string; hosted: Check | null } | null>(

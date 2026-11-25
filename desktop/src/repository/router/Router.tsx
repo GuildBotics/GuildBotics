@@ -1,61 +1,14 @@
-// A minimal History API router: the GUI has few routes and its URL grammar
-// is parsed by routes.ts.
+// Shared router links and comment fragments.
 
 import {
   useEffect,
   useRef,
-  useSyncExternalStore,
   type AnchorHTMLAttributes,
   type MouseEvent,
   type ReactNode,
 } from "react";
+import { Link as RouterLink, useLocation } from "react-router";
 import { inAppPath } from "./routes";
-
-const listeners = new Set<() => void>();
-
-function notify() {
-  for (const listener of listeners) listener();
-}
-
-function subscribe(listener: () => void): () => void {
-  if (listeners.size === 0) {
-    window.addEventListener("popstate", notify);
-    window.addEventListener("hashchange", notify);
-  }
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) {
-      window.removeEventListener("popstate", notify);
-      window.removeEventListener("hashchange", notify);
-    }
-  };
-}
-
-const snapshot = () => window.location.pathname;
-
-export function navigate(to: string, opts: { replace?: boolean } = {}): void {
-  if (opts.replace) window.history.replaceState(null, "", to);
-  else window.history.pushState(null, "", to);
-  notify();
-  if (!to.includes("#")) window.scrollTo?.(0, 0);
-  else {
-    const id = fragmentId(window.location.hash);
-    const element = id === null ? null : document.getElementById(id);
-    if (element) reveal(element);
-  }
-}
-
-/** Leaves the GUI for another address (a local app's redirect). */
-export function leave(url: string): void {
-  window.location.assign(url);
-}
-
-export function usePathname(): string {
-  return useSyncExternalStore(subscribe, snapshot, snapshot);
-}
-
-const fragment = () => window.location.hash;
 
 function fragmentId(hash: string): string | null {
   try {
@@ -75,13 +28,14 @@ function reveal(element: HTMLElement) {
 
 /** Scroll when an asynchronously loaded post appears, or its fragment is visited again. */
 export function useFragmentTarget(id: string) {
-  const hash = useSyncExternalStore(subscribe, fragment, fragment);
+  const { key, hash } = useLocation();
   const ref = useRef<HTMLElement>(null);
+  const active = fragmentId(hash) === id;
   useEffect(() => {
     const element = ref.current;
-    if (element && fragmentId(hash) === id) reveal(element);
-  }, [hash, id]);
-  return { ref, "data-target": fragmentId(hash) === id || undefined };
+    if (element && active) reveal(element);
+  }, [active, key, hash]);
+  return { ref, "data-target": active || undefined };
 }
 
 type LinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
@@ -91,18 +45,20 @@ type LinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
 };
 
 /** An in-app link: plain left clicks navigate without reloading the page (or `go` instead), others open `to` as a link does. */
-export function Link({ to, children, onClick, go = () => navigate(to), ...rest }: LinkProps) {
+export function Link({ to, children, onClick, go, ...rest }: LinkProps) {
   const handle = (e: MouseEvent<HTMLAnchorElement>) => {
     onClick?.(e);
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
       return;
-    e.preventDefault();
-    go();
+    if (go) {
+      e.preventDefault();
+      go();
+    }
   };
   return (
-    <a href={to} onClick={handle} {...rest}>
+    <RouterLink to={to} onClick={handle} {...rest}>
       {children}
-    </a>
+    </RouterLink>
   );
 }
 

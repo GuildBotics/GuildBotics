@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-/** Visual frame; each application owns its navigation, routes and data. */
+/** Shared navigation and page layout. */
 export function AppShell({ sidebar, children }: { sidebar: ReactNode; children: ReactNode }) {
   return (
     <main className="shell">

@@ -143,7 +143,7 @@ Commands:
   secrets         Manage workspace or shared identity secrets
   service         Start or stop scheduled commands, ticket patrol, and chat events
   connect         Connect this machine's CLI through the server's consent screen
-  open            Open the GuildBotics screens in the browser. The browser enters with a shared single-use link that expires after 60 seconds. The session also opens Branvil
+  open            Open the GuildBotics screens in the browser. The browser enters with a single-use link that expires after 60 seconds
   runner          Run the CI runner, a separate process that executes jobs in microVMs
   help            Print this message or the help of the given subcommand(s)
 
@@ -1812,16 +1812,13 @@ Options:
 ## guildbotics open
 
 ```text
-Open the GuildBotics screens in the browser. The browser enters with a shared single-use link that expires after 60 seconds. The session also opens Branvil
+Open the GuildBotics screens in the browser. The browser enters with a single-use link that expires after 60 seconds
 
 Usage: guildbotics open [OPTIONS]
 
 Options:
       --print
           Print the link instead of opening it, to paste into a browser on another machine
-
-      --branvil
-          Open the Branvil screens
 
   -h, --help
           Print help

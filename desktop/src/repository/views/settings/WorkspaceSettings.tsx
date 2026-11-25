@@ -41,9 +41,9 @@ export function WorkspaceSettings({
   const items = (repos.data?.items ?? []).filter((r) => r.path.startsWith(`${workspace}/`));
   return (
     <Card p="lg">
-      <Header order={3} title={workspace} description={t("settings.workspaceHelp")} />
       <Header
-        order={4}
+        order={3}
+        description={t("settings.repositoriesWorkspace", { workspace })}
         title={
           <Group gap="xs">
             {t("settings.repositories")}

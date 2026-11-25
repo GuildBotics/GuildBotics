@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router";
 import {
   ActionIcon,
   Anchor,
@@ -42,7 +43,7 @@ import {
   usePeople,
 } from "../query/hooks";
 import { keys } from "../query/keys";
-import { navigate, ServiceLink } from "../router/Router";
+import { ServiceLink } from "../router/Router";
 import { href } from "../router/routes";
 import { labelOf, Relations, relationRefusal } from "./ticket/Relations";
 import { RepositoryField } from "./ticket/RepositoryField";
@@ -59,6 +60,7 @@ export function TicketView({
   ticketKey: string;
   drawer?: boolean;
 }) {
+  const navigate = useNavigate();
   const t = useT();
   const client = useQueryClient();
   const ticket = useTicket(repo, ticketKey);
@@ -116,7 +118,7 @@ export function TicketView({
       drawer && opener
         ? opener(at.repository, at.key)
         : navigate(href.ticket(at.repository, at.key), { replace: true }),
-    [drawer, opener],
+    [drawer, navigate, opener],
   );
   const moved =
     ticket.data && (ticket.data.repository !== repo || ticket.data.key !== ticketKey)

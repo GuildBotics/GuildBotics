@@ -5,9 +5,9 @@
 // until what it says changes; the lost connection cannot be dismissed, as it
 // goes away by itself once the page is up to date again.
 
-import { HubStatusBand } from "../../ui/HubStatus";
 import { Alert, Anchor, Stack, Text } from "@mantine/core";
 import { TriangleAlert } from "lucide-react";
+import { useWorkspacePath } from "../../ui/workspaceLinks";
 import { useState } from "react";
 import { useT } from "../i18n";
 import { useDiagnostics } from "../query/hooks";
@@ -18,21 +18,20 @@ interface Warning {
   id: string;
   text: string;
   repository?: string;
-  dismissible: boolean;
 }
 
-export function AlertBand({ streamLost }: { streamLost: boolean }) {
+export function AlertBand({ hubOperating }: { hubOperating: boolean }) {
   const t = useT();
+  const scope = useWorkspacePath();
   const diagnostics = useDiagnostics();
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
   const d = diagnostics.data;
   const warnings: Warning[] = [];
-  if (streamLost) warnings.push({ id: "stream", text: t("alert.streamLost"), dismissible: false });
   const runner = d?.runner;
   const showRunner =
     runner &&
     (runner.state === "stopping"
-      ? !d?.hub?.operation
+      ? !hubOperating
       : runner.state !== "ready" &&
         (runner.mode !== "off" || runner.state === "executor_unavailable"));
   if (runner && showRunner) {
@@ -45,28 +44,26 @@ export function AlertBand({ streamLost }: { streamLost: boolean }) {
         : runner.state === "no_runner"
           ? t("alert.noRunner")
           : t("alert.executorUnavailable", { detail });
-    warnings.push({ id: `runner:${runner.state}:${runner.detail}`, text, dismissible: true });
+    warnings.push({ id: `runner:${runner.state}:${runner.detail}`, text });
   }
   for (const p of d?.upstream?.problems ?? []) {
     warnings.push({
       id: `upstream:${p.repository}:${p.problem}`,
       text: t("alert.upstream", { repository: p.repository, problem: p.problem }),
       repository: p.repository,
-      dismissible: true,
     });
   }
   const shown = warnings.filter((w) => !dismissed.has(w.id));
-  if (shown.length === 0 && !d?.hub?.operation) return null;
+  if (shown.length === 0) return null;
   return (
     <Stack gap="xs" role="region" aria-label={t("alert.region")}>
-      <HubStatusBand status={d?.hub} t={t} />
       {shown.map((w) => (
         <Alert
           key={w.id}
           color="warning"
           icon={<TriangleAlert size={18} />}
           title={t("alert.title")}
-          withCloseButton={w.dismissible}
+          withCloseButton
           closeButtonLabel={t("alert.dismiss")}
           onClose={() => setDismissed(new Set([...dismissed, w.id]))}
         >
@@ -74,7 +71,7 @@ export function AlertBand({ streamLost }: { streamLost: boolean }) {
             {w.text}
           </Text>
           {w.repository && (
-            <Anchor component={Link} to={href.settings()} size="sm" ml="md">
+            <Anchor component={Link} to={scope + href.settings()} size="sm" ml="md">
               {t("alert.openSettings")}
             </Anchor>
           )}

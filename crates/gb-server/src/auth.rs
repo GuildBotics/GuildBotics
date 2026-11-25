@@ -440,15 +440,6 @@ impl branvil::host::Host for ServerAuth {
     fn owner_token(&self, token: &str) -> bool {
         self.known_token(token, false)
     }
-    fn navigation(&self) -> branvil::host::Navigation {
-        branvil::host::Navigation {
-            label: "GuildBotics".into(),
-            url: "/".into(),
-        }
-    }
-    fn entry_path(&self) -> &str {
-        "/enter?next=%2Fworkspaces"
-    }
 }
 
 /// A fresh token: its public id, its secret's digest, and its text.

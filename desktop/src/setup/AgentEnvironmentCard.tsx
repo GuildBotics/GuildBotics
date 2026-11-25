@@ -1,3 +1,4 @@
+import { WorkspaceLink } from "../ui/workspaceLinks";
 import {
   Badge,
   Button,
@@ -14,7 +15,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Hammer, RefreshCw } from "lucide-react";
 import { useEffect } from "react";
-import { Link } from "react-router";
+
 import { useTranslation } from "react-i18next";
 
 import { BrowserToolLogin } from "./BrowserToolLogin";
@@ -510,7 +511,7 @@ function ToolLogin({ tool }: { tool: EnvironmentToolStatus }) {
         )}
         {check?.status === "failed" && (
           <Button
-            component={Link}
+            component={WorkspaceLink}
             to={`/diagnostics?tab=executions${check.trace_id ? `&trace_id=${encodeURIComponent(check.trace_id)}` : ""}`}
             size="compact-xs"
             variant="subtle"

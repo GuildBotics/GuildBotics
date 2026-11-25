@@ -1,6 +1,6 @@
-import { workspacePath } from "./repository/router/routes";
-import { HubBand, HubVersion } from "./HubStatus";
+import { useHubStatus, HubVersion } from "./HubStatus";
 import { RunFiles } from "./commands/RunFiles";
+import { HubStatusBand } from "./ui/HubStatus";
 import { AppShell } from "./ui/AppShell";
 import {
   ActionIcon,
@@ -40,6 +40,7 @@ import {
   CheckCircle2,
   Copy,
   ExternalLink,
+  GitPullRequest,
   RotateCcwClock,
   Play,
   RotateCcw,
@@ -50,6 +51,7 @@ import {
   Terminal,
   Ticket,
   TriangleAlert,
+  Workflow,
   XCircle,
 } from "lucide-react";
 import {
@@ -62,7 +64,15 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { Navigate, NavLink, Route, Routes, useNavigate, useSearchParams } from "react-router";
+import {
+  Link,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from "react-router";
 
 import { ActivityHistoryPage } from "./activity/ActivityHistory";
 import { CommandsPage } from "./commands/CommandsPage";
@@ -90,6 +100,7 @@ import {
   updateServiceSettings,
   updateTranscriptSettings,
   verify as verifyConfiguration,
+  workspaceFromPath,
   type ChatReceiveResetResponse,
   type MemoryEvent,
   type RuntimeActiveWork,
@@ -105,8 +116,12 @@ import {
   type TranscriptSettingsStatus,
 } from "./api/client";
 import { useServiceProviders } from "./setup/providers";
-import { BranvilNavItem } from "./setup/providers/branvil/BranvilNavItem";
-import { normalizeLanguage, setAppLanguage, type AppLanguage } from "./i18n";
+import { RepositoryPage } from "./repository/App";
+import { AlertBand } from "./repository/components/AlertBand";
+import { WorkspaceSelect } from "./repository/components/Sidebar";
+import { href, parseRoute, workspacePath } from "./repository/router/routes";
+import { useCurrentWorkspace } from "./repository/workspace";
+import { WorkspaceNavLink } from "./ui/workspaceLinks";
 import { ChangeStreamLost } from "./repository/query/events";
 import { ServerMachineBadge, useServerMachineLabel } from "./serverMachine";
 import { SetupPage } from "./setup/SetupPage";
@@ -138,17 +153,28 @@ const MEMORY_FOCUS_SEARCH_PARAMS = [
   "person_id",
 ] as const;
 
-export function App({ scoped }: { scoped?: boolean } = {}) {
-  const { t, i18n } = useTranslation();
+export function App() {
+  const { t } = useTranslation();
   const { t: repositoryT } = useTranslation("repository");
+  const { pathname, search, hash } = useLocation();
+  const navigate = useNavigate();
   const streamLost = useContext(ChangeStreamLost);
-  const appLanguage = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
+  const hub = useHubStatus();
+  const workspace = workspaceFromPath(pathname);
+  const route = parseRoute(pathname);
+  const repositorySettings = route.name === "settings" ? route : undefined;
+  const repository = pathname !== "/" && route.name !== "not_found" && route.name !== "settings";
+  useEffect(() => {
+    document.documentElement.dataset.screen = repository ? "repository" : "desktop";
+  }, [repository]);
   const config = useQuery({
     queryKey: ["config"],
     queryFn: getConfigStatus,
     refetchInterval: (query) => (query.state.data?.input_store_problem ? 2000 : false),
   });
   const configured = Boolean(config.data?.project_file_exists);
+  const hosted = config.data?.branvil_available !== false;
+  const current = useCurrentWorkspace(workspace, config.data?.workspace_name, hosted);
   const runtimeStatus = useQuery({
     queryKey: ["scheduler"],
     queryFn: getSchedulerStatus,
@@ -157,17 +183,43 @@ export function App({ scoped }: { scoped?: boolean } = {}) {
   });
   const serviceNavState = serviceRuntimeNavState(runtimeStatus.data);
   const commandNavState = commandRuntimeNavState(runtimeStatus.data);
+  const scope = current.name ? workspacePath(current.name) : "";
+  const page = workspace ? pathname.replace(/^\/workspaces\/[^/]+/, "") : pathname;
+  const switchWorkspace = (name: string) => {
+    const prefix = workspacePath(name);
+    let destination = href.workspace(name);
+    if (route.name === "pulls") destination = href.pulls(name);
+    else if (route.name === "settings")
+      destination = href.settings(route.repo ? undefined : (route.section ?? undefined), name);
+    else if (["/activity", "/service", "/commands", "/diagnostics", "/setup"].includes(page)) {
+      destination = prefix + page;
+    }
+    requestNavigation(() => navigate(destination));
+  };
   return (
     <AppShell
       sidebar={
-        <>
-          <nav className="nav">
-            {configured ? (
-              <GuardedNavLink className="nav-item" to="/activity">
+        <WorkspaceSelect current={current} available={hosted} onWorkspaceChange={switchWorkspace}>
+          <nav className="nav" aria-label={repositoryT("nav.main")}>
+            {configured || current.name ? (
+              <GuardedNavLink to={scope + "/activity"}>
                 <RotateCcwClock size={18} /> {t("app.nav.activity")}
               </GuardedNavLink>
             ) : null}
-            <GuardedNavLink className="nav-item" to="/service">
+            {current.name && hosted && (
+              <>
+                <GuardedNavLink to={href.workspace(current.name)} active={route.name === "ticket"}>
+                  <Workflow size={18} /> {repositoryT("nav.relations")}
+                </GuardedNavLink>
+                <GuardedNavLink
+                  to={href.pulls(current.name)}
+                  active={["repo", "pull", "commit", "job"].includes(route.name)}
+                >
+                  <GitPullRequest size={18} /> {repositoryT("nav.pulls")}
+                </GuardedNavLink>
+              </>
+            )}
+            <GuardedNavLink to={scope + "/service"}>
               <Activity size={18} />
               <span className="nav-item-label">{t("app.nav.service")}</span>
               <NavStatusIndicator
@@ -175,7 +227,7 @@ export function App({ scoped }: { scoped?: boolean } = {}) {
                 state={serviceNavState}
               />
             </GuardedNavLink>
-            <GuardedNavLink className="nav-item" to="/commands">
+            <GuardedNavLink to={scope + "/commands"}>
               <Terminal size={18} />
               <span className="nav-item-label">{t("app.nav.commands")}</span>
               <NavStatusIndicator
@@ -183,33 +235,14 @@ export function App({ scoped }: { scoped?: boolean } = {}) {
                 state={commandNavState}
               />
             </GuardedNavLink>
-            <GuardedNavLink className="nav-item" to="/diagnostics">
+            <GuardedNavLink to={scope + "/diagnostics"}>
               <TriangleAlert size={18} /> {t("app.nav.diagnostics")}
             </GuardedNavLink>
-            <GuardedNavLink className="nav-item" to="/setup">
+            <GuardedNavLink to={scope + "/setup"} active={route.name === "settings"}>
               <Settings size={18} /> {t("app.nav.setup")}
             </GuardedNavLink>
-            {config.data?.branvil_available ? <BranvilNavItem /> : null}
           </nav>
-          <Select
-            className="sidebar-language"
-            classNames={{
-              input: "sidebar-input",
-              label: "sidebar-field-label",
-            }}
-            label={t("app.language.label")}
-            data={[
-              { label: t("app.language.english"), value: "en" },
-              { label: t("app.language.japanese"), value: "ja" },
-            ]}
-            value={appLanguage}
-            onChange={(value) => {
-              if (value === "en" || value === "ja") {
-                void setAppLanguage(value as AppLanguage);
-              }
-            }}
-          />
-        </>
+        </WorkspaceSelect>
       }
     >
       {config.data?.workspace_problem ? (
@@ -228,21 +261,59 @@ export function App({ scoped }: { scoped?: boolean } = {}) {
           {repositoryT("alert.streamLost")}
         </Alert>
       ) : null}
-      <HubBand />
+      <HubStatusBand status={hub.data} t={t} />
+      {hosted ? <AlertBand hubOperating={Boolean(hub.data?.operation)} /> : null}
       {configured ? <SystemAlertBand /> : null}
-      <Routes>
-        <Route
-          element={<ConfiguredRoute configured={configured} loading={config.isLoading} />}
-          path="/activity"
+      {!workspace &&
+      current.name &&
+      ["/activity", "/commands", "/diagnostics", "/service"].includes(page) ? (
+        <Navigate replace to={scope + page + search + hash} />
+      ) : page === "/setup" || repositorySettings ? (
+        <SetupPage
+          workspace={current.name}
+          repositoriesAvailable={hosted}
+          repositorySettings={repositorySettings}
         />
-        <Route element={<ServicePage />} path="/service" />
-        <Route element={<Navigate replace to="/service" />} path="/overview" />
-        <Route element={<CommandsPage />} path="/commands" />
-        <Route element={<DiagnosticsPage />} path="/diagnostics" />
-        <Route element={<SetupPage />} path="/setup" />
-        <Route element={<IndexRedirect scoped={scoped} />} path="*" />
-      </Routes>
+      ) : repository ? (
+        <RepositoryPage route={route} current={current} />
+      ) : (
+        <Routes>
+          <Route path={workspace ? "/workspaces/:workspace" : "/"}>
+            {desktopRoutes(
+              configured,
+              config.isLoading,
+              scope,
+              <RepositoryPage
+                route={route.name === "not_found" ? route : { name: "not_found", pathname }}
+                current={current}
+              />,
+            )}
+          </Route>
+        </Routes>
+      )}
     </AppShell>
+  );
+}
+
+function desktopRoutes(configured: boolean, loading: boolean, scope: string, notFound: ReactNode) {
+  return (
+    <>
+      <Route
+        index
+        element={
+          loading ? null : <Navigate replace to={scope + (configured ? "/activity" : "/setup")} />
+        }
+      />
+      <Route
+        path="activity"
+        element={<ConfiguredRoute configured={configured} loading={loading} scope={scope} />}
+      />
+      <Route path="service" element={<ServicePage />} />
+      <Route path="overview" element={<Navigate replace to={scope + "/service"} />} />
+      <Route path="commands" element={<CommandsPage />} />
+      <Route path="diagnostics" element={<DiagnosticsPage />} />
+      <Route path="*" element={notFound} />
+    </>
   );
 }
 
@@ -321,7 +392,7 @@ function SystemAlertBand() {
                 ) : null}
                 {alert.actions.includes("setup") ? (
                   <Anchor
-                    component={NavLink}
+                    component={WorkspaceNavLink}
                     size="sm"
                     to={systemAlertSetupTarget(alert)}
                     underline="hover"
@@ -330,13 +401,13 @@ function SystemAlertBand() {
                   </Anchor>
                 ) : null}
                 {alert.actions.includes("service") ? (
-                  <Anchor component={NavLink} size="sm" to="/service" underline="hover">
+                  <Anchor component={WorkspaceNavLink} size="sm" to="/service" underline="hover">
                     {t("systemAlerts.actions.service")}
                   </Anchor>
                 ) : null}
                 {alert.actions.includes("trace") && alert.trace_id ? (
                   <Anchor
-                    component={NavLink}
+                    component={WorkspaceNavLink}
                     size="sm"
                     to={`/diagnostics?tab=executions&trace_id=${encodeURIComponent(alert.trace_id)}`}
                     underline="hover"
@@ -441,25 +512,30 @@ export function systemAlertSetupTarget(alert: SystemAlert): string {
 // discards its buffer.
 function GuardedNavLink({
   to,
-  className,
+  active,
   children,
 }: {
   to: string;
-  className?: string;
+  active?: boolean;
   children: ReactNode;
 }) {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const isActive = active || pathname === to;
   return (
-    <NavLink
+    <Link
       to={to}
-      className={className}
+      aria-current={isActive ? "page" : undefined}
+      className={isActive ? "nav-item active" : "nav-item"}
       onClick={(event) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+          return;
         event.preventDefault();
         requestNavigation(() => navigate(to));
       }}
     >
       {children}
-    </NavLink>
+    </Link>
   );
 }
 
@@ -508,31 +584,19 @@ function runtimeUnitsStopping(status: RuntimeStatus) {
   );
 }
 
-function ConfiguredRoute({ configured, loading }: { configured: boolean; loading: boolean }) {
+function ConfiguredRoute({
+  configured,
+  loading,
+  scope,
+}: {
+  configured: boolean;
+  loading: boolean;
+  scope: string;
+}) {
   if (loading) {
     return null;
   }
-  return configured ? <ActivityHistoryPage /> : <Navigate replace to="/setup" />;
-}
-
-function IndexRedirect({ scoped }: { scoped?: boolean }) {
-  // The landing route picks the first screen based on whether setup is done:
-  // a configured workspace opens the service screen, otherwise the setup screen.
-  const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
-  if (config.isLoading) {
-    return null;
-  }
-  const configured = Boolean(config.data?.project_file_exists);
-  const page = configured ? "/activity" : "/setup";
-  if (scoped === false && config.data?.workspace_name) {
-    return <WorkspaceLanding to={workspacePath(config.data.workspace_name) + page} />;
-  }
-  return <Navigate replace to={page} />;
-}
-
-function WorkspaceLanding({ to }: { to: string }) {
-  useEffect(() => window.location.replace(to), [to]);
-  return null;
+  return configured ? <ActivityHistoryPage /> : <Navigate replace to={scope + "/setup"} />;
 }
 
 const SERVICE_SETTINGS_QUERY_KEY = ["service-settings"];
@@ -693,7 +757,7 @@ function ServicePage() {
         <Alert color="warning" title={t("overview.setupRequiredTitle")}>
           <Group justify="space-between" align="center">
             <Text size="sm">{t("overview.setupRequiredBody")}</Text>
-            <Button component={NavLink} to="/setup" variant="light">
+            <Button component={WorkspaceNavLink} to="/setup" variant="light">
               {t("overview.openSetup")}
             </Button>
           </Group>
@@ -742,7 +806,7 @@ function ServicePage() {
               <Stack gap="xs">
                 <Group>
                   <Button
-                    component={NavLink}
+                    component={WorkspaceNavLink}
                     to="/setup?section=members&tab=patrol"
                     variant="light"
                   >
@@ -822,7 +886,11 @@ function ServicePage() {
               ]}
             >
               <Group>
-                <Button component={NavLink} to="/setup?section=members&tab=patrol" variant="light">
+                <Button
+                  component={WorkspaceNavLink}
+                  to="/setup?section=members&tab=patrol"
+                  variant="light"
+                >
                   {t("overview.openMemberPatrolSettings")}
                 </Button>
               </Group>
@@ -1958,7 +2026,7 @@ function TraceExplorer({
                       })()}
                       {hasMemoryRecords ? (
                         <Badge
-                          component={NavLink}
+                          component={WorkspaceNavLink}
                           color="info"
                           variant="light"
                           style={{ cursor: "pointer", textDecoration: "none" }}

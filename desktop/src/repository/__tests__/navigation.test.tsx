@@ -28,10 +28,7 @@ function setup(empty = false) {
 async function expectStart(name: string) {
   await waitFor(() => expect(window.location.pathname).toBe(`/workspaces/${name}/task-flow`));
   const nav = await screen.findByRole("navigation", { name: "Main" });
-  expect(await within(nav).findByRole("link", { name: "Task flow" })).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
+  await within(nav).findByRole("link", { name: "Task flow", current: "page" });
 }
 
 describe("workspace navigation", () => {
@@ -44,7 +41,7 @@ describe("workspace navigation", () => {
       const historyLength = window.history.length;
       renderApp(
         entry === "home" || entry === "create from home"
-          ? "/"
+          ? "/workspaces"
           : entry === "switch"
             ? "/workspaces/acme/task-flow"
             : "/settings/repositories/members",
@@ -85,14 +82,14 @@ describe("workspace navigation", () => {
     [
       "settings",
       "/settings/repositories/members",
-      "/settings/repositories",
+      "/workspaces/beta/settings/repositories/members",
       "Settings",
       "Settings",
     ],
     [
       "repository settings",
       "/workspaces/acme/repos/demo/settings",
-      "/settings/repositories",
+      "/workspaces/beta/settings/repositories",
       "Settings",
       "Settings",
     ],
@@ -142,7 +139,7 @@ describe("workspace navigation", () => {
       expect(
         within(before)
           .queryAllByRole("link", { current: "page" })
-          .map((link) => link.textContent),
+          .map((link) => link.textContent.trim()),
       ).toEqual(current ? [current] : []);
       await choose(userEvent.setup(), "Workspace", "beta");
       await waitFor(() => expect(window.location.pathname).toBe(to));
@@ -166,8 +163,16 @@ describe("workspace navigation", () => {
     expect(
       within(nav)
         .getAllByRole("link")
-        .map((link) => link.textContent),
-    ).toEqual(["Task flow", "Pull requests", "Settings"]);
+        .map((link) => link.textContent.trim()),
+    ).toEqual([
+      "Activity",
+      "Task flow",
+      "Pull requests",
+      "Service",
+      "Edit Command",
+      "Diagnostics",
+      "Settings",
+    ]);
   });
 });
 
@@ -179,7 +184,9 @@ it("switches workspaces within settings even when storage cannot save the select
   try {
     renderApp("/settings/repositories/members");
     await choose(userEvent.setup(), "Workspace", "beta");
-    await waitFor(() => expect(window.location.pathname).toBe("/settings/repositories"));
+    await waitFor(() =>
+      expect(window.location.pathname).toBe("/workspaces/beta/settings/repositories/members"),
+    );
     expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveValue("beta");
   } finally {
     save.mockRestore();
@@ -197,28 +204,49 @@ it.each(["/acme/-/relations", "/acme/-/board"])(
   },
 );
 
-describe("embedding host navigation", () => {
-  it.each([null, { label: "Host screen", url: "/host/" }])(
-    "uses only the server supplied destination %j",
-    async (navigation) => {
-      fakeApi({
-        "GET /api/v1/session": json(200, { ...SESSION, host_navigation: navigation }),
-        "GET /api/v1/workspaces": page([]),
-      });
-      renderApp("/");
-      const nav = await screen.findByRole("navigation", { name: "Main" });
-      if (navigation)
-        expect(within(nav).getByRole("link", { name: navigation.label })).toHaveAttribute(
-          "href",
-          navigation.url,
-        );
-      else expect(within(nav).getAllByRole("link")).toHaveLength(1);
-    },
-  );
+describe("shared navigation", () => {
+  it("shows the workspace from a deep link and uses it throughout the sidebar", async () => {
+    setup();
+    window.localStorage.setItem("branvil.workspace", "beta");
+    renderApp("/workspaces/acme/repos/demo/tickets/1");
+    expect(await screen.findByRole("combobox", { name: "Workspace" })).toHaveValue("acme");
+    const nav = screen.getByRole("navigation", { name: "Main" });
+    expect(within(nav).getByRole("link", { name: "Edit Command" })).toHaveAttribute(
+      "href",
+      "/workspaces/acme/commands",
+    );
+    expect(within(nav).getByRole("link", { name: "Settings" })).toHaveAttribute(
+      "href",
+      "/workspaces/acme/setup",
+    );
+    await userEvent.click(within(nav).getByRole("link", { name: "Pull requests" }));
+    expect(screen.getByRole("navigation", { name: "Main" })).toBe(nav);
+    expect(window.location.pathname).toBe("/workspaces/acme/pulls");
+  });
+
+  it("marks a list failure and enables the selected workspace after retry", async () => {
+    fakeApi({
+      "GET /api/v1/workspaces": [
+        json(503, {}),
+        json(503, {}),
+        json(503, {}),
+        page([workspace("acme"), workspace("beta")]),
+      ],
+    });
+    renderApp("/workspaces/beta/pulls");
+    const select = await screen.findByRole("combobox", { name: "Workspace" });
+    expect(select).toHaveValue("beta");
+    expect(select).toBeDisabled();
+    expect(await screen.findByText("Could not load workspaces.")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(select).toBeEnabled());
+    expect(select).toHaveValue("beta");
+    expect(screen.queryByText("Could not load workspaces.")).not.toBeInTheDocument();
+  });
 
   it("persists the sidebar language in the shared preference", async () => {
     setup(true);
-    renderApp("/");
+    renderApp("/workspaces");
     await screen.findByRole("navigation", { name: "Main" });
     await choose(userEvent.setup(), "Display language", "日本語");
     expect(localStorage.getItem("guildbotics.appLanguage")).toBe("ja");

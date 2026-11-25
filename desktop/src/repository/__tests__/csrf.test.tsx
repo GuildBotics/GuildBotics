@@ -17,7 +17,7 @@ describe("CSRF recovery guidance", () => {
     async (lang) => {
       fakeApi({
         "POST /api/v1/x": apiError(403, "csrf_mismatch", "CSRF mismatch."),
-        "GET /api/v1/session": json(200, { csrf: "fresh" }),
+        "GET /-/guildbotics/api/session": json(200, { csrf: "fresh" }),
       });
       const error: unknown = await request("POST", "/x").catch((err: unknown) => err);
       void i18n.changeLanguage(lang);

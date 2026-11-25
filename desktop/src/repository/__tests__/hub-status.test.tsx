@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useDiagnostics } from "../query/hooks";
+import { useHubStatus } from "../../HubStatus";
 import { act, renderHook, screen } from "@testing-library/react";
 import { it, expect, vi } from "vitest";
 import { fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
@@ -13,20 +13,20 @@ it.each([true, false])(
       "GET /api/v1/members": json(200, { items: [], next_cursor: null }),
       "GET /api/v1/admin/diagnostics": json(200, {
         runner: { state: "stopping", mode: "auto", detail: "" },
-        hub: embedded
+      }),
+      "GET /-/guildbotics/api/hub-status": json(200, {
+        current: {
+          sha: "abcdef012345",
+          subject: "Build title",
+          url: "https://example.com/commit/abcdef012345",
+        },
+        target: null,
+        operation: embedded
           ? {
-              current: {
-                sha: "abcdef012345",
-                subject: "Build title",
-                url: "https://example.com/commit/abcdef012345",
-              },
-              target: null,
-              operation: {
-                kind: "update",
-                phase: "draining",
-                since: "one",
-                waiting: { runs: 3, ci_jobs: 2 },
-              },
+              kind: "update",
+              phase: "draining",
+              since: "one",
+              waiting: { runs: 3, ci_jobs: 2 },
             }
           : null,
       }),
@@ -45,15 +45,15 @@ it.each([true, false])(
   },
 );
 
-it("polls standalone and idle diagnostics slowly, with short intervals only during Hub work", async () => {
+it("polls Hub status faster during maintenance", async () => {
   vi.useFakeTimers();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   let operation: unknown = null;
   const calls = fakeApi({
-    "GET /api/v1/admin/diagnostics": () => json(200, { hub: { operation } }),
+    "GET /-/guildbotics/api/hub-status": () => json(200, { operation }),
   });
   try {
-    renderHook(() => useDiagnostics(), {
+    renderHook(() => useHubStatus(), {
       wrapper: ({ children }) => (
         <QueryClientProvider client={client}>{children}</QueryClientProvider>
       ),
@@ -68,13 +68,13 @@ it("polls standalone and idle diagnostics slowly, with short intervals only duri
     expect(calls.requests).toHaveLength(2);
     operation = { kind: "update", phase: "preparing" };
     await act(async () => {
-      client.setQueryData(["diagnostics"], { hub: { operation } });
+      client.setQueryData(["hub-status"], { operation });
       await vi.advanceTimersByTimeAsync(2000);
     });
     expect(calls.requests).toHaveLength(3);
     operation = null;
     await act(async () => {
-      client.setQueryData(["diagnostics"], { hub: { operation } });
+      client.setQueryData(["hub-status"], { operation });
       await vi.advanceTimersByTimeAsync(2000);
     });
     expect(calls.requests).toHaveLength(3);

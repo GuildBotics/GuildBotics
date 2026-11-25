@@ -10,34 +10,36 @@ describe("entering through the host", () => {
     "explains how to open the printed link in the same browser (%s)",
     async (language) => {
       fakeApi({
-        "GET /api/v1/session": apiError(401, "unauthorized", "No valid token or session."),
+        "GET /-/guildbotics/api/session": apiError(
+          401,
+          "unauthorized",
+          "No valid token or session.",
+        ),
       });
       renderApp("/", language);
-      expect(await screen.findByText("guildbotics open --print")).toBeInTheDocument();
+      expect(await screen.findByText("ssh <server> guildbotics open --print")).toBeInTheDocument();
       expect(
         screen.getByText(
           language === "en"
-            ? /Paste the printed URL into the address bar of this same browser/
-            : /表示されたURLを、この画面と同じブラウザのアドレスバーに貼り付けて/,
+            ? /paste the printed link into this browser's address bar/
+            : /表示されたリンクをこのブラウザのアドレスバーに貼り付けて/,
         ),
       ).toBeInTheDocument();
     },
   );
 
-  it("shows how to open Branvil on every page without a session, even when the session read fails", async () => {
+  it("shows the same entry instructions on a repository deep link", async () => {
     fakeApi({
-      "GET /api/v1/session": apiError(401, "unauthorized", "No valid token or session."),
+      "GET /-/guildbotics/api/session": apiError(401, "unauthorized", "No valid token or session."),
     });
     renderApp("/workspaces/acme/repos/demo");
-    expect(
-      await screen.findByText("On the Hub machine, print an entry link with:"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("guildbotics open", { exact: true })).toBeVisible();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
   it("keeps the guidance and a retry when the session cannot be read", async () => {
     const fake = fakeApi({
-      "GET /api/v1/session": [
+      "GET /-/guildbotics/api/session": [
         apiError(421, "misdirected", "This Host is not Branvil's."),
         json(200, SESSION),
       ],
@@ -46,15 +48,12 @@ describe("entering through the host", () => {
       "GET /api/v1/admin/diagnostics": json(200, {}),
     });
     const user = userEvent.setup();
-    renderApp("/");
-    expect(
-      await screen.findByText("On the Hub machine, print an entry link with:"),
-    ).toBeInTheDocument();
-    expect(await screen.findByText("This Host is not Branvil's.")).toBeInTheDocument();
+    renderApp("/workspaces");
+    expect(await screen.findByRole("dialog")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("heading", { name: "No workspace yet" })).toBeInTheDocument();
     await waitFor(() =>
-      expect(fake.calls("GET", "/api/v1/session").length).toBeGreaterThanOrEqual(2),
+      expect(fake.calls("GET", "/-/guildbotics/api/session").length).toBeGreaterThanOrEqual(2),
     );
   });
 });

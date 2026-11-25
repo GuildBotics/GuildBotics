@@ -37,10 +37,6 @@ export const ja: Record<MessageKey, string> = {
   "nav.settings": "設定",
   "notFound.title": "ページが見つかりません",
 
-  "guide.run": "Hubマシンで次のコマンドを実行して、入口のURLを表示します：",
-  "guide.why":
-    "表示されたURLを、この画面と同じブラウザのアドレスバーに貼り付けて開いてください。リンクは60秒間に1回だけ使え、入ったことはそのブラウザでだけ有効です。",
-
   "lane.new": "新規",
   "lane.ready": "着手可",
   "lane.in_progress": "作業中",
@@ -366,6 +362,8 @@ export const ja: Record<MessageKey, string> = {
   "repo.labels": "チケットのラベル",
   "repo.create": "リポジトリを作成",
 
+  "settings.reviewSettings": "レビュー担当・認証",
+  "settings.repositoriesWorkspace": "{{workspace}} のリポジトリ。",
   "settings.sections": "設定の項目",
   "settings.repositories": "リポジトリ",
   "settings.members": "メンバー",
@@ -545,6 +543,7 @@ export const ja: Record<MessageKey, string> = {
   "pickup.undoGone":
     "動かしたチケットはその間にすべて着手可のレーンを離れたため、戻すものはありません。",
   "board.assignee": "{{key}} の担当者: {{name}} — クリックで変更",
+  "workspace.listFailed": "ワークスペースを取得できませんでした。",
   "workspace.label": "ワークスペース",
   "workspace.new": "新しいワークスペース",
   "workspace.newMenu": "＋ 新しいワークスペース…",
@@ -643,10 +642,6 @@ export const ja: Record<MessageKey, string> = {
   "repo.createSubmit": "追加",
   "member.createSubmit": "追加",
   "account.noneOn": "{{host}} アカウントなし",
-  "settings.workspaceGroup": "ワークスペース",
-  "settings.branvilGroup": "Branvil 全体",
-  "settings.workspaceHelp":
-    "ワークスペース。ボードを 1 つと、そこにチケットを置くリポジトリを持ちます。",
   "settings.noRepos": "リポジトリはまだありません。",
   "settings.repoName": "名前",
   "settings.tagsHelp": "入力して Enter で追加します。",

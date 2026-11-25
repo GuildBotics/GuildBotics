@@ -37,7 +37,6 @@ export type AccountCredential =
 export const PROVIDERS = [{ name: "github", label: "GitHub" }] as const;
 
 export interface Session {
-  host_navigation?: { label: string; url: string } | null;
   me: Member;
   csrf: string;
 }
@@ -559,7 +558,6 @@ type RunnerVersionMismatch = { name: string; version: string };
 
 /** What `/admin/diagnostics` says that the warnings use; the rest is for people reading the API. */
 export interface Diagnostics {
-  hub?: import("../../ui/HubStatus").HubStatus | null;
   runner?: {
     state: "ready" | "no_runner" | "executor_unavailable" | "stopping" | string;
     detail: string;

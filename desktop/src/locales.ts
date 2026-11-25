@@ -24,7 +24,7 @@ export const resources = {
           service: "Service",
           commands: "Edit Command",
           diagnostics: "Diagnostics",
-          setup: "Setup",
+          setup: "Settings",
         },
         navStatus: {
           service: {
@@ -547,6 +547,7 @@ export const resources = {
         },
         nav: {
           groupWorkspace: "Workspace",
+          groupCodeHost: "Code host",
           groupMachine: "This machine",
           project: "Project",
           intelligence: "LLM / AI CLI tools",
@@ -1663,6 +1664,7 @@ export const resources = {
         },
         nav: {
           groupWorkspace: "ワークスペース",
+          groupCodeHost: "コードホスト",
           groupMachine: "このマシン",
           project: "プロジェクト",
           intelligence: "LLM・AI CLIツール",

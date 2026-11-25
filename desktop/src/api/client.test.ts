@@ -37,6 +37,7 @@ import {
   getTranscriptSettings,
   memberAvatarUrl,
   runScenarioDiagnostics,
+  runCommand,
   setWorkspace,
   updateRuntimeDebug,
   startScheduler,
@@ -158,6 +159,34 @@ describe("session", () => {
     expect(headerValue(calls[0].init, "X-GuildBotics-CSRF")).toBe("test-csrf");
     expect(headerValue(calls[2].init, "X-GuildBotics-CSRF")).toBe("fresh");
     expect(calls[2].init.body).toBe(calls[0].init.body);
+  });
+
+  it("retries a manual command in the workspace it was launched from", async () => {
+    window.history.replaceState(null, "", "/workspaces/%61cme/commands");
+    try {
+      const calls = queueFetch(
+        errorResponse(403, "csrf_mismatch"),
+        jsonResponse({ csrf: "fresh" }),
+        jsonResponse({}),
+      );
+      const run = runCommand({ command: "status" });
+      window.history.replaceState(null, "", "/workspaces/beta/commands");
+      await run;
+
+      expect(calls.map(({ url }) => url)).toEqual([
+        "/-/guildbotics/api/commands/run",
+        "/-/guildbotics/api/session",
+        "/-/guildbotics/api/commands/run",
+      ]);
+      expect(calls.map(({ init }) => headerValue(init, "X-GuildBotics-Workspace"))).toEqual([
+        "acme",
+        undefined,
+        "acme",
+      ]);
+      expect(calls[2].init.body).toBe(calls[0].init.body);
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
   });
 
   it("refreshes an upload's refused CSRF value too, sending the same file", async () => {

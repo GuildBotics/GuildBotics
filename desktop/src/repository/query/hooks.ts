@@ -1,21 +1,15 @@
 // Query hooks: one per resource the views show. Views never call the API
 // client for reads directly.
 
-import { QueryCache, QueryClient, useQuery } from "@tanstack/react-query";
+import { QueryClient, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { ApiError, isApiError, setCsrfToken } from "../../api/client";
+import { ApiError } from "../../api/client";
 import * as api from "../api/endpoints";
-import type { MemberKind, Session } from "../api/types";
+import type { MemberKind } from "../api/types";
 import { keys } from "./keys";
 
 export function createQueryClient(): QueryClient {
-  const client: QueryClient = new QueryClient({
-    queryCache: new QueryCache({
-      onError: (err) => {
-        // An expired session anywhere brings back the guidance page.
-        if (isApiError(err, undefined, 401)) client.setQueryData(keys.session(), null);
-      },
-    }),
+  return new QueryClient({
     defaultOptions: {
       queries: {
         // Freshness comes from the event stream, not from polling.
@@ -27,25 +21,13 @@ export function createQueryClient(): QueryClient {
       mutations: { retry: false },
     },
   });
-  return client;
 }
 
-export function useSession() {
+export function useSession(enabled = true) {
   return useQuery({
     queryKey: keys.session(),
-    queryFn: async (): Promise<Session | null> => {
-      try {
-        const s = await api.session.get();
-        setCsrfToken(s.csrf);
-        return s;
-      } catch (err) {
-        if (isApiError(err, undefined, 401)) {
-          setCsrfToken(null);
-          return null;
-        }
-        throw err;
-      }
-    },
+    queryFn: api.session.get,
+    enabled,
     staleTime: Infinity,
   });
 }
@@ -59,8 +41,8 @@ export const useMarkdown = (repo: string, source: string) =>
     enabled: source.length > 0,
   });
 
-export const useWorkspaces = () =>
-  useQuery({ queryKey: keys.workspaces(), queryFn: () => api.workspaces.list() });
+export const useWorkspaces = (enabled = true) =>
+  useQuery({ queryKey: keys.workspaces(), queryFn: api.workspaces.list, enabled });
 
 /** A commit never changes: cached for the session. */
 export const useCommit = (repo: string, sha: string) =>
@@ -129,7 +111,7 @@ export const useDiagnostics = () =>
   useQuery({
     queryKey: keys.diagnostics(),
     queryFn: () => api.admin.diagnostics(),
-    refetchInterval: (query) => (query.state.data?.hub?.operation ? 2000 : 30_000),
+    refetchInterval: 30_000,
   });
 
 /** The notification webhook; polled, since how its last send went has no events. */

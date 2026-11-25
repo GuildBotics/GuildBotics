@@ -74,7 +74,7 @@ target/debug/guildbotics install
 
 `install` はビルド済みの実行ファイルを `~/.guildbotics/bin/guildbotics` に置き、利用可能なAI CLIのユーザー領域に同梱スキルを配置します。ユーザーが編集したスキルと既存のコマンドは保持します。`~/.local/bin/guildbotics` のリンクを使うには `~/.local/bin` を `PATH` に加えます。
 
-コードホストのデータは、初回の起動時に `~/.guildbotics/data/code-host` に作られます。別の場所を使う場合や既存のデータを使う場合は、起動の前に `GUILDBOTICS_CODE_HOST_DATA_DIR` にその絶対パスを設定します。コードホストの画面は `"$HOME/.guildbotics/bin/guildbotics" open --branvil` で開きます。ログイン時の起動、更新、復旧は [macOS Hubの起動と更新](docs/hub-server.md) を参照してください。
+コードホストのデータは、初回の起動時に `~/.guildbotics/data/code-host` に作られます。別の場所を使う場合や既存のデータを使う場合は、起動の前に `GUILDBOTICS_CODE_HOST_DATA_DIR` にその絶対パスを設定します。コードホストの画面は `"$HOME/.guildbotics/bin/guildbotics" open` で開きます。ログイン時の起動、更新、復旧は [macOS Hubの起動と更新](docs/hub-server.md) を参照してください。
 
 ### 初期セットアップ
 
@@ -464,8 +464,7 @@ guildbotics open
 ブラウザが、一度だけ使える入口リンク（60 秒で失効します）で開きます。サインインの画面はなく、`~/.guildbotics/data/server/<port>/owner.token` を読める OS のユーザーがオーナーです。セッションは 30 日続きます。期限が切れたら、もう一度 `guildbotics open` を実行してください。
 
 サーバーのすべての画面で、入口とブラウザセッションを共用します。
-`guildbotics open` と `guildbotics open --branvil` は `/enter` の
-入口リンクを表示し、入った後の画面だけが異なります。
+`guildbotics open` は `/enter` の入口リンクを表示します。すべての画面に共通のサイドバーから移動できます。
 
 **Windows クライアントの導入**
 

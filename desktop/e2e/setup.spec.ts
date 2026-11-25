@@ -28,7 +28,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
   // (GUILDBOTICS_WORKSPACE_ROOT), never from the backend cwd.
   // Compare filesystem identities rather than spellings: macOS may add
   // /private, while Windows may expand an 8.3 temp path before returning it.
-  const workspaceField = page.getByLabel("Workspace");
+  const workspaceField = page.getByRole("textbox", { name: "Workspace", exact: true });
   await expect
     .poll(async () => realpathSync.native(await workspaceField.inputValue()))
     .toBe(realpathSync.native(ctx.workspaceDir));
@@ -130,7 +130,7 @@ test("first-run setup happy path writes project.yml and enters the service view"
   // the backend serves for the provider. jsdom can only prove the editor state
   // changed; that a number survives client -> FastAPI -> YAML as a number needs
   // this real stack. Branch coverage stays in the unit / component tests.
-  await page.getByRole("link", { name: "Setup", exact: true }).click();
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   await page.getByRole("button", { name: "LLM / AI CLI tools", exact: true }).click();
   await page.getByRole("button", { name: "Advanced settings", exact: true }).click();
@@ -201,10 +201,12 @@ test("one entry opens both screens, APIs and the consent page", async ({ page, c
     });
   expect((await write("wrong")).status()).toBe(403);
   expect((await write(bv.csrf)).status()).toBe(201);
-  const link = await (await page.request.post("/-/guildbotics/api/session/links", {
-    headers: { "x-guildbotics-csrf": bv.csrf },
-    data: { next: "/" },
-  })).json();
+  const link = await (
+    await page.request.post("/-/guildbotics/api/session/links", {
+      headers: { "x-guildbotics-csrf": bv.csrf },
+      data: { next: "/" },
+    })
+  ).json();
   expect(new URL(link.url).pathname).toBe("/enter");
   await context.clearCookies();
   await page.goto(link.url);

@@ -1113,60 +1113,55 @@ fn code_host_data(dir: &Path) -> PathBuf {
 }
 
 #[tokio::test]
-async fn open_commands_share_the_entry_and_browser_session() {
+async fn open_uses_the_shared_entry_and_browser_session() {
     let dir = tempfile::tempdir().unwrap();
     let server = Server::start(dir.path());
-    for (args, next) in [
-        (vec!["open", "--print"], None),
-        (vec!["open", "--branvil", "--print"], Some("/workspaces")),
-    ] {
-        let opened = Command::new(BIN)
-            .args(args)
-            .env("GUILDBOTICS_HOME", &server.home)
-            .env("GUILDBOTICS_SERVER_PORT", server.port.to_string())
-            .output()
-            .unwrap();
-        assert_ok(&opened);
-        let link = String::from_utf8(opened.stdout).unwrap();
-        let link = reqwest::Url::parse(link.trim()).unwrap();
-        assert_eq!(link.origin().ascii_serialization(), server.url(""));
-        assert_eq!(link.path(), "/enter");
-        assert_eq!(
-            link.query_pairs()
-                .find(|(key, _)| key == "next")
-                .map(|(_, value)| value.into_owned())
-                .as_deref(),
-            next
-        );
-        let entered = server
+    let opened = Command::new(BIN)
+        .args(["open", "--print"])
+        .env("GUILDBOTICS_HOME", &server.home)
+        .env("GUILDBOTICS_SERVER_PORT", server.port.to_string())
+        .output()
+        .unwrap();
+    assert_ok(&opened);
+    let link = String::from_utf8(opened.stdout).unwrap();
+    let link = reqwest::Url::parse(link.trim()).unwrap();
+    assert_eq!(link.origin().ascii_serialization(), server.url(""));
+    assert_eq!(link.path(), "/enter");
+    assert_eq!(
+        link.query_pairs()
+            .find(|(key, _)| key == "next")
+            .map(|(_, value)| value.into_owned())
+            .as_deref(),
+        None
+    );
+    let entered = server
+        .http
+        .post(server.url("/-/guildbotics/api/session"))
+        .json(&json!({"code": link.fragment().unwrap()}))
+        .send()
+        .await
+        .unwrap();
+    let (status, headers, session) = body(entered).await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    for path in ["/-/guildbotics/api/session", "/api/v1/session"] {
+        let current = server
             .http
-            .post(server.url("/-/guildbotics/api/session"))
-            .json(&json!({"code": link.fragment().unwrap()}))
+            .get(server.url(path))
+            .header("cookie", cookie)
             .send()
             .await
             .unwrap();
-        let (status, headers, session) = body(entered).await;
+        let (status, _, current) = body(current).await;
         assert_eq!(status, StatusCode::OK);
-        let cookie = headers["set-cookie"]
-            .to_str()
-            .unwrap()
-            .split(';')
-            .next()
-            .unwrap();
-        for path in ["/-/guildbotics/api/session", "/api/v1/session"] {
-            let current = server
-                .http
-                .get(server.url(path))
-                .header("cookie", cookie)
-                .send()
-                .await
-                .unwrap();
-            let (status, _, current) = body(current).await;
-            assert_eq!(status, StatusCode::OK);
-            assert!(current["csrf"] == session["csrf"]);
-            if path == "/api/v1/session" {
-                assert_eq!(current["me"]["kind"], "owner");
-            }
+        assert!(current["csrf"] == session["csrf"]);
+        if path == "/api/v1/session" {
+            assert_eq!(current["me"]["kind"], "owner");
         }
     }
     server.stop();

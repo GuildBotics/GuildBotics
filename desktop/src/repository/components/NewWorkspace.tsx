@@ -1,15 +1,17 @@
+import { useNavigate } from "react-router";
 import { Button, Group, Modal, Stack, TextInput } from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { requestNavigation } from "../../navigationGuard";
 import * as api from "../api/endpoints";
 import { useT } from "../i18n";
 import { keys } from "../query/keys";
-import { navigate } from "../router/Router";
 import { href } from "../router/routes";
 import { ErrorMessage } from "./common";
 
 /** Creates a workspace and opens its first page. */
 export function NewWorkspaceModal({ opened, onClose }: { opened: boolean; onClose: () => void }) {
+  const navigate = useNavigate();
   const t = useT();
   const client = useQueryClient();
   const [name, setName] = useState("");
@@ -18,7 +20,7 @@ export function NewWorkspaceModal({ opened, onClose }: { opened: boolean; onClos
     onSuccess: (w) => {
       setName("");
       onClose();
-      navigate(href.workspace(w.name));
+      requestNavigation(() => navigate(href.workspace(w.name)));
     },
     onSettled: () => void client.invalidateQueries({ queryKey: keys.workspaces() }),
   });

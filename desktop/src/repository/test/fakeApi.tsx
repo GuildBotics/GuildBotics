@@ -5,7 +5,8 @@ import { render } from "@testing-library/react";
 import { vi } from "vitest";
 import { EntryPage } from "../../session/EntryPage";
 import { theme } from "../../ui/theme";
-import { RepositoryApp } from "../App";
+import { App } from "../../App";
+import { BrowserRouter } from "react-router";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { TestMantineProvider } from "../../test/TestMantineProvider";
 import { createQueryClient } from "../query/hooks";
@@ -59,7 +60,13 @@ export function fakeApi(routes: Record<string, Reply | Reply[]>) {
     };
     requests.push(rec);
     const key = `${rec.method} ${rec.path}`;
-    const route = routes[key];
+    const route =
+      routes[key] ??
+      {
+        "GET /-/guildbotics/api/session": json(200, { csrf: "csrf-123" }),
+        "GET /-/guildbotics/api/config/status": json(200, { branvil_available: true }),
+        "GET /-/guildbotics/api/hub-status": json(200, {}),
+      }[key];
     if (route === undefined) {
       return new Response(
         JSON.stringify({ error: { code: "not_found", message: `no route ${key}` } }),
@@ -93,7 +100,7 @@ export const ME = {
 };
 export const SESSION = { me: ME, csrf: "csrf-123" };
 
-export function renderApp(path: string, language: "en" | "ja" = "en", withSession = false) {
+export function renderApp(path: string, language: "en" | "ja" = "en") {
   void i18n.changeLanguage(language);
   window.history.replaceState(null, "", path);
   const client = createQueryClient();
@@ -103,13 +110,11 @@ export function renderApp(path: string, language: "en" | "ja" = "en", withSessio
   const utils = render(
     <TestMantineProvider theme={theme}>
       <QueryClientProvider client={client}>
-        {withSession ? (
+        <BrowserRouter>
           <EntryPage>
-            <RepositoryApp />
+            <App />
           </EntryPage>
-        ) : (
-          <RepositoryApp />
-        )}
+        </BrowserRouter>
       </QueryClientProvider>
     </TestMantineProvider>,
   );

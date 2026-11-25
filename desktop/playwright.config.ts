@@ -47,7 +47,7 @@ type Stack = {
 const STACKS: Stack[] = [
   {
     name: "setup",
-    testMatch: /(setup|navigation)\.spec\.ts$/,
+    testMatch: /setup\.spec\.ts$/,
     backendPort: port("GUILDBOTICS_E2E_BACKEND_PORT", 8766),
   },
   {
@@ -55,7 +55,7 @@ const STACKS: Stack[] = [
     testMatch:
       process.env.GUILDBOTICS_E2E_PERF === "1"
         ? /branvil-perf\.spec\.ts$/
-        : /(service|commands|decisions|visual|branvil-(smoke|.*-layout))\.spec\.ts$/,
+        : /(service|commands|decisions|navigation|visual|branvil-(smoke|.*-layout))\.spec\.ts$/,
     backendPort: port("GUILDBOTICS_E2E_CONFIGURED_BACKEND_PORT", 8767),
     env: { GUILDBOTICS_E2E_SEED: "1" },
   },

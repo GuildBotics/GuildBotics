@@ -53,7 +53,7 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
     case "command":
       return [(q) => ["command-runs", "command-run-detail"].includes(String(keyOf(q)[0]))];
     case "hub_status_changed":
-      return [(q) => keyOf(q)[0] === "diagnostics" || keyOf(q)[0] === "hub-status"];
+      return [(q) => keyOf(q)[0] === "hub-status"];
     case "ticket":
       return [
         isCheckList,

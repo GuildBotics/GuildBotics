@@ -38,7 +38,7 @@ To receive chat events, start the service with **Event triggers** included on th
 
 Create a Slack App (send + receive) in Slack that acts as the AI agent. The default path is the semi-automatic registration on the screens: the required scopes, Socket Mode and event subscriptions all come pre-configured from an App Manifest that GuildBotics generates.
 
-First choose Slack under **Setup → Integrations → Chat**; the members then have a Slack tab. Under **Setup → Members → Slack**, choose **Register a new app** and do the following.
+First choose Slack under **Settings → Integrations → Chat**; the members then have a Slack tab. Under **Settings → Members → Slack**, choose **Register a new app** and do the following.
 
 1. Enter an **App name** (defaults to the member ID) and press **Create the app on Slack**
    - Slack's app creation screen opens in your external browser with the manifest applied
@@ -106,7 +106,7 @@ If you want a separate receiving path (for example, a separate workspace or a se
 
 ## Configuring on the Screens
 
-Configure this per member under **Setup → Members → Slack**.
+Configure this per member under **Settings → Members → Slack**.
 
 - **Slack Bot token** (`xoxb-...`) and **Slack App token** (`xapp-...`): the tokens you noted down during the Slack App setup. On a saved member, leaving a field empty keeps the saved token
 - **Verify app**: asks Slack about the configuration that saving would leave in effect — the tokens, the scopes actually granted to the bot, and whether the bot can read each configured channel (that is, whether it was invited). An empty token field is checked against the saved token, and the result names which one it checked ("Saved bot token", for example)
@@ -125,7 +125,7 @@ Tokens live in the encrypted identity store with the member's credentials, share
 
 ## Chat Judgment Engine
 
-Choose an engine under **Setup → LLM / AI CLI tools → Advanced settings → Chat judgment engine**, then save at the top of the section.
+Choose an engine under **Settings → LLM / AI CLI tools → Advanced settings → Chat judgment engine**, then save at the top of the section.
 
 - **LLM**: assign an existing slot. Its settings supply the model, parameters, and authentication.
 - **Jev**: uses `jev-latest`. Enter the API key in the field shown when Jev is selected and save it with the settings. A saved key appears masked and is kept unless changed. SecretStore stores it as `TYPESAFE_API_KEY`.
@@ -151,7 +151,7 @@ uv run --no-sync python scripts/evaluate-chat-decision.py /path/to/evaluation.js
 
 Posts at fixed times are made by running `workflows/chat_post_command` on a schedule (the post body is the output of a GuildBotics custom command).
 
-Under **Setup → Members → Patrol**, press **Add schedule**, switch the command field to **Custom**, and enter a command line such as the following. Set the time with the Hourly / Daily / Weekly presets or a **Detailed schedule**.
+Under **Settings → Members → Patrol**, press **Add schedule**, switch the command field to **Custom**, and enter a command line such as the following. Set the time with the Hourly / Daily / Weekly presets or a **Detailed schedule**.
 
 ```text
 workflows/chat_post_command channel_name=dev-chat command='examples/reports/ai_news_digest query="OpenAI OR Anthropic OR Gemini" language=ja country=JP limit=10 max_age_hours=24'

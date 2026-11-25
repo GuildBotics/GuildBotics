@@ -33,6 +33,8 @@ export function parseRoute(pathname: string): Route {
   if (area === "settings" && workspace === "repositories" && segs.length <= 3)
     return { name: "settings", section: page ?? null };
   if (area !== "workspaces" || !workspace) return { name: "not_found", pathname };
+  if (page === "settings" && name === "repositories" && segs.length <= 5)
+    return { name: "settings", section: kind ?? null };
   if (segs.length === 3 && page === "task-flow") return { name: "workspace", workspace };
   if (segs.length === 3 && page === "pulls") return { name: "pulls", workspace };
   if (page !== "repos" || !name) return { name: "not_found", pathname };
@@ -71,8 +73,10 @@ export const POST_MERGE_FRAGMENT = "post-merge-checks";
 
 export const href = {
   home: () => "/workspaces",
-  settings: (section?: string) =>
-    section ? `/settings/repositories/${encodeURIComponent(section)}` : "/settings/repositories",
+  settings: (section?: string, workspace?: string) =>
+    (workspace ? workspacePath(workspace) : "") +
+    "/settings/repositories" +
+    (section ? `/${encodeURIComponent(section)}` : ""),
   repoSettings: (repo: string) => `${repositoryPath(repo)}/settings`,
   workspace: (workspace: string) => `${workspacePath(workspace)}/task-flow`,
   pulls: (workspace: string) => `${workspacePath(workspace)}/pulls`,

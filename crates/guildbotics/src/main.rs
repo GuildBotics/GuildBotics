@@ -95,15 +95,12 @@ enum Command {
     /// Connect this machine's CLI through the server's consent screen
     Connect,
     /// Open the GuildBotics screens in the browser. The browser enters with a
-    /// shared single-use link that expires after 60 seconds. The session also opens Branvil
+    /// single-use link that expires after 60 seconds
     Open {
         /// Print the link instead of opening it, to paste into a browser on
         /// another machine
         #[arg(long)]
         print: bool,
-        /// Open the Branvil screens
-        #[arg(long)]
-        branvil: bool,
     },
     /// Run the CI runner, a separate process that executes jobs in microVMs
     Runner(gb_runner::RunnerArgs),
@@ -347,7 +344,7 @@ fn main() -> ExitCode {
             }))
             .map(|()| 0),
         ),
-        Command::Open { print, branvil } => open(print, branvil),
+        Command::Open { print } => open(print),
         #[cfg(feature = "hub")]
         Command::Server {
             command: ServerCommand::HubClients { checkout, sha },
@@ -491,18 +488,12 @@ fn run_command(
 
 /// Opens the screens with an entry link, or prints it when asked to or when
 /// no browser opens it.
-fn open(print: bool, branvil: bool) -> ExitCode {
+fn open(print: bool) -> ExitCode {
     let link = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| e.to_string())
-        .and_then(|runtime| {
-            runtime.block_on(gb_server::client::entry_link_for(if branvil {
-                "/workspaces"
-            } else {
-                "/"
-            }))
-        });
+        .and_then(|runtime| runtime.block_on(gb_server::client::entry_link()));
     match link {
         Ok(url) => {
             if print || !browse(&url) {

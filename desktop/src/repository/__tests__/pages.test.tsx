@@ -165,18 +165,19 @@ describe("pages", () => {
       "GET /api/v1/workspaces/beta/board/cards": page([]),
       "GET /api/v1/repos": page([]),
     });
-    const first = renderApp("/");
+    const first = renderApp("/workspaces");
     await waitFor(() => expect(window.location.pathname).toBe("/workspaces/acme/task-flow"));
     first.unmount();
-    renderApp("/workspaces/beta/task-flow");
+    const second = renderApp("/workspaces/beta/task-flow");
     expect(await screen.findByText("beta · 0 open")).toBeInTheDocument();
-    renderApp("/");
+    second.unmount();
+    renderApp("/workspaces");
     await waitFor(() => expect(window.location.pathname).toBe("/workspaces/beta/task-flow"));
   });
 
   it("offers to create a workspace when there is none", async () => {
     fakeApi({ ...SHELL, "GET /api/v1/workspaces": page([]) });
-    renderApp("/");
+    renderApp("/workspaces");
     expect(await screen.findByRole("heading", { name: "No workspace yet" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New workspace" })).toBeInTheDocument();
   });
@@ -946,33 +947,33 @@ describe("pages", () => {
         upstream: { state: "following", problems: [] },
       }),
     });
-    renderApp("/settings/repositories/members", "en", true);
+    renderApp("/settings/repositories/members");
     await screen.findByRole("list", { name: "Members" });
     const stream = FakeEventSource.last as FakeEventSource;
     stream.open();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
 
+    const offlineWarning =
+      "The connection to the server is lost, so what you see may be out of date. Reconnecting…";
     // A moment's drop, back before the warning is due, is not worth one.
     stream.drop();
     act(() => vi.advanceTimersByTime(LOST_AFTER_MS - 1));
     stream.open();
     act(() => vi.advanceTimersByTime(LOST_AFTER_MS));
-    expect(screen.queryByRole("region", { name: "Warnings" })).not.toBeInTheDocument();
+    expect(screen.queryByText(offlineWarning)).not.toBeInTheDocument();
 
     // A longer one is, counted from its own start, and cannot be dismissed.
     stream.drop();
     act(() => vi.advanceTimersByTime(LOST_AFTER_MS - 1));
-    expect(screen.queryByRole("region", { name: "Warnings" })).not.toBeInTheDocument();
+    expect(screen.queryByText(offlineWarning)).not.toBeInTheDocument();
     act(() => vi.advanceTimersByTime(1));
-    const warnings = screen.getByRole("region", { name: "Warnings" });
+    const warning = screen.getByText(offlineWarning).closest("[role=alert]")!;
+    expect(warning).toBeInTheDocument();
     expect(
-      within(warnings).getByText(
-        "The connection to the server is lost, so what you see may be out of date. Reconnecting…",
-      ),
-    ).toBeInTheDocument();
-    expect(within(warnings).queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+      within(warning as HTMLElement).queryByRole("button", { name: "Dismiss" }),
+    ).not.toBeInTheDocument();
 
     stream.open();
-    expect(screen.queryByRole("region", { name: "Warnings" })).not.toBeInTheDocument();
+    expect(screen.queryByText(offlineWarning)).not.toBeInTheDocument();
   });
 });

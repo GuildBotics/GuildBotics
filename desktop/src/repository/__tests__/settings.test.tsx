@@ -114,14 +114,13 @@ describe("settings", () => {
       });
       renderApp(path);
       const sections = await screen.findByRole("navigation", { name: "Settings sections" });
-      expect(await within(sections).findByRole("link", { name: "acme" })).toHaveAttribute(
+      expect(await within(sections).findByRole("link", { name: "Repositories" })).toHaveAttribute(
         "aria-current",
         "page",
       );
-      expect(within(sections).getByRole("link", { name: "Members" })).toHaveAttribute(
-        "href",
-        "/settings/repositories/members",
-      );
+      expect(
+        within(sections).getByRole("link", { name: "Review and authentication" }),
+      ).toHaveAttribute("href", "/workspaces/acme/settings/repositories/members");
       expect(within(sections).queryByRole("link", { name: "Display" })).not.toBeInTheDocument();
       // Only this workspace's repositories.
       const list = await screen.findByRole("list", { name: "Repositories" });

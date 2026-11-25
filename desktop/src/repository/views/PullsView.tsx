@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router";
 import { Button, Card, Group, Select, Stack, Text, TextInput } from "@mantine/core";
 import { Search } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -7,7 +8,7 @@ import { ErrorMessage, Loading, MemberAvatar, StateBadge, Time } from "../compon
 import { useT } from "../i18n";
 import { useChecks, useMemberKinds, useRepos } from "../query/hooks";
 import { usePullList } from "../query/pullList";
-import { Link, navigate } from "../router/Router";
+import { Link } from "../router/Router";
 import { href } from "../router/routes";
 import { CI_TONE, rollup } from "./board/ordering";
 import { JourneyBadge } from "./pull/LandingStatus";
@@ -36,6 +37,7 @@ function CiCell({ pull, load }: { pull: PullRequest; load: boolean }) {
  * the header.
  */
 export function PullsView({ workspace, repo }: { workspace: string; repo: string | null }) {
+  const navigate = useNavigate();
   const t = useT();
   const repos = useRepos();
   const kindOf = useMemberKinds();

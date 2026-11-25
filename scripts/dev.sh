@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the screens and the server, and open both screens.
+# Build the screens and the server, and open the application.
 set -euo pipefail
 
 usage() {
@@ -7,7 +7,7 @@ usage() {
 Usage: scripts/dev.sh [--data-dir PATH] [--no-open]
 
 Build and run the server of this checkout -- GuildBotics and its code host in
-one process -- until Ctrl-C, on data of its own, and open both screens once it
+one process -- until Ctrl-C, on data of its own, and open the application once it
 is ready.
   --data-dir PATH  Data directory (default: ~/.gbb/dev): GuildBotics' machine
                    root in its home/ (GUILDBOTICS_HOME), the code host's data
@@ -109,7 +109,6 @@ open_screens() {
   if ! "$open_browser"; then return 0; fi
   # A link that no browser takes is printed instead; the session is shared.
   "$binary" open || return 0
-  "$binary" open --branvil || return 0
 }
 server=$$
 # Not the server's child, which nothing would reap.

@@ -32,13 +32,11 @@ test("warns on a lost event stream and refreshes the screen after the server res
   await control(ctx, "stop-backend");
   const streamWarning = page.getByText(/The connection to the server is lost/);
   await expect(streamWarning).toBeVisible();
-  // The next request the screen makes finds nobody: opening another screen
-  // makes one at once.
-  await page.getByRole("link", { name: "Diagnostics", exact: true }).click();
+  // The shared Hub status poll can detect the loss before the stream warning.
   const unreachable = page.getByRole("dialog", { name: "Cannot reach GuildBotics" });
-  await expect(unreachable).toBeVisible({ timeout: 30_000 });
+  await expect(unreachable).toBeVisible({ timeout: 45_000 });
   // What was on the screen stays under the notice.
-  await expect(page.getByRole("navigation")).toBeAttached();
+  await expect(page.getByRole("navigation", { name: "Main", exact: true })).toBeAttached();
 
   // The service must also remain recoverable when selection encounters a
   // corrupt device registry; this exercises real startup and its HTTP contract.
@@ -54,9 +52,9 @@ test("warns on a lost event stream and refreshes the screen after the server res
   await stream;
   await expect(streamWarning).toBeHidden();
   await expect(unreachable).toHaveCount(0, { timeout: 60_000 });
-  await expect(page.getByRole("navigation")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main", exact: true })).toBeVisible();
   await expect(page.getByRole("alert").filter({ hasText: "workspace registry" })).toHaveCount(1);
-  await expect(page.getByRole("link", { name: "Setup" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Settings" })).toBeVisible();
 
   const preparing = await ownerApi(ctx, "/hub-status", {
     method: "POST",
@@ -99,6 +97,6 @@ test("warns on a lost event stream and refreshes the screen after the server res
   expect(recovered.ok).toBe(true);
   expect((await recovered.json()).input_store_problem).toBe("");
   await page.reload();
-  await expect(page.getByRole("navigation")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main", exact: true })).toBeVisible();
   await expect(page.getByText(/Cannot read the workspace registry/)).toHaveCount(0);
 });

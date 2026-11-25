@@ -1,146 +1,71 @@
-// The sidebar, as GuildBotics Desktop's: the connection, the workspace, the
-// pages, and the display language at the bottom.
-
-import { Select, Stack, Text } from "@mantine/core";
-import { ArrowLeftRight, GitPullRequest, Settings, Workflow } from "lucide-react";
+import { Button, Select, Stack, Text } from "@mantine/core";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { setAppLanguage } from "../../i18n";
+import { normalizeLanguage, setAppLanguage } from "../../i18n";
 import { useT } from "../i18n";
-import { Link, navigate } from "../router/Router";
-import { useSession } from "../query/hooks";
-import { href, workspacePath, type Route } from "../router/routes";
+import type { CurrentWorkspace } from "../workspace";
 import { NewWorkspaceModal } from "./NewWorkspace";
 
 const NEW_WORKSPACE = "\u0000new";
 
-type Page = "workspace" | "pulls" | "settings" | null;
-
-function pageOf(route: Route): Page {
-  switch (route.name) {
-    case "ticket":
-      return "workspace";
-    case "repo":
-    case "pull":
-    case "commit":
-    case "job":
-      return "pulls";
-    case "workspace":
-    case "pulls":
-    case "settings":
-      return route.name;
-    default:
-      return null;
-  }
-}
-
-function NavItem({
-  to,
-  active,
-  icon,
+export function WorkspaceSelect({
+  current,
+  available,
+  onWorkspaceChange,
   children,
 }: {
-  to: string;
-  active: boolean;
-  icon: ReactNode;
+  current: CurrentWorkspace;
+  available: boolean;
+  onWorkspaceChange: (name: string) => void;
   children: ReactNode;
 }) {
-  return (
-    <Link
-      to={to}
-      className={active ? "nav-item active" : "nav-item"}
-      aria-current={active ? "page" : undefined}
-    >
-      {icon}
-      <span>{children}</span>
-    </Link>
-  );
-}
-
-export function Sidebar({
-  route,
-  workspace,
-  workspaces,
-  onWorkspaceChange,
-}: {
-  route: Route;
-  workspace: string | null;
-  workspaces: string[] | null;
-  onWorkspaceChange: (name: string) => void;
-}) {
   const t = useT();
-  const { i18n } = useTranslation();
-  const navigation = useSession().data?.host_navigation;
+  const { t: appT, i18n } = useTranslation();
   const [creating, setCreating] = useState(false);
-  const page = pageOf(route);
-  const choose = (name: string | null) => {
-    if (name === NEW_WORKSPACE) {
-      setCreating(true);
-      return;
-    }
-    if (!name || name === workspace) return;
-    onWorkspaceChange(name);
-    // Preserve top-level pages; detail pages return to the task flow,
-    // independently of the sidebar's current-location highlight.
-    navigate(
-      route.name === "pulls"
-        ? href.pulls(name)
-        : route.name === "settings"
-          ? href.settings()
-          : href.workspace(name),
-    );
-  };
+  const { name, names, query } = current;
+  const options = [...(names ?? [])];
+  if (name && !options.includes(name)) options.unshift(name);
   return (
     <>
-      <Stack gap={6}>
-        <Text component="label" htmlFor="workspace-switch" className="sidebar-field-label">
-          {t("workspace.label")}
-        </Text>
-        <Select
-          id="workspace-switch"
-          classNames={{ input: "sidebar-input" }}
-          value={workspace}
-          data={[
-            ...(workspaces ?? []).map((n) => ({ value: n, label: n })),
-            { group: " ", items: [{ value: NEW_WORKSPACE, label: t("workspace.newMenu") }] },
-          ]}
-          onChange={choose}
-          allowDeselect={false}
-        />
-      </Stack>
-      <nav className="nav" aria-label={t("nav.main")}>
-        {workspace && (
-          <>
-            <NavItem
-              to={href.workspace(workspace)}
-              active={page === "workspace"}
-              icon={<Workflow size={18} />}
-            >
-              {t("nav.relations")}
-            </NavItem>
-            <NavItem
-              to={href.pulls(workspace)}
-              active={page === "pulls"}
-              icon={<GitPullRequest size={18} />}
-            >
-              {t("nav.pulls")}
-            </NavItem>
-            <div className="nav-separator" />
-          </>
-        )}
-        <NavItem to={href.settings()} active={page === "settings"} icon={<Settings size={18} />}>
-          {t("nav.settings")}
-        </NavItem>
-        {navigation && (
-          <a
-            className="nav-item"
-            href={workspace ? workspacePath(workspace) + "/activity" : navigation.url}
-          >
-            <ArrowLeftRight size={18} aria-hidden="true" />
-            <span>{navigation.label}</span>
-          </a>
-        )}
-      </nav>
+      {available && (
+        <Stack gap={6}>
+          <Text component="label" htmlFor="workspace-switch" className="sidebar-field-label">
+            {t("workspace.label")}
+          </Text>
+          <Select
+            id="workspace-switch"
+            classNames={{ input: "sidebar-input" }}
+            value={name}
+            disabled={query.isPending || query.isError}
+            placeholder={query.isPending ? t("common.loading") : undefined}
+            data={[
+              ...options,
+              { group: " ", items: [{ value: NEW_WORKSPACE, label: t("workspace.newMenu") }] },
+            ]}
+            onChange={(next) => {
+              if (next === NEW_WORKSPACE) setCreating(true);
+              else if (next && next !== name) onWorkspaceChange(next);
+            }}
+            allowDeselect={false}
+          />
+          {query.isError && (
+            <>
+              <Text size="sm" role="alert">
+                {t("workspace.listFailed")}
+              </Text>
+              <Button
+                size="compact-sm"
+                variant="subtle"
+                disabled={query.isFetching}
+                onClick={() => void query.refetch()}
+              >
+                {appT("common.retry")}
+              </Button>
+            </>
+          )}
+        </Stack>
+      )}
+      {children}
       <Stack gap={6} className="sidebar-language">
         <Text component="label" htmlFor="language-switch" className="sidebar-field-label">
           {t("app.language.label")}
@@ -148,13 +73,13 @@ export function Sidebar({
         <Select
           id="language-switch"
           classNames={{ input: "sidebar-input" }}
-          value={i18n.language}
+          value={normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en"}
           data={[
             { value: "ja", label: "日本語" },
             { value: "en", label: "English" },
           ]}
-          onChange={(v) => {
-            if (v === "en" || v === "ja") void setAppLanguage(v);
+          onChange={(value) => {
+            if (value === "en" || value === "ja") void setAppLanguage(value);
           }}
           allowDeselect={false}
         />

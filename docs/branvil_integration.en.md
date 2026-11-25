@@ -52,7 +52,7 @@ Hub machine                                 another machine
 
 The GuildBotics server calls the service directly, in its own process. While the embedded
 service is not running, for example while the server stops, every ticket and pull request
-operation fails, and **Setup → Verification** reports that the workspace cannot be read.
+operation fails, and **Settings → Verification** reports that the workspace cannot be read.
 
 Such a failure is recorded as `ServiceUnavailable`. Autonomous patrols and
 scheduled commands defer that work: they leave no failed workflow comment, record a started
@@ -172,12 +172,11 @@ Several GuildBotics workspaces can use one Branvil. The members are the same in 
 workspace, and each GuildBotics workspace chooses the code host's workspace its members work in.
 
 The server uses one browser entry and session for all of its screens.
-`guildbotics open` and `guildbotics open --branvil` issue links to
-`/enter`; only the landing screen differs.
+`guildbotics open` issues a link to `/enter`. The sidebar gives access to all screens.
 
 ## Set up the code host and the tickets
 
-On the Hub's screens, under **Setup → Integrations**:
+On the Hub's screens, under **Settings → Integrations**:
 
 1. Choose **Branvil** for the code host and for the tickets. Both use the same service on
    the Hub.
@@ -188,8 +187,7 @@ There is no connection step. The server calls the service in its own process dir
 the owner and as each AI member. It keeps no token for this and hands none to a member, a
 command, or an isolated environment.
 
-The item below **Setup** in the sidebar switches to the code host's screens in the same
-browser session. It appears while the server runs with the code host embedded.
+Choose a workspace at the top of the sidebar to open its **Task flow** or **Pull requests**.
 
 Without the GUI, the same settings are in `team/project.yml`:
 
@@ -203,7 +201,7 @@ services:
     workspace: acme
 ```
 
-Press **Validate settings** under **Setup → Verification**: it checks that the chosen
+Press **Validate settings** under **Settings → Verification**: it checks that the chosen
 workspace exists.
 
 ## Members
@@ -228,7 +226,7 @@ You, the human member, are Branvil's owner, and you can make Branvil the `origin
 checkouts on the Hub. Branvil's git asks for a member's name and
 token. GuildBotics hands git yours, so git never asks for a name or a password:
 
-1. Under **Setup → Integrations**, the code host or the tickets show **Your own git on this
+1. Under **Settings → Integrations**, the code host or the tickets show **Your own git on this
    machine** above the workspace choice, with the lines to add. Copy them.
 2. Open your global git configuration with `git config --global --edit` and paste the lines
    **at the end**:

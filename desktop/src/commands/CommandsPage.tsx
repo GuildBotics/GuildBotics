@@ -1,3 +1,4 @@
+import { WorkspaceNavLink } from "../ui/workspaceLinks";
 import {
   Alert,
   Button,
@@ -25,7 +26,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { NavLink, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
 
 import {
   ApiRequestError,
@@ -672,7 +673,7 @@ function CommandsWorkspace({ storageDir }: { storageDir: string | undefined }) {
         <Alert color="warning" title={t("overview.setupRequiredTitle")}>
           <Group justify="space-between" align="center">
             <Text size="sm">{t("overview.setupRequiredBody")}</Text>
-            <Button component={NavLink} to="/setup" variant="light">
+            <Button component={WorkspaceNavLink} to="/setup" variant="light">
               {t("overview.openSetup")}
             </Button>
           </Group>

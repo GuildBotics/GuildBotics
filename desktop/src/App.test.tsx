@@ -188,32 +188,20 @@ describe("App", () => {
     );
   });
 
-  it.each([true, false, undefined])(
-    "shows the Branvil entry only when the server embeds it (%s)",
-    async (available) => {
-      const config = await getConfigStatus();
-      vi.mocked(getConfigStatus).mockResolvedValue({
-        ...config,
-        project_file_exists: false,
-        branvil_available: available,
-      });
-      window.location.hash = "#/setup";
-      renderApp();
-      await waitFor(() =>
-        expect(screen.getByRole("link", { name: t()("app.nav.setup") })).toBeVisible(),
-      );
-      await waitFor(() => expect(getConfigStatus).toHaveBeenCalled());
-      if (available) {
-        const entry = await screen.findByRole("link", { name: "Branvil" });
-        expect(entry).toHaveAttribute("href", "/workspaces");
-        expect(screen.getByRole("link", { name: t()("app.nav.setup") }).nextElementSibling).toBe(
-          entry,
-        );
-      } else {
-        expect(screen.queryByRole("link", { name: "Branvil" })).not.toBeInTheDocument();
-      }
-    },
-  );
+  it("keeps local settings available when the code host is disabled", async () => {
+    const config = await getConfigStatus();
+    vi.mocked(getConfigStatus).mockResolvedValue({
+      ...config,
+      project_file_exists: false,
+      branvil_available: false,
+    });
+    window.location.hash = "#/setup";
+    renderApp();
+    expect(await screen.findByRole("link", { name: t()("app.nav.setup") })).toBeVisible();
+    await waitFor(() => expect(screen.queryByRole("combobox", { name: "Workspace" })).toBeNull());
+    expect(screen.queryByRole("link", { name: "Task flow" })).not.toBeInTheDocument();
+  });
+
   it("renders the shared workspace and input-store refusal once", async () => {
     const status = await getConfigStatus();
     vi.mocked(getConfigStatus).mockResolvedValue({
@@ -252,7 +240,7 @@ describe("App", () => {
     window.location.hash = "#/service";
     renderApp();
     expect(await screen.findByText("Workspace registry needs repair")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Setup/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Settings/ })).toBeInTheDocument();
   });
   it("renders the service page with runtime controls", async () => {
     window.location.hash = "#/service";

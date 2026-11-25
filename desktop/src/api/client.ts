@@ -5,7 +5,14 @@ import type { Page } from "../repository/api/types";
 // only in this module's memory (never in storage) and goes with every write.
 
 export function workspaceFromPath(path: string): string | undefined {
-  return /^\/workspaces\/([A-Za-z0-9_.-]+)(?:\/|$)/.exec(path)?.[1];
+  const [, encoded] = /^\/workspaces\/([^/]+)/.exec(path) ?? [];
+  if (!encoded) return undefined;
+  try {
+    const name = decodeURIComponent(encoded);
+    return /^[A-Za-z0-9_.-]+$/.test(name) ? name : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 const API_PREFIX = "/-/guildbotics/api";
@@ -1608,9 +1615,13 @@ export async function request<T>(
 
 type Outgoing = RequestInit & { method: string; headers?: Record<string, string> };
 
-async function attempt(prefix: string, path: string, outgoing: Outgoing): Promise<Response> {
+async function attempt(
+  prefix: string,
+  path: string,
+  outgoing: Outgoing,
+  workspace: string | undefined,
+): Promise<Response> {
   const repository = prefix === REPOSITORY_PREFIX;
-  const workspace = workspaceFromPath(window.location.pathname);
   const writing = outgoing.method !== "GET" && outgoing.method !== "HEAD";
   let response: Response;
   try {
@@ -1635,14 +1646,15 @@ async function attempt(prefix: string, path: string, outgoing: Outgoing): Promis
     throw error;
   }
   if (response.ok) return response;
-  if (repository) throw await readRepositoryError(response);
   if (response.status === 401) lossListeners.forEach((listener) => listener("signed_out"));
+  if (repository) throw await readRepositoryError(response);
   throw Object.assign(new ApiRequestError(await readError(response)), { status: response.status });
 }
 
 async function send(path: string, outgoing: Outgoing, prefix = API_PREFIX): Promise<Response> {
+  const workspace = workspaceFromPath(window.location.pathname);
   try {
-    return await attempt(prefix, path, outgoing);
+    return await attempt(prefix, path, outgoing, workspace);
   } catch (error) {
     // A CSRF refusal happens before a write runs. Retry it only once.
     if (
@@ -1657,14 +1669,24 @@ async function send(path: string, outgoing: Outgoing, prefix = API_PREFIX): Prom
     }
   }
   try {
-    const response = await attempt(prefix, "/session", { method: "GET", signal: outgoing.signal });
+    const response = await attempt(
+      API_PREFIX,
+      "/session",
+      { method: "GET", signal: outgoing.signal },
+      undefined,
+    );
     setCsrfToken(((await response.json()) as { csrf: string }).csrf);
-    return await attempt(prefix, path, outgoing);
+    return await attempt(prefix, path, outgoing, workspace);
   } catch (error) {
-    if (isApiError(error, "csrf_mismatch", 403) || isApiError(error, undefined, 401)) {
+    const sessionExpired =
+      (error instanceof ApiError ||
+        (prefix === REPOSITORY_PREFIX && error instanceof ApiRequestError)) &&
+      "status" in error &&
+      error.status === 401;
+    if (sessionExpired || isApiError(error, "csrf_mismatch", 403)) {
       setCsrfToken(null);
       throw new ApiError(
-        error.status,
+        sessionExpired ? 401 : 403,
         "session_changed",
         "The session could not be refreshed. Reload the page and try again.",
       );

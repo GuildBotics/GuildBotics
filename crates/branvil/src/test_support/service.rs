@@ -37,15 +37,6 @@ impl crate::host::Host for TestHost {
     fn owner_token(&self, token: &str) -> bool {
         token == OWNER_TOKEN
     }
-    fn entry_path(&self) -> &str {
-        "/enter?next=%2Fworkspaces"
-    }
-    fn navigation(&self) -> crate::host::Navigation {
-        crate::host::Navigation {
-            label: "GuildBotics".into(),
-            url: "/".into(),
-        }
-    }
 }
 
 /// Creates the data directory `data_dir` with `owner` as its owner, as the

@@ -208,7 +208,7 @@ describe("CI settings", () => {
     fakeApi({ ...SHELL, "GET /api/v1/admin/ci": json(200, CI) });
     renderApp("/settings/repositories/ci");
     const sections = await screen.findByRole("navigation", { name: "Settings sections" });
-    expect(within(sections).getByRole("link", { name: "CI" })).toHaveAttribute(
+    expect(await within(sections).findByRole("link", { name: "CI" })).toHaveAttribute(
       "aria-current",
       "page",
     );
@@ -687,10 +687,10 @@ describe("CI settings", () => {
     });
     renderApp("/settings/repositories/ci");
     const sections = await screen.findByRole("navigation", { name: "Settings sections" });
-    expect(within(sections).getByRole("link", { name: "Members" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    await within(sections).findByRole("link", {
+      name: "Review and authentication",
+      current: "page",
+    });
     expect(within(sections).queryByRole("link", { name: "CI" })).not.toBeInTheDocument();
     expect(fake.calls("GET", "/api/v1/admin/ci")).toHaveLength(0);
   });

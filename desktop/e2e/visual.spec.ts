@@ -18,11 +18,7 @@ test("capture the desktop presentation for review", async ({ page }) => {
   for (const scheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: scheme, reducedMotion: "reduce" });
     for (const route of ["service", "commands", "diagnostics", "setup"]) {
-      await page.goto(
-        route === "diagnostics"
-          ? "/diagnostics?tab=memory"
-          : `/${route}`,
-      );
+      await page.goto(route === "diagnostics" ? "/diagnostics?tab=memory" : `/${route}`);
       await expect(page.locator("main")).toBeVisible();
       await page.waitForLoadState("networkidle");
       await page.addStyleTag({
@@ -38,7 +34,7 @@ test("capture the desktop presentation for review", async ({ page }) => {
         animations: "disabled",
         caret: "hide",
         // The isolated backend has a fresh temporary workspace on each run.
-        mask: [page.getByLabel("Workspace", { exact: true })],
+        mask: [page.getByRole("textbox", { name: "Workspace", exact: true })],
       });
     }
   }

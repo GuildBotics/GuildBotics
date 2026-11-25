@@ -20,7 +20,7 @@ marked "(in process only)".
 GuildBotics authenticates the owner (`host::Host`, given to
 `prepare_embedded`). `GET /api/v1/session` resolves GuildBotics' live owner
 cookie (`guildbotics_session_<port>`) to the owner member and returns
-`{"me", "csrf", "host_navigation": {label, url}}` with GuildBotics' CSRF
+`{"me", "csrf"}` with GuildBotics' CSRF
 value; every non-GET request made with the cookie sends it as
 `X-GuildBotics-CSRF`. A Bearer token that is not a member's token
 (`bvt_...`) is checked as GuildBotics' owner token (the one in
@@ -1708,4 +1708,4 @@ are attached in the ticket creation transaction; closed tickets receive none.
 Undetermined and abandoned searches produce no hint.
 
 
-Embedded hosts may attach a device-local Hub status callback through `DataApi::attach_hub_status`. Diagnostics returns its result as `hub` (`null` for standalone Branvil): `current` and `target` versions (`sha`, `subject`, nullable `url`) and nullable `operation` (`kind`, `phase`, `since`, `commit`, `waiting`). Branvil supplies `operation.waiting.ci_jobs` from its own queue. `hub_status_changed` events invalidate diagnostics. This state is never persisted.
+The shared browser shell reads Hub maintenance state from `/-/guildbotics/api/hub-status` and refreshes it on `hub_status_changed` events.

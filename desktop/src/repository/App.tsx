@@ -1,78 +1,33 @@
-// Application shell: providers, the session gate, the sidebar, and route dispatch.
+// Dispatch repository routes inside the shared application shell.
 
 import { Button, Stack, Text, Title } from "@mantine/core";
-import { useContext, useEffect, useState } from "react";
-import { AlertBand } from "./components/AlertBand";
+import { useState } from "react";
+import { Navigate } from "react-router";
 import { Loading } from "./components/common";
 import { NewWorkspaceModal } from "./components/NewWorkspace";
-import { Sidebar } from "./components/Sidebar";
 import { useT } from "./i18n";
-import { ChangeStreamLost } from "./query/events";
-import { useSession } from "./query/hooks";
-import { Link, navigate, usePathname } from "./router/Router";
-import { href, parseRoute, type Route } from "./router/routes";
-import { AppShell } from "../ui/AppShell";
+import { Link } from "./router/Router";
+import { href, type Route } from "./router/routes";
 import { CommitView } from "./views/CommitView";
-import { GuidanceView } from "./views/GuidanceView";
 import { JobView } from "./views/JobView";
 import { PullsView } from "./views/PullsView";
 import { PullView } from "./views/PullView";
 import { RelationsView } from "./views/RelationsView";
-import { SettingsView } from "./views/SettingsView";
 import { TicketView } from "./views/TicketView";
 import { TicketDrawer } from "./views/ticket/TicketDrawer";
-import { useCurrentWorkspace } from "./workspace";
+import type { CurrentWorkspace } from "./workspace";
 
-export function RepositoryApp() {
-  return <Gate route={parseRoute(usePathname())} />;
-}
-
-function Gate({ route }: { route: Route }) {
-  const session = useSession();
-  if (session.isPending) return <Loading />;
-  if (session.isError)
-    return <GuidanceView error={session.error} onRetry={() => void session.refetch()} />;
-  if (!session.data) return <GuidanceView />;
-  return <SignedIn route={route} />;
-}
-
-function SignedIn({ route }: { route: Route }) {
-  const streamLost = useContext(ChangeStreamLost);
-  const current = useCurrentWorkspace(route);
-  return (
-    <AppShell
-      sidebar={
-        <Sidebar
-          route={route}
-          workspace={current.name}
-          workspaces={current.names}
-          onWorkspaceChange={current.select}
-        />
-      }
-    >
-      <AlertBand streamLost={streamLost} />
-      <RouteView route={route} workspace={current.name} workspaces={current.names} />
-    </AppShell>
-  );
-}
-
-function RouteView({
+export function RepositoryPage({
   route,
-  workspace,
-  workspaces,
+  current,
 }: {
-  route: Route;
-  workspace: string | null;
-  workspaces: string[] | null;
+  route: Exclude<Route, { name: "settings" }>;
+  current: CurrentWorkspace;
 }) {
   const t = useT();
   switch (route.name) {
     case "home":
-      return <Home workspace={workspace} workspaces={workspaces} />;
-    case "settings":
-      return (
-        <SettingsView section={route.section} workspace={workspace} repo={route.repo ?? null} />
-      );
+      return <Home current={current} />;
     case "pulls":
       return <PullsView key={route.workspace} workspace={route.workspace} repo={null} />;
     case "workspace":
@@ -121,19 +76,12 @@ function RouteView({
 }
 
 /** `/` opens the shown workspace's first page; with no workspace yet, offers to create one. */
-function Home({
-  workspace,
-  workspaces,
-}: {
-  workspace: string | null;
-  workspaces: string[] | null;
-}) {
+function Home({ current }: { current: CurrentWorkspace }) {
   const t = useT();
   const [creating, setCreating] = useState(false);
-  useEffect(() => {
-    if (workspace) navigate(href.workspace(workspace), { replace: true });
-  }, [workspace]);
-  if (workspaces === null || workspace) return <Loading />;
+  if (current.name) return <Navigate to={href.workspace(current.name)} replace />;
+  if (current.query.isError) return null;
+  if (current.query.isPending) return <Loading />;
   return (
     <Stack gap="lg" align="flex-start">
       <Title order={2}>{t("workspace.noneTitle")}</Title>

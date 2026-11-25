@@ -13,14 +13,14 @@ import * as api from "../api/endpoints";
 import { apiError, fakeApi, json } from "../test/fakeApi";
 
 describe("API client", () => {
-  it("uses the same session for Hub and repository writes after a repository refresh", async () => {
+  it("uses the same session for Hub and repository writes after a session refresh", async () => {
     const fake = fakeApi({
       "POST /-/guildbotics/api/session": json(200, { csrf: "initial" }),
       "PATCH /api/v1/x": [
         apiError(403, "csrf_mismatch", "Old session."),
         json(200, { saved: true }),
       ],
-      "GET /api/v1/session": json(200, { csrf: "fresh" }),
+      "GET /-/guildbotics/api/session": json(200, { csrf: "fresh" }),
       "POST /-/guildbotics/api/x": json(200, { saved: true }),
     });
 
@@ -105,7 +105,7 @@ describe("API client", () => {
           apiError(403, "csrf_mismatch", "Old session."),
           json(200, { saved: true }),
         ],
-        "GET /api/v1/session": json(200, { csrf: "fresh" }),
+        "GET /-/guildbotics/api/session": json(200, { csrf: "fresh" }),
       });
       setCsrfToken("old");
       await expect(
@@ -117,7 +117,7 @@ describe("API client", () => {
       ).resolves.toEqual({ saved: true });
       expect(fake.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
         `${method} /api/v1/x`,
-        "GET /api/v1/session",
+        "GET /-/guildbotics/api/session",
         `${method} /api/v1/x`,
       ]);
       const [first, refresh, retry] = fake.requests;
@@ -134,7 +134,7 @@ describe("API client", () => {
   it("replays an uploaded Blob without changing its content type", async () => {
     const fake = fakeApi({
       "PUT /api/v1/picture": [apiError(403, "csrf_mismatch", "Old session."), { status: 204 }],
-      "GET /api/v1/session": json(200, { csrf: "fresh" }),
+      "GET /-/guildbotics/api/session": json(200, { csrf: "fresh" }),
     });
     const file = new Blob(["image"], { type: "image/png" });
     await expect(request("PUT", "/picture", { body: file })).resolves.toBeUndefined();
@@ -150,11 +150,11 @@ describe("API client", () => {
           apiError(403, "csrf_mismatch", "Old session."),
           apiError(code === "unauthorized" ? 401 : 403, code, "Refused again."),
         ],
-        "GET /api/v1/session": json(200, { csrf: "fresh" }),
+        "GET /-/guildbotics/api/session": json(200, { csrf: "fresh" }),
       });
       await expect(request("POST", "/x")).rejects.toMatchObject({ code: "session_changed" });
       expect(fake.calls("POST", "/api/v1/x")).toHaveLength(2);
-      expect(fake.calls("GET", "/api/v1/session")).toHaveLength(1);
+      expect(fake.calls("GET", "/-/guildbotics/api/session")).toHaveLength(1);
       expect(getCsrfToken()).toBeNull();
     },
   );
@@ -162,7 +162,7 @@ describe("API client", () => {
   it("does not replay the write if refreshing the session is refused", async () => {
     const fake = fakeApi({
       "POST /api/v1/x": apiError(403, "csrf_mismatch", "Old session."),
-      "GET /api/v1/session": apiError(401, "unauthorized", "Expired."),
+      "GET /-/guildbotics/api/session": json(401, { code: "unauthorized", message: "Expired." }),
     });
     await expect(request("POST", "/x")).rejects.toMatchObject({ code: "session_changed" });
     expect(fake.requests).toHaveLength(2);
@@ -182,7 +182,7 @@ describe("API client", () => {
     const controller = new AbortController();
     const fake = fakeApi({
       "POST /api/v1/x": apiError(403, "csrf_mismatch", "Old session."),
-      "GET /api/v1/session": () => {
+      "GET /-/guildbotics/api/session": () => {
         controller.abort();
         throw new DOMException("Aborted", "AbortError");
       },
@@ -192,7 +192,7 @@ describe("API client", () => {
     });
     expect(fake.requests).toHaveLength(2);
     expect(globalThis.fetch).toHaveBeenLastCalledWith(
-      "/api/v1/session",
+      "/-/guildbotics/api/session",
       expect.objectContaining({ signal: controller.signal }),
     );
   });

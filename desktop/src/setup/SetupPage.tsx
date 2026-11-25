@@ -1,3 +1,11 @@
+import { href as repositoryHref, workspacePath, type Route } from "../repository/router/routes";
+import { useT } from "../repository/i18n";
+import {
+  RepositorySettingsPanel,
+  useRepositorySettings,
+  type RepositorySection,
+} from "../repository/views/SettingsView";
+import { WorkspaceLink } from "../ui/workspaceLinks";
 import { Header } from "../ui/Header";
 import { cliToolStatusColor, cliToolStatusKey } from "../cliAgent";
 import { DecisionSettings } from "./DecisionSettings";
@@ -42,17 +50,21 @@ import { useForm, type UseFormReturnType } from "@mantine/form";
 import { notifications } from "@mantine/notifications";
 import { schemaResolver } from "@mantine/form";
 import {
+  Bell,
   Check,
   CheckCircle2,
   CircleAlert,
   Copy,
+  Cpu,
   Eraser,
   Folder,
+  FolderGit2,
   History,
   Plus,
   Save,
   Trash2,
   TriangleAlert,
+  Users,
   WandSparkles,
   XCircle,
 } from "lucide-react";
@@ -62,7 +74,7 @@ import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } fr
 import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Link, useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 
 import {
   type CommandOption,
@@ -341,8 +353,17 @@ function SlotNameInput({ label, value, readOnly, onRename, flex, size, fw }: Slo
   );
 }
 
-export function SetupPage() {
+export function SetupPage({
+  workspace = null,
+  repositoriesAvailable = false,
+  repositorySettings,
+}: {
+  workspace?: string | null;
+  repositoriesAvailable?: boolean;
+  repositorySettings?: Extract<Route, { name: "settings" }>;
+} = {}) {
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
@@ -377,6 +398,13 @@ export function SetupPage() {
     retry: false,
   });
   const hasExistingProject = Boolean(config.data?.project_file_exists);
+  const showCodeHostSettings =
+    Boolean(repositorySettings) || (repositoriesAvailable && hasExistingProject);
+  const repository = useRepositorySettings(
+    repositorySettings?.section ?? null,
+    workspace,
+    showCodeHostSettings,
+  );
   const projectConfig = useQuery({
     queryKey: ["project-config"],
     queryFn: getProjectConfig,
@@ -458,7 +486,14 @@ export function SetupPage() {
     sectionParam && (CORE_SETUP_SECTIONS_CONFIGURED as readonly string[]).includes(sectionParam)
       ? (sectionParam as CoreSection)
       : "project";
-  const setSection = (value: CoreSection) => setSearchParams({ section: value }, { replace: true });
+  const setSection = (value: CoreSection) => {
+    if (!repositorySettings) {
+      setSearchParams({ section: value }, { replace: true });
+      return;
+    }
+    const scope = workspace ? workspacePath(workspace) : "";
+    void navigate(scope + "/setup?" + new URLSearchParams({ section: value }));
+  };
   const requestedMemberTab = searchParams.get("tab");
   const [focusMemberTab] = useState<MemberEditorTab | undefined>(
     requestedMemberTab &&
@@ -715,9 +750,11 @@ export function SetupPage() {
       <Group justify="space-between" align="flex-start">
         <Box>
           <Title order={2}>
-            {hasExistingProject ? t("setup.configuredTitle") : t("setup.title")}
+            {hasExistingProject || repositorySettings
+              ? t("setup.configuredTitle")
+              : t("setup.title")}
           </Title>
-          {!hasExistingProject && (
+          {!hasExistingProject && !repositorySettings && (
             <Text size="sm" c="dimmed" mt={4}>
               {t("setup.saveMode.manual")}
             </Text>
@@ -725,95 +762,108 @@ export function SetupPage() {
         </Box>
       </Group>
 
-      <SetupStatusBanner
-        status={visibleStatus}
-        hasExistingProject={hasExistingProject}
-        initialProgress={initialProgress}
-        onCreateInitial={async () => {
-          await saveNow();
-        }}
-        creating={saveMutation.isPending}
-        canGoBack={canGoBack}
-        canGoNext={canGoNext}
-        currentSectionReady={currentSectionReady}
-        onGoBack={goBackSection}
-        onGoNext={goNextSection}
-      />
+      {(hasExistingProject || !repositorySettings) && (
+        <SetupStatusBanner
+          status={visibleStatus}
+          hasExistingProject={hasExistingProject}
+          initialProgress={initialProgress}
+          onCreateInitial={async () => {
+            await saveNow();
+          }}
+          creating={saveMutation.isPending}
+          canGoBack={canGoBack}
+          canGoNext={canGoNext}
+          currentSectionReady={currentSectionReady}
+          onGoBack={goBackSection}
+          onGoNext={goNextSection}
+        />
+      )}
 
       <div className="setup-layout">
         <SetupSectionNav
-          active={activeSection}
+          active={repositorySettings ? null : activeSection}
           onChange={setSection}
           sections={coreSections}
           status={visibleStatus}
+          repositoriesAvailable={repositoriesAvailable || Boolean(repositorySettings)}
+          repositorySection={
+            repositorySettings && !repository.pending ? repository.current : undefined
+          }
+          showCodeHostSettings={showCodeHostSettings}
+          owner={repository.owner}
+          workspace={workspace}
         />
-        <Stack gap="md">
-          {activeSection === "project" ? (
-            <ProjectSection
-              form={form}
-              saveState={saveState}
-              persisted={canSaveProject && !workspaceSwitching}
-              saving={saveMutation.isPending}
-              onSave={saveNow}
-              onWorkspaceChange={changeWorkspace}
-            />
-          ) : null}
-          {activeSection === "intelligence" ? (
-            <IntelligenceSection
-              form={form}
-              openAdvanced={openAdvanced}
-              saveState={saveState}
-              persisted={canSaveProject && !workspaceSwitching}
-              saving={saveMutation.isPending}
-              onSave={saveNow}
-              tools={cliTools}
-              storedProviderKeys={storedProviderKeys}
-              providers={llmProviders.data ?? []}
-            />
-          ) : null}
-          {activeSection === "environment" ? (
-            <AgentEnvironmentSection
-              focusElement={focusElement}
-              focusGrant={focusGrant}
-              status={environmentStatus.data}
-            />
-          ) : null}
-          {activeSection === "integrations" ? (
-            <IntegrationsSection
-              form={form}
-              saveState={saveState}
-              persisted={canSaveProject && !workspaceSwitching}
-              saving={saveMutation.isPending}
-              onSave={saveNow}
-            />
-          ) : null}
-          {activeSection === "device" ? <DeviceSettings /> : null}
-          {activeSection === "verification" ? (
-            <VerificationSection
-              config={config.data}
-              projectConfig={projectConfig.data}
-              activeMemberCount={activeMemberCount}
-            />
-          ) : null}
-          {activeSection === "members" ? (
-            <MembersSection
-              key={membersGeneration}
-              activeMemberCount={activeMemberCount}
-              members={teamSummary?.members ?? []}
-              defaultPersonId={teamSummary?.default_person_id ?? ""}
-              config={config.data}
-              // What a member's save works with is the saved project, not
-              // integrations still being edited.
-              services={projectConfig.data?.services ?? {}}
-              cliTools={cliTools}
-              llmProviderAvailability={llmProviderAvailability}
-              providers={llmProviders.data ?? []}
-              initialTab={focusMemberTab}
-              initialMemberId={focusMemberId}
-              initialSlot={focusSlot}
-            />
-          ) : null}
-        </Stack>
+        {repositorySettings ? (
+          <RepositorySettingsPanel settings={repository} repo={repositorySettings.repo} />
+        ) : (
+          <Stack gap="md">
+            {activeSection === "project" ? (
+              <ProjectSection
+                form={form}
+                saveState={saveState}
+                persisted={canSaveProject && !workspaceSwitching}
+                saving={saveMutation.isPending}
+                onSave={saveNow}
+                onWorkspaceChange={changeWorkspace}
+              />
+            ) : null}
+            {activeSection === "intelligence" ? (
+              <IntelligenceSection
+                form={form}
+                openAdvanced={openAdvanced}
+                saveState={saveState}
+                persisted={canSaveProject && !workspaceSwitching}
+                saving={saveMutation.isPending}
+                onSave={saveNow}
+                tools={cliTools}
+                storedProviderKeys={storedProviderKeys}
+                providers={llmProviders.data ?? []}
+              />
+            ) : null}
+            {activeSection === "environment" ? (
+              <AgentEnvironmentSection
+                focusElement={focusElement}
+                focusGrant={focusGrant}
+                status={environmentStatus.data}
+              />
+            ) : null}
+            {activeSection === "integrations" ? (
+              <IntegrationsSection
+                form={form}
+                saveState={saveState}
+                persisted={canSaveProject && !workspaceSwitching}
+                saving={saveMutation.isPending}
+                onSave={saveNow}
+              />
+            ) : null}
+            {activeSection === "device" ? <DeviceSettings /> : null}
+            {activeSection === "verification" ? (
+              <VerificationSection
+                config={config.data}
+                projectConfig={projectConfig.data}
+                activeMemberCount={activeMemberCount}
+              />
+            ) : null}
+            {activeSection === "members" ? (
+              <MembersSection
+                key={membersGeneration}
+                activeMemberCount={activeMemberCount}
+                members={teamSummary?.members ?? []}
+                defaultPersonId={teamSummary?.default_person_id ?? ""}
+                config={config.data}
+                // What a member's save works with is the saved project, not
+                // integrations still being edited.
+                services={projectConfig.data?.services ?? {}}
+                cliTools={cliTools}
+                llmProviderAvailability={llmProviderAvailability}
+                providers={llmProviders.data ?? []}
+                initialTab={focusMemberTab}
+                initialMemberId={focusMemberId}
+                initialSlot={focusSlot}
+              />
+            ) : null}
+          </Stack>
+        )}
       </div>
 
       {saveMutation.error ? (
@@ -952,13 +1002,33 @@ function SetupSectionNav({
   onChange,
   sections,
   status,
+  repositoriesAvailable,
+  repositorySection,
+  showCodeHostSettings,
+  owner,
+  workspace,
 }: {
-  active: string;
+  active: CoreSection | null;
   onChange: (value: CoreSection) => void;
   sections: readonly CoreSection[];
   status: SetupStatus;
+  repositoriesAvailable: boolean;
+  repositorySection?: RepositorySection;
+  showCodeHostSettings: boolean;
+  owner: boolean;
+  workspace: string | null;
 }) {
   const { t } = useTranslation();
+  const repoT = useT();
+  const repositorySections = [
+    { section: "members", label: repoT("settings.reviewSettings"), icon: Users },
+    ...(owner
+      ? [
+          { section: "ci", label: repoT("ci.settings.title"), icon: Cpu },
+          { section: "notifications", label: repoT("settings.notifications"), icon: Bell },
+        ]
+      : []),
+  ];
   const groups = [
     { labelKey: "setup.nav.groupWorkspace", machine: false },
     { labelKey: "setup.nav.groupMachine", machine: true },
@@ -967,28 +1037,65 @@ function SetupSectionNav({
     sections: sections.filter((value) => MACHINE_SECTIONS.has(value) === group.machine),
   }));
   return (
-    <Card withBorder radius="md" p="xs" className="setup-nav">
-      {groups.map((group) =>
-        group.sections.length === 0 ? null : (
-          <div className="setup-nav-group" key={group.labelKey}>
-            <Group className="nav-label" gap={6}>
-              {t(group.labelKey)}
-              {group.machine ? <ServerMachineBadge /> : null}
-            </Group>
-            {group.sections.map((value) => (
-              <button
-                className={`setup-nav-item ${active === value ? "active" : ""}`}
-                key={value}
-                type="button"
-                onClick={() => onChange(value)}
-              >
-                <StatusIcon ok={isCoreSectionReady(value, status)} />
-                <span>{t(CORE_SECTION_LABEL_KEYS[value])}</span>
-              </button>
-            ))}
-          </div>
-        ),
-      )}
+    <Card
+      component="nav"
+      aria-label={repoT("settings.sections")}
+      withBorder
+      radius="md"
+      p="xs"
+      className="setup-nav"
+    >
+      {groups.map((group) => (
+        <Fragment key={group.labelKey}>
+          {group.machine && showCodeHostSettings && (
+            <div className="setup-nav-group">
+              <div className="nav-label">{t("setup.nav.groupCodeHost")}</div>
+              {repositorySections.map(({ section, label, icon: Icon }) => (
+                <Link
+                  key={section}
+                  className={`setup-nav-item ${repositorySection === section ? "active" : ""}`}
+                  aria-current={repositorySection === section ? "page" : undefined}
+                  to={repositoryHref.settings(section, workspace ?? undefined)}
+                >
+                  <Icon size={18} aria-hidden="true" />
+                  <span>{label}</span>
+                </Link>
+              ))}
+            </div>
+          )}
+          {group.sections.length > 0 && (
+            <div className="setup-nav-group">
+              <Group className="nav-label" gap={6}>
+                {t(group.labelKey)}
+                {group.machine ? <ServerMachineBadge /> : null}
+              </Group>
+              {group.sections.map((value) => (
+                <Fragment key={value}>
+                  <button
+                    className={`setup-nav-item ${active === value ? "active" : ""}`}
+                    type="button"
+                    aria-current={active === value ? "page" : undefined}
+                    onClick={() => onChange(value)}
+                  >
+                    <StatusIcon ok={isCoreSectionReady(value, status)} />
+                    <span>{t(CORE_SECTION_LABEL_KEYS[value])}</span>
+                  </button>
+                  {value === "project" && repositoriesAvailable && (
+                    <Link
+                      className={`setup-nav-item ${repositorySection === "repositories" ? "active" : ""}`}
+                      aria-current={repositorySection === "repositories" ? "page" : undefined}
+                      to={repositoryHref.settings(undefined, workspace ?? undefined)}
+                    >
+                      <FolderGit2 size={18} aria-hidden="true" />
+                      <span>{repoT("settings.repositories")}</span>
+                    </Link>
+                  )}
+                </Fragment>
+              ))}
+            </div>
+          )}
+        </Fragment>
+      ))}
     </Card>
   );
 }
@@ -1294,7 +1401,7 @@ function IntelligenceSection({
                     machine,
                   })}
                 </Badge>
-                <Anchor component={Link} to="/setup?section=environment" size="sm">
+                <Anchor component={WorkspaceLink} to="/setup?section=environment" size="sm">
                   {t("setup.intelligence.openEnvironment")}
                 </Anchor>
               </Group>
@@ -4952,7 +5059,7 @@ function CommandOptionSummary({ option }: { option: CommandOption }) {
         {/* The commands screen opens the workspace's own commands only. */}
         {option.source === "workspace" ? (
           <Anchor
-            component={Link}
+            component={WorkspaceLink}
             to={`/commands?${new URLSearchParams({ command: option.command })}`}
             size="sm"
             title={option.path}

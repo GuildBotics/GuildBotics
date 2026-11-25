@@ -153,12 +153,10 @@ async fn me(c: Caller) -> R {
 }
 
 async fn session_get(State(app): State<Shared>, headers: HeaderMap) -> R {
-    let host = app.host.get().ok_or_else(AppError::unauthorized)?;
     let (member, csrf) = auth::host_session(&app, &Method::GET, &headers).await?;
     Ok(ok(members::SessionView {
         me: members::member_view(&member),
         csrf,
-        host_navigation: host.navigation(),
     }))
 }
 
@@ -790,7 +788,6 @@ async fn diagnostics(State(app): State<Shared>, c: Caller) -> R {
             "queues": app.store.stats().snapshot(),
         },
         "git": {"version": git_version, "repositories": repos},
-        "hub": crate::api::DataApi::new(app.clone()).hub_status().await,
         "runner": app.ci.diagnostics().await,
         "upstream": app.upstream.diagnostics(&app).await,
     })))

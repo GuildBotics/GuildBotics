@@ -2,7 +2,6 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { dictionaries } from "../test/words";
-import { navigate } from "../router/Router";
 import { apiError, fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 import { choose, pickFromMenu } from "../test/mantine";
 import { ticketNamed } from "../views/ticket/Relations";
@@ -98,7 +97,11 @@ describe("ticket view", () => {
       scroll.mockClear();
       await user.click(link);
       expect(scroll.mock.contexts).toContain(target);
-      act(() => navigate(`${page}#cmt_1`));
+      await user.click(
+        within(screen.getByText("cmt_1").closest("article")!).getByTitle(
+          dictionaries[language]["comment.link"],
+        ),
+      );
       const first = screen.getByText("cmt_1").closest("article")!;
       expect(scroll.mock.contexts).toContain(first);
       expect(first).toHaveAttribute("data-target", "true");

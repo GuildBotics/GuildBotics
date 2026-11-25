@@ -4,9 +4,6 @@ export const branvil = {
   en: {
     setup: {
       branvil: {
-        nav: {
-          label: "Branvil",
-        },
         workspace: "Workspace",
         workspaceHint:
           "The Branvil workspace members work in: they write only to its repositories and take tickets from its board.",
@@ -40,9 +37,6 @@ export const branvil = {
   ja: {
     setup: {
       branvil: {
-        nav: {
-          label: "Branvil",
-        },
         workspace: "ワークスペース",
         workspaceHint:
           "メンバーが作業する Branvil のワークスペースです。そのリポジトリにだけ書き込み、そのボードからチケットを取ります。",

@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { onConnectionLost, type ConnectionLoss } from "../api/client";
@@ -12,7 +12,9 @@ import { Connecting, NoSessionGuide, UnreachableNotice } from "./Guidance";
  * A page the server serves: the entry and consent pages by their path, and
  * otherwise `children` (the App) once this browser's session is taken up.
  */
-export function EntryPage({ children }: { children: ReactNode }) {
+type Props = { children: ReactNode; contentClient?: QueryClient };
+
+export function EntryPage({ children, contentClient }: Props) {
   const [page] = useState(() => window.location.pathname);
   if (page === ENTER_PATH) {
     return <EnterView />;
@@ -20,7 +22,7 @@ export function EntryPage({ children }: { children: ReactNode }) {
   if (page === AUTHORIZE_PATH) {
     return <AuthorizeView />;
   }
-  return <AppSession>{children}</AppSession>;
+  return <AppSession contentClient={contentClient}>{children}</AppSession>;
 }
 
 /**
@@ -29,7 +31,7 @@ export function EntryPage({ children }: { children: ReactNode }) {
  * screen under a notice until a retry reaches it, and then reloads what it
  * shows.
  */
-function AppSession({ children }: { children: ReactNode }) {
+function AppSession({ children, contentClient }: Props) {
   const queryClient = useQueryClient();
   const session = useQuery(SESSION_QUERY);
   const [lost, setLost] = useState<ConnectionLoss | null>(null);
@@ -37,7 +39,7 @@ function AppSession({ children }: { children: ReactNode }) {
     setLost((previous) => (previous === "unreachable" ? null : previous));
   }, []);
   const streamLost = useChangeStream(
-    queryClient,
+    contentClient ?? queryClient,
     session.data === true && lost !== "signed_out",
     clearUnreachable,
   );
@@ -57,7 +59,7 @@ function AppSession({ children }: { children: ReactNode }) {
   const retry = async () => {
     if ((await session.refetch()).data) {
       setLost(null);
-      void queryClient.invalidateQueries();
+      void (contentClient ?? queryClient).invalidateQueries();
     }
   };
   const notice =
