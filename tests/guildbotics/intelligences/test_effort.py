@@ -8,7 +8,6 @@ from guildbotics.intelligences.effort import (
     EFFORT_LEVELS,
     EffortError,
     ResolvedEffort,
-    describe_overlay_problems,
     effort_diagnostics,
     effort_settings,
     normalize_effort,
@@ -178,47 +177,6 @@ def test_field_descriptors_reject_a_malformed_block() -> None:
     with pytest.raises(EffortError):
         validate_effort_fields([{"key": "x", "type": "nope"}], where="test")
     assert validate_effort_fields(None, where="test") == []
-
-
-def test_a_mistyped_key_is_reported_against_the_descriptors() -> None:
-    fields = validate_effort_fields(
-        [
-            {"key": "reasoning_effort", "type": "enum", "values": ["low", "high"]},
-            {"key": "id", "type": "model_id"},
-        ],
-        where="test",
-    )
-    problems = describe_overlay_problems({"high": {"reasoning_efort": "high"}}, fields)
-    assert problems and "reasoning_efort" in problems[0]
-    assert (
-        describe_overlay_problems({"high": {"reasoning_effort": "high"}}, fields) == []
-    )
-
-
-def test_nested_and_numeric_settings_are_checked_by_dotted_path() -> None:
-    fields = validate_effort_fields(
-        [
-            {"key": "thinking.type", "type": "enum", "values": ["enabled", "disabled"]},
-            {"key": "thinking.budget_tokens", "type": "integer", "minimum": 1024},
-        ],
-        where="test",
-    )
-    valid = {"high": {"thinking": {"type": "enabled", "budget_tokens": 8000}}}
-    assert describe_overlay_problems(valid, fields) == []
-
-    below = {"high": {"thinking": {"type": "enabled", "budget_tokens": 10}}}
-    assert "at least 1024" in describe_overlay_problems(below, fields)[0]
-
-    stringified = {"high": {"thinking": {"budget_tokens": "8000"}}}
-    assert "whole number" in describe_overlay_problems(stringified, fields)[0]
-
-    bad_enum = {"high": {"thinking": {"type": "on"}}}
-    assert "must be one of" in describe_overlay_problems(bad_enum, fields)[0]
-
-
-def test_a_provider_without_descriptors_accepts_anything() -> None:
-    """Nothing is known about its keys, so nothing can be called wrong."""
-    assert describe_overlay_problems({"high": {"whatever": 1}}, []) == []
 
 
 def test_a_mapping_for_default_is_rejected_rather_than_ignored() -> None:

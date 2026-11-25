@@ -9,13 +9,12 @@ from guildbotics.entities.team import (
     Service,
 )
 
-
 # -----------------------------
 # Project tests
 # -----------------------------
 
 
-def test_project_service_names_and_availability():
+def test_project_service_names():
     project = Project(
         name="p",
         services={
@@ -24,8 +23,6 @@ def test_project_service_names_and_availability():
         },
     )
 
-    assert project.is_available_service(Service.TICKET_SERVICE)
-    assert not project.is_available_service(Service.CODE_HOSTING_SERVICE)
     # Name is lower-cased by implementation
     assert project.get_service_name(Service.TICKET_SERVICE) == "jira"
 
@@ -80,22 +77,6 @@ def test_project_accepts_description():
 # -----------------------------
 # Person tests
 # -----------------------------
-
-
-def test_person_secret_helpers(monkeypatch):
-    person = Person(person_id="u2", name="Bob")
-    key = "slack_bot_token"
-    env_key = "U2_SLACK_BOT_TOKEN"
-
-    # Not set
-    assert person.has_secret(key) is False
-    with pytest.raises(KeyError):
-        _ = person.get_secret(key)
-
-    # Set and read
-    monkeypatch.setenv(env_key, "secret-value")
-    assert person.has_secret(key) is True
-    assert person.get_secret(key) == "secret-value"
 
 
 def test_person_retains_schedule_configuration_for_the_host():

@@ -13,7 +13,6 @@ from typing import Any, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from guildbotics.runtime.member_invocation import Work
-from guildbotics.runtime.person_lease import PersonExecutionLease
 
 TURN_TIMEOUT_SECONDS = 3 * 60 * 60
 
@@ -104,7 +103,6 @@ class AgentExecutionContext:
     event_id: str = ""
     #: The execution lease the turn holds, which the member commands it asks for
     #: act under; a read-only turn holds none and so cannot ask for a write.
-    lease: PersonExecutionLease | None = None
     model: str = ""
     #: Resolved provider-neutral effort level (``low`` / ``high``), or ``""``
     #: when the turn requests no effort override.
@@ -131,11 +129,6 @@ class AgentExecutionContext:
             raise ValueError("Execution and conversation person_id must match.")
         if not self.run_id.strip():
             raise ValueError("run_id must not be empty.")
-
-    @property
-    def lease_id(self) -> str:
-        """The held lease's id for diagnostics, or an empty string without one."""
-        return self.lease.metadata.lease_id if self.lease is not None else ""
 
 
 @dataclass(slots=True)

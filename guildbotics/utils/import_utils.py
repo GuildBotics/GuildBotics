@@ -30,43 +30,6 @@ def load_class(module_and_cls: str) -> type[Any]:
     return cast(type[Any], getattr(module_obj, cls_name))
 
 
-def instantiate_class(
-    module_and_cls: str, expected_type: type[Any] | None = None, **kwargs
-) -> Any:
-    """
-    Instantiate a class from a module given its full path and parameters,
-    and optionally verify its type.
-
-    Args:
-        module_and_cls (str): The full path to the class,
-            e.g., "module.submodule.ClassName".
-        expected_type (Optional[Type[Any]]): If provided, the created instance
-            must be an instance of this type.
-        **kwargs: Keyword arguments to pass to the class constructor.
-
-    Returns:
-        Any: An instance of the class.
-
-    Raises:
-        ImportError: If the module or class cannot be found.
-        TypeError: If instantiation fails due to incorrect arguments or if the
-            resulting instance is not of expected_type.
-    """
-    cls_obj = load_class(module_and_cls)
-    try:
-        instance = cls_obj(**kwargs)
-    except TypeError as e:
-        raise TypeError(
-            f"Failed to instantiate class '{module_and_cls}' with arguments {kwargs}"
-        ) from e
-
-    if expected_type is not None and not isinstance(instance, expected_type):
-        raise TypeError(
-            f"Expected instance of type {expected_type.__name__}, got {type(instance).__name__}"
-        )
-    return instance
-
-
 class ClassResolver:
     def __init__(self, schema: str | None, parent: ClassResolver | None = None) -> None:
         self.schema = schema

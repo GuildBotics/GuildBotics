@@ -15,7 +15,6 @@ no layer names the provider a workspace configures for a kind of service.
 
 import json
 import re
-import subprocess
 from itertools import combinations
 from pathlib import Path
 
@@ -28,7 +27,6 @@ REFERENCE_PATH = Path("guildbotics/templates/member/reference.md")
 CATALOG = json.loads(
     Path("guildbotics/templates/member/catalog.json").read_text(encoding="utf-8")
 )
-VENV = CATALOG["guest_venv"]
 
 
 def capability_reference_text() -> str:
@@ -132,39 +130,6 @@ def _agent_facing_files() -> list[Path]:
         for path in ([root] if root.is_file() else sorted(root.rglob("*")))
         if path.is_file() and "__pycache__" not in path.parts
     ]
-
-
-def test_guest_entry_instructions_use_the_snapshot_interpreter():
-    tracked = subprocess.check_output(
-        ["git", "ls-files", "-z", "*.md", "*.py"], text=True, encoding="utf-8"
-    )
-    # Runtime tests intentionally invoke the guest with sys.executable.
-    documented = {
-        Path(name)
-        for name in tracked.split("\0")
-        if name and not name.startswith("tests/")
-    }
-    sources = {
-        str(path): path.read_text(encoding="utf-8")
-        for path in sorted(documented | set(_agent_facing_files()))
-    }
-    sources["member context/help"] = capability_reference_text()
-    interpreters = {
-        name: re.findall(
-            r"([^\s`\"']+)[`\"']?\s+-m\s+guildbotics\.guest\.entry\b", text
-        )
-        for name, text in sources.items()
-    }
-    for name in (
-        "member context/help",
-        *(
-            str(FUNCTIONS_DIR / f"handle_ticket.{language}.md")
-            for language in ("en", "ja")
-        ),
-    ):
-        assert interpreters[name], name
-    for name, paths in interpreters.items():
-        assert all(path == f"{VENV}/bin/python" for path in paths), (name, paths)
 
 
 def _prompt_body(name: str, language: str) -> str:

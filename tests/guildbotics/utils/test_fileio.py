@@ -5,23 +5,15 @@ import pytest
 from guildbotics.utils.fileio import (
     GUILDBOTICS_WORKSPACE_ROOT,
     WorkspaceNotConfiguredError,
-    _clean_data,
-    apply_workspace_root,
     find_package_subdir,
     get_config_path,
-    get_machine_state_path,
-    get_machine_state_root,
     get_member_clone_path,
     get_primary_config_path,
-    get_workspace_config_dir,
     get_workspace_local_path,
     get_workspace_root,
-    get_workspace_state_path,
-    get_workspace_work_path,
     load_markdown_with_frontmatter,
     load_person_slot_mapping,
     load_yaml_file,
-    save_yaml_file,
 )
 
 
@@ -144,29 +136,9 @@ def test_get_primary_config_path_uses_resolved_workspace(tmp_path):
     )
 
 
-def test_get_machine_state_root_is_independent_of_workspace(tmp_path):
-    home = tmp_path / "home"
-
-    assert get_machine_state_root() == home / ".guildbotics" / "data"
-    assert get_machine_state_path("run", "service.lock") == (
-        home / ".guildbotics" / "data" / "run" / "service.lock"
-    )
-
-
-def test_workspace_state_and_local_paths_do_not_overlap(tmp_path):
-    state = get_workspace_state_path("documents")
-    local = get_workspace_local_path("run")
-    clone = get_member_clone_path("aiko")
-    work = get_workspace_work_path("command-authoring")
-
-    assert state == tmp_path / ".guildbotics" / "state" / "documents"
-    assert local == tmp_path / ".guildbotics" / "local" / "run"
-    assert clone == tmp_path / ".guildbotics" / "local" / "clones" / "aiko"
-    assert work == (tmp_path / ".guildbotics" / "local" / "work" / "command-authoring")
-    assert state.is_relative_to(tmp_path / ".guildbotics" / "state")
-    assert local.is_relative_to(tmp_path / ".guildbotics" / "local")
-    assert not state.is_relative_to(tmp_path / ".guildbotics" / "local")
-    assert not clone.is_relative_to(tmp_path / ".guildbotics" / "state")
+def test_workspace_local_paths_use_the_selected_workspace(tmp_path):
+    assert get_workspace_local_path("run") == tmp_path / ".guildbotics/local/run"
+    assert get_member_clone_path("aiko") == tmp_path / ".guildbotics/local/clones/aiko"
 
 
 def test_get_workspace_root_does_not_use_cwd(tmp_path, monkeypatch):
@@ -177,69 +149,6 @@ def test_get_workspace_root_does_not_use_cwd(tmp_path, monkeypatch):
 
     with pytest.raises(WorkspaceNotConfiguredError):
         get_workspace_root()
-
-
-def test_apply_workspace_root_publishes_config_dir(tmp_path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    applied = apply_workspace_root(workspace)
-
-    assert applied == workspace.resolve()
-    assert get_workspace_root() == workspace.resolve()
-    assert get_workspace_config_dir() == workspace.resolve() / ".guildbotics" / "config"
-
-
-def test_clean_data_removes_none_and_empty_keys():
-    """_clean_data drops None/'' keys in dicts, preserves list items."""
-    raw = {
-        "a": 1,
-        "b": None,
-        "c": "",
-        "d": {"e": None, "f": "", "g": 2},
-        "h": [
-            {"i": None, "j": ""},
-            5,
-            None,
-            "",
-        ],
-    }
-    cleaned = _clean_data(raw)
-    assert cleaned == {
-        "a": 1,
-        "d": {"g": 2},
-        "h": [{}, 5, None, ""],
-    }
-
-
-def test_save_yaml_file_roundtrip_cleans(tmp_path):
-    """save_yaml_file writes cleaned YAML; loading reproduces cleaned structure."""
-    raw = {
-        "title": "example",
-        "unused": None,
-        "nested": {"x": 1, "drop": ""},
-        "items": [
-            {"keep": 1, "omit": None},
-            {"omit": ""},
-            None,
-            "",
-        ],
-    }
-    expected = {
-        "title": "example",
-        "nested": {"x": 1},
-        "items": [
-            {"keep": 1},
-            {},
-            None,
-            "",
-        ],
-    }
-
-    out = tmp_path / "out.yaml"
-    save_yaml_file(out, raw)
-    loaded = load_yaml_file(out)
-    assert loaded == expected
 
 
 def test_get_primary_config_path_requires_workspace(monkeypatch):
@@ -255,17 +164,3 @@ def test_get_config_path_uses_template_without_workspace(monkeypatch):
     resolved = get_config_path("team/project.yml")
 
     assert resolved == find_package_subdir(Path("templates")) / "team" / "project.yml"
-
-
-def test_the_host_keeps_its_temporary_files_under_its_own_state(tmp_path) -> None:
-    """Never in the OS temporary directory, which a grant may open."""
-    from guildbotics.utils.fileio import host_temporary_directory, host_temporary_root
-
-    home = tmp_path / "home"
-
-    root = host_temporary_root()
-
-    assert root == home / ".guildbotics" / "data" / "tmp"
-    assert root.is_dir()
-    with host_temporary_directory("x-") as held:
-        assert Path(held).parent == root

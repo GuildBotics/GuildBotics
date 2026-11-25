@@ -12,6 +12,7 @@ import pytest
 from guildbotics.guest.worktree_copy import (
     WorktreeCopyError,
     changed_files,
+    copy_tree,
     receive_tree,
 )
 
@@ -327,3 +328,31 @@ def test_a_blob_shared_by_more_files_than_open_files_allow_is_restored(
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == "300"
     assert all((destination / str(i)).read_bytes() == b"" for i in range(300))
+
+
+def test_host_manifest_drives_guest_copy_and_change_detection(tmp_path):
+    source = tmp_path / "host"
+    source.mkdir()
+    git(source, "init", "-q")
+    (source / ".gitignore").write_text("build/\n")
+    (source / "tracked").write_text("original")
+    git(source, "add", ".")
+    (source / "build").mkdir()
+    (source / "build/ignored").write_text("ignored")
+    (source / "empty").mkdir()
+
+    selector = Path("target/debug/examples/worktree-list").resolve()
+    manifest = json.loads(subprocess.check_output([selector, source]))
+    destination = tmp_path / "guest"
+    copied = {file["path"]: file for file in copy_tree(source, destination, manifest)}
+    assert set(copied) == {".gitignore", "tracked"}
+    assert (destination / "empty").is_dir()
+    assert not (destination / "build").exists()
+    assert (destination / ".git").read_text() == f"gitdir: {source / '.git'}\n"
+
+    (destination / "tracked").write_text("edited")
+    (destination / "build").mkdir()
+    (destination / "build/new").write_text("generated")
+    [change] = changed_files(source, destination, copied, frozenset())
+    assert change["path"] == "tracked"
+    assert base64.b64decode(change["content"]) == b"edited"

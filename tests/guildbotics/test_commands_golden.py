@@ -141,7 +141,6 @@ def workspace(case: dict, root: Path, setenv: Callable[[str, str], None]) -> dic
     else:
         loaded = {
             "language": team.project.get_language_code(),
-            "default_person_id": team.get_default_person_id(),
             "members": [
                 {
                     "person_id": m.person_id,
@@ -166,7 +165,15 @@ def test_a_module_declares_as_the_fixture_has_it(case, tmp_path):
 
 @pytest.mark.parametrize("case", FIXTURE["workspaces"], ids=lambda c: c["id"])
 def test_a_workspace_is_read_as_the_fixture_has_it(case, tmp_path, monkeypatch):
-    assert workspace(case, tmp_path, monkeypatch.setenv) == case["expected"]
+    expected = dict(case["expected"])
+    if expected["team"] is not None:
+        # The Rust host alone picks the default member.
+        expected["team"] = {
+            key: value
+            for key, value in expected["team"].items()
+            if key != "default_person_id"
+        }
+    assert workspace(case, tmp_path, monkeypatch.setenv) == expected
 
 
 def main() -> None:
@@ -178,9 +185,13 @@ def main() -> None:
         for case in fixture["python_sources"]:
             case["expected"] = python_source(case, Path(tempfile.mkdtemp()))
         for case in fixture["workspaces"]:
-            case["expected"] = workspace(
-                case, Path(tempfile.mkdtemp()), os.environ.__setitem__
-            )
+            previous_team = case["expected"]["team"]
+            expected = workspace(case, Path(tempfile.mkdtemp()), os.environ.__setitem__)
+            if previous_team is not None and expected["team"] is not None:
+                expected["team"]["default_person_id"] = previous_team[
+                    "default_person_id"
+                ]
+            case["expected"] = expected
     finally:
         os.environ.clear()
         os.environ.update(saved)

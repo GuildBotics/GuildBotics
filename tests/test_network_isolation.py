@@ -5,11 +5,12 @@ import socket
 import subprocess
 import sys
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 
 
-def _run(test_file: Path, *args: str, env: dict[str, str] | None = None):
+def _run(test_path: Path, *args: str, env: dict[str, str] | None = None):
     return subprocess.run(
         [
             sys.executable,
@@ -19,8 +20,9 @@ def _run(test_file: Path, *args: str, env: dict[str, str] | None = None):
             "tests.conftest",
             "-c",
             "pyproject.toml",
-            str(test_file),
+            str(test_path),
             "-q",
+            "-rA",
             "--tb=short",
             *args,
         ],
@@ -127,21 +129,44 @@ def test_localhost():
 """,
         encoding="utf-8",
     )
-    result = _run(test_file)
-    expected = (
-        "12 passed, 9 errors"
-        if hasattr(socket.socket, "sendmsg")
-        else "11 passed, 1 skipped, 8 errors"
-    )
-    assert expected in result.stdout, result.stdout + result.stderr
-    assert "192.0.2.1" in result.stdout
-    assert "example.com" in result.stdout
-    assert "External network attempts" in result.stdout
+    _write_lifecycle_probe(tmp_path)
+    result = _run(tmp_path, env={**os.environ, "GUILDBOTICS_TEST_FIXTURE_DNS": "1"})
+    output = result.stdout + result.stderr
+    assert result.returncode == pytest.ExitCode.INTERRUPTED, output
+    for host in (
+        "192.0.2.1",
+        "example.com",
+        "collection.example",
+        "fixture.example",
+        "late.example",
+    ):
+        assert host in output
+    assert "External network attempts" in output
+    assert "ERROR test_lifecycle.py::test_session_fixture" in output
+    assert "PASSED test_lifecycle.py::test_bare_marker_is_rejected" in output
+    for name in (
+        "module_fixture",
+        "external_address",
+        "external_name",
+        "external_udp",
+        "external_legacy_dns",
+        "gethostbyname_ex",
+        "gethostbyaddr",
+        "getnameinfo",
+    ):
+        assert f"ERROR test_network_probe.py::test_{name}" in output
+    if hasattr(socket.socket, "sendmsg"):
+        assert "ERROR test_network_probe.py::test_external_sendmsg" in output
+    for name in ("ipv4_loopback", "ipv6_loopback", "localhost"):
+        node = f"test_network_probe.py::test_{name}"
+        assert f"PASSED {node}" in output
+        assert f"ERROR {node}" not in output
 
 
-def test_network_guard_covers_collection_and_session(tmp_path: Path) -> None:
+def _write_lifecycle_probe(tmp_path: Path) -> Path:
     (tmp_path / "conftest.py").write_text(
         """
+import os
 import socket
 import threading
 import pytest
@@ -158,6 +183,8 @@ def pytest_sessionfinish(session):
     thread = threading.Thread(target=late_dns)
     thread.start()
     thread.join()
+    if os.environ.get("GUILDBOTICS_TEST_FIXTURE_DNS") == "1":
+        session.exitstatus = pytest.ExitCode.INTERRUPTED
 """,
         encoding="utf-8",
     )
@@ -167,6 +194,7 @@ def pytest_sessionfinish(session):
 import os
 import socket
 import pytest
+from tests import conftest
 
 try:
     socket.getaddrinfo("collection.example", 443)
@@ -185,15 +213,23 @@ def session_dns():
 
 def test_session_fixture(session_dns):
     pass
+
+
+def test_bare_marker_is_rejected(request):
+    request.node.add_marker(pytest.mark.real_device)
+    try:
+        with pytest.raises(pytest.UsageError, match="real_device requires a known opt-in flag"):
+            conftest.pytest_collection_modifyitems(request.config, [request.node])
+    finally:
+        request.node.own_markers.pop()
 """,
         encoding="utf-8",
     )
-    result = _run(test_file, env={**os.environ, "GUILDBOTICS_TEST_FIXTURE_DNS": "1"})
-    assert result.returncode != 0
-    for host in ("collection.example", "fixture.example", "late.example"):
-        assert host in result.stdout, result.stdout + result.stderr
-    assert "1 passed, 1 error" in result.stdout, result.stdout + result.stderr
+    return test_file
 
+
+def test_network_guard_covers_collection_and_session_in_xdist(tmp_path: Path) -> None:
+    test_file = _write_lifecycle_probe(tmp_path)
     parallel = _run(
         test_file,
         "-n",
@@ -201,7 +237,7 @@ def test_session_fixture(session_dns):
         env={**os.environ, "GUILDBOTICS_TEST_FIXTURE_DNS": "0"},
     )
     assert parallel.returncode != 0, parallel.stdout + parallel.stderr
-    assert "1 passed" in parallel.stdout, parallel.stdout + parallel.stderr
+    assert "2 passed" in parallel.stdout, parallel.stdout + parallel.stderr
     assert "<outside test>: collection.example" in parallel.stdout
     assert "<outside test>: late.example" in parallel.stdout
 
@@ -230,40 +266,7 @@ def test_second(request):
     assert "Total: 2" in result.stdout
 
 
-def test_network_attempt_preserves_existing_exit_status(tmp_path: Path) -> None:
-    (tmp_path / "conftest.py").write_text(
-        """
-import socket
-import pytest
-
-
-@pytest.hookimpl(trylast=True)
-def pytest_sessionfinish(session):
-    try:
-        socket.gethostbyname("late.example")
-    except OSError:
-        pass
-    session.exitstatus = pytest.ExitCode.INTERRUPTED
-""",
-        encoding="utf-8",
-    )
-    test_file = tmp_path / "test_exit_status.py"
-    test_file.write_text("def test_success(): pass\n", encoding="utf-8")
-    result = _run(test_file)
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert "late.example" in result.stdout
-
-
-@pytest.mark.parametrize(
-    "flag,disabled,enabled_value",
-    [
-        ("GUILDBOTICS_CONTRACT_PROBE", "0", "1"),
-        ("GUILDBOTICS_E2E_ENVIRONMENT_FROM", "", "/ready/workspace"),
-    ],
-)
-def test_real_device_requires_explicit_opt_in(
-    tmp_path: Path, flag: str, disabled: str, enabled_value: str
-) -> None:
+def test_real_device_requires_explicit_opt_in(tmp_path: Path) -> None:
     test_file = tmp_path / "test_real_device.py"
     test_file.write_text(
         """
@@ -271,47 +274,59 @@ import pytest
 from tests import conftest
 
 
-@pytest.mark.real_device("GUILDBOTICS_CONTRACT_PROBE")
-def test_real_device(request):
+@pytest.mark.parametrize(
+    "kind",
+    [
+        pytest.param("contract", marks=pytest.mark.real_device("GUILDBOTICS_CONTRACT_PROBE")),
+        pytest.param("environment", marks=pytest.mark.real_device("GUILDBOTICS_E2E_ENVIRONMENT_FROM")),
+    ],
+)
+def test_real_device(request, kind):
     guard = request.config.stash[conftest._NETWORK_GUARD]
     assert guard.exempt
     assert request.node.get_closest_marker("timeout").args == (1800,)
     guard._check("example.com")
-        """.replace("GUILDBOTICS_CONTRACT_PROBE", flag),
+        """,
         encoding="utf-8",
     )
-    env = {**os.environ, flag: disabled}
+    env = {**os.environ}
     env.pop("CI", None)
-    skipped = _run(test_file, env=env)
-    assert "1 skipped" in skipped.stdout, skipped.stdout + skipped.stderr
+    report = tmp_path / "opt-in.xml"
+    for contract, environment, enabled, skipped in (
+        ("1", "", "contract", "environment"),
+        ("0", "/ready/workspace", "environment", "contract"),
+    ):
+        result = _run(
+            test_file,
+            f"--junitxml={report}",
+            env={
+                **env,
+                "GUILDBOTICS_CONTRACT_PROBE": contract,
+                "GUILDBOTICS_E2E_ENVIRONMENT_FROM": environment,
+            },
+        )
+        output = result.stdout + result.stderr
+        assert result.returncode == pytest.ExitCode.OK, output
+        skipped_by_name = {
+            case.attrib["name"]: case.find("skipped") is not None
+            for case in ElementTree.parse(report).iter("testcase")
+        }
+        assert skipped_by_name == {
+            f"test_real_device[{enabled}]": False,
+            f"test_real_device[{skipped}]": True,
+        }
 
-    env[flag] = enabled_value
-    enabled = _run(test_file, env=env)
-    assert "1 passed" in enabled.stdout, enabled.stdout + enabled.stderr
-
+    env.update(
+        GUILDBOTICS_CONTRACT_PROBE="1",
+        GUILDBOTICS_E2E_ENVIRONMENT_FROM="/ready/workspace",
+    )
     ci = _run(test_file, env={**env, "CI": "true"})
+    assert ci.returncode == pytest.ExitCode.USAGE_ERROR
     assert "real_device tests cannot run in CI" in ci.stdout + ci.stderr
 
     parallel = _run(test_file, "-n", "2", env=env)
+    assert parallel.returncode == pytest.ExitCode.USAGE_ERROR
     assert (
         "real_device tests must run without pytest-xdist"
         in parallel.stdout + parallel.stderr
     )
-
-
-def test_real_device_marker_requires_a_known_flag(tmp_path: Path) -> None:
-    test_file = tmp_path / "test_invalid_real_device.py"
-    test_file.write_text(
-        """
-import pytest
-
-
-@pytest.mark.real_device
-def test_bare_marker():
-    pass
-""",
-        encoding="utf-8",
-    )
-    result = _run(test_file)
-    assert result.returncode != 0
-    assert "real_device requires a known opt-in flag" in result.stdout + result.stderr

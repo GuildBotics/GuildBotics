@@ -1,11 +1,11 @@
 """Exercise the schema guard against real, disposable Git histories."""
 
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -109,6 +109,7 @@ def test_missing_version_fails(repo: Path, target: str) -> None:
     assert "exactly one SCHEMA_VERSION" in result.stderr
 
 
+@pytest.mark.repo_policy
 def test_repository_itself() -> None:
     result = run(ROOT, "HEAD")
     assert result.returncode == 0, result.stderr

@@ -20,7 +20,6 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from guildbotics.utils.import_utils import (
-    instantiate_class,
     load_class,
 )
 
@@ -87,35 +86,3 @@ def test_load_class_missing_symbol(dummy_module: str) -> None:
     with pytest.raises(ImportError) as exc:
         load_class(f"{dummy_module}.MissingClass")
     assert "Class 'MissingClass' not found" in str(exc.value)
-
-
-def test_instantiate_class_success(dummy_module: str) -> None:
-    """instantiate_class constructs the instance with provided kwargs."""
-
-    obj = instantiate_class(f"{dummy_module}.DummyClass", value=7)
-    assert type(obj).__name__ == "DummyClass"
-    assert getattr(obj, "value") == 7
-
-
-def test_instantiate_class_missing_module() -> None:
-    """instantiate_class propagates ImportError for nonexistent module."""
-
-    with pytest.raises(ImportError) as exc:
-        instantiate_class("no.such.module.DummyClass")
-    assert "Module 'no.such.module' could not be imported" in str(exc.value)
-
-
-def test_instantiate_class_missing_symbol(dummy_module: str) -> None:
-    """instantiate_class raises ImportError when class is missing."""
-
-    with pytest.raises(ImportError) as exc:
-        instantiate_class(f"{dummy_module}.MissingClass")
-    assert "Class 'MissingClass' not found" in str(exc.value)
-
-
-def test_instantiate_class_expected_type_mismatch(dummy_module: str) -> None:
-    """instantiate_class raises TypeError when expected_type does not match."""
-
-    with pytest.raises(TypeError) as exc:
-        instantiate_class(f"{dummy_module}.DummyClass", expected_type=dict)
-    assert "Expected instance of type dict" in str(exc.value)
