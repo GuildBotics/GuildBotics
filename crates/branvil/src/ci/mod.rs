@@ -1073,7 +1073,7 @@ impl Ci {
         if last_contact.elapsed() > Duration::from_secs(absent) {
             let details = format!(
                 "No CI runner has contacted the server for {absent} s (last contact: {}). Start `guildbotics runner` (docs/ci.md)",
-                last_text.unwrap_or_else(|| "none since Branvil started".into())
+                last_text.unwrap_or_else(|| "none since GuildBotics started".into())
             );
             let now = util::now();
             let before = queue::earlier(&now, absent);
@@ -1154,7 +1154,7 @@ impl Ci {
         while running > 0 {
             if Instant::now() >= deadline {
                 let why = format!(
-                    "Branvil stopped (an update or a restart) before it finished, {wait} s after it stopped giving out jobs"
+                    "GuildBotics stopped (an update or a restart) before it finished, {wait} s after it stopped giving out jobs"
                 );
                 let now = util::now();
                 let changed = store
@@ -1374,7 +1374,7 @@ impl Ci {
             (
                 "stopping",
                 format!(
-                    "Branvil is stopping (an update or a restart): it gives out no job and waits until the running ones finish, at most until {until}; queued jobs run after it starts again."
+                    "GuildBotics is stopping (an update or a restart): it gives out no job and waits until the running ones finish, at most until {until}; queued jobs run after it starts again."
                 ),
                 None,
             )
@@ -1382,7 +1382,7 @@ impl Ci {
             (
                 "no_runner",
                 format!(
-                    "No runner has contacted Branvil in the last {} s; queued jobs conclude startup_failure.",
+                    "No runner has contacted the server in the last {} s; queued jobs conclude startup_failure.",
                     absent.as_secs()
                 ),
                 None,
@@ -1651,7 +1651,7 @@ mod tests {
             "http://127.0.0.1:7878".into(),
             layout,
             config,
-            std::path::PathBuf::from("/nonexistent/branvil.toml"),
+            std::path::PathBuf::from("/nonexistent/config.toml"),
         );
         let repo = Repo {
             id: "repo_1".into(),

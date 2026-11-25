@@ -18,7 +18,7 @@
 
 メンバーは、設定で指定したチャネルを監視します。受信したメッセージがメンション・参加条件を満たすと、チャット判断エンジンが対応エージェントの起動要否を判定します。リアクションや行動なしで完了できる場合はそのまま処理し、それ以外は対応エージェントが thread の文脈と自身の role を読み、必要な作業と Slack への応答を行います。
 
-**依頼された作業の実行**: メッセージが Branvil などの操作を明示的に指示している場合（例:「この PR のレビューコメントに対応して」）、メンバーはその作業を実行します。メンバーの作業ディレクトリにはリポジトリの checkout がないため、対象リポジトリをメッセージと thread 文脈から特定し、`guildbotics member git prepare` で作業ブランチを準備してから作業します。対象が曖昧な場合は thread で質問し、`asking` として完了します。
+**依頼された作業の実行**: メッセージがチケットや PR などの操作を明示的に指示している場合（例:「この PR のレビューコメントに対応して」）、メンバーはその作業を実行します。メンバーの作業ディレクトリにはリポジトリの checkout がないため、対象リポジトリをメッセージと thread 文脈から特定し、`guildbotics member git prepare` で作業ブランチを準備してから作業します。対象が曖昧な場合は thread で質問し、`asking` として完了します。
 
 **Slack への応答形式**: 作業の有無にかかわらず、最後に以下のいずれかで thread へ対応します。
 
@@ -208,7 +208,7 @@ task_schedules:
 ポイント:
 
 - 監視対象チャネルは `message_channels` で定義し、`chat.enabled: true` のものがプロジェクトのチャット（`services.chat_service`）で監視対象になります
-- チケットや PR の作業が人の対応を待って止まったときは、Branvil がオーナーの webhook に 1 回通知します。通知には対象項目へのリンクと、コメントがある場合はそのリンクが入ります。Slack で受け取る場合は、どのメンバーも監視していないチャンネルの Incoming Webhook を **設定 → 通知** で設定します。Slack では通常の bot 投稿として届くため、監視対象のチャンネルに送るとメンバーが会話の入力として扱うことがあります。
+- チケットや PR の作業が人の対応を待って止まったときは、GuildBotics がオーナーの webhook に 1 回通知します。通知には対象項目へのリンクと、コメントがある場合はそのリンクが入ります。Slack で受け取る場合は、どのメンバーも監視していないチャンネルの Incoming Webhook を **設定 → 通知** で設定します。Slack では通常の bot 投稿として届くため、監視対象のチャンネルに送るとメンバーが会話の入力として扱うことがあります。
 - `chat.participation` は GUI の **会話への参加条件** に対応します。`strict`（既定）は明示メンションと一度呼ばれた thread の follow-up、`social` は雑談チャネル向けに未メンションの自然参加も許可、`muted` は明示メンションのみを処理します
 - `startup_backfill_minutes` と `backfill_interval_seconds` は GUI からは設定できません。起動時に Slack history から直近の channel message と既知 thread reply を取り込み（backfill）、既定値はそれぞれ `60` と `300` です。`backfill_interval_seconds` を `0` にすると、起動後の定期 history 確認を無効化できます
 - すべてのワークスペースで共通のメンバーのアイデンティティ（`~/.guildbotics/identity/.guildbotics/config/team/members/<person_id>/identity.yml`）の `profile.character` には、興味・嗜好・会話参加方針などを定義できます（GUI の **基本** タブに対応）。チャット判断にはこのプロフィールが入力として渡され、返信生成は割り当てられたエンジン経由で参照します。人間のメンバーの Slack User ID は、同じファイルの `account_info.slack_user_id` です

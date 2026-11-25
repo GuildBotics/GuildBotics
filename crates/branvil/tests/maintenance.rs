@@ -52,7 +52,9 @@ async fn an_upgraded_database_serves_only_after_a_successful_check() {
     w.server.stop();
     let data = w.server.data.clone();
     let db = data.join("branvil.redb");
-    as_schema_45(&db);
+    let settings = "[ci]\nqueue_max = 9\n";
+    std::fs::write(data.join("config.toml"), settings).unwrap();
+    as_previous_schema(&db);
     let admin = |what: &str| {
         branvil_command()
             .args(["admin", what, "--data-dir"])
@@ -85,6 +87,15 @@ async fn an_upgraded_database_serves_only_after_a_successful_check() {
     let out = admin("upgrade");
     assert!(out.status.success(), "{}", text(&out));
     assert!(text(&out).contains("upgraded"), "{}", text(&out));
+    // The previous build, should the update roll back, still reads its file.
+    assert_eq!(
+        std::fs::read_to_string(data.join(PREVIOUS_CONFIG_FILE)).unwrap(),
+        settings
+    );
+    assert_eq!(
+        std::fs::read_to_string(data.join("config.toml")).unwrap(),
+        settings
+    );
     let out = admin("upgrade");
     assert!(out.status.success(), "{}", text(&out));
     assert!(
@@ -121,7 +132,7 @@ async fn an_upgraded_database_serves_only_after_a_successful_check() {
     // A reindex does not mark the database checked.
     refuses_to_serve(&data, unchecked).await;
     // The check reads the configuration the server reads next.
-    let config = data.join("branvil.toml");
+    let config = data.join("config.toml");
     let converted = std::fs::read_to_string(&config).unwrap();
     std::fs::write(&config, format!("{converted}\nunknown = 1\n")).unwrap();
     let out = admin("check");

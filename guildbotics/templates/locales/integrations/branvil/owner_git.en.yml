@@ -1,2 +1,2 @@
 en:
-  unavailable: "GuildBotics could not hand git this machine's Branvil token: %{reason}"
+  unavailable: "GuildBotics could not hand git this machine's code host token: %{reason}"

@@ -344,11 +344,11 @@ guildbotics run repository/security_alerts --person alice repo=org/repo alert=42
 guildbotics run repository/security_alerts --person alice repo=org/repo state=resolved page_size=10 output=json
 ```
 
-The command uses the Branvil code host selected in `services.code_hosting_service`.
-It runs read-only inside the microVM without making an LLM call. Branvil reads
+The command uses the code host selected in `services.code_hosting_service`.
+It runs read-only inside the microVM without making an LLM call. The code host reads
 Dependabot alerts from the repository's GitHub upstream and needs read access
 there. A repository without an upstream reports that the operation is
-unsupported. See the [Branvil integration guide](branvil_integration.en.md).
+unsupported. See [Repositories with an upstream on GitHub](code_host.en.md#repositories-with-an-upstream-on-github).
 
 `output=json` returns JSON text with `{ "repo": "org/repo", "alerts": [...], "continuation": null }`, preserving empty lists and `null`. Each alert has a string `id`, URL, state, package, ecosystem, manifest path, severity, advisory `identifiers` (a list of `{ "type": "CVE", "value": "..." }`), summary, description, `affected_versions`, `patched_version`, and creation/update timestamps. Missing optional fields are `null`; missing identifiers are an empty list. Markdown omits missing optional fields and explicitly marks unreported patches. Its headings show the selected state and each alert’s ID, package, and severity. Lists show summaries; individual alerts show the full description after the metadata, inside a blockquote. This resource covers dependency vulnerabilities.
 
@@ -988,7 +988,7 @@ Raw effective parameter values are never recorded, because `api_key`, headers, a
 ## 10. Checking chat updates before publication
 
 In a chat workflow, check the source thread immediately before replying, reacting,
-pushing commits, or writing to Branvil:
+pushing commits, or writing to tickets or pull requests:
 
 ```bash
 guildbotics member chat updates --person alice
@@ -1002,9 +1002,9 @@ while another writer finishes: wait a few seconds and retry, without publishing
 or completing as `blocked` solely for this state. `unavailable` means reception cannot be verified: defer external
 writes and complete as `blocked` if reception cannot recover within the turn.
 The write commands also reject missing checks and messages arriving after a check.
-The check uses the original chat thread even when publishing to Branvil or another
+The check uses the original chat thread even when publishing to a ticket, a pull request, or another
 channel. It records which messages were delivered. Additional messages are marked
-processed on done/asking only after a later chat reply, post, reaction, Branvil write, or Git publication. Blocked or
+processed on done/asking only after a later chat reply, post, reaction, ticket or pull request write, or Git publication. Blocked or
 no-op-only runs leave those messages pending for the next run. A final check cannot
 exclude arrivals after the check.
 

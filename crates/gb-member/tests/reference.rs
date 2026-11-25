@@ -114,7 +114,7 @@ fn reference_includes_standard_work_procedure() {
     assert!(text.contains("reply_target_id"));
     assert!(text.contains("repository/pr_checks failed_logs=true"));
     assert!(text.contains("required_checks=passed"));
-    assert!(text.contains("Branvil’s PR screen (landing)"));
+    assert!(text.contains("the PR screen (landing)"));
     assert!(text.contains("externally visible trace"));
     assert!(text.contains("entry point"));
     assert!(text.contains("Avoid duplicate posts"));

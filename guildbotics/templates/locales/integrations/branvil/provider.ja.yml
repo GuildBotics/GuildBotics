@@ -1,5 +1,5 @@
 ja:
   workspace: "ワークスペース %{workspace} を読み取りました。"
-  ci_load_failed: "Branvil の CI ランナーが %{archive} を読み込めませんでした: %{detail}"
-  ci_load_lost: "Branvil の CI ランナーが %{archive} を読み込んでいる間に Branvil が再起動したため、読み込みの結果がわかりません。もう一度読み込んでください。"
-  ci_load_superseded: "%{archive} の読み込みの終わりを確かめる前に Branvil の CI ランナーで別の image の操作が始まったため、読み込みの結果がわかりません。もう一度読み込んでください。"
+  ci_load_failed: "CI ランナーが %{archive} を読み込めませんでした: %{detail}"
+  ci_load_lost: "CI ランナーが %{archive} を読み込んでいる間に GuildBotics が再起動したため、読み込みの結果がわかりません。もう一度読み込んでください。"
+  ci_load_superseded: "%{archive} の読み込みの終わりを確かめる前に CI ランナーで別の image の操作が始まったため、読み込みの結果がわかりません。もう一度読み込んでください。"

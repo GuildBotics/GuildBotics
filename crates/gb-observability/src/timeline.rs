@@ -264,7 +264,7 @@ pub fn build(
                         match provider {
                             "slack" => "Slack",
                             "local" => "Local",
-                            "branvil" => "Branvil",
+                            "branvil" => "GuildBotics",
                             p => p,
                         },
                     )],

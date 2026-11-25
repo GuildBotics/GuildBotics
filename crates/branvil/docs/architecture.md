@@ -3,7 +3,8 @@
 The Rust host embeds Branvil. Branvil starts Git child processes and a
 separate CI runner process (`guildbotics runner`) that executes jobs in microVMs. It
 listens on loopback only; other machines reach it through OpenSSH port forwarding
-managed by an OS service (see `README.md`). The data API is the
+managed by an OS service (see
+[SSH forwarding](../../../docs/code_host.en.md#set-up-ssh-forwarding-on-another-machine)). The data API is the
 boundary into the data. The GUI and CLI use HTTP; an embedded provider uses
 `api::DataApi` directly in the service process. Both call the same domain
 operations, with the same member permissions, locks, events and CI triggers.
@@ -23,12 +24,12 @@ callbacks continue to use loopback HTTP. On shutdown the host refuses new GuildB
 while still serving Branvil (including Git pushes and runner reports). It calls
 `Embedded::drain`, closes events, stops the shared listener with a five-second
 request grace, then calls `Embedded::close` before releasing the machine lock.
-Forced shutdown can skip the CI wait. Standalone hosts use `Running::stop`.
+Forced shutdown can skip the CI wait. The test server (`test_support`) uses `Running::stop`.
 
 ```
 browser GUI ─┐                         ┌─ redb (branvil.redb)
 provider ────┼─ HTTP (axum) ─ domain ──┤
-branvil CLI ─┘        │                └─ git (bare repos, argv only)
+guildbotics ─┘        │                └─ git (bare repos, argv only)
 git client ── Smart HTTP ─ git http-backend ─ receive-pack ─ Branvil hooks ─┐
                                                                             └─ loopback callback ─ refs
 guildbotics runner ── runner API (HTTP) ─ ci ─ redb queue · ci/ files      (no database, no repositories)
@@ -42,7 +43,7 @@ The pieces of the authentication that do not depend on Branvil's records (single
 | Module | Responsibility |
 | --- | --- |
 | `lib.rs`, `main.rs`, `cli.rs` | clap commands (`main.rs` is the `branvil` executable; another one runs the same commands under its own, and the service in its process, through `lib.rs`): `init`, `serve`, `admin check|reindex|upgrade` (offline, on the data directory), and `member`/`workspace`/`repo`/`backup`/`open` (clients of the running API, with the owner's token file by default) |
-| `config.rs` | `branvil.toml` and the data directory layout |
+| `config.rs` | `config.toml` and the data directory layout |
 | `store.rs` | redb tables, order-preserving keys, JSON records, bounded blocking executor (`Store::read` / `Store::write`), the schema version and the upgrade frame (exclusive open, reads, then a copy and one write transaction) |
 | `upgrade.rs` | what the upgrade from the previous schema version changes in the records (replaced at each version) |
 | `model.rs` | stored records and the one function per record that derives its index entries; consistency check and rebuild |
@@ -386,7 +387,7 @@ repository lock or a transaction.
   request wake it at once. The next registration deadline of a live pull
   request also wakes it, even with longer regular intervals. An expired
   deadline whose read failed is retried at the regular interval, so it
-  cannot cause a busy loop. `[upstream]` in `branvil.toml` sets both intervals.
+  cannot cause a busy loop. `[upstream]` in `config.toml` sets both intervals.
 - **The default branch.** When the host's tip differs from Branvil's: `git
   fetch` it into the hidden `refs/branvil/upstream/<branch>`, then, under the
   repository lock, fast-forward Branvil's branch (`update-ref` with the

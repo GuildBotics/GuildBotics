@@ -21,7 +21,7 @@ async fn provider_listing_validation_localization_and_public_page() {
     assert_eq!(
         providers,
         json!([
-            {"name":"branvil","title":"Branvil","kinds":["ticket_service","code_hosting_service"],"avatar":false},
+            {"name":"branvil","title":"GuildBotics","kinds":["ticket_service","code_hosting_service"],"avatar":false},
             {"name":"slack","title":"Slack","kinds":["chat_service"],"avatar":true}
         ])
     );

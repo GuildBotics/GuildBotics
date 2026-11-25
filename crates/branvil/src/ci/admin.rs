@@ -271,7 +271,7 @@ pub(crate) async fn data_load(
     let path = PathBuf::from(path.trim());
     if !path.is_absolute() {
         return Err(AppError::invalid(
-            "Give the absolute path of the archive on the Branvil machine.",
+            "Give the absolute path of the archive on the Hub.",
         ));
     }
     match std::fs::symlink_metadata(&path) {

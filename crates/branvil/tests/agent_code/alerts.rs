@@ -113,11 +113,11 @@ impl Host {
         });
         // The service reads GitHub at this stand-in.
         let url = format!("http://{address}");
-        let mut config = std::fs::read_to_string(data.join("branvil.toml")).unwrap_or_default();
+        let mut config = std::fs::read_to_string(data.join("config.toml")).unwrap_or_default();
         config.push_str(&format!(
             "\n[upstream.github]\napi_url = \"{url}\"\nweb_url = \"{url}\"\ngit_url = \"{url}\"\n"
         ));
-        std::fs::write(data.join("branvil.toml"), config).unwrap();
+        std::fs::write(data.join("config.toml"), config).unwrap();
         Self {
             address,
             answers,

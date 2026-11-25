@@ -1,5 +1,5 @@
 en:
-  unreachable: "This machine has no credential that the GuildBotics server on this port accepts, or nothing proves to be that server there. On the server machine, start GuildBotics; on another machine, forward the port to the server and run `guildbotics connect` first. If forwarding is not installed, follow the initial setup in docs/branvil_integration.en.md (Set up SSH forwarding on another machine), using scripts/hub-forward.ps1 on Windows."
+  unreachable: "This machine has no credential that the GuildBotics server on this port accepts, or nothing proves to be that server there. On the server machine, start GuildBotics; on another machine, forward the port to the server and run `guildbotics connect` first. If forwarding is not installed, follow the initial setup in docs/code_host.en.md (Set up SSH forwarding on another machine), using scripts/hub-forward.ps1 on Windows."
   refused: "The GuildBotics server refused the request: %{reason}"
   consent: "Allow this machine on the consent screen in your browser. If it did not open, open this address:\n%{url}"
   callback_received: "GuildBotics received the answer. You can close this page."

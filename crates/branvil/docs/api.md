@@ -204,8 +204,8 @@ bad token.
 ### Members and tokens (admin API)
 
 The members, tokens, accounts ("Upstream"), and workspaces endpoints are
-Branvil's admin API: any client holding an owner token may use them (the
-`branvil` CLI, the GUI). They are as stable
+Branvil's admin API: any client holding an owner token may use them (the GUI
+and the Hub's update commands). They are as stable
 as the rest of this file.
 
 - `GET /api/v1/members` (owner) → items of `{"name","display_name","kind","accounts","reviewers","avatar_url"}`;
@@ -1474,7 +1474,7 @@ alone and automatic retry recovery do not send notices.
 
 The owner manages runners and limits under **Settings → CI**, and images
 under **Settings → Agent execution environment → Images** (`docs/ci.md`).
-Changes to runner mode and limits are written to `branvil.toml`, preserving
+Changes to runner mode and limits are written to `config.toml`, preserving
 the rest of the file, and take effect immediately. The Hub uses the shared image store at
 `<GuildBotics data>/msb`.
 

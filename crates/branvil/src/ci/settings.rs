@@ -1,6 +1,6 @@
 //! What the owner changes from the GUI (Settings → CI): whether the service
 //! runs the runner, the limits the runner puts on every job, and the
-//! runner's image cache. The first two are `branvil.toml` settings: they are
+//! runner's image cache. The first two are `config.toml` settings: they are
 //! written there (keeping the rest of the file as it is) and applied at once,
 //! without restarting the service; the runner API reads the current limits
 //! for each claim. The image cache is the one of the
@@ -347,7 +347,7 @@ mod tests {
     #[tokio::test]
     async fn settings_are_saved_keeping_the_rest_of_the_file() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("branvil.toml");
+        let file = dir.path().join("config.toml");
         std::fs::write(
             &file,
             "# Branvil\n[storage]\ncache_size_mib = 16\n\n[ci]\n# who runs jobs\nrunner = \"off\"\nqueue_max = 9\n",
@@ -394,7 +394,7 @@ mod tests {
     #[tokio::test]
     async fn settings_already_in_effect_change_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("branvil.toml");
+        let file = dir.path().join("config.toml");
         let control = Control::new(file.clone(), &CiConfig::default());
         let seen = control.subscribe();
         control.set_mode(RunnerMode::Off).await.unwrap();
@@ -418,7 +418,7 @@ mod tests {
             "[ci]\nexecutor = { max_cpus = 2 }\n",
             "ci.runner = \"off\"\n",
         ] {
-            let file = dir.path().join("branvil.toml");
+            let file = dir.path().join("config.toml");
             std::fs::write(&file, text).unwrap();
             let control = Control::new(file.clone(), &CiConfig::default());
             control.set_mode(RunnerMode::Auto).await.unwrap();
@@ -438,7 +438,7 @@ mod tests {
         let real = dir.path().join("real.toml");
         std::fs::write(&real, "[ci]\n").unwrap();
         std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let link = dir.path().join("branvil.toml");
+        let link = dir.path().join("config.toml");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let control = Control::new(link.clone(), &CiConfig::default());
         control.set_mode(RunnerMode::Auto).await.unwrap();
@@ -460,7 +460,7 @@ mod tests {
     #[tokio::test]
     async fn a_file_that_is_no_configuration_is_refused_not_overwritten() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("branvil.toml");
+        let file = dir.path().join("config.toml");
         std::fs::write(&file, "unknown_setting = 1\n").unwrap();
         let control = Control::new(file.clone(), &CiConfig::default());
         assert_eq!(
@@ -476,7 +476,7 @@ mod tests {
     #[tokio::test]
     async fn a_missing_file_is_created() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("branvil.toml");
+        let file = dir.path().join("config.toml");
         let control = Control::new(file.clone(), &CiConfig::default());
         control.set_mode(RunnerMode::Auto).await.unwrap();
         let parsed: crate::config::ConfigFile =
@@ -495,7 +495,7 @@ mod tests {
             16384
         );
         let dir = tempfile::tempdir().unwrap();
-        let control = Control::new(dir.path().join("branvil.toml"), &CiConfig::default());
+        let control = Control::new(dir.path().join("config.toml"), &CiConfig::default());
         for quota in [1024, 1 << 20] {
             let limits = Limits {
                 work_quota_mib: quota,
@@ -509,7 +509,7 @@ mod tests {
     #[tokio::test]
     async fn limits_out_of_range_change_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("branvil.toml");
+        let file = dir.path().join("config.toml");
         let control = Control::new(file.clone(), &CiConfig::default());
         for bad in [
             Limits {
@@ -554,7 +554,7 @@ mod tests {
     #[tokio::test]
     async fn an_unreadable_file_is_not_overwritten() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("branvil.toml");
+        let file = dir.path().join("config.toml");
         std::fs::write(&file, "listen = \n").unwrap();
         let control = Control::new(file.clone(), &CiConfig::default());
         assert!(control.set_mode(RunnerMode::Auto).await.is_err());

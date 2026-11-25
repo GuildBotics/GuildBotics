@@ -116,7 +116,7 @@ README); "provider unit tests on the double" are GuildBotics'
 
 Repository creation, a repository's labels, board order, the ticket's assignee, thread
 resolution, merge, CI retry/cancel, required checks, the upstream, publishing: reached by
-the GUI and the `branvil` CLI only. Workspaces, members, tokens, and members' accounts are
+the GUI only. Workspaces, members, tokens, and members' accounts are
 not in the ports either; they are Branvil's public admin API (`api.md`, "Members and tokens
 (admin API)"); GuildBotics uses the same operations as the owner through `DataApi::owner()`
 (workspaces, the member's Git token). A pull request merged on the upstream host reads as merged here, the host's

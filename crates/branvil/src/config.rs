@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-/// `branvil.toml`. Every field is optional; a missing file means defaults.
+/// `config.toml`. Every field is optional; a missing file means defaults.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFile {
@@ -139,7 +139,7 @@ impl Layout {
         }
     }
     pub fn config_file(&self) -> PathBuf {
-        self.root.join("branvil.toml")
+        self.root.join("config.toml")
     }
     pub fn db(&self) -> PathBuf {
         self.root.join("branvil.redb")
@@ -217,7 +217,7 @@ pub fn restrict(_path: &Path, _dir: bool) -> anyhow::Result<()> {
 }
 
 impl Config {
-    /// Reads `config_path`, else `branvil.toml` of `data_dir` when it exists.
+    /// Reads `config_path`, else `config.toml` of `data_dir` when it exists.
     pub fn load(config_path: Option<&Path>, data_dir: &Path) -> anyhow::Result<Config> {
         let data_dir = data_dir.to_path_buf();
         let layout = Layout::new(&data_dir);
@@ -258,7 +258,7 @@ mod tests {
         let c = Config::load(None, dir.path()).unwrap();
         assert_eq!(c.storage.cache_size_mib, 32);
         std::fs::write(
-            dir.path().join("branvil.toml"),
+            dir.path().join("config.toml"),
             "listen = \"127.0.0.1:7878\"\n",
         )
         .unwrap();

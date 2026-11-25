@@ -160,7 +160,7 @@ How the scheduler behaves (from `crates/gb-server/src/scheduler.rs`, `crates/gb-
 
 The ticket-driven workflow also wakes on the changes described above and continues while candidates remain, without waiting for the patrol interval between candidates.
 
-When the patrol starts an author's PR feedback work for a head in a deferred Branvil class (see the [CI queue](../crates/branvil/docs/ci.md)), Branvil returns running CI for that head to its original queue position.
+When the patrol starts an author's PR feedback work for a head in a deferred CI class (see the [CI queue](../crates/branvil/docs/ci.md)), running CI for that head returns to its original queue position.
 
 **Randomization handling**:
 

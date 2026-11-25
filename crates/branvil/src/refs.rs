@@ -256,11 +256,13 @@ pub fn check_push(
         let creating = u.old == ZERO_SHA;
         if let Some(branch) = u.refname.strip_prefix("refs/heads/") {
             if !crate::git::valid_branch(branch) {
-                return Err(format!("{branch} is not a branch name Branvil accepts."));
+                return Err(format!(
+                    "{branch} is not a branch name GuildBotics accepts."
+                ));
             }
             if repo.upstream.is_some() && branch == repo.default_branch {
                 return Err(format!(
-                    "{branch} follows the upstream: it changes there, and Branvil follows it."
+                    "{branch} follows the upstream: it changes there, and GuildBotics follows it."
                 ));
             }
             if repo.is_protected(branch) {
@@ -283,7 +285,7 @@ pub fn check_push(
             }
         } else {
             return Err(format!(
-                "{} is not a branch or tag; Branvil refuses it.",
+                "{} is not a branch or tag; GuildBotics refuses it.",
                 u.refname
             ));
         }

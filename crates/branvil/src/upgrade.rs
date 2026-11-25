@@ -1,12 +1,20 @@
-//! 45 → 46: tie execution settings to the existing workspace and update stored item URLs.
+//! 46 → 47: the configuration file is named `config.toml` (was `branvil.toml`,
+//! kept for the previous build until the owner removes it),
+//! and the automatic runner's display name no longer says Branvil.
+//! Every upgrade also binds the GuildBotics workspaces' execution roots.
 use std::{collections::BTreeMap, path::PathBuf};
 
+use crate::ci::supervise::{AUTO_RUNNER, AUTO_RUNNER_DISPLAY_NAME};
 use crate::config::Layout;
-use crate::model::{Comment, Pull};
-use crate::store::{self, Rd, Store, Tbl, Upgraded, Upgrading, Wtx};
+use crate::model::Member;
+use crate::store::{self, Rd, Store, Upgraded, Upgrading, Wtx};
 
-pub const FROM: u64 = 45;
+pub const FROM: u64 = 46;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
+/// The configuration file's name in the data directory of version `FROM`.
+pub const FROM_CONFIG_FILE: &str = "branvil.toml";
+/// The automatic runner's display name given before version 47.
+const FROM_RUNNER_DISPLAY_NAME: &str = "Branvil runner (automatic)";
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
     upgrade_with_roots(layout, BTreeMap::new())
@@ -25,26 +33,23 @@ pub(crate) fn upgrade_with_roots(
     };
     db.finish(|w| {
         execution_roots(w, roots)?;
-        let pulls = update_rows::<Pull>(w, store::PULLS, |pull| {
-            let mut changed = false;
-            for ticket in &mut pull.tickets {
-                if let Some((repo, number)) = &ticket.local {
-                    let repo = crate::domain::repo_by_id(w, repo)?;
-                    let mut url = reqwest::Url::parse(&ticket.url)?;
-                    url.set_path(&crate::util::item_path(&repo.path, "tickets", number));
-                    if ticket.url != url.as_str() {
-                        ticket.url = url.to_string();
-                        changed = true;
-                    }
-                }
+        let key = Member::key(AUTO_RUNNER);
+        if let Some(mut runner) = w.get::<Member>(store::MEMBERS, &key)?
+            && runner.display_name == FROM_RUNNER_DISPLAY_NAME
+        {
+            runner.display_name = AUTO_RUNNER_DISPLAY_NAME.into();
+            w.put(store::MEMBERS, &key, &runner)?;
+        }
+        // Copied, not moved: the previous build, which a failed or rolled-back
+        // update runs again, still reads the file under its old name.
+        let legacy = layout.root.join(FROM_CONFIG_FILE);
+        Ok(match std::fs::copy(&legacy, layout.config_file()) {
+            Ok(_) => format!("copied {FROM_CONFIG_FILE} to config.toml"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                "no configuration file to copy".into()
             }
-            Ok(changed)
-        })?;
-        let comments = update_rows::<Comment>(w, store::COMMENTS, |comment| {
-            let target = comment.meta.as_mut().and_then(|meta| meta.get_mut("work_identity"));
-            Ok(target.is_some_and(rewrite_value))
-        })?;
-        Ok(format!("updated local links in {pulls} pull requests and workflow metadata in {comments} comments"))
+            Err(e) => return Err(e.into()),
+        })
     })
     .map(Some)
 }
@@ -61,40 +66,6 @@ fn execution_roots(w: &Wtx, roots: BTreeMap<String, PathBuf>) -> crate::error::A
         }
     }
     Ok(())
-}
-
-fn update_rows<T>(
-    w: &Wtx,
-    table: Tbl,
-    mut update: impl FnMut(&mut T) -> anyhow::Result<bool>,
-) -> anyhow::Result<usize>
-where
-    T: serde::de::DeserializeOwned + serde::Serialize,
-{
-    let mut after = None;
-    let mut changed = 0;
-    loop {
-        let rows = w.prefix_raw(table, &[], after.as_deref(), 512)?;
-        if rows.is_empty() {
-            return Ok(changed);
-        }
-        for (key, raw) in rows {
-            let mut value = store::decode(&raw)?;
-            if update(&mut value)? {
-                w.put(table, &key, &value)?;
-                changed += 1;
-            }
-            after = Some(key);
-        }
-    }
-}
-
-pub fn rewrite_value(value: &mut serde_json::Value) -> bool {
-    let Some(url) = value.as_str().and_then(legacy_item_url) else {
-        return false;
-    };
-    *value = url.into();
-    true
 }
 
 /// Offline conversion for structured links to the embedded code host.
@@ -131,65 +102,96 @@ mod tests {
     use super::legacy_item_url;
 
     #[test]
-    fn upgrade_preserves_workspace_repository_and_ticket_relations() {
+    fn upgrade_copies_the_configuration_file_and_renames_the_automatic_runner() {
         use super::*;
-        use crate::model::{Repo, Ticket, Workspace};
-        use serde_json::json;
+        use crate::model::Workspace;
         let temporary = tempfile::tempdir().unwrap();
         let layout = Layout::new(temporary.path());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
-        let (workspace, repo) = db.write_sync(|w| {
-            let workspace = crate::domain::repos::insert_workspace(w, "acme".into(), None)?;
-            let repo = Repo {
-                id: "repo_original".into(), path: "acme/demo".into(), workspace: workspace.id,
-                default_branch: "main".into(), protected_branches: vec![],
-                required_approvals: 0,
-                auto_land: false, hold_while_failing: false, ci_network: false, responder: None,
-                labels: vec![], upstream: None, revision: 1, created_at: crate::util::now(),
-            };
-            w.put(store::REPOS, &Repo::key(&repo.id), &repo)?;
-            let ticket = json!({"workspace":repo.workspace, "repo":repo.id, "number":3,
-                "parent":[repo.id,1],"blocked_by":[[repo.id,2]],"lane":"ready","rank":"0|zz"});
-            w.put(store::TICKETS, &Ticket::key(&repo.id, 3), &ticket)?;
-            let pull = json!({"repo":repo.id,"number":2,"title":"Keep this pull",
-                "body":"http://localhost/acme/demo/-/tickets/3","state":"open","merged":false,
-                "draft":false,"author":"owner","head":"topic","base":"main","reviewers":[],
-                "tickets":[{"url":"http://localhost/acme/demo/-/tickets/3","closes":true,"local":[repo.id,3]}],
-                "labels":[],"reviewed_by":[],"created_at":"fixture","updated_at":"fixture","revision":1});
-            w.put(store::PULLS, &Pull::key(&repo.id, 2), &pull)?;
-            w.put(store::META, &store::Key::new().s("schema_version").bytes(), &FROM)?;
-            Ok((repo.workspace, repo.id))
-        }).unwrap();
+        let workspace = db
+            .write_sync(|w| {
+                let workspace = crate::domain::repos::insert_workspace(w, "acme".into(), None)?;
+                crate::domain::members::insert_member(
+                    w,
+                    &crate::domain::members::NewMember {
+                        name: AUTO_RUNNER.into(),
+                        display_name: Some(FROM_RUNNER_DISPLAY_NAME.into()),
+                        kind: crate::model::MemberKind::Runner,
+                    },
+                )?;
+                w.put(
+                    store::META,
+                    &store::Key::new().s("schema_version").bytes(),
+                    &FROM,
+                )?;
+                Ok(workspace.id)
+            })
+            .unwrap();
         drop(db);
+        let legacy = temporary.path().join(FROM_CONFIG_FILE);
+        std::fs::write(&legacy, "[ci]\nqueue_max = 9\n").unwrap();
         let root = temporary.path().join("execution");
-        upgrade_with_roots(&layout, [("acme".into(), root.clone())].into())
+        let done = upgrade_with_roots(&layout, [("acme".into(), root.clone())].into())
             .unwrap()
             .unwrap();
+        assert_eq!(done.summary, "copied branvil.toml to config.toml");
+        assert_eq!(
+            std::fs::read_to_string(&legacy).unwrap(),
+            "[ci]\nqueue_max = 9\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(temporary.path().join("config.toml")).unwrap(),
+            "[ci]\nqueue_max = 9\n"
+        );
+        let config = crate::config::Config::load(None, temporary.path()).unwrap();
+        assert_eq!(config.ci.queue_max, 9);
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
-        db.read_sync(|r| {
-            let workspace_record: Workspace = r
-                .get(store::WORKSPACES, &Workspace::key(&workspace))?
-                .unwrap();
-            assert_eq!(workspace_record.id, workspace);
-            assert_eq!(workspace_record.execution_root, Some(root.clone()));
-            let repo_record: Repo = r.get(store::REPOS, &Repo::key(&repo))?.unwrap();
-            assert_eq!(repo_record.workspace, workspace);
-            let ticket: serde_json::Value = r.get(store::TICKETS, &Ticket::key(&repo, 3))?.unwrap();
-            assert_eq!(
-                ticket,
-                json!({"workspace":workspace,"repo":repo,"number":3,
-                "parent":[repo,1],"blocked_by":[[repo,2]],"lane":"ready","rank":"0|zz"})
-            );
-            let pull: Pull = r.get(store::PULLS, &Pull::key(&repo, 2))?.unwrap();
-            assert_eq!(pull.body, "http://localhost/acme/demo/-/tickets/3");
-            assert_eq!(
-                pull.tickets[0].url,
-                "http://localhost/workspaces/acme/repos/demo/tickets/3"
-            );
-            assert_eq!(pull.tickets[0].local, Some((repo.clone(), 3)));
+        let record: Workspace = db
+            .read_sync(|r| r.get(store::WORKSPACES, &Workspace::key(&workspace)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.execution_root, Some(root));
+        let runner: Member = db
+            .read_sync(|r| r.get(store::MEMBERS, &Member::key(AUTO_RUNNER)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(runner.display_name, "GuildBotics runner (automatic)");
+    }
+
+    #[test]
+    fn upgrade_keeps_the_defaults_and_a_runner_name_the_owner_chose() {
+        use super::*;
+        let temporary = tempfile::tempdir().unwrap();
+        let layout = Layout::new(temporary.path());
+        let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
+        db.write_sync(|w| {
+            crate::domain::members::insert_member(
+                w,
+                &crate::domain::members::NewMember {
+                    name: AUTO_RUNNER.into(),
+                    display_name: Some("Hub runner".into()),
+                    kind: crate::model::MemberKind::Runner,
+                },
+            )?;
+            w.put(
+                store::META,
+                &store::Key::new().s("schema_version").bytes(),
+                &FROM,
+            )?;
             Ok(())
         })
         .unwrap();
+        drop(db);
+        let done = upgrade(&layout).unwrap().unwrap();
+        assert_eq!(done.summary, "no configuration file to copy");
+        assert!(!layout.config_file().exists());
+        assert!(upgrade(&layout).unwrap().is_none());
+        let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
+        let runner: Member = db
+            .read_sync(|r| r.get(store::MEMBERS, &Member::key(AUTO_RUNNER)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(runner.display_name, "Hub runner");
     }
 
     #[test]

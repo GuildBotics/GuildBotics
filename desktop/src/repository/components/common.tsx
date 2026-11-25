@@ -161,6 +161,12 @@ export function StateBadge({ children, tone = "neutral" }: { children: ReactNode
   );
 }
 
+/** The service's own actor, stored as `branvil`, that writes repair tickets and code host comments. */
+const isSystemActor = (name: string) => name.toLowerCase() === "branvil";
+
+/** The name shown for a member: the service's own actor is shown as GuildBotics. */
+export const shownName = (name: string) => (isSystemActor(name) ? "GuildBotics" : name);
+
 /** A member's avatar: their initial, teal for agents as GuildBotics shows members. */
 export function MemberAvatar({
   name,
@@ -180,10 +186,10 @@ export function MemberAvatar({
       radius="xl"
       color={kind === "agent" ? "teal" : "gray"}
       variant="light"
-      alt={name}
+      alt={shownName(name)}
     >
-      {name.toLowerCase() === "branvil" ? (
-        <Anvil size={Math.round(size * 0.7)} role="img" aria-label="Branvil" />
+      {isSystemActor(name) ? (
+        <Anvil size={Math.round(size * 0.7)} role="img" aria-label={shownName(name)} />
       ) : (
         name.slice(0, 1).toUpperCase()
       )}
@@ -288,7 +294,7 @@ export function PostHead({
   return (
     <div className="post-head">
       <MemberAvatar name={author} kind={kind} />
-      <strong>{author}</strong>
+      <strong>{shownName(author)}</strong>
       <Text span size="xs" c="dimmed">
         {url ? (
           <Link to={url} title={t("comment.link")}>

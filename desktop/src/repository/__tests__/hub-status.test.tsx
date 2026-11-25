@@ -38,9 +38,9 @@ it.each([true, false])(
         "href",
         "https://example.com/commit/abcdef012345",
       );
-      expect(screen.queryByText(/Branvil is stopping/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/GuildBotics is stopping/)).not.toBeInTheDocument();
     } else {
-      expect(await screen.findByText(/Branvil is stopping/)).toBeInTheDocument();
+      expect(await screen.findByText(/GuildBotics is stopping/)).toBeInTheDocument();
     }
   },
 );

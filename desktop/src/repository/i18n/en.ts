@@ -23,12 +23,12 @@ export const en = {
   "common.copy": "Copy",
   "common.copied": "Copied",
   "common.notProvided": "Not provided",
-  "common.notAvailableYet": "Not available yet on this Branvil.",
+  "common.notAvailableYet": "Not available yet on this server.",
   "common.forbidden": "You do not have permission.",
   "common.sessionChanged":
     "This change was not saved. Copy what you entered, then reload the page and try again.",
   "common.networkError":
-    "Branvil is not reachable. Check that Branvil is running on the Hub. If you are using a machine other than the Hub, also check that the OpenSSH forwarding service is running.",
+    "The GuildBotics server is not reachable. Check that GuildBotics is running on the Hub. If you are using a machine other than the Hub, also check that the OpenSSH forwarding service is running.",
 
   "nav.main": "Main",
   "nav.home": "Home",
@@ -184,15 +184,15 @@ export const en = {
   "landing.badge.owner_fix_auto": "Repair automatic operation",
   "landing.badge.auto_merge": "Merging into {{base}}",
   "landing.badge.owner_merge": "Please merge",
-  "landing.next.publishing": "Branvil is sending the head or opening a pull request on {{host}}",
+  "landing.next.publishing": "Sending the head or opening a pull request on {{host}}",
   "landing.next.owner_publish": "Your turn: publish to {{host}} from the pull request",
   "landing.next.host_checks": "Waiting for checks on {{host}}",
   "landing.next.owner_merge_host": "Your turn: merge on {{host}}",
-  "landing.next.following": "Waiting for Branvil to bring the host merge into {{base}}",
+  "landing.next.following": "Waiting for the host merge to be brought into {{base}}",
   "landing.next.owner_fix_following": "Your turn: restore following from {{host}}",
   "landing.next.host_closed": "Your turn: reopen on {{host}} or close this pull request",
   "landing.next.owner_fix_auto": "Your turn: resolve the automatic publish or merge failure",
-  "landing.next.auto_merge": "Branvil is merging into {{base}}",
+  "landing.next.auto_merge": "Merging into {{base}}",
   "landing.next.owner_merge": "Your turn: merge into {{base}} from the pull request",
   "landing.action": "Open for action",
   "landing.unanswered": "Awaiting the author's answer",
@@ -214,16 +214,16 @@ export const en = {
   "landing.check.postMergeSkipped": "Runs after merge",
   "settings.holdWhileFailing": "Hold regular PRs while base verification is failing",
   "settings.holdWhileFailingHelp":
-    "During a verification failure, Branvil allows only repair PRs to merge into the affected default or collection branch.",
+    "During a verification failure, only repair PRs can merge into the affected default or collection branch.",
   "settings.holdWhileFailingHelpUpstream":
-    "PRs without a repair ticket stay unpublished to {{host}} until main verification passes. Branvil cannot stop merges on {{host}} for PRs already published to {{host}}. Those PRs are shown as held. Branvil also holds local merges into failing collection branches except for their repair PRs.",
+    "PRs without a repair ticket stay unpublished to {{host}} until main verification passes. Merges on {{host}} of PRs already published to {{host}} cannot be stopped from here. Those PRs are shown as held. Local merges into failing collection branches are also held except for their repair PRs.",
   "landing.blocker.held": "Held (main failing)",
   "landing.held":
     "Held: main verification is failing (repair #{{number}}, assigned to {{name}}). The hold lifts when main verification passes.",
   "landing.heldUnassigned":
     "Held: main verification is failing (repair #{{number}}, unassigned). The hold lifts when main verification passes.",
   "landing.repairLink": "Open repair ticket #{{number}}",
-  "landing.heldPublished": "Merging on {{host}} is still possible; Branvil cannot stop it.",
+  "landing.heldPublished": "Merging on {{host}} is still possible; it cannot be stopped from here.",
   "landing.blocker.draft": "Draft",
   "landing.blocker.already_in_base": "Already in base",
   "landing.blocker.conflict": "Conflicts",
@@ -285,13 +285,13 @@ export const en = {
   "ci.postMergeReason":
     "This job runs only after merging, so it doesn't run on pull requests. It runs in the main verification after the merge. You can retry it to check it now.",
   "ci.mergeDecision": "Merge decision",
-  "ci.mergeDecisionNoRequired": "Branvil recorded no required checks for this head.",
+  "ci.mergeDecisionNoRequired": "No required checks were recorded for this head.",
   "ci.mergeDecisionUnavailable": "No merge decision checks were recorded for this pull request.",
   "ci.mergeDecisionAtPublication":
-    "Branvil’s required checks when it published this head to the upstream host.",
+    "The required checks when this head was published to the upstream host.",
   "ci.upstreamMergeHeadChecks": "Upstream PR head checks",
   "ci.upstreamMergeHeadChecksReason":
-    "Branvil records the PR head’s checks at import using the results from before any verification of the same commit on the receiving branch. The upstream PR shows the host’s merge decision.",
+    "The PR head’s checks are recorded at import using the results from before any verification of the same commit on the receiving branch. The upstream PR shows the host’s merge decision.",
   "ci.mergeDecisionNoResults": "No required check results were available at that time.",
   "ci.postMergeConfirmation": "Post-merge verification",
   "ci.postMergeStatus": "Post-merge verification: {{status}}",
@@ -371,7 +371,7 @@ export const en = {
 
   "upstream.title": "Upstream",
   "upstream.explain":
-    "The repository on a code host this one follows: Branvil's default branch moves only to the host's, and pull requests are published there to be merged by people. One member's account on the host reads it.",
+    "The repository on a code host this one follows: the default branch here moves only to the host's, and pull requests are published there to be merged by people. One member's account on the host reads it.",
   "upstream.none": "No upstream: pull requests are merged here.",
   "upstream.provider": "Host",
   "upstream.repository": "Repository there",
@@ -407,7 +407,7 @@ export const en = {
   "account.kind.token": "Token",
   "account.kind.app": "{{host}} App",
   "account.appHelp":
-    "The app's ID, the ID of its installation on the account that owns the repositories, and its private key. Branvil makes the app's short-lived tokens itself; the account acts as the app's bot.",
+    "The app's ID, the ID of its installation on the account that owns the repositories, and its private key. GuildBotics makes the app's short-lived tokens itself; the account acts as the app's bot.",
   "account.appId": "App ID",
   "account.installationId": "Installation ID",
   "account.privateKey": "Private key (PEM)",
@@ -421,24 +421,25 @@ export const en = {
   "publish.edit": "Edit title and body",
   "publish.body": "Body",
   "publish.source":
-    "They are Branvil's: {{host}} gets them as previewed, and an edit made on {{host}} is replaced when they change here.",
+    "They come from the pull request here: {{host}} gets them as previewed, and an edit made on {{host}} is replaced when they change here.",
   "publish.preview": "What will be posted",
   "publish.postedAs": "Posted on {{host}} as {{login}}.",
-  "publish.noAccount": "{{account}} has no {{host}} account in Branvil; set it under Members.",
+  "publish.noAccount": "{{account}} has no {{host}} account; set it under Members.",
   "publish.submit": "Publish to {{host}}",
   "publish.again": "Publish again to {{host}}",
-  "publish.confirmAgain": "Replace what {{host}} has on this branch with Branvil's head?",
+  "publish.confirmAgain": "Replace what {{host}} has on this branch with the head here?",
   "publish.publishing": "Publishing…",
   "publish.draft": "A draft is not published; mark it ready first.",
   "publish.auto":
     "This repository publishes it to {{host}} automatically when its head checks, approvals and other landing conditions are met.",
   "publish.automatically": "published automatically",
   "publish.notReady": "Not ready to publish: {{message}}",
-  "publish.mergeThere": "Published. People review and merge it on {{host}}; Branvil follows.",
+  "publish.mergeThere":
+    "Published. People review and merge it on {{host}}; the merge is brought back here.",
   "publish.noPullYet": "branch pushed, pull request not opened yet",
   "publish.as": "as {{account}}",
   "publish.stopped":
-    "Sending stopped: {{reason}} Publish again when the conditions are met to replace the host branch with Branvil's head.",
+    "Sending stopped: {{reason}} Publish again when the conditions are met to replace the host branch with the head here.",
   "publish.failing": "Last attempt failed (retried): {{reason}}",
 
   "member.create": "Create member",
@@ -557,7 +558,7 @@ export const en = {
     "The connection to the server is lost, so what you see may be out of date. Reconnecting…",
   "alert.executorUnavailable": "The CI runner cannot run jobs: {{detail}}",
   "alert.stopping":
-    "Branvil is stopping for an update or a restart once the running CI jobs finish. New jobs wait and start after it runs again.",
+    "GuildBotics is stopping for an update or a restart once the running CI jobs finish. New jobs wait and start after it runs again.",
   "alert.upstream": "The upstream of {{repository}} cannot be followed: {{problem}}",
   "alert.openSettings": "Open the repository settings",
   "board.summary": "{{workspace}} · {{count}} open",
@@ -657,9 +658,9 @@ export const en = {
   "settings.tabCi": "CI",
   "settings.autoLand": "Land automatically",
   "settings.autoLandHelp":
-    "When the required head checks and approvals are in place and the head does not conflict with the base, Branvil merges automatically. The combination with the base is verified after merging. Keep it a draft to hold it.",
+    "When the required head checks and approvals are in place and the head does not conflict with the base, it is merged automatically. The combination with the base is verified after merging. Keep it a draft to hold it.",
   "settings.autoLandHelpUpstream":
-    "When the required head checks and approvals are in place and the head does not conflict with the base, Branvil publishes to {{host}} automatically as the author. People merge on {{host}}. Once the {{host}} checks succeed, the Notifications webhook is notified for each PR. The combination with the base is verified after merging. Keep it a draft to hold it.",
+    "When the required head checks and approvals are in place and the head does not conflict with the base, it is published to {{host}} automatically in its author's name. People merge on {{host}}. Once the {{host}} checks succeed, the Notifications webhook is notified for each PR. The combination with the base is verified after merging. Keep it a draft to hold it.",
   "settings.notifications": "Notifications",
   "notifications.help":
     "When a PR in a repository that lands automatically becomes ready to merge on the host, this webhook is notified once per PR. The message links to both pull requests (a Slack Incoming Webhook accepts it). Creating a repair ticket after main verification fails sends one notice with the failed jobs, range, ticket URL and assignee. The same webhook receives notices when member work stops for a person, the automatic re-review limit is reached, or a Hub update stops. The webhook URL is kept like a credential and is never shown again.",
@@ -675,7 +676,7 @@ export const en = {
     "Assigned when main verification fails and the repair ticket cannot be assigned to a PR author. Automatic uses the active author of the most recently merged agent PR, then the first active person_id. An unavailable selected agent falls back to automatic assignment.",
   "settings.ciNetwork": "Network for jobs",
   "settings.ciNetworkHelp":
-    "Lets this repository's CI jobs use the network. They reach public destinations only, never the Branvil machine or private networks, and destinations are not filtered by host name.",
+    "Lets this repository's CI jobs use the network. They reach public destinations only, never the Hub or private networks, and destinations are not filtered by host name.",
   "ci.runnerVersionMismatch": "{{name}} reported version {{version}}, which differs from the Hub.",
   "ci.settings.title": "CI",
   "ci.settings.help": "Manage runners, resource limits, and network access for CI jobs.",
@@ -700,7 +701,7 @@ export const en = {
   "ci.settings.runnerMissingImages": "Missing images for {{cpu}}: {{images}}",
   "ci.settings.forwarding": "Set up SSH forwarding before joining",
   "ci.settings.forwardingUrl":
-    "https://github.com/GuildBotics/GuildBotics/blob/main/docs/branvil_integration.en.md#set-up-ssh-forwarding-on-another-machine",
+    "https://github.com/GuildBotics/GuildBotics/blob/main/docs/code_host.en.md#set-up-ssh-forwarding-on-another-machine",
   "ci.settings.lastReport": "Last report",
   "ci.settings.lastSeen": "last seen",
   "ci.settings.executor": "Executor",

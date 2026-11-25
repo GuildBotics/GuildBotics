@@ -90,7 +90,7 @@ impl AppError {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal",
-            "Branvil hit an internal error; see the service log.",
+            "GuildBotics hit an internal error; see the service log.",
         )
     }
 }

@@ -30,7 +30,7 @@ use crate::util;
 pub const MANIFEST: &str = "manifest.json";
 const FORMAT: u32 = 1;
 const DB_FILE: &str = "branvil.redb";
-const CONFIG_FILE: &str = "branvil.toml";
+const CONFIG_FILE: &str = "config.toml";
 /// Limit of one `git bundle` or restore fetch.
 const BUNDLE_TIMEOUT_SECS: u64 = 3600;
 
@@ -83,7 +83,7 @@ pub struct AccountEntry {
 const EXCLUDED: &[&str] = &[
     "members' upstream credentials and the webhook URL (in the service's vault, named after its data directory: set them again after a restore into another directory)",
     "hooks/ and git/ (written again at every start)",
-    "Git reflogs and repository-local Git configuration (Branvil re-applies its own at start)",
+    "Git reflogs and repository-local Git configuration (re-applied at every start)",
 ];
 
 #[derive(Deserialize, Debug)]
@@ -421,7 +421,7 @@ pub async fn restore(from: &Path, data_dir: &Path) -> anyhow::Result<u8> {
     let manifest: Manifest = serde_json::from_str(&text).context("reading the manifest")?;
     if manifest.format != FORMAT || manifest.service != "branvil" {
         bail!(
-            "{} is not a Branvil backup of format {FORMAT}",
+            "{} is not a code host backup of format {FORMAT}",
             from.display()
         );
     }
@@ -445,7 +445,7 @@ pub async fn restore(from: &Path, data_dir: &Path) -> anyhow::Result<u8> {
         }
     }
     println!(
-        "backup verified: {} files, created {} by Branvil {}",
+        "backup verified: {} files, created {} by GuildBotics {}",
         manifest.files.len(),
         manifest.created_at,
         manifest.branvil_version
@@ -459,8 +459,13 @@ pub async fn restore(from: &Path, data_dir: &Path) -> anyhow::Result<u8> {
     let layout = Layout::new(data_dir);
     layout.create()?;
     std::fs::copy(inside(from, DB_FILE)?, layout.db()).context("copying the database")?;
-    if from.join(CONFIG_FILE).exists() {
-        std::fs::copy(from.join(CONFIG_FILE), layout.config_file())?;
+    // A previous version's file keeps its name; the upgrade below copies it.
+    let config = match manifest.schema_version {
+        crate::upgrade::FROM => crate::upgrade::FROM_CONFIG_FILE,
+        _ => CONFIG_FILE,
+    };
+    if from.join(config).exists() {
+        std::fs::copy(from.join(config), layout.root.join(config))?;
     }
     for dir in [
         layout.ci_logs(),

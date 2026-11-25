@@ -515,7 +515,7 @@ async fn the_registration_deadline_polls_without_waiting_for_the_regular_interva
     let (mut w, gh) = followed().await;
     // Both regular intervals are an hour. Only the registration deadline
     // can poll the already-finished checks in time to send this notice.
-    let config = w.server.data.join("branvil.toml");
+    let config = w.server.data.join("config.toml");
     let text = std::fs::read_to_string(&config).unwrap();
     std::fs::write(
         &config,
@@ -572,7 +572,7 @@ async fn the_registration_deadline_polls_without_waiting_for_the_regular_interva
 async fn the_webhook_is_told_only_once_every_host_check_of_the_head_succeeded() {
     let (mut w, gh) = followed().await;
     // GitHub takes its time to register the checks of a new head.
-    let config = w.server.data.join("branvil.toml");
+    let config = w.server.data.join("config.toml");
     let text = std::fs::read_to_string(&config).unwrap();
     let text = text.replace(
         "checks_registration_secs = 0",
@@ -1009,7 +1009,7 @@ async fn an_automatic_missing_credential_is_persisted_and_clears_after_repair() 
 async fn a_statement_on_a_published_pull_request_holds_its_notice_until_answered() {
     let (mut w, _gh) = followed().await;
     // The host takes its time to register the checks of the head.
-    let config = w.server.data.join("branvil.toml");
+    let config = w.server.data.join("config.toml");
     let text = std::fs::read_to_string(&config).unwrap();
     std::fs::write(
         &config,

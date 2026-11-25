@@ -1,9 +1,10 @@
 # Security
 
-Branvil is a single-user service: one person, the owner, runs it on the
-GuildBotics Hub machine under their own OS account, and the clients are that
-person's browser, GuildBotics (its agents act as Branvil members whose kind
-fixes what they may do), Git clients, and the `branvil` CLI. Whoever can run commands as the
+Branvil, the code host inside GuildBotics, is single-user: one person, the
+owner, runs it on the GuildBotics Hub machine under their own OS account, and
+the clients are that person's browser, GuildBotics (its agents act as Branvil
+members whose kind fixes what they may do), Git clients, and the GuildBotics
+CLI (`guildbotics runner` and the Hub's update commands). Whoever can run commands as the
 Hub's OS user is the owner: the owner's token is a file in the data directory,
 and the GUI is entered with a link that file's token creates. This document says what Branvil defends
 against, how, where the code and tests are, and what it does not protect.
@@ -354,5 +355,5 @@ Their cookies and entry links remain separate, but the browser's origin boundary
 no longer separates the screens. Both use `loopback_auth::CSP`: scripts and fonts
 from self, no objects, no Tauri IPC sources. Rendered user content must remain
 sanitized; same-origin scripts can reach either service. Host and Origin checks
-still apply on each service's routes. Standalone Branvil continues to use its
-own configured origin.
+still apply on each service's routes. The test server (`test_support::serve`)
+uses its own origin.

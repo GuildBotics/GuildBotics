@@ -621,7 +621,7 @@ fi
             let data = dir.path().join("data");
             std::fs::create_dir_all(&data).unwrap();
             std::fs::write(
-                data.join("branvil.toml"),
+                data.join("config.toml"),
                 format!("[ci]\nlease_secs = {lease_secs}\n"),
             )
             .unwrap();

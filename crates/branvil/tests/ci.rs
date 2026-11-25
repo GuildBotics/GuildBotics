@@ -543,6 +543,7 @@ async fn previous_schema_upgrade_preserves_records() {
     assert_eq!(status, 200, "{result}");
     w.push_change("docs-upgrade", "notes.md", "documentation");
     w.open_pull("docs-upgrade", json!([])).await;
+    let merge_checks = checks(&w, 1).await["merge_checks"].clone();
     w.server.stop();
     let data = w.server.data.clone();
     let db = data.join("branvil.redb");
@@ -572,7 +573,7 @@ async fn previous_schema_upgrade_preserves_records() {
     let repos = records(&db, "repos");
     assert!(attempts.iter().any(|a| a["inputs"].is_string()));
     let indexed_memory = tables(&db)["ix_ci_memory"].clone();
-    as_schema_45(&db);
+    as_previous_schema(&db);
     let prior_runs = records(&db, "ci_runs");
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
@@ -584,7 +585,7 @@ async fn previous_schema_upgrade_preserves_records() {
     );
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 45 to 46"), "{output}");
+    assert!(output.contains("from schema version 46 to 47"), "{output}");
     assert_eq!(
         tables(&db).get("ix_repair_unnotified"),
         before.get("ix_repair_unnotified")
@@ -618,7 +619,7 @@ async fn previous_schema_upgrade_preserves_records() {
     assert_eq!(admin("upgrade").0, 0);
     assert_eq!(tables(&db), upgraded);
     w.restart(&[]);
-    assert!(checks(&w, 1).await["merge_checks"].is_null());
+    assert_eq!(checks(&w, 1).await["merge_checks"], merge_checks);
 }
 
 #[tokio::test]
@@ -1606,7 +1607,7 @@ where
 
 /// Sets `[ci]` values in the service's configuration (restart to apply).
 fn set_ci_config(w: &World, values: &[(&str, toml::Value)]) {
-    let path = w.server.data.join("branvil.toml");
+    let path = w.server.data.join("config.toml");
     let mut doc: toml::Table = std::fs::read_to_string(&path).unwrap().parse().unwrap();
     let ci = doc
         .entry("ci")
@@ -3321,7 +3322,7 @@ async fn a_job_still_running_when_the_stop_wait_ends_is_queued_again_in_its_plac
     assert_eq!(old["conclusion"], "cancelled");
     let details = old["details"].as_str().unwrap();
     assert!(
-        details.contains("Branvil stopped") && details.contains("in its place"),
+        details.contains("GuildBotics stopped") && details.contains("in its place"),
         "{old}"
     );
     assert_eq!(runner.finish(&running, "success").await.0, 409);

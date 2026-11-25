@@ -535,14 +535,14 @@ a force request made while GuildBotics is still finishing its work. On an
 orderly stop the combined server logs interrupted jobs and exits
 successfully so launchd leaves it stopped.
 
-- For standalone Branvil, SIGTERM stops CI first: the service gives out no job to any runner and
+- For the test server (`test_support::serve`), SIGTERM stops CI first: the service gives out no job to any runner and
   waits until no check runs, at most `ci.stop_wait_secs` (default 3600 s, the
   default job time limit), while it serves everything else, the runners'
   heartbeats, logs, and results among it. Jobs queued meanwhile wait and run
   after the next start. The diagnostics' and the CI settings' runner state is
   `stopping` meanwhile, and the GUI shows the owner a warning on every page; the
   service's log says how many jobs it waits for, and its standard output says
-  `branvil stopping: waiting for …` when running Branvil on its own.
+  `branvil stopping: waiting for …`.
 - A check still running when that time is up is interrupted ("Interrupted:
   Branvil stopped …; queued again in its place") and queued again in its place,
   so the next start runs it before the jobs queued after it (one already
@@ -728,19 +728,13 @@ Git of its machine).
 
 ### Join a Windows or Linux runner
 
-Install the GuildBotics client and [set up SSH forwarding to the Hub](../../../docs/branvil_integration.en.md#set-up-ssh-forwarding-on-another-machine) first.
-Use a Windows x86_64 machine or a Linux x86_64 desktop with glibc 2.36 or later,
-Git, the libcap-ng runtime, an unlocked Secret Service keyring, and read/write
-access to `/dev/kvm`. On Linux, keep the `hub-forward.service` user service
-running. Install Git on Windows as well.
-
-Run `guildbotics runner join` and approve **CI runner** access in the browser.
-The command verifies and installs msb 0.6.17 and stores the runner credential
-in the OS keychain. It registers a Windows login task or a systemd user service
-at `guildbotics-runner-<port>.service`. Joining again replaces the previous
-credential for that device. Work is kept under the machine's GuildBotics directory.
-Check Linux startup and restart logs with
-`journalctl --user -u guildbotics-runner-7878.service` (substitute the forwarded port).
+How the owner joins a machine is in the user guide,
+[Join another machine as a CI runner](../../../docs/code_host.en.md#join-another-machine-as-a-ci-runner).
+`guildbotics runner join` verifies and installs msb 0.6.17, stores the runner
+credential in the OS keychain, and registers a Windows login task or a systemd
+user service at `guildbotics-runner-<port>.service`. Joining again replaces the
+previous credential for that device. Work is kept under the machine's
+GuildBotics directory, and the runner reads `<machine root>/runner/config.toml`.
 The runner checks `/api/v1/runner/health` before claims. When the Hub version
 changes, the runner drains its attempts and exits. The login task or user service
 restarts it, and the client installs the matching build before it requests work.
@@ -758,7 +752,7 @@ guildbotics runner doctor                                          # which msb, 
 GUILDBOTICS_RUNNER_TOKEN=<runner token> guildbotics runner --url http://127.0.0.1:7878
 ```
 
-Or let the service supervise one: `[ci] runner = "auto"` in `branvil.toml`
+Or let the service supervise one: `[ci] runner = "auto"` in `config.toml`
 makes the server start `guildbotics runner` as a child (member
 `branvil-runner`, a token minted at every start and passed through the
 environment; the previous automatic token is revoked) and restart it when it
@@ -778,7 +772,7 @@ can take work, the warning names the incompatible runner even with the
 automatic runner switched off.
 
 Select a runner under Settings → CI to save its job resources. The Hub writes
-the override to `[ci.runner_limits.<name>]` in its `branvil.toml` while
+the override to `[ci.runner_limits.<name>]` in its `config.toml` while
 preserving the rest of the file. Without an override, the Hub supplies its
 `[ci.executor]` defaults. The form shows whether it uses the defaults or
 values saved for the selected runner. Every successful claim supplies the resources for

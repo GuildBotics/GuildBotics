@@ -94,12 +94,12 @@ pub async fn run_hook(name: &str) -> i32 {
     );
     let pre = name == "pre-receive";
     if url.is_empty() || secret.is_empty() || repo.is_empty() {
-        eprintln!("branvil: this push did not come through Branvil; refused.");
+        eprintln!("guildbotics: this push did not come through GuildBotics; refused.");
         return if pre { 1 } else { 0 };
     }
     let mut input = String::new();
     if std::io::stdin().read_to_string(&mut input).is_err() {
-        eprintln!("branvil: cannot read the hook input.");
+        eprintln!("guildbotics: cannot read the hook input.");
         return 1;
     }
     let client = reqwest::Client::new();
@@ -139,22 +139,22 @@ pub async fn run_hook(name: &str) -> i32 {
             match answer {
                 Some(a) if a.ok => 0,
                 Some(a) => {
-                    eprintln!("branvil: {}", a.message);
+                    eprintln!("guildbotics: {}", a.message);
                     if pre { 1 } else { 0 }
                 }
                 None => {
-                    eprintln!("branvil: unexpected answer from the service.");
+                    eprintln!("guildbotics: unexpected answer from the service.");
                     if pre { 1 } else { 0 }
                 }
             }
         }
         Err(_) => {
             if pre {
-                eprintln!("branvil: the service cannot be reached; push refused.");
+                eprintln!("guildbotics: the service cannot be reached; push refused.");
                 1
             } else {
                 eprintln!(
-                    "branvil: the service cannot be reached; it records this push when it restarts."
+                    "guildbotics: the service cannot be reached; it records this push when it restarts."
                 );
                 0
             }

@@ -94,9 +94,9 @@ npm run quality       # format:check + lint + typecheck + duplicates + test（E2
 
 ### E2E（Playwright・実ブラウザ + 実 Local API backend）
 
-Branvil の画面の検証も同じ構成で動かします。`npm run e2e -- --project=configured`
+タスクボード、プルリクエスト、タスクフロー、CI の設定の画面の検証も同じ構成で動かします。`npm run e2e -- --project=configured`
 でチケットの作成・移動・イベント反映、セッションの復帰と表示の検証を実行します。
-一時サーバーの共有セッションを使い、単体の Branvil バイナリは起動しません。
+一時サーバーの共有セッションを使い、コードホストだけを別のプロセスで起動することはしません。
 1 枚のカードだけの一時盤面の計測には `GUILDBOTICS_E2E_PERF=1` を指定します。
 大規模盤面の性能比較には使えません。
 

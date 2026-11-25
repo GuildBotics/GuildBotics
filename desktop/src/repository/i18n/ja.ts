@@ -25,12 +25,12 @@ export const ja: Record<MessageKey, string> = {
   "common.copy": "コピー",
   "common.copied": "コピーしました",
   "common.notProvided": "未記入",
-  "common.notAvailableYet": "このBranvilではまだ利用できません。",
+  "common.notAvailableYet": "このサーバーではまだ利用できません。",
   "common.forbidden": "権限がありません。",
   "common.sessionChanged":
     "今回の書き込みは保存されていません。入力した内容を控えてから、ページを再読み込みしてもう一度お試しください。",
   "common.networkError":
-    "Branvilに届きません。HubでBranvilが動いているか確認してください。Hub以外のマシンから開いている場合は、OpenSSHの転送サービスが動いているかも確認してください。",
+    "GuildBoticsのサーバーに届きません。HubでGuildBoticsが動いているか確認してください。Hub以外のマシンから開いている場合は、OpenSSHの転送サービスが動いているかも確認してください。",
 
   "nav.main": "メイン",
   "nav.home": "ホーム",
@@ -186,15 +186,15 @@ export const ja: Record<MessageKey, string> = {
   "landing.badge.owner_fix_auto": "自動処理の失敗を解消してください",
   "landing.badge.auto_merge": "{{base}}へマージ中",
   "landing.badge.owner_merge": "マージしてください",
-  "landing.next.publishing": "Branvilが{{host}}へ送信・PR作成を進めています",
+  "landing.next.publishing": "{{host}}へ送信・PR作成を進めています",
   "landing.next.owner_publish": "オーナーの番：PR画面から{{host}}へ公開してください",
   "landing.next.host_checks": "{{host}}のチェックを待っています",
   "landing.next.owner_merge_host": "オーナーの番：{{host}}でマージしてください",
-  "landing.next.following": "Branvilがホストのマージを{{base}}へ取り込むのを待っています",
+  "landing.next.following": "ホストのマージを{{base}}へ取り込むのを待っています",
   "landing.next.owner_fix_following": "オーナーの番：{{host}}からの取り込みを復旧してください",
   "landing.next.host_closed": "オーナーの番：{{host}}で開き直すか、このPRを閉じてください",
   "landing.next.owner_fix_auto": "オーナーの番：自動公開・マージの失敗を解消してください",
-  "landing.next.auto_merge": "Branvilが{{base}}へマージしています",
+  "landing.next.auto_merge": "{{base}}へマージしています",
   "landing.next.owner_merge": "オーナーの番：PR画面から{{base}}へマージしてください",
   "landing.action": "操作する画面を開く",
   "landing.unanswered": "作者の返答待ち",
@@ -218,14 +218,14 @@ export const ja: Record<MessageKey, string> = {
   "settings.holdWhileFailingHelp":
     "確認が失敗している間は、その既定ブランチまたは集約ブランチへの手動・自動マージを修復 PR に限ります。",
   "settings.holdWhileFailingHelpUpstream":
-    "修復チケットにつながっていない PR は、main の確認が通るまで {{host}} に出しません。すでに {{host}} に出ている PR は、{{host}} でのマージを Branvil は止められません。その PR は保留中と表示します。確認が失敗している集約ブランチへのマージも、その修復 PR に限ります。",
+    "修復チケットにつながっていない PR は、main の確認が通るまで {{host}} に出しません。すでに {{host}} に出ている PR の {{host}} でのマージは、ここからは止められません。その PR は保留中と表示します。確認が失敗している集約ブランチへのマージも、その修復 PR に限ります。",
   "landing.blocker.held": "保留中（main の失敗）",
   "landing.held":
     "保留中：main の確認が失敗しています（修復 #{{number}}、担当 {{name}}）。main の確認が通ると、保留が解けます。",
   "landing.heldUnassigned":
     "保留中：main の確認が失敗しています（修復 #{{number}}、担当なし）。main の確認が通ると、保留が解けます。",
   "landing.repairLink": "修復チケット #{{number}} を開く",
-  "landing.heldPublished": "{{host}} ではマージできますが、Branvil は止められません。",
+  "landing.heldPublished": "{{host}} ではマージできますが、ここからは止められません。",
   "landing.blocker.draft": "ドラフト",
   "landing.blocker.already_in_base": "baseに取り込み済み",
   "landing.blocker.conflict": "衝突",
@@ -288,9 +288,9 @@ export const ja: Record<MessageKey, string> = {
   "ci.postMergeReason":
     "マージ後だけ流すジョブなので、PR では流していません。マージのあとの main の確認で流れます。今すぐ確かめたいときは再実行で流せます。",
   "ci.mergeDecision": "マージの判定",
-  "ci.mergeDecisionNoRequired": "この head に対する Branvil の必須チェックはありませんでした。",
+  "ci.mergeDecisionNoRequired": "この head に対する必須チェックはありませんでした。",
   "ci.mergeDecisionUnavailable": "この PR のマージ判定に使ったチェックは記録されていません。",
-  "ci.mergeDecisionAtPublication": "Branvil がこの head を上流に公開した時点の必須チェックです。",
+  "ci.mergeDecisionAtPublication": "この head を上流に公開した時点の必須チェックです。",
   "ci.upstreamMergeHeadChecks": "上流 PR の head チェック",
   "ci.upstreamMergeHeadChecksReason":
     "上流マージの取り込み時点で確認した、受け入れブランチの検証より前の PR 側のチェックです。上流ホストのマージ判定は上流 PR にあります。",
@@ -373,7 +373,7 @@ export const ja: Record<MessageKey, string> = {
 
   "upstream.title": "上流",
   "upstream.explain":
-    "このリポジトリが追従するコードホスト上のリポジトリです。Branvil の既定ブランチは上流に合わせてだけ進み、PR は上流に出して人がマージします。上流の読み取りには、メンバー 1 人のアカウントを使います。",
+    "このリポジトリが追従するコードホスト上のリポジトリです。こちらの既定ブランチは上流に合わせてだけ進み、PR は上流に出して人がマージします。上流の読み取りには、メンバー 1 人のアカウントを使います。",
   "upstream.none": "上流はありません。PR はここでマージします。",
   "upstream.provider": "ホスト",
   "upstream.repository": "上流のリポジトリ",
@@ -409,7 +409,7 @@ export const ja: Record<MessageKey, string> = {
   "account.kind.token": "トークン",
   "account.kind.app": "{{host}} App",
   "account.appHelp":
-    "App の ID、リポジトリを持つアカウントへのインストールの ID、秘密鍵を入力します。短期トークンは Branvil が作り、アカウントは App のボットとして動きます。",
+    "App の ID、リポジトリを持つアカウントへのインストールの ID、秘密鍵を入力します。短期トークンは GuildBotics が作り、アカウントは App のボットとして動きます。",
   "account.appId": "App ID",
   "account.installationId": "インストール ID",
   "account.privateKey": "秘密鍵（PEM）",
@@ -423,14 +423,14 @@ export const ja: Record<MessageKey, string> = {
   "publish.edit": "タイトルと本文を直す",
   "publish.body": "本文",
   "publish.source":
-    "元は Branvil の PR です。{{host}} には「投稿される内容」の形で届き、{{host}} で直しても、ここで変わったときに上書きされます。",
+    "ここの PR の内容が元です。{{host}} には「投稿される内容」の形で届き、{{host}} で直しても、ここで変わったときに上書きされます。",
   "publish.preview": "投稿される内容",
   "publish.postedAs": "{{host}} には {{login}} として投稿します。",
   "publish.noAccount":
-    "{{account}} の {{host}} アカウントが Branvil に登録されていません。メンバー設定で登録してください。",
+    "{{account}} の {{host}} アカウントが登録されていません。メンバー設定で登録してください。",
   "publish.submit": "{{host}} に出す",
   "publish.again": "{{host}} にもう一度出す",
-  "publish.confirmAgain": "{{host}} のこのブランチを、Branvil の head で置き換えますか？",
+  "publish.confirmAgain": "{{host}} のこのブランチを、ここの head で置き換えますか？",
   "publish.publishing": "出しています…",
   "publish.draft": "ドラフトは出せません。先にレビュー可能にしてください。",
   "publish.auto":
@@ -438,11 +438,11 @@ export const ja: Record<MessageKey, string> = {
   "publish.automatically": "自動で出しました",
   "publish.notReady": "まだ出せません：{{message}}",
   "publish.mergeThere":
-    "出しました。{{host}} で人がレビューしてマージし、Branvil はそれに追従します。",
+    "出しました。{{host}} で人がレビューしてマージし、そのマージをここへ取り込みます。",
   "publish.noPullYet": "ブランチは push 済み、PR はまだ開いていません",
   "publish.as": "{{account}} として",
   "publish.stopped":
-    "送信を止めています：{{reason}} 条件がそろったらもう一度公開すると、上流のブランチを Branvil の head で置き換えます。",
+    "送信を止めています：{{reason}} 条件がそろったらもう一度公開すると、上流のブランチをここの head で置き換えます。",
   "publish.failing": "直近の試行に失敗（再試行します）：{{reason}}",
 
   "member.create": "メンバーを作成",
@@ -562,7 +562,7 @@ export const ja: Record<MessageKey, string> = {
     "サーバーとの接続が切れています。画面は最新でないかもしれません。再接続しています…",
   "alert.executorUnavailable": "CI のランナーがジョブを実行できません: {{detail}}",
   "alert.stopping":
-    "Branvil は更新か再起動のため、実行中の CI ジョブが終わったら止まります。新しいジョブは待って、起動し直してから始まります。",
+    "GuildBotics は更新か再起動のため、実行中の CI ジョブが終わったら止まります。新しいジョブは待って、起動し直してから始まります。",
   "alert.upstream": "{{repository}} の上流を追従できていません: {{problem}}",
   "alert.openSettings": "リポジトリの設定を開く",
   "board.summary": "{{workspace}} · オープン {{count}} 件",
@@ -661,9 +661,9 @@ export const ja: Record<MessageKey, string> = {
   "settings.tabCi": "CI",
   "settings.autoLand": "自動で取り込む",
   "settings.autoLandHelp":
-    "head の必須チェックと承認がそろい、base と衝突しなければ、Branvil が自動でマージします。base との組み合わせは、マージのあとに確かめます。止めておくにはドラフトのままにしてください。",
+    "head の必須チェックと承認がそろい、base と衝突しなければ、自動でマージします。base との組み合わせは、マージのあとに確かめます。止めておくにはドラフトのままにしてください。",
   "settings.autoLandHelpUpstream":
-    "head の必須チェックと承認がそろい、base と衝突しなければ、Branvil が作成者として自動で {{host}} に出します。マージは {{host}} で人が行います。{{host}} のチェックが成功すると、PR ごとに「通知」の webhook に知らせます。base との組み合わせは、マージのあとに確かめます。止めておくにはドラフトのままにしてください。",
+    "head の必須チェックと承認がそろい、base と衝突しなければ、作成者として自動で {{host}} に出します。マージは {{host}} で人が行います。{{host}} のチェックが成功すると、PR ごとに「通知」の webhook に知らせます。base との組み合わせは、マージのあとに確かめます。止めておくにはドラフトのままにしてください。",
   "settings.notifications": "通知",
   "notifications.help":
     "自動で取り込むリポジトリの PR がホストでマージできるようになると、PR ごとに 1 回知らせます。メッセージには両方の PR へのリンクがあり、Slack の Incoming Webhook がそのまま受け取れます。mainの確認が失敗して修復チケットを作ると、落ちたジョブ、範囲、チケットのURL、担当を1回知らせます。メンバーの作業が人の対応を待って止まったとき、自動再レビューの上限に達したとき、Hubの更新が止まったときも同じwebhookで知らせます。webhookのURLは資格情報として保管し、二度と表示しません。",
@@ -680,7 +680,7 @@ export const ja: Record<MessageKey, string> = {
     "main の確認が落ちたとき、修復チケットの担当が PR の作者で決まらない場合に付ける。自動では、在籍中の AI メンバー（agent）の PR のうち最後にマージされたものの作者か、person_id 順の先頭を選ぶ。指定したメンバーが作業できない場合も自動で担当を決める。",
   "settings.ciNetwork": "ジョブのネットワーク",
   "settings.ciNetworkHelp":
-    "このリポジトリの CI ジョブにネットワークの利用を許可します。届くのは公開された宛先だけで、Branvil のマシンやプライベートネットワークには届きません。ホスト名による絞り込みはありません。",
+    "このリポジトリの CI ジョブにネットワークの利用を許可します。届くのは公開された宛先だけで、Hub やプライベートネットワークには届きません。ホスト名による絞り込みはありません。",
   "ci.runnerVersionMismatch": "{{name}} の版（{{version}}）は Hub と異なります。",
   "ci.settings.title": "CI",
   "ci.settings.help": "CI のランナー、ジョブのリソース上限、ネットワークアクセスを管理します。",
@@ -705,7 +705,7 @@ export const ja: Record<MessageKey, string> = {
   "ci.settings.runnerMissingImages": "{{cpu}} 向けの不足イメージ: {{images}}",
   "ci.settings.forwarding": "参加の前に SSH 転送を設定",
   "ci.settings.forwardingUrl":
-    "https://github.com/GuildBotics/GuildBotics/blob/main/docs/branvil_integration.ja.md#hub-以外のマシンで-ssh-転送を設定する",
+    "https://github.com/GuildBotics/GuildBotics/blob/main/docs/code_host.ja.md#hub-以外のマシンで-ssh-転送を設定する",
   "ci.settings.lastReport": "最後の報告",
   "ci.settings.lastSeen": "最終接続",
   "ci.settings.executor": "実行環境",

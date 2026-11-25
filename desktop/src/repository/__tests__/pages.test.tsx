@@ -892,7 +892,7 @@ describe("pages", () => {
     const warnings = await screen.findByRole("region", { name: "Warnings" });
     expect(
       await within(warnings).findByText(
-        /Branvil is stopping for an update or a restart once the running CI jobs finish/,
+        /GuildBotics is stopping for an update or a restart once the running CI jobs finish/,
       ),
     ).toBeInTheDocument();
   });
@@ -911,7 +911,7 @@ describe("pages", () => {
     const warnings = await screen.findByRole("region", { name: "Warnings" });
     expect(
       within(warnings).getByText(
-        /Branvil is stopping for an update or a restart once the running CI jobs finish/,
+        /GuildBotics is stopping for an update or a restart once the running CI jobs finish/,
       ),
     ).toBeInTheDocument();
   });

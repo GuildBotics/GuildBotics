@@ -262,7 +262,7 @@ impl Server {
         self.api
             .branvil
             .set(branvil.clone())
-            .map_err(|_| anyhow::anyhow!("Branvil already attached"))?;
+            .map_err(|_| anyhow::anyhow!("the code host is already attached"))?;
         self.api
             .select(Selected::open(workspace, &self.api, Some(branvil)));
         Ok(())
@@ -350,7 +350,7 @@ impl Server {
             startup_api
                 .branvil
                 .set(data_api.clone())
-                .map_err(|_| anyhow::anyhow!("Branvil already attached"))?;
+                .map_err(|_| anyhow::anyhow!("the code host is already attached"))?;
             let workspace = startup_api.selected().workspace.clone();
             if let Some(workspace) = &workspace {
                 crate::member::native::ensure_branvil_agents(&startup_api, workspace).await;
@@ -360,7 +360,7 @@ impl Server {
             // Ready means the selection is published and open to operations.
             drop(preparing);
             ready_tx.send_replace(true);
-            tracing::info!("Branvil ready on the shared listener");
+            tracing::info!("Code host ready on the shared listener");
             Ok::<_, anyhow::Error>(Some(embedded))
         });
         let (work, cancelled) = (self.api.work.clone(), self.api.cancelled.clone());

@@ -2399,7 +2399,7 @@ pub fn expire(w: &Wtx, now: &str) -> AppResult<Vec<(String, String)>> {
         interrupt(
             w,
             &old,
-            "the runner stopped renewing its lease (runner lost or Branvil restarted)",
+            "the runner stopped renewing its lease (runner lost or GuildBotics restarted)",
             now,
         )?;
         changed.push((old.repo_path.clone(), old.sha.clone()));
@@ -4825,13 +4825,13 @@ mod tests {
         // Only the given runner's.
         let changed = s.write_sync(|w| interrupt_running(w, Some("other"), "-", T2));
         assert!(changed.unwrap().is_empty());
-        s.write_sync(|w| interrupt_running(w, Some("R"), "Branvil stopped", T2))
+        s.write_sync(|w| interrupt_running(w, Some("R"), "GuildBotics stopped", T2))
             .unwrap();
         let old = s
             .read_sync(|r| get_attempt(r, &again.attempt.id))
             .unwrap()
             .unwrap();
-        assert!(old.details.unwrap().contains("Branvil stopped; retry"));
+        assert!(old.details.unwrap().contains("GuildBotics stopped; retry"));
         assert_eq!(
             s.write_sync(|w| claim(w, "r", 60, T2))
                 .unwrap()

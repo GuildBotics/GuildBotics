@@ -24,7 +24,7 @@ while the backup runs. `restore` puts the code host's part into
 branvil-2026-10-14/          (0700)
 ├── manifest.json            versions, tables, repositories, checksums, exclusions (written last)
 ├── branvil.redb             the database as of one read transaction
-├── branvil.toml             the configuration file
+├── config.toml              the configuration file
 ├── repos/<repo id>.bundle   `git bundle --all` of each repository with refs
 ├── ci/logs/, ci/artifacts/  CI logs and artifacts
 └── attachments/             images attached to tickets
@@ -201,11 +201,14 @@ new data directory; when the upgrade fails, the restored directory is left
 at the previous version, and `guildbotics server hub-data upgrade --data-dir <it>` finishes
 it once the cause is fixed).
 
-Version 18 → 19 (`src/upgrade.rs`): CI attempts gain automatic-retry lineage,
-runner-wait state, and the delivery time of their recovery notice. Existing
-attempts keep their results and logs and
-start without automatic-retry metadata or pending recovery notices. The
-upgrade rebuilds indexes. It does not schedule retries of historical failures.
+Version 46 → 47 (`src/upgrade.rs`): the configuration file `branvil.toml` in
+the data directory is copied to `config.toml`, and the automatic runner's
+stored display name changes to "GuildBotics runner (automatic)" unless the
+owner renamed it. `branvil.toml` stays for the previous build, which a rolled
+back update runs again; the owner removes it once the update is confirmed. A
+backup of version 46 holds the file under its old name; restore places it as
+it is, and its upgrade copies it. Every upgrade also binds the GuildBotics
+workspaces' execution roots.
 
 ### The integrated Hub service
 

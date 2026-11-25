@@ -1237,7 +1237,7 @@ mod tests {
         let origin = "http://127.0.0.1:7878";
         for (input, fail) in [
             (
-                "capability[]=authtype\r\ncapability[]=state\r\nprotocol=http\r\nhost=127.0.0.1:7878\r\npath=git/acme/demo.git\r\nwwwauth[]=Basic realm=branvil\r\n\r\n",
+                "capability[]=authtype\r\ncapability[]=state\r\nprotocol=http\r\nhost=127.0.0.1:7878\r\npath=git/acme/demo.git\r\nwwwauth[]=Basic realm=GuildBotics\r\n\r\n",
                 false,
             ),
             ("protocol=http\nhost=127.0.0.1:7878", false),
@@ -1274,7 +1274,7 @@ mod tests {
                 assert_eq!(
                     String::from_utf8(error).unwrap(),
                     format!(
-                        "Branvil is not reachable at {origin}. Check that Branvil is running on this machine.\n"
+                        "The GuildBotics server is not reachable at {origin}. Check that GuildBotics is running on this machine.\n"
                     )
                 );
             } else {

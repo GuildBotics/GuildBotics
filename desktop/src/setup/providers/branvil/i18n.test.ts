@@ -7,8 +7,8 @@ describe("Branvil workspace guidance", () => {
     const t = i18n.getFixedT(language);
     expect(t("overview.diagnosticChecks.branvil_workspace.description", { target: "acme" })).toBe(
       language === "en"
-        ? "Check that the workspace acme exists on Branvil."
-        : "ワークスペース acme が Branvil にあるか確認してください。",
+        ? "Check that the workspace acme exists in GuildBotics."
+        : "ワークスペース acme が GuildBotics にあるか確認してください。",
     );
   });
 });

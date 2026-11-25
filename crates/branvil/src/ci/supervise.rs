@@ -20,6 +20,7 @@ use crate::store::{self, Rd};
 use crate::util;
 
 pub const AUTO_RUNNER: &str = "branvil-runner";
+pub const AUTO_RUNNER_DISPLAY_NAME: &str = "GuildBotics runner (automatic)";
 
 /// Mints the token of the next child. The previous child is gone (it ends with
 /// its service, or before the next start): the jobs it held are interrupted
@@ -42,7 +43,7 @@ async fn mint_token(app: &Shared) -> AppResult<String> {
                         w,
                         &NewMember {
                             name: AUTO_RUNNER.into(),
-                            display_name: Some("Branvil runner (automatic)".into()),
+                            display_name: Some(AUTO_RUNNER_DISPLAY_NAME.into()),
                             kind: MemberKind::Runner,
                         },
                     )?;
@@ -51,7 +52,7 @@ async fn mint_token(app: &Shared) -> AppResult<String> {
             let changed = queue::interrupt_running(
                 w,
                 Some(AUTO_RUNNER),
-                "the automatic runner stopped before it finished (Branvil stopped, or the runner exited)",
+                "the automatic runner stopped before it finished (GuildBotics stopped, or the runner exited)",
                 &now,
             )?;
             Ok((

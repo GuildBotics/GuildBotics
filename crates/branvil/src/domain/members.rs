@@ -296,7 +296,7 @@ pub async fn issue_token(
     super::check_text("label", &input.label, 256)?;
     if auth::is_reserved_label(&input.label) {
         return Err(AppError::invalid(format!(
-            "The label {} is reserved for tokens Branvil issues itself.",
+            "The label {} is reserved for tokens GuildBotics issues itself.",
             input.label
         )));
     }

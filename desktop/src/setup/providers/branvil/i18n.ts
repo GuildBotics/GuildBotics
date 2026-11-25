@@ -4,14 +4,14 @@ export const branvil = {
     overview: {
       diagnosticSuccess: {
         branvil_workspace: {
-          title: "The Branvil workspace was read",
+          title: "The workspace was read",
           description: "The workspace {{target}} was read.",
         },
       },
       diagnosticChecks: {
         branvil_workspace: {
-          title: "The Branvil workspace could not be read",
-          description: "Check that the workspace {{target}} exists on Branvil.",
+          title: "The workspace could not be read",
+          description: "Check that the workspace {{target}} exists in GuildBotics.",
         },
       },
     },
@@ -20,14 +20,14 @@ export const branvil = {
     overview: {
       diagnosticSuccess: {
         branvil_workspace: {
-          title: "Branvil のワークスペースを読み取りました",
+          title: "ワークスペースを読み取りました",
           description: "ワークスペース {{target}} を読み取りました。",
         },
       },
       diagnosticChecks: {
         branvil_workspace: {
-          title: "Branvil のワークスペースを読み取れませんでした",
-          description: "ワークスペース {{target}} が Branvil にあるか確認してください。",
+          title: "ワークスペースを読み取れませんでした",
+          description: "ワークスペース {{target}} が GuildBotics にあるか確認してください。",
         },
       },
     },

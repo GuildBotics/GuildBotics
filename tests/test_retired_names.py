@@ -1,8 +1,11 @@
-"""Keep the retired Branvil environment names and CI directory out of the repository."""
+"""Keep the retired Branvil names out of the repository and of the text people read."""
 
 import re
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 ENVIRONMENT_NAME = re.compile(r"(?<![A-Z0-9_])BRANVIL_[A-Z0-9_]+")
@@ -16,6 +19,15 @@ STORED_SECRET_FILES = {
     "docs/hub-server.md": STORED_SECRETS,
 }
 GIT_TOKEN_FILES = {"docs/secret_migration.md", "records/golden/secret_migration.json"}
+# The code host's former product name. Code keeps it; the docs, the screens and
+# the messages call the code host by GuildBotics and its features.
+PRODUCT_NAME = "Branvil"
+OUTWARD_TEXT = re.compile(
+    r"README(\.ja)?\.md|docs/.+\.md|desktop/README\.md|skills/.+\.md"
+    r"|crates/gb-member/README\.md|guildbotics/templates/(member|commands)/.+\.md"
+    r"|guildbotics/templates/locales/.+\.yml"
+    r"|desktop/src/(repository/i18n/(en|ja)|setup/providers/[^/]+/i18n)\.ts"
+)
 
 
 def tracked_files() -> list[str]:
@@ -30,6 +42,27 @@ def retired_names(name: str, text: str) -> set[str]:
     if RETIRED_DIRECTORY in text:
         found.add(RETIRED_DIRECTORY)
     return found
+
+
+def strings(value: object) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from strings(item)
+
+
+def names_the_product(name: str, text: str) -> bool:
+    if not OUTWARD_TEXT.fullmatch(name):
+        return False
+    if name.endswith(".yml"):
+        # Locale keys name the code; their values are what people read.
+        values = strings(yaml.safe_load(text))
+        return any(PRODUCT_NAME.lower() in value.lower() for value in values)
+    return PRODUCT_NAME in text
 
 
 def test_a_retired_name_is_found() -> None:
@@ -58,6 +91,34 @@ def test_no_tracked_file_uses_a_retired_name() -> None:
             continue
         if names:
             found[name] = names
+    assert not found
+
+
+def test_the_product_name_is_found_only_in_outward_text() -> None:
+    assert names_the_product("README.md", "Run Branvil")
+    assert names_the_product("docs/code_host.ja.md", "Branvil の画面")
+    assert names_the_product(
+        "desktop/src/repository/i18n/ja.ts", '"Branvil に届きません"'
+    )
+    assert names_the_product("desktop/src/setup/providers/slack/i18n.ts", "Branvil")
+    locale = "guildbotics/templates/locales/integrations/branvil/api.en.yml"
+    assert names_the_product(locale, "api:\n  hint: see docs/branvil_integration.md\n")
+    assert not names_the_product(
+        locale, "branvil:\n  api:\n    stopped: The code host stopped.\n"
+    )
+    assert not names_the_product("docs/code_host.en.md", "the crate `crates/branvil`")
+    assert not names_the_product("AGENTS.md", "Branvil")
+    assert not names_the_product("crates/branvil/docs/api.md", "Branvil")
+    assert not names_the_product("desktop/src/App.tsx", "Branvil")
+
+
+def test_no_outward_text_names_the_product() -> None:
+    found = [
+        name
+        for name in tracked_files()
+        if OUTWARD_TEXT.fullmatch(name)
+        and names_the_product(name, (ROOT / name).read_text(encoding="utf-8"))
+    ]
     assert not found
 
 

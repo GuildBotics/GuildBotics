@@ -8,11 +8,12 @@ document and the implementation disagree, fix the document (see `AGENTS.md`).
 
 ## 1. System Overview
 
-GuildBotics runs AI agents as _team members_ that collaborate through Branvil and Slack.
-A scheduler starts one worker per active member; workers pick up work from Branvil
+GuildBotics runs AI agents as _team members_ that collaborate through the embedded code
+host (`crates/branvil`) and Slack.
+A scheduler starts one worker per active member; workers pick up work from the code host
 (tickets) or from incoming Slack events, then delegate the actual
 investigation/editing/judgment to an external AI CLI tool (Codex, Claude Code, Grok Build). External side effects that the AI agent performs _as the member_
-— git pushes, Branvil comments and PRs, Slack posts, memory writes — go through a single
+— git pushes, ticket comments and PRs, Slack posts, memory writes — go through a single
 boundary: the `guildbotics member ...` CLI (member capability). Workflows additionally
 perform a narrow set of orchestration/status writes of their own (see §3).
 
@@ -30,7 +31,7 @@ Users interact with the system through:
 ```text
 guildbotics server start                 Rust host, one process on the Hub
   ├─ GuildBotics screens and /-/guildbotics/api        gb-server, loopback port 7878 by default
-  ├─ Branvil screens, Git and HTTP API   branvil, loopback port 7878 by default
+  ├─ code host screens, Git and HTTP API   branvil, loopback port 7878 by default
   └─ one microVM per command            gb-environment
        └─ guildbotics.guest.entry       Python commands, subcommands and AI CLI turns
 ```
@@ -38,9 +39,9 @@ guildbotics server start                 Rust host, one process on the Hub
 `gb-config` resolves workspace settings, team and member data, command names and
 declarations, and brain slots. `gb-server` uses those results to start a command
 and write its records through `gb-observability`. Member operations live in
-`gb-server/src/member/`, which calls the embedded Branvil's agent module for
+`gb-server/src/member/`, which calls the embedded code host's agent module for
 tickets and pull requests; `gb-member` keeps the parts the client also uses.
-`gb-integrations` selects the chat provider. Branvil uses no GuildBotics crate
+`gb-integrations` selects the chat provider. The code host uses no GuildBotics crate
 but `gb-base`. `gb-setup` validates setup changes, `gb-workspace` owns
 workspace selection and identity, and `gb-base` owns the shared file and path
 operations used across crates.
@@ -84,7 +85,7 @@ workflow (orchestration)
   and chat selection (`gb-server/src/chat_dispatch.rs`) — moves the board lane and
   posts the rate-limit / failure status on the ticket or in the Slack thread.
 - **CLI agent**: reads the ticket/thread, investigates, edits, and decides. It never
-  receives Branvil or Slack tokens and never calls provider APIs directly; every external
+  receives code host or Slack tokens and never calls provider APIs directly; every external
   write goes through `guildbotics member ...`.
 - **Trusted member transport**: interactive skill sessions invoke the member CLI
   directly. Every native provider session instead receives one authenticated MCP tool,
@@ -140,12 +141,12 @@ Trust rules that follow from this shape:
   evidence), the ticket PR, and the code host's PRs that refer to the ticket
   (`ticket_pull_requests`), each only when the member authored it (the patrol resumes a
   member only for its own PRs), then revalidates each open PR against the code host's current state;
-  closed and merged PRs are excluded. The required head checks from Branvil landing
+  closed and merged PRs are excluded. The required head checks from the code host's landing
   govern run completion (all head checks for repair PRs). Failed checks reject done;
   running checks require `member checks await`, accepted only when none failed.
   Patrol resumes when required checks finish or the head changes. Unanswered feedback,
   conflicts, upstream checks, approvals and Draft do not prevent ending a run.
-  PR merge eligibility belongs to Branvil landing. Push/publish reports required checks;
+  PR merge eligibility belongs to the code host's landing. Push/publish reports required checks;
   lookup failure does not turn a successful push into a failed command.
 
 - Credentials are resolved by the member CLI itself from the active workspace (config +
@@ -163,7 +164,7 @@ The layer model and its guard tests are described in `AGENTS.md`
 
 ### External services
 
-Tickets, pull requests, and CI are the embedded Branvil's. `gb-server` calls its agent
+Tickets, pull requests, and CI are the embedded code host's. `gb-server` calls its agent
 module (`branvil/src/agent/`, `TicketAgent` and `CodeAgent`) as the member, through
 `gb-server/src/member.rs`'s `Agents`, which acts within the workspace
 `project.services` names for each. Chat is the one service with providers:
@@ -179,14 +180,14 @@ module (`branvil/src/agent/`, `TicketAgent` and `CodeAgent`) as the member, thro
 
 What these share lives in `gb-base/src/service.rs`:
 
-- **People.** Authors, assignees, and reviewers are Branvil account names, which are the
+- **People.** Authors, assignees, and reviewers are code host account names, which are the
   members' person ids; chat uses the chat's account names (`ActorName`). `member context`
   publishes the team roster so agents can resolve these names and address a teammate.
 - **References.** Tickets and pull requests are named by their URLs; a read is
   `read(resource, subject)`, the subject being the item's URL or, for repository
   information, the repository's path (`workspace/repo`). Comments, reviews, threads,
   CI jobs, artifacts, and attachments are opaque string ids that mean something only
-  together with their item's URL. Reads and writes return Branvil's own views. A write
+  together with their item's URL. Reads and writes return the code host's own views. A write
   also names its work target, `{kind: ticket | pull_request, url, title, label}`, which
   the trace and the run evidence record and the member's output leaves out.
 - **Failures.** `ServiceError` carries a locale key and safe arguments, never what the
@@ -198,7 +199,7 @@ What these share lives in `gb-base/src/service.rs`:
 - **A workflow status** (`WorkflowStatus`) is what a run that did not finish leaves where
   its work came from: a comment's `meta`, or chat message metadata, given back on
   reading. The ticket selector sends work-stop notices for the owner through
-  Branvil's shared webhook. The workflow status on the original item still drives patrol.
+  the code host's shared webhook. The workflow status on the original item still drives patrol.
 - **Write scope.** Each service's configuration names a workspace; a write goes only to
   a repository directly in it (`check_path`), a push only to the code host's.
 - **Selection rules are GuildBotics' own.** The shared patrol code decides which pull
@@ -207,8 +208,8 @@ What these share lives in `gb-base/src/service.rs`:
   ticket is a member's work now (`branvil/src/agent/selection.rs`) by applying these
   shared rules to observations of the embedded service.
 
-`branvil` (`branvil/src/agent/`) is a code host and tickets of a
-[Branvil](branvil_integration.en.md) service that every machine reaches at the same
+The `branvil` provider (`branvil/src/agent/`) is the code host and tickets of the
+[embedded service](code_host.en.md) that every machine reaches at the same
 base URL. Its API answers raw data (comments with an opaque `meta` carrying a workflow
 status, reviews, threads, checks); the agent module applies the rules above to it. The
 agent calls the embedded service in the server's process, without a token:
@@ -226,7 +227,7 @@ with its member, command, source (routine, scheduled, event queue or manual),
 trigger, run ID and work identity. Selection happens before dispatch.
 
 - **Ticket workflow** (`workflows/ticket_driven_workflow`, the default routine,
-  `TICKET_WORKFLOW_COMMAND`): a routine that _polls_ the configured board (Branvil) and the code host's pull requests. The board is treated as a loose
+  `TICKET_WORKFLOW_COMMAND`): a routine that _polls_ the configured board and the code host's pull requests. The board is treated as a loose
   queue/trigger — GuildBotics does not reimplement fine-grained code-host/git
   operations around it, and there is no webhook receiver (local-first design). The
   candidates are the pull requests that ask something of the member
@@ -244,7 +245,7 @@ trigger, run ID and work identity. Selection happens before dispatch.
   is excluded only from the assigned work's decision history. The task keeps the full
   conversation; initial work, unanswered summons, held status and linked-PR completion
   still use their own evidence. Comments without mentions keep the ordinary behavior.
-  Branvil returns resolved mentions with the body or comment and supports a
+  The code host returns resolved mentions with the body or comment and supports a
   workspace query for tickets that mention the member. The local provider
   scans its files. Assignment and unanswered mentions are rechecked before
   dispatch.
@@ -308,7 +309,7 @@ Invariants:
   undeclared commands fail closed as write-capable instead of being classified from
   command-name strings.
 - `guildbotics server start` runs both services in one foreground process
-  when Branvil has been initialized. The host holds
+  when the code host has been initialized. The host holds
   `<machine-state-root>/run/app-api.lock` until the process exits. A second
   server using that root refuses to start. `service.lock` covers scheduler
   workers and listeners only while they run. A lock file's presence alone
@@ -325,12 +326,12 @@ Invariants:
 - Before judging the batch, selection records its event IDs and last
   message timestamp as `chat_batch` evidence on the task run. Completion acknowledges
   and removes those IDs. Additional `chat_updates` input is acknowledged only on
-  done/asking after a subsequent chat reply, post, reaction, Branvil write, or Git publication. Blocked runs and updates
+  done/asking after a subsequent chat reply, post, reaction, ticket or pull request write, or Git publication. Blocked runs and updates
   with no later external action remain queued for another run.
   Messages not delivered to the agent also remain queued. The dispatcher reloads the thread on its next pass. Recovery
   after a recorded completion uses that saved membership, not a newly fetched
   thread, so it cannot acknowledge unread messages or repeat completed actions.
-- Before replying, reacting, pushing Git commits, or writing to Branvil, a chat agent
+- Before replying, reacting, pushing Git commits, or writing to tickets or pull requests, a chat agent
   calls `guildbotics member chat updates --person <person>`.
   The command returns `new_messages`, `up_to_date`, `catching_up`, or `unavailable` from the durable
   queue for the run's original thread, which is the run's work as the host settled it,
@@ -728,7 +729,7 @@ process, and processes of their own such as a local `guildbotics run` or
 (`gb-workspace/src/identity.rs`). The workspace ID is in `state/workspace.json`: the member CLI
 names the workspace it means by it, so a backend serving another selection refuses rather
 than acting there. The device ID and its display name (the host name) are in
-`~/.guildbotics/data/device.json`; records carry the device ID, and the owner's Branvil git token
+`~/.guildbotics/data/device.json`; records carry the device ID, and the owner's code host git token
 is labelled with it. Neither identity authenticates anything. Shared
 records derive from `SharedRecord` (`gb-workspace/src/identity.rs`), which rejects unknown
 fields, so machine-local data is kept out of them by structure rather than by a list of
@@ -807,10 +808,10 @@ transfer format. Dollar expressions are literal and key-only lines are
 rejected before saving. Real environment variables can supply configured keys;
 a workspace `.env` is never read at startup. Tests inject a temporary keychain.
 
-Branvil keeps only the owner's token in its data directory's `secrets/`.
+The code host keeps only the owner's token in its data directory's `secrets/`.
 Members' upstream credentials and the webhook URL are in the identity store
 under lower-case `branvil_*` names (`gb-server/src/branvil_vault.rs`), so
-`--identities` export and import carry them too. See Branvil's
+`--identities` export and import carry them too. See the code host's
 [backup and restore guide](../crates/branvil/docs/backup-restore.md) for what a
 backup includes.
 
@@ -919,7 +920,7 @@ backup includes.
 `desktop/` is a React (Mantine, TanStack Query) frontend that the server serves to a
 browser; the repository is a monorepo on purpose. The server runs from a checkout on the
 Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
-[`scripts/hub-server.sh`](hub-server.md) installs. The LaunchAgent runs a signed copy of the locally built Rust executable, at one fixed path so that macOS keeps the access it granted, with Branvil in the same process.
+[`scripts/hub-server.sh`](hub-server.md) installs. The LaunchAgent runs a signed copy of the locally built Rust executable, at one fixed path so that macOS keeps the access it granted, with the code host in the same process.
 
 - **Local API boundary**: the browser calls the Rust backend (`gb-server`), which serves both the API under `/-/guildbotics/api`,
   the shared `/api/v1/events` change stream, and the screens themselves (the Vite build of
@@ -930,7 +931,7 @@ Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
   server that proxies `/-/guildbotics/api` to it. GuildBotics runs
   on one machine, the Hub; other machines reach it from a browser through SSH forwarding
   to the same port (`scripts/hub-forward.sh` / `.ps1`, plain OpenSSH user services).
-- **Authentication** (`gb-server/src/auth.rs`, as Branvil's "Entering the GUI"): there is one
+- **Authentication** (`gb-server/src/auth.rs`, as the code host's "Entering the GUI"): there is one
   person, the owner, and no sign-in screen.
   - The server keeps its records in `~/.guildbotics/data/server/<port>/` (`0700`):
     `owner.token` (`0600`) and `auth.json` (tokens and sessions, by SHA-256 only). A
@@ -946,8 +947,8 @@ Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
     `Referer`. The page removes it from the address bar and exchanges it at
     `POST /-/guildbotics/api/session` for the session cookie `guildbotics_session_<port>` (`HttpOnly`,
     `SameSite=Strict`, 30 days; the port is in the name because cookies are not
-    separated by port, which also keeps it apart from Branvil's `branvil_session`) and
-    its CSRF value. As in Branvil, a session ends after its 30 days however much it is
+    separated by port, which also keeps it apart from the code host's `branvil_session`) and
+    its CSRF value. As in the code host, a session ends after its 30 days however much it is
     used, and the screen then says how to enter again. Every non-GET
     request made with the cookie must carry `X-GuildBotics-CSRF`, else
     `403 csrf_mismatch`. `guildbotics open [--print]` is that client on the command
@@ -995,12 +996,12 @@ Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
     taken before the client's next connection (later requests usually reuse the proved
     connection).
 - **Runtime lifecycle**: `guildbotics server start` runs one foreground process.
-  It owns one listener and `app-api.lock` until both services exit. Branvil's
+  It owns one listener and `app-api.lock` until both services exit. The code host's
   `prepare_embedded` returns a router and data/shutdown handles without binding;
   its routes return 503 until recovery completes. GuildBotics routes take
-  precedence over Branvil's GUI fallback. `guildbotics server stop` drains
+  precedence over the code host's GUI fallback. `guildbotics server stop` drains
   GuildBotics' work first, including service shutdown, private login, worktree
-  writebacks, snapshot builds, and VM cleanup. Branvil keeps giving out CI jobs
+  writebacks, snapshot builds, and VM cleanup. The code host keeps giving out CI jobs
   throughout that wait. Only then does it stop giving out jobs and wait for
   running CI jobs, bounded by `ci.stop_wait_secs`. The screens and the CLI stay
   available meanwhile: the API refuses
@@ -1055,7 +1056,7 @@ Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
   mounts read-only. This keeps
   prompts small and lets it follow leads into other executions and into the commands and
   settings they ran with. What it reads
-  is untrusted — logs carry Branvil ticket bodies, chat messages and external tool output —
+  is untrusted — logs carry ticket bodies, chat messages and external tool output —
   which is why the read-only confinement above is enforced rather than requested. It returns
   the answer plus the trace ids it read, and the backend drops any id that was never
   recorded before the frontend turns it into a link. The record detail and the assistant
