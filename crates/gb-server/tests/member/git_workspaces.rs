@@ -432,6 +432,80 @@ async fn initialization_and_reassignment_failures_preserve_their_registration() 
     assert!(f.workspace("one").commit(&path, "noop").await.is_ok());
 }
 #[tokio::test]
+async fn prepare_prunes_stale_tracking_refs_before_writing_their_replacements() {
+    let f = Fixture::new().await;
+    let head = git(&f.remote, &["rev-parse", "refs/heads/main"]);
+    git(&f.remote, &["update-ref", "refs/heads/Feature", &head]);
+    let path = f.prepare("one", "ticket/1").await;
+
+    let tracking_refs = || {
+        git(
+            &path,
+            &[
+                "for-each-ref",
+                "--format=%(refname) %(objectname)",
+                "refs/remotes/origin/",
+            ],
+        )
+    };
+    for (old, new, batches) in [
+        ("Feature", "Feature", 1),
+        ("Feature", "feature", 2),
+        ("feature", "feature/child", 2),
+        ("feature/child", "feature", 2),
+        ("feature", "renamed", 2),
+    ] {
+        if old != new {
+            git(
+                &f.remote,
+                &["update-ref", "-d", &format!("refs/heads/{old}")],
+            );
+            git(
+                &f.remote,
+                &["update-ref", &format!("refs/heads/{new}"), &head],
+            );
+        }
+        f.guest.calls.lock().unwrap().clear();
+        assert_eq!(f.prepare("one", "ticket/1").await, path);
+        let mut expected = [
+            format!("refs/remotes/origin/main {head}"),
+            format!("refs/remotes/origin/{new} {head}"),
+        ];
+        expected.sort();
+        assert_eq!(tracking_refs(), expected.join("\n"), "{old} -> {new}");
+
+        // Linux can handle a case-only rename in one batch. Check the batch
+        // count as well so CI guards the behavior needed on the Hub volume.
+        let calls = f.guest.calls.lock().unwrap();
+        let actual = calls
+            .iter()
+            .filter(|(cwd, args, _)| {
+                cwd == &path && args == &["git", "update-ref", "--no-deref", "--stdin"]
+            })
+            .count();
+        assert_eq!(actual, batches, "{old} -> {new}");
+    }
+    git(&f.remote, &["update-ref", "-d", "refs/heads/renamed"]);
+    git(&f.remote, &["update-ref", "refs/heads/recovered", &head]);
+    let lock = path.join(".git/refs/remotes/origin/recovered.lock");
+    std::fs::write(&lock, "").unwrap();
+    assert!(
+        f.workspace("one")
+            .prepare("acme/repo", "ticket/1")
+            .await
+            .is_err()
+    );
+    assert_eq!(tracking_refs(), format!("refs/remotes/origin/main {head}"));
+
+    std::fs::remove_file(lock).unwrap();
+    assert_eq!(f.prepare("one", "ticket/1").await, path);
+    assert_eq!(
+        tracking_refs(),
+        format!("refs/remotes/origin/main {head}\nrefs/remotes/origin/recovered {head}")
+    );
+}
+
+#[tokio::test]
 async fn published_and_tag_history_remains_reusable_after_remote_deletion() {
     let f = Fixture::new().await;
     let first = f.prepare("one", "ticket/1").await;

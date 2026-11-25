@@ -1506,37 +1506,23 @@ EOF"#;
             .await?
             .text();
         let existing: std::collections::BTreeSet<_> = existing.lines().collect();
-        let mut updates = String::new();
-        let mut blocking = String::new();
+        let mut deletes = String::new();
         for &reference in &existing {
-            if !reference.starts_with("refs/remotes/origin/") || refs.contains_key(reference) {
-                continue;
+            if reference.starts_with("refs/remotes/origin/") && !refs.contains_key(reference) {
+                deletes.push_str(&format!("delete {reference}\n"));
             }
-            // Git's files backend cannot delete a ref and create a ref at a
-            // parent or child path in the same transaction.
-            let prefix = format!("{reference}/");
-            let has_child = refs
-                .range(prefix.clone()..)
-                .next()
-                .is_some_and(|(name, _)| name.starts_with(&prefix));
-            let has_parent = reference
-                .match_indices('/')
-                .any(|(end, _)| refs.contains_key(&reference[..end]));
-            let batch = if has_child || has_parent {
-                &mut blocking
-            } else {
-                &mut updates
-            };
-            batch.push_str(&format!("delete {reference}\n"));
         }
-        if !blocking.is_empty() {
+        // Release stale names first so Git can lock replacements that alias them
+        // by case on the filesystem or use their paths as directories.
+        if !deletes.is_empty() {
             self.git(
                 &path,
                 &["update-ref", "--no-deref", "--stdin"],
-                blocking.into_bytes(),
+                deletes.into_bytes(),
             )
             .await?;
         }
+        let mut updates = String::new();
         for (reference, name) in &refs {
             if !reference.starts_with("refs/tags/") || !existing.contains(reference.as_str()) {
                 updates.push_str(&format!("update {reference} {name}\n"));
