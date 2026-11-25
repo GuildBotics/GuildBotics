@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { dictionaries } from "../test/words";
 import { apiError, fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
+import { fill } from "../../test/fill";
 import { choose, pickFromMenu } from "../test/mantine";
 import { ticketNamed } from "../views/ticket/Relations";
 import { card } from "./fixtures";
@@ -159,7 +160,7 @@ describe("ticket view", () => {
     await user.type(body, "   ");
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     await user.clear(body);
-    await user.type(body, "Edited comment");
+    await fill(user, body, "Edited comment");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Cannot save.");
     expect(body).toHaveValue("Edited comment");
@@ -496,7 +497,7 @@ describe("ticket view", () => {
     const body = screen.getByRole("textbox", { name: "Description" });
     expect(body).toHaveValue("Old body");
     await user.clear(body);
-    await user.type(body, "New body");
+    await fill(user, body, "New body");
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(fake.calls("PATCH", TICKET)).toHaveLength(2));
     expect(fake.calls("PATCH", TICKET)[1]?.body).toEqual({ body: "New body", revision: 4 });
@@ -656,7 +657,7 @@ describe("ticket view", () => {
     renderApp("/workspaces/acme/repos/demo/tickets/1");
     expect(await screen.findByText("GitHub issue")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Edit the issue URL" }));
-    await user.type(screen.getByLabelText("Issue URL"), issue);
+    await fill(user, screen.getByLabelText("Issue URL"), issue);
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(fake.calls("PATCH", TICKET)).toHaveLength(1));
     expect(fake.calls("PATCH", TICKET)[0]?.body).toEqual({ upstream_issue: issue });
@@ -710,13 +711,13 @@ describe("ticket view", () => {
     await user.click(
       (await group("Child tickets")).getByRole("button", { name: "Add to Child tickets" }),
     );
-    await user.type(screen.getByLabelText("Ticket to add to Child tickets"), "nope");
+    await fill(user, screen.getByLabelText("Ticket to add to Child tickets"), "nope");
     await user.click(screen.getByRole("button", { name: "Add" }));
     expect(
       await screen.findByText("Name a ticket as #12, repository#12, or its URL."),
     ).toBeInTheDocument();
     await user.clear(screen.getByLabelText("Ticket to add to Child tickets"));
-    await user.type(screen.getByLabelText("Ticket to add to Child tickets"), "#5");
+    await fill(user, screen.getByLabelText("Ticket to add to Child tickets"), "#5");
     await user.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() =>
       expect(fake.calls("PATCH", "/api/v1/repos/acme/demo/tickets/5")).toHaveLength(1),
@@ -741,7 +742,7 @@ describe("ticket view", () => {
       { remove_blocked_by: [shown.blocked_by[0]?.url] },
     ]);
     await user.click((await group("Blocks")).getByRole("button", { name: "Add to Blocks" }));
-    await user.type(screen.getByLabelText("Ticket to add to Blocks"), "acme/web#6");
+    await fill(user, screen.getByLabelText("Ticket to add to Blocks"), "acme/web#6");
     await user.click(screen.getByRole("button", { name: "Add" }));
     await waitFor(() =>
       expect(fake.calls("PATCH", "/api/v1/repos/acme/web/tickets/6")).toHaveLength(1),

@@ -898,16 +898,18 @@ describe("pages", () => {
   });
 
   it("waits for service warnings beyond the former one-second query deadline", async () => {
-    fakeApi({
-      ...SHELL,
-      "GET /api/v1/admin/diagnostics": async () => {
-        await new Promise((resolve) => setTimeout(resolve, 1_100));
-        return json(200, {
-          runner: { state: "stopping", detail: "Branvil is stopping.", mode: "off" },
-        });
-      },
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const diagnostics = vi.fn(async () => {
+      // Native AbortSignal.timeout uses a clock that fake timers do not advance.
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      return json(200, {
+        runner: { state: "stopping", detail: "Branvil is stopping.", mode: "off" },
+      });
     });
+    fakeApi({ ...SHELL, "GET /api/v1/admin/diagnostics": diagnostics });
     renderApp("/settings/repositories/members");
+    await waitFor(() => expect(diagnostics).toHaveBeenCalled());
+    await act(() => vi.advanceTimersByTimeAsync(1_100));
     const warnings = await screen.findByRole("region", { name: "Warnings" });
     expect(
       within(warnings).getByText(

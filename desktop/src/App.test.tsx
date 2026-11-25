@@ -1,8 +1,5 @@
-import { createTheme } from "@mantine/core";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { TFunction } from "i18next";
-import { HashRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -41,7 +38,8 @@ import "./i18n";
 import { makeTraceRecord } from "./test/factories";
 import { EntryPage } from "./session/EntryPage";
 import { resumeSession } from "./api/client";
-import { TestMantineProvider } from "./test/TestMantineProvider";
+import { runtimeUnit } from "./test/factories";
+import { renderWithProviders } from "./test/render";
 
 function t(): TFunction {
   return i18n.getFixedT("en") as TFunction;
@@ -214,17 +212,21 @@ describe("App", () => {
     expect(await screen.findAllByText("Registry is invalid")).toHaveLength(1);
   });
   it("clears a recovered input-store alert without changing workspace", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = await getConfigStatus();
-    vi.mocked(getConfigStatus).mockResolvedValueOnce({
+    vi.mocked(getConfigStatus).mockResolvedValue({
       ...status,
       input_store_problem: "Input folder is unavailable",
     });
     window.location.hash = "#/service";
     renderApp();
     expect(await screen.findByText("Input folder is unavailable")).toBeInTheDocument();
-    await waitFor(
-      () => expect(screen.queryByText("Input folder is unavailable")).not.toBeInTheDocument(),
-      { timeout: 4000 },
+    vi.mocked(getConfigStatus).mockResolvedValue(status);
+    const reads = vi.mocked(getConfigStatus).mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(vi.mocked(getConfigStatus).mock.calls.length).toBeGreaterThan(reads);
+    await waitFor(() =>
+      expect(screen.queryByText("Input folder is unavailable")).not.toBeInTheDocument(),
     );
   });
   it("shows the refused workspace reason while leaving setup accessible", async () => {
@@ -979,58 +981,16 @@ describe("isStopTimeoutPending", () => {
 });
 
 function renderApp(withSession = false) {
-  const theme = createTheme({
-    primaryColor: "dark",
-    defaultRadius: "md",
-  });
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <TestMantineProvider theme={theme}>
-      <QueryClientProvider client={queryClient}>
-        <HashRouter>
-          {withSession ? (
-            <EntryPage>
-              <App />
-            </EntryPage>
-          ) : (
-            <App />
-          )}
-        </HashRouter>
-      </QueryClientProvider>
-    </TestMantineProvider>,
+  return renderWithProviders(
+    withSession ? (
+      <EntryPage>
+        <App />
+      </EntryPage>
+    ) : (
+      <App />
+    ),
+    { router: "hash" },
   );
-}
-
-function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {
-  return {
-    target,
-    state: "stopped",
-    running: false,
-    started_at: null,
-    stopped_at: null,
-    error: null,
-    max_consecutive_errors: null,
-    routine_interval_minutes: null,
-    active_member_count: 1,
-    worker_count: 0,
-    scheduled_source_enabled: null,
-    routine_source_enabled: null,
-    event_queue_source_enabled: null,
-    subscription_count: 0,
-    listener_count: 0,
-    cycle_count: 0,
-    cycle_failure_count: 0,
-    events_drained_count: 0,
-    events_auth_failed_count: 0,
-    events_auth_failed_persons: [],
-    events_missing_credential_count: 0,
-    events_missing_credential_persons: [],
-    events_chat_provider: "",
-    member_routines: [],
-    member_pull_requests: {},
-  };
 }
 
 describe("traceTitle / traceSubtitle", () => {

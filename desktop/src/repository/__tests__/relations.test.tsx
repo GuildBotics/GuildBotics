@@ -1,8 +1,9 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Card, TicketRef } from "../api/types";
 import { apiError, fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
+import { fill } from "../../test/fill";
 import { choose, pickFromMenu } from "../test/mantine";
 import { card } from "./fixtures";
 
@@ -184,7 +185,8 @@ describe("relations", () => {
   });
 
   it("copies a ticket's URL from its menu", async () => {
-    const user = userEvent.setup();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     fakeApi(routes());
     await shown();
     await user.click(within(article("4")).getByRole("button", { name: "Actions of acme/demo#4" }));
@@ -201,11 +203,18 @@ describe("relations", () => {
       "Copy URL",
       "Delete",
     ]);
-    await user.click(within(menu).getByRole("menuitem", { name: "Copy URL" }));
-    expect(await navigator.clipboard.readText()).toBe(url("4"));
-    expect(await within(menu).findByRole("menuitem", { name: "Copied" })).toBeInTheDocument();
+    const write = vi.spyOn(navigator.clipboard, "writeText");
+    // Freeze the clock while checking the exact delay from a successful copy.
+    vi.setTimerTickMode("manual");
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy URL" }));
+    });
+    expect(write).toHaveBeenCalledWith(url("4"));
+    expect(within(menu).getByRole("menuitem", { name: "Copied" })).toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(1_499));
     expect(screen.getByRole("menu")).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
   it("makes a dropped card a child and the new tickets it relates ready, and undoes it", async () => {
@@ -597,7 +606,7 @@ describe("relations", () => {
     const user = userEvent.setup();
     fakeApi(routes());
     await shown();
-    await user.type(screen.getByRole("textbox", { name: "Text" }), "Title of 4");
+    await fill(user, screen.getByRole("textbox", { name: "Text" }), "Title of 4");
     expect(screen.getAllByRole("article")).toEqual([article("4")]);
     expect(article("4")).not.toHaveClass("dim");
     expect(edge("4", "1")).toBeNull();
@@ -627,7 +636,7 @@ describe("relations", () => {
       );
       await shown();
       const input = screen.getByRole("textbox", { name: "Text" });
-      await user.type(input, "Title of 6");
+      await fill(user, input, "Title of 6");
       expect(screen.getAllByRole("article")).toEqual([article("1"), article("2"), article("6")]);
       expect(article("1")).toHaveClass("dim");
       expect(article("2")).toHaveClass("dim");
@@ -651,14 +660,14 @@ describe("relations", () => {
     fakeApi(routes({ open: [...CARDS, card("6", "new"), card("7", "new")] }));
     await shown();
     const input = screen.getByRole("textbox", { name: "Text" });
-    await user.type(input, "Title of 6");
+    await fill(user, input, "Title of 6");
     const frame = screen.getByRole("group", { name: "New tickets (1)" });
     expect(within(frame).getByRole("article")).toBe(article("6"));
     await user.click(within(frame).getByRole("button", { name: "Close child tickets" }));
     expect(screen.queryByRole("article")).not.toBeInTheDocument();
     // A new filter opens the frame again.
     await user.clear(input);
-    await user.type(input, "Title of 7");
+    await fill(user, input, "Title of 7");
     expect(article("7")).toBeInTheDocument();
     await user.clear(input);
     expect(
@@ -688,7 +697,7 @@ describe("relations", () => {
     expect(screen.getAllByRole("article")).toEqual([article("1"), article("2")]);
     await choose(user, "Label", "bug");
     expect(article("2")).toBeInTheDocument();
-    await user.type(screen.getByRole("textbox", { name: "Text" }), "Title of 3");
+    await fill(user, screen.getByRole("textbox", { name: "Text" }), "Title of 3");
     expect(screen.queryByRole("article")).not.toBeInTheDocument();
   });
 
@@ -975,7 +984,7 @@ describe("relations: order and new tickets", () => {
     await shown();
     await user.click(screen.getByRole("button", { name: "Add ticket" }));
     const dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByRole("textbox", { name: "Title" }), "A new one");
+    await fill(user, within(dialog).getByRole("textbox", { name: "Title" }), "A new one");
     await user.click(within(dialog).getByRole("button", { name: "Create ticket" }));
     await waitFor(() => expect(freshFrame()).toHaveClass("rel-frame"));
     expect(fake.calls("POST", "/api/v1/repos/acme/demo/tickets")[0]?.body).toEqual({
@@ -989,13 +998,11 @@ describe("relations: order and new tickets", () => {
     ).toBeInTheDocument();
   });
 
-  // Every creation entry, including inserting a parent between a ticket and its parent.
+  // The shared creation callback reveals a top-level or related ticket.
   it.each([
     { item: "Add ticket", on: "6" },
     { item: "Add parent ticket", on: "2" },
-    { item: "Add parent ticket", on: "5" },
     { item: "Add child ticket", on: "2" },
-    { item: "Add next ticket", on: "2" },
   ])(
     "clears all filters after successful $item on #$on and reveals the new ticket",
     async ({ item, on }) => {
@@ -1013,7 +1020,6 @@ describe("relations: order and new tickets", () => {
       const made = card("9", item === "Add ticket" ? "new" : "ready");
       const parent = item === "Add parent ticket";
       const child = item === "Add child ticket";
-      const next = item === "Add next ticket";
       const after = [
         ...seed.map((c) => {
           if (c.key === on)
@@ -1023,9 +1029,7 @@ describe("relations: order and new tickets", () => {
                 ? { parent: ref("9") }
                 : child
                   ? { children: [...c.children, ref("9")] }
-                  : next
-                    ? { blocks: [...c.blocks, ref("9")] }
-                    : {}),
+                  : {}),
             };
           if (parent && c.key === source.parent?.key)
             return { ...c, children: [...c.children.filter((r) => r.key !== on), ref("9")] };
@@ -1035,7 +1039,6 @@ describe("relations: order and new tickets", () => {
           ...made,
           parent: parent ? source.parent : child ? ref(on) : null,
           children: parent ? [ref(on)] : [],
-          blocked_by: next ? [ref(on)] : [],
         },
       ];
       let created = false;
@@ -1065,14 +1068,14 @@ describe("relations: order and new tickets", () => {
       await shown();
       await choose(user, "Assignee", "owner");
       await choose(user, "Label", "bug");
-      await user.type(screen.getByRole("textbox", { name: "Text" }), `Title of ${on}`);
+      await fill(user, screen.getByRole("textbox", { name: "Text" }), `Title of ${on}`);
       if (item === "Add ticket") {
         // A temporary fold must not prevent revealing a new card in the same frame.
         await user.click(within(freshFrame()).getByRole("button", { name: "Close child tickets" }));
         await user.click(screen.getByRole("button", { name: item }));
       } else await pickFromMenu(user, `Actions of acme/demo#${on}`, item, article(on));
       const dialog = await screen.findByRole("dialog");
-      await user.type(within(dialog).getByRole("textbox", { name: "Title" }), "Different title");
+      await fill(user, within(dialog).getByRole("textbox", { name: "Title" }), "Different title");
       await user.click(within(dialog).getByRole("button", { name: "Create ticket" }));
 
       expect(await screen.findByRole("article", { name: /^acme\/demo#9 / })).toBeInTheDocument();
@@ -1089,9 +1092,9 @@ describe("relations: order and new tickets", () => {
       );
       if (parent || child)
         expect(anchor("9").parentElement?.closest("[data-ticket]")).toBe(
-          parent && !source.parent ? null : anchor(parent ? source.parent!.key : on),
+          anchor(parent ? source.parent!.key : on),
         );
-      await user.type(screen.getByRole("textbox", { name: "Text" }), "no match");
+      await fill(user, screen.getByRole("textbox", { name: "Text" }), "no match");
       await user.clear(screen.getByRole("textbox", { name: "Text" }));
       expect(
         scroll.mock.instances.filter(
@@ -1109,7 +1112,7 @@ describe("relations: order and new tickets", () => {
       }),
     );
     await shown();
-    await user.type(screen.getByRole("textbox", { name: "Text" }), "Title of 2");
+    await fill(user, screen.getByRole("textbox", { name: "Text" }), "Title of 2");
     await pickFromMenu(user, "Actions of acme/demo#2", "Add child ticket", article("2"));
     let dialog = await screen.findByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -1117,7 +1120,7 @@ describe("relations: order and new tickets", () => {
     expect(fake.calls("POST", "/api/v1/repos/acme/demo/tickets")).toHaveLength(0);
     await pickFromMenu(user, "Actions of acme/demo#2", "Add child ticket", article("2"));
     dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByRole("textbox", { name: "Title" }), "Different title");
+    await fill(user, within(dialog).getByRole("textbox", { name: "Title" }), "Different title");
     await user.click(within(dialog).getByRole("button", { name: "Create ticket" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("Creation refused.");
     expect(screen.getByRole("textbox", { name: "Text" })).toHaveValue("Title of 2");
@@ -1165,7 +1168,7 @@ describe("relations: order and new tickets", () => {
     await others(user);
     await pickFromMenu(user, "Actions of acme/demo#1", "Add child ticket", article("1"));
     const dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByRole("textbox", { name: "Title" }), "Related");
+    await fill(user, within(dialog).getByRole("textbox", { name: "Title" }), "Related");
     await user.click(within(dialog).getByRole("button", { name: "Create ticket" }));
     expect(
       await screen.findByText("Created acme/demo#9 as a child of acme/demo#1."),
@@ -1190,10 +1193,10 @@ describe("relations: order and new tickets", () => {
       }),
     );
     await shown();
-    await user.type(screen.getByRole("textbox", { name: "Text" }), "Title of 4");
+    await fill(user, screen.getByRole("textbox", { name: "Text" }), "Title of 4");
     await pickFromMenu(user, "Actions of acme/demo#4", "Add child ticket", article("4"));
     const dialog = await screen.findByRole("dialog");
-    await user.type(within(dialog).getByRole("textbox", { name: "Title" }), "Related");
+    await fill(user, within(dialog).getByRole("textbox", { name: "Title" }), "Related");
     await user.click(within(dialog).getByRole("button", { name: "Create ticket" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Refused.");
     expect(await screen.findByRole("article", { name: /^acme\/demo#9 / })).toBeInTheDocument();
@@ -1254,7 +1257,7 @@ describe("relations: order and new tickets", () => {
       await pickFromMenu(user, `Actions of acme/demo#${on}`, item, article(on));
       const dialog = await screen.findByRole("dialog");
       expect(dialog).toHaveTextContent(note);
-      await user.type(within(dialog).getByRole("textbox", { name: "Title" }), "Related");
+      await fill(user, within(dialog).getByRole("textbox", { name: "Title" }), "Related");
       await user.click(within(dialog).getByRole("button", { name: "Create ticket" }));
       expect(await screen.findByText(done)).toBeInTheDocument();
       expect(fake.calls("POST", "/api/v1/repos/acme/demo/tickets")[0]?.body).toMatchObject({

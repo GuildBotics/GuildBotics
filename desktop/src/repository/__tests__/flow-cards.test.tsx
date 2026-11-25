@@ -338,8 +338,9 @@ describe("task flow cards", () => {
   });
 
   it("leaves the copy item unchanged when the clipboard refuses", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     fakeApi(flowRoutes());
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderApp("/workspaces/acme/task-flow");
     await screen.findByText("Title of 1");
     vi.spyOn(navigator.clipboard, "writeText").mockRejectedValueOnce(new Error("denied"));
@@ -348,11 +349,10 @@ describe("task flow cards", () => {
     const menu = await screen.findByRole("menu");
     await user.click(within(menu).getByRole("menuitem", { name: "Copy URL" }));
 
-    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
     expect(within(menu).getByRole("menuitem", { name: "Copy URL" })).toBeInTheDocument();
     expect(within(menu).queryByRole("menuitem", { name: "Copied" })).not.toBeInTheDocument();
     // Longer than the success label stays up: a refusal must not close the menu later.
-    await act(() => new Promise((resolve) => setTimeout(resolve, 1_700)));
+    await act(() => vi.advanceTimersByTimeAsync(1_700));
     expect(screen.getByRole("menu")).toBeInTheDocument();
     expect(within(menu).queryByRole("menuitem", { name: "Copied" })).not.toBeInTheDocument();
   });

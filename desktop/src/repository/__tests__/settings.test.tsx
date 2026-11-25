@@ -4,6 +4,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { fakeApi, json, ME, renderApp, SESSION } from "../test/fakeApi";
+import { fill } from "../../test/fill";
 import { choose } from "../test/mantine";
 
 const page = (items: unknown[]) => json(200, { items, next_cursor: null });
@@ -150,7 +151,7 @@ describe("settings", () => {
     ).toEqual([expect.stringContaining("Owner (owner)"), expect.stringContaining("Aiko (aiko)")]);
     await user.click(screen.getByRole("button", { name: "Create member" }));
     const form = await screen.findByRole("form", { name: "Create member" });
-    await user.type(within(form).getByRole("textbox", { name: "Name" }), "rin");
+    await fill(user, within(form).getByRole("textbox", { name: "Name" }), "rin");
     // Only agents and runners can be created: there is one owner.
     await user.click(within(form).getByRole("combobox", { name: "Kind" }));
     expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual([
@@ -179,7 +180,7 @@ describe("settings", () => {
     renderApp("/settings/repositories");
     await choose(user, "Workspace", "+ New workspace…");
     const dialog = await screen.findByRole("dialog", { name: "New workspace" });
-    await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "beta");
+    await fill(user, within(dialog).getByRole("textbox", { name: "Name" }), "beta");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(fake.calls("POST", "/api/v1/workspaces")).toHaveLength(1));
     expect(fake.calls("POST", "/api/v1/workspaces")[0]?.body).toEqual({ name: "beta" });
@@ -196,7 +197,7 @@ describe("settings", () => {
     renderApp("/settings/repositories");
     await user.click(await screen.findByRole("button", { name: "Create repository" }));
     const form = await screen.findByRole("form", { name: "Create repository" });
-    await user.type(within(form).getByRole("textbox", { name: "Name" }), "demo");
+    await fill(user, within(form).getByRole("textbox", { name: "Name" }), "demo");
     await addPills(user, "Ticket labels", ["bug", "ui"]);
     await user.click(within(form).getByRole("button", { name: "Add" }));
     await waitFor(() => expect(fake.calls("POST", "/api/v1/repos")).toHaveLength(1));
@@ -422,7 +423,7 @@ describe("settings", () => {
     expect(await screen.findByText("Not set")).toBeInTheDocument();
     const form = screen.getByRole("form", { name: "Webhook URL" });
     expect(within(form).getByLabelText("Webhook URL")).not.toHaveAttribute("placeholder");
-    await user.type(within(form).getByLabelText("Webhook URL"), secret);
+    await fill(user, within(form).getByLabelText("Webhook URL"), secret);
     await user.click(within(form).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(fake.calls("PUT", "/api/v1/admin/webhook")).toHaveLength(1));
     expect(fake.calls("PUT", "/api/v1/admin/webhook")[0]?.body).toEqual({ url: secret });
@@ -489,7 +490,7 @@ describe("settings", () => {
     const row = (await screen.findByText("Aiko (aiko)")).closest("[role=listitem]") as HTMLElement;
     await user.click(within(row).getByRole("button", { name: "Edit" }));
     await user.click(within(row).getByRole("tab", { name: "Accounts on code hosts" }));
-    await user.type(within(row).getByLabelText("GitHub token"), "gh-secret");
+    await fill(user, within(row).getByLabelText("GitHub token"), "gh-secret");
     await user.click(within(row).getByRole("button", { name: "Save account" }));
     await waitFor(() =>
       expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")).toHaveLength(1),
@@ -657,8 +658,8 @@ describe("settings", () => {
     expect(within(row).queryByLabelText("Replace the GitHub token")).not.toBeInTheDocument();
     expect(within(row).getByLabelText("Private key (PEM)")).not.toHaveAttribute("placeholder");
     const save = within(row).getByRole("button", { name: "Save account" });
-    await user.type(within(row).getByLabelText("App ID"), " 4242 ");
-    await user.type(within(row).getByLabelText("Installation ID"), "777");
+    await fill(user, within(row).getByLabelText("App ID"), " 4242 ");
+    await fill(user, within(row).getByLabelText("Installation ID"), "777");
     expect(save).toBeDisabled();
     // The key comes from a chosen file (or is pasted).
     const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n";
@@ -688,7 +689,7 @@ describe("settings", () => {
     expect(within(row).getByLabelText("Replace the GitHub token")).not.toHaveAttribute(
       "placeholder",
     );
-    await user.type(within(row).getByLabelText("Replace the GitHub token"), "gh-new");
+    await fill(user, within(row).getByLabelText("Replace the GitHub token"), "gh-new");
     await user.click(within(row).getByRole("button", { name: "Save account" }));
     await waitFor(() =>
       expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")).toHaveLength(2),
@@ -747,7 +748,7 @@ describe("settings", () => {
     await user.click(screen.getByRole("tab", { name: "Upstream" }));
     expect(screen.getByText("No upstream: pull requests are merged here.")).toBeInTheDocument();
     const form = screen.getByRole("form", { name: "Set upstream" });
-    await user.type(within(form).getByRole("textbox", { name: "Repository there" }), "octo/demo");
+    await fill(user, within(form).getByRole("textbox", { name: "Repository there" }), "octo/demo");
     await user.click(within(form).getByRole("button", { name: "Set upstream" }));
     expect(
       await screen.findByText(

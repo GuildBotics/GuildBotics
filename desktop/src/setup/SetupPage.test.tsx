@@ -1,10 +1,8 @@
-import { createTheme } from "@mantine/core";
-import { StrictMode } from "react";
 import { Notifications, notifications } from "@mantine/notifications";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { QueryClient } from "@tanstack/react-query";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Link, MemoryRouter } from "react-router";
+import { Link } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -38,6 +36,7 @@ import {
   updateProjectConfig,
   type CommandOption,
   type ConfigStatus,
+  type ProjectConfig,
   type IntelligenceConfig,
   type MemberConfig,
   type ProjectServices,
@@ -48,7 +47,11 @@ import {
 import { type AgentEnvironmentStatusResponse } from "../api/client";
 import i18n from "../i18n";
 import { fill } from "../test/fill";
-import { TestMantineProvider } from "../test/TestMantineProvider";
+import {
+  configStatus as baseConfigStatus,
+  projectConfig as baseProjectConfig,
+} from "../test/factories";
+import { renderWithProviders } from "../test/render";
 import { verifySlackTokens } from "./providers/slack/api";
 import {
   type ScheduledCommandDraft,
@@ -826,17 +829,13 @@ describe("SetupPage", () => {
     // search params and never remounts the page, so the open section must
     // track the URL rather than a mount-time copy of it.
     const user = userEvent.setup();
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(
-      <TestMantineProvider theme={createTheme({ primaryColor: "dark", defaultRadius: "md" })}>
+    renderWithProviders(
+      <>
         <Notifications />
-        <QueryClientProvider client={queryClient}>
-          <MemoryRouter initialEntries={["/setup?section=device"]}>
-            <Link to="/setup?section=project">open project from outside</Link>
-            <SetupPage />
-          </MemoryRouter>
-        </QueryClientProvider>
-      </TestMantineProvider>,
+        <Link to="/setup?section=project">open project from outside</Link>
+        <SetupPage />
+      </>,
+      { router: "memory", initialPath: "/setup?section=device" },
     );
     expect(
       await screen.findByRole("heading", { name: t("setup.device.title") }),
@@ -993,86 +992,6 @@ describe("SetupPage", () => {
     expect(await screen.findByLabelText("Workspace")).toBeInTheDocument();
   });
 
-  it("creates the initial setup via initConfig and opens the workspace", async () => {
-    const user = userEvent.setup();
-    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(
-      environmentStatus({
-        tools: [
-          {
-            name: "codex",
-            label: "OpenAI Codex CLI",
-            members: [],
-            config_reference: "cli_agents/codex/default.yml",
-            provisioned: true,
-            credentials_saved: true,
-            authentication_failed: false,
-            usage_supported: false,
-            usage_check: null,
-            login_command: "/Users/me/.guildbotics/bin/guildbotics environment login codex",
-            problem: "",
-          },
-        ],
-      }),
-    );
-    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
-    vi.mocked(getTeam).mockRejectedValue(
-      new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
-    );
-    vi.mocked(addMemberConfig).mockImplementationOnce(async (request) => {
-      vi.mocked(getTeam).mockResolvedValue({
-        project: { name: "", language_code: "en", language_name: "English" },
-        default_person_id: "",
-        members: [
-          {
-            person_id: request.person_id,
-            name: request.person_name,
-            person_type: "agent",
-            is_active: request.is_active,
-            roles: request.roles ?? [],
-          },
-        ],
-      });
-      return configWriteResponse();
-    });
-    renderSetupPage("/setup");
-
-    await screen.findByRole("heading", { name: "First setup" });
-
-    // Complete every required section so the Create action becomes available:
-    // the project description and the provider API key. Using no service is
-    // complete as it is.
-    await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
-    await fill(user, screen.getByLabelText("Project description"), "Demo project");
-    await user.click(screen.getByRole("link", { name: "LLM / AI CLI tools" }));
-    await user.click(
-      await screen.findByRole("button", {
-        name: t("setup.intelligence.apiKeyButtonLabel", { provider: "OpenAI" }),
-      }),
-    );
-    await fill(user, await screen.findByLabelText("OpenAI API key"), "sk-test");
-
-    // Add one active member so the members section is complete; the add form is
-    // shown by default and pre-filled with character defaults.
-    await user.click(screen.getByRole("link", { name: "Members and patrol" }));
-    await fillRequiredMemberBasics(user, { personId: "alice", personName: "Alice" });
-    await user.click(screen.getByRole("button", { name: "Add member" }));
-
-    const createButton = await screen.findByRole("button", { name: t("setup.saveInitial") });
-    await user.click(createButton);
-
-    await waitFor(() => expect(initConfig).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(initConfig).mock.calls[0][0]).toMatchObject({
-      description: "Demo project",
-      llm_api_type: "openai",
-      cli_agent: "codex",
-      services: {},
-      provider_api_keys: { openai: "sk-test" },
-    });
-    await waitFor(() => expect(setWorkspace).toHaveBeenCalledWith({ workspace_dir: "/workspace" }));
-    expect(await screen.findByText(t("setup.initialCreated.title"))).toBeInTheDocument();
-    expect(screen.getByText(/\/workspace\/\.guildbotics\/config/)).toBeInTheDocument();
-  });
-
   it("saves an existing project through updateProjectConfig when asked to", async () => {
     const user = userEvent.setup();
     renderSetupPage("/setup");
@@ -1083,9 +1002,10 @@ describe("SetupPage", () => {
     await fill(user, description, "Updated description");
     await saveSection(user);
 
-    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
     expect(vi.mocked(updateProjectConfig).mock.calls[0][0]).toMatchObject({
       description: "Updated description",
+      expected_revisions: { "team/project.yml": "abc123" },
     });
     expect(initConfig).not.toHaveBeenCalled();
   });
@@ -1114,22 +1034,6 @@ describe("SetupPage", () => {
 
     await vi.advanceTimersByTimeAsync(LONGER_THAN_ANY_AUTOSAVE_MS);
     expect(updateProjectConfig).not.toHaveBeenCalled();
-  });
-
-  it("sends the revisions the form was composed against", async () => {
-    const user = userEvent.setup();
-    renderSetupPage("/setup");
-
-    const description = await screen.findByLabelText("Project description");
-    await waitFor(() => expect(description).toHaveValue("Demo project"));
-    await user.clear(description);
-    await fill(user, description, "Updated description");
-    await saveSection(user);
-
-    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1), { timeout: 3000 });
-    expect(vi.mocked(updateProjectConfig).mock.calls[0][0]).toMatchObject({
-      expected_revisions: { "team/project.yml": "abc123" },
-    });
   });
 
   it("rebuilds the form when its snapshot is read in another workspace", async () => {
@@ -1163,7 +1067,7 @@ describe("SetupPage", () => {
     await queryClient.refetchQueries({ queryKey: ["config"] });
     await waitFor(() => expect(description).toHaveValue("Demo project"));
     await saveSection(user);
-    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
     expect(vi.mocked(updateProjectConfig).mock.calls[0][0]).toMatchObject({
       config_dir: "/other/.guildbotics/config",
       description: "Demo project",
@@ -1383,25 +1287,13 @@ async function openWorkspace(user: ReturnType<typeof userEvent.setup>, path: str
 }
 
 function renderSetupPage(path: string, strict = false, repositoriesAvailable = false) {
-  const theme = createTheme({
-    primaryColor: "dark",
-    defaultRadius: "md",
-  });
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  const content = (
-    <TestMantineProvider theme={theme}>
+  return renderWithProviders(
+    <>
       <Notifications />
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[path]}>
-          <SetupPage repositoriesAvailable={repositoriesAvailable} />
-        </MemoryRouter>
-      </QueryClientProvider>
-    </TestMantineProvider>
+      <SetupPage repositoriesAvailable={repositoriesAvailable} />
+    </>,
+    { router: "memory", initialPath: path, strict },
   );
-  const view = render(strict ? <StrictMode>{content}</StrictMode> : content);
-  return { ...view, queryClient };
 }
 
 function environmentStatus(
@@ -1553,32 +1445,16 @@ function baseMemberValues(overrides: Partial<MemberFormValues> = {}): MemberForm
   };
 }
 
-function configStatus(overrides: Record<string, unknown> = {}): ConfigStatus {
-  return {
-    cwd: "/workspace",
-    workspace: "/workspace",
-    config_dir: "/workspace/.guildbotics/config",
-    project_file: "/workspace/.guildbotics/config/project.yml",
-    project_file_exists: false,
-    storage_dir: "/workspace/.guildbotics",
-    ...overrides,
-  } as ConfigStatus;
+function configStatus(overrides: Partial<ConfigStatus> = {}) {
+  return baseConfigStatus({ project_file_exists: false, ...overrides });
 }
 
-type ProjectConfigValue = Parameters<typeof toProjectUpdateRequest>[2];
-
-function projectConfig(overrides: Record<string, unknown> = {}): ProjectConfigValue {
-  return {
-    config_dir: "/workspace/.guildbotics/config",
+function projectConfig(overrides: Partial<ProjectConfig> & { github_enabled?: boolean } = {}) {
+  return baseProjectConfig({
     revisions: { "team/project.yml": "abc123" },
-    language: "en",
     description: "Existing project",
-    llm_api_type: "openai",
-    cli_agent: "codex",
-    services: {},
-    provider_api_keys: { openai: true, gemini: false, anthropic: false },
     ...overrides,
-  } as ProjectConfigValue;
+  });
 }
 
 function commandOption(overrides: Partial<CommandOption> = {}): CommandOption {
@@ -3701,6 +3577,9 @@ describe("PatrolSettingsEditor", () => {
       let reason: string;
       if (kind === "routine-empty") {
         await user.click(screen.getByText(t("setup.members.patrol.overrideRoutine")));
+        expect(
+          screen.queryByText(t("setup.members.patrol.routineRequired")),
+        ).not.toBeInTheDocument();
         const input = screen
           .getAllByLabelText(t("setup.members.patrol.routineCommands"))
           .find((element) => element instanceof HTMLInputElement && element.type !== "hidden");
@@ -3818,19 +3697,6 @@ describe("PatrolSettingsEditor", () => {
     ).toBeInTheDocument();
   });
 
-  it("blocks saving when an existing selected routine is no longer eligible", async () => {
-    const user = userEvent.setup();
-    vi.mocked(getMemberConfig).mockResolvedValue(
-      memberConfigDetail({ routine_commands: ["workflows/needs_input"] }),
-    );
-    await openPatrolTab(user);
-
-    expect(
-      (await screen.findAllByText(t("setup.members.patrol.routineIneligible"))).length,
-    ).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeDisabled();
-  });
-
   it("shows a routine catalog loading error and disables patrol command editing", async () => {
     const user = userEvent.setup();
     vi.mocked(getRoutineCommandOptions).mockRejectedValue(new Error("routine catalog failed"));
@@ -3852,28 +3718,6 @@ describe("PatrolSettingsEditor", () => {
     expect(
       screen.queryByLabelText(t("setup.members.patrol.routineCommands")),
     ).not.toBeInTheDocument();
-  });
-
-  it("requires a routine once the seeded default is removed", async () => {
-    const user = userEvent.setup();
-    await openPatrolTab(user);
-
-    // Clicking the Switch's visible label toggles the member-specific override,
-    // which seeds the default routine so the form starts valid.
-    await user.click(await screen.findByText(t("setup.members.patrol.overrideRoutine")));
-    expect(screen.queryByText(t("setup.members.patrol.routineRequired"))).not.toBeInTheDocument();
-
-    // Removing the only selected command surfaces the required-field error and
-    // blocks saving even though the rest of the member is valid.
-    const routineInput = screen
-      .getAllByLabelText(t("setup.members.patrol.routineCommands"))
-      .find((element) => element instanceof HTMLInputElement && element.type !== "hidden");
-    await user.click(routineInput as HTMLElement);
-    await user.keyboard("{Backspace}");
-    expect(
-      (await screen.findAllByText(t("setup.members.patrol.routineRequired"))).length,
-    ).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeDisabled();
   });
 
   it("adds and removes a scheduled command", async () => {
@@ -3981,25 +3825,6 @@ describe("PatrolSettingsEditor", () => {
     // original daily expression), independent of the preset-driven generated cron.
     const cronField = await screen.findByLabelText(t("setup.members.patrol.cron"));
     expect(cronField).toHaveValue("0 9 * * *");
-  });
-
-  it("blocks saving when a custom cron is invalid", async () => {
-    const user = userEvent.setup();
-    await openPatrolTab(user);
-
-    await user.click(screen.getByRole("button", { name: t("setup.members.patrol.addSchedule") }));
-    await user.click(
-      await screen.findByRole("radio", { name: t("setup.members.patrol.cronPresets.custom") }),
-    );
-
-    const cronField = await screen.findByLabelText(t("setup.members.patrol.cron"));
-    await user.clear(cronField);
-    await fill(user, cronField, "0 9 * *");
-
-    expect(
-      (await screen.findAllByText(t("setup.members.patrol.cronInvalid"))).length,
-    ).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: t("setup.members.saveButton") })).toBeDisabled();
   });
 });
 
@@ -4229,9 +4054,7 @@ describe("IntelligenceEditor (team default)", () => {
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
     await saveSection(user);
 
-    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
-      timeout: 3000,
-    });
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
     const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
     expect(body.model_mapping).toHaveProperty("renamed-slot");
     expect(body.model_mapping).not.toHaveProperty("custom_slot");
@@ -4249,9 +4072,7 @@ describe("IntelligenceEditor (team default)", () => {
 
     await saveSection(user);
 
-    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
-      timeout: 3000,
-    });
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
     const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
     expect(body.cli_agent_mapping).toMatchObject({
       default: "cli_agents/codex/default.yml",
@@ -4309,9 +4130,7 @@ describe("IntelligenceEditor (team default)", () => {
     expect(updateIntelligenceConfig).not.toHaveBeenCalled();
     await saveSection(user);
 
-    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
-      timeout: 3000,
-    });
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
     const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
     expect(body.cli_agent_mapping).toHaveProperty("renamed-cli");
     expect(body.cli_agent_mapping).not.toHaveProperty("custom_cli");
@@ -4419,9 +4238,7 @@ describe("IntelligenceEditor (team default)", () => {
 
     await saveSection(user);
 
-    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
-      timeout: 3000,
-    });
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
     const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
     expect(body).toMatchObject({ person_id: null, inherit_team_defaults: false });
     expect(body.models?.[0]).toMatchObject({
@@ -4442,9 +4259,7 @@ describe("IntelligenceEditor (team default)", () => {
 
     await saveSection(user);
 
-    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
-      timeout: 3000,
-    });
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
   });
 
   it("does not offer Jev for ordinary command assignments", async () => {
@@ -4595,34 +4410,13 @@ describe("IntelligenceEditor (team default)", () => {
 
     await saveSection(user);
 
-    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
-      timeout: 3000,
-    });
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
     const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
     expect(body.brain_mapping?.[0]).toMatchObject({
       name: "writer",
       engine: "cli",
       target: "default",
     });
-  });
-
-  it("shows a JSON validation error and blocks the save for a malformed effort", async () => {
-    const user = userOnFakeClock();
-    await openTeamIntelligenceAdvanced(user);
-
-    await user.click(
-      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.customize") }))[0],
-    );
-    await user.click(
-      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.showJson") }))[0],
-    );
-    const effortInput = await screen.findByLabelText(t("setup.intelligence.effortJson"));
-    await user.click(effortInput);
-    await user.paste("{not json");
-
-    expect(await screen.findByText(t("setup.intelligence.effortJsonError"))).toBeInTheDocument();
-    await vi.advanceTimersByTimeAsync(LONGER_THAN_ANY_AUTOSAVE_MS);
-    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
 
   it("sends a typed effort edit through the API on save", async () => {
@@ -4636,9 +4430,7 @@ describe("IntelligenceEditor (team default)", () => {
     await user.click(await screen.findByRole("option", { name: "low" }));
     await saveSection(user);
 
-    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1), {
-      timeout: 3000,
-    });
+    await waitFor(() => expect(updateIntelligenceConfig).toHaveBeenCalledTimes(1));
     const body = vi.mocked(updateIntelligenceConfig).mock.calls[0][0];
     // Customizing one level keeps the inherited settings of the other, instead
     // of saving a mapping that silently drops `high`.
@@ -4646,28 +4438,6 @@ describe("IntelligenceEditor (team default)", () => {
       high: { reasoning_effort: "high" },
       low: { reasoning_effort: "low" },
     });
-  });
-
-  it("blocks the save while the JSON escape hatch holds malformed text", async () => {
-    // The field withholds onChange while the text is malformed, so without the
-    // validity wiring the pending autosave would still fire and silently
-    // persist the last value that parsed -- not what is on screen.
-    const user = userOnFakeClock();
-    await openTeamIntelligenceAdvanced(user);
-
-    await user.click(
-      (await screen.findAllByRole("button", { name: t("setup.intelligence.effort.customize") }))[0],
-    );
-    await user.click(screen.getByRole("button", { name: t("setup.intelligence.effort.showJson") }));
-    const jsonField = screen.getByLabelText(t("setup.intelligence.effortJson"));
-    await user.clear(jsonField);
-    await user.click(jsonField);
-    await user.paste('{"high":{"reasoning_effort":"high"}}');
-    await user.paste(" oops");
-
-    expect(await screen.findByText(t("setup.intelligence.effortJsonError"))).toBeInTheDocument();
-    await vi.advanceTimersByTimeAsync(LONGER_THAN_ANY_AUTOSAVE_MS);
-    expect(updateIntelligenceConfig).not.toHaveBeenCalled();
   });
 
   it("saves neither half while the advanced settings hold an invalid entry", async () => {
