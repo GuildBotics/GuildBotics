@@ -3,6 +3,7 @@ import i18n from "../../i18n";
 
 import { render } from "@testing-library/react";
 import { vi } from "vitest";
+import { EntryPage } from "../../session/EntryPage";
 import { theme } from "../../ui/theme";
 import { RepositoryApp } from "../App";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -92,7 +93,7 @@ export const ME = {
 };
 export const SESSION = { me: ME, csrf: "csrf-123" };
 
-export function renderApp(path: string, language: "en" | "ja" = "en") {
+export function renderApp(path: string, language: "en" | "ja" = "en", withSession = false) {
   void i18n.changeLanguage(language);
   window.history.replaceState(null, "", path);
   const client = createQueryClient();
@@ -102,7 +103,13 @@ export function renderApp(path: string, language: "en" | "ja" = "en") {
   const utils = render(
     <TestMantineProvider theme={theme}>
       <QueryClientProvider client={client}>
-        <RepositoryApp />
+        {withSession ? (
+          <EntryPage>
+            <RepositoryApp />
+          </EntryPage>
+        ) : (
+          <RepositoryApp />
+        )}
       </QueryClientProvider>
     </TestMantineProvider>,
   );

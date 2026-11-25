@@ -1277,9 +1277,27 @@ nothing.
 ## Events (GUI)
 
 `GET /api/v1/events` is a Server-Sent Events stream. Each event is
-`event: change` with `data: {"kind": "ticket"|"pull"|"board"|"check"|"upstream"|"repo", "path": "...", "id": "...", "actor": "owner"|"agent"|"runner"|null}`.
-`path`/`id` by kind: `ticket` repository / key, `pull` repository / number, `board` workspace / —, `check`
-repository / commit sha, `upstream` repository / — (what following its upstream found changed), `repo` repository / — (its settings, its upstream, or its refs changed, or a member's account on its upstream host was set). The actor is the authenticated writer’s member kind, or null for system changes. Events only say what changed; the GUI refetches it. On reconnect (or after a
+`event: change` with a JSON object containing `kind`, `path`, `id` and
+`actor`. The actor is the authenticated writer’s member kind (`owner`,
+`agent` or `runner`), or null for system changes.
+
+| Kind | Path | ID |
+| --- | --- | --- |
+| `ticket` | Repository | Ticket key |
+| `pull` | Repository | Pull request number |
+| `board` | Workspace | — |
+| `check` | Repository | Commit SHA |
+| `upstream` | Repository | — |
+| `repo` | Repository | — |
+| `verification` | Repository | — |
+| `workspace.changed` | `workspace` | — |
+| `hub_status_changed` | `hub` | — |
+| `command` | `commands` | — |
+
+Events only say what changed. The GUI refetches the affected data, including
+command runs from the workspace in the page URL. The command console prefers
+a run still active in the current server instance. The stream sends new changes
+from the time it opens. On reconnect (or after a
 `event: reset`, sent when the client fell behind) the GUI refetches what it shows.
 The stream ends when the service shuts down. The service subscribes to the
 same changes itself to land pull requests automatically ("Landing

@@ -38,7 +38,6 @@ import {
   memberAvatarUrl,
   runScenarioDiagnostics,
   setWorkspace,
-  subscribeEvents,
   updateRuntimeDebug,
   startScheduler,
   updateServiceSettings,
@@ -46,11 +45,8 @@ import {
   uploadCommandInputFile,
   uploadMemberAvatar,
   verify,
-  type RuntimeEvent,
-  type StreamStatus,
 } from "./client";
 import { startSlackAppRegistration, verifySlackTokens } from "../setup/providers/slack/api";
-import { makeRuntimeEvent } from "../test/factories";
 
 type FetchArgs = { url: string; init: RequestInit };
 
@@ -901,53 +897,5 @@ describe("websocket subscriptions", () => {
     MockWebSocket.instances[1].onclose?.();
     expect(MockWebSocket.instances[1].send).not.toHaveBeenCalled();
     expect(cancelled).not.toHaveBeenCalled();
-  });
-
-  it("connects to this page's /-/guildbotics/api/events without a subprotocol and drives status transitions", () => {
-    const events: RuntimeEvent[] = [];
-    const statuses: StreamStatus[] = [];
-
-    const unsubscribe = subscribeEvents(
-      (event) => events.push(event),
-      (status) => statuses.push(status),
-    );
-
-    const socket = MockWebSocket.instances[0];
-    // The session cookie authenticates the handshake.
-    expect(socket.url).toBe(`ws://${window.location.host}/-/guildbotics/api/events`);
-    expect(socket.protocols).toBeUndefined();
-    expect(statuses).toEqual(["connecting"]);
-
-    socket.onopen?.();
-    expect(statuses).toEqual(["connecting", "connected"]);
-
-    const event = makeRuntimeEvent({
-      type: "task_started",
-      trace_id: "r1",
-      span_id: "s1",
-      source: "manual",
-      payload: { id: 1 },
-      attributes: { "target.label": "#42" },
-      timestamp: "2026-06-05T00:00:00Z",
-    });
-    socket.onmessage?.({ data: JSON.stringify(event) });
-    expect(events).toEqual([event]);
-
-    socket.onerror?.();
-    expect(statuses).toEqual(["connecting", "connected", "error"]);
-
-    socket.onclose?.();
-    expect(statuses).toEqual(["connecting", "connected", "error", "disconnected"]);
-
-    unsubscribe();
-    expect(socket.close).toHaveBeenCalledTimes(1);
-  });
-
-  it("works without an onStatus callback", () => {
-    expect(() => subscribeEvents(() => undefined)).not.toThrow();
-    const socket = MockWebSocket.instances[0];
-    expect(() => socket.onopen?.()).not.toThrow();
-    expect(() => socket.onerror?.()).not.toThrow();
-    expect(() => socket.onclose?.()).not.toThrow();
   });
 });

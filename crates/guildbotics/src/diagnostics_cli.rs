@@ -101,6 +101,7 @@ pub async fn run(command: DiagnosticsCommand) -> anyhow::Result<()> {
                 include_assistant,
                 limit: limit as usize,
                 include_system: true,
+                prefer_running_in: None,
                 search_transcripts: true,
             },
         )?,

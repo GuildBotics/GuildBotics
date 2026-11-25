@@ -52,6 +52,16 @@ impl DataApi {
         self.app.events.subscribe()
     }
 
+    pub fn workspace_changed(&self) {
+        self.app
+            .events
+            .publish("workspace.changed", "workspace", "");
+    }
+
+    pub fn command_runs_changed(&self) {
+        self.app.events.publish("command", "commands", "");
+    }
+
     pub fn hub_status_changed(&self) {
         self.app.events.publish("hub_status_changed", "hub", "");
     }

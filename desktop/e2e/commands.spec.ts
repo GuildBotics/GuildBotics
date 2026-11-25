@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { expect } from "@playwright/test";
 
-import { readStackContext, test } from "./stack-context";
+import { ownerApi, readStackContext, test } from "./stack-context";
 
 // Journey ④: Command editor against the REAL backend.
 //
@@ -29,7 +29,11 @@ test("creates, edits and saves a shared command, and says why it cannot run here
 }) => {
   const ctx = readStackContext("configured");
 
-  await page.goto("/commands");
+  const stream = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/v1/events" && response.ok(),
+  );
+  await page.goto("/workspaces/acme/commands");
+  await stream;
   await expect(page.getByRole("heading", { name: "Edit Command" })).toBeVisible();
 
   // The assistant is a drawer, as on the diagnostics screen: the editor owns
@@ -81,9 +85,7 @@ test("creates, edits and saves a shared command, and says why it cannot run here
     /[/\\]\.guildbotics[/\\]data[/\\]command_inputs[/\\][a-f0-9]{32}[/\\]clipboard\.png$/,
   );
   const pastedImage = await message.inputValue();
-  const storedPath = pastedImage.match(
-    /[/\\]([a-f0-9]{32})[/\\](clipboard\.png)$/,
-  );
+  const storedPath = pastedImage.match(/[/\\]([a-f0-9]{32})[/\\](clipboard\.png)$/);
   expect(storedPath).not.toBeNull();
   const [, uploadId, name] = storedPath as RegExpMatchArray;
   const storedImage = join(ctx.homeDir, ".guildbotics", "data", "command_inputs", uploadId, name);
@@ -99,6 +101,20 @@ test("creates, edits and saves a shared command, and says why it cannot run here
   // frontmatter and must fail here with a readable diff.
   const commandFile = join(ctx.configDir, "commands", "e2e-note.md");
   expect(readFileSync(commandFile, "utf-8")).toBe(SOURCE);
+
+  // A command requested from outside this page reaches the real runtime and
+  // records the failure. The signed-in tab re-reads its list on the stream.
+  await expect(page.getByText("No command result yet.")).toBeVisible();
+  const requested = await ownerApi(ctx, "/commands/run", {
+    method: "POST",
+    headers: { "X-GuildBotics-Workspace": "acme" },
+    body: JSON.stringify({ command: "e2e-note" }),
+  });
+  expect(requested.status).toBe(400);
+  expect((await requested.json()).context.trace_id).toBeTruthy();
+  await expect(
+    page.locator(".command-run-meta").getByText("Failed", { exact: true }),
+  ).toBeVisible();
 
   // Deleting through the confirm dialog removes the real file from the
   // workspace, not just the entry in the list.

@@ -842,6 +842,10 @@ async fn a_run_records_and_publishes_its_start_and_failure_and_releases_its_plac
         assert_eq!(started["source"], "manual");
         assert_eq!(started["attributes"]["run.entry"], "command");
         assert_eq!(
+            started["attributes"]["server.instance_id"],
+            f.api.instance_id
+        );
+        assert_eq!(
             started["payload"],
             json!({"command": "demo", "person": "bot"})
         );

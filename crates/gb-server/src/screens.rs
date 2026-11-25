@@ -202,6 +202,8 @@ pub(crate) struct Filters {
     attr_key: Option<String>,
     attr_value: Option<String>,
     limit: Option<usize>,
+    #[serde(default)]
+    prefer_running: bool,
 }
 
 pub(crate) async fn traces(
@@ -236,6 +238,7 @@ pub(crate) async fn traces(
                     attr_value: filters.attr_value.as_deref(),
                     limit: filters.limit.unwrap_or(200),
                     include_assistant: true,
+                    prefer_running_in: filters.prefer_running.then_some(api.instance_id.as_str()),
                     include_system: true,
                     search_transcripts: false,
                 },

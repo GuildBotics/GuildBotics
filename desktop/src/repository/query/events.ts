@@ -5,7 +5,7 @@
 // the others stale, so an event never fans out into fetching hidden data.
 
 import type { Query, QueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { createContext, useEffect, useState } from "react";
 import type { Card, ChangeEvent, Checks, PullRequest } from "../api/types";
 import { routeOfUrl } from "../router/routes";
 import { subscribeChangeStream } from "./changeStream";
@@ -48,8 +48,12 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
   const id = event.id ?? "";
   if (!path) return null;
   switch (event.kind) {
+    case "workspace.changed":
+      return null;
+    case "command":
+      return [(q) => ["command-runs", "command-run-detail"].includes(String(keyOf(q)[0]))];
     case "hub_status_changed":
-      return [(q) => keyOf(q)[0] === "diagnostics"];
+      return [(q) => keyOf(q)[0] === "diagnostics" || keyOf(q)[0] === "hub-status"];
     case "ticket":
       return [
         isCheckList,
@@ -171,13 +175,18 @@ export function applyChange(event: ChangeEvent, client: QueryClient): void {
 
 /** How long the stream may be down before the GUI warns: a moment's drop (waking from sleep, a restart of the service) is not worth one. */
 export const LOST_AFTER_MS = 5_000;
+export const ChangeStreamLost = createContext(false);
 
 /**
  * Shares one EventSource across tabs while `enabled`. On joining, reconnect,
  * takeover, and `reset`, refetches shown queries to cover missed events.
  * Returns whether the shared stream has been down for `LOST_AFTER_MS`.
  */
-export function useChangeStream(client: QueryClient, enabled: boolean): boolean {
+export function useChangeStream(
+  client: QueryClient,
+  enabled: boolean,
+  onConnect?: () => void,
+): boolean {
   const [lost, setLost] = useState(false);
 
   useEffect(() => {
@@ -195,7 +204,10 @@ export function useChangeStream(client: QueryClient, enabled: boolean): boolean 
           clearTimeout(lostTimer);
           if (message.downSince === null) {
             setLost(false);
-            if (!connected) refetchShown();
+            if (!connected) {
+              onConnect?.();
+              refetchShown();
+            }
             connected = true;
           } else {
             connected = false;
@@ -231,7 +243,7 @@ export function useChangeStream(client: QueryClient, enabled: boolean): boolean 
       window.removeEventListener("pageshow", start);
       stop();
     };
-  }, [client, enabled]);
+  }, [client, enabled, onConnect]);
 
   return enabled && lost;
 }

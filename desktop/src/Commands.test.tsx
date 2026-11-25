@@ -20,20 +20,19 @@ import {
   listCommandFiles,
   runCommand,
   uploadCommandInputFile,
-  subscribeEvents,
   updateCommandFile,
   type CommandFileDetail,
   type CommandFileExecutionStatus,
   type CommandFileSummary,
   type ConfigStatus,
-  type RuntimeEvent,
   type TeamSummary,
   type TraceDetailResponse,
   type TraceRecord,
 } from "./api/client";
 import i18n from "./i18n";
 import "./i18n";
-import { makeRuntimeEvent, makeTraceRecord } from "./test/factories";
+import { makeTraceRecord } from "./test/factories";
+import { applyChange } from "./repository/query/events";
 import { TestMantineProvider } from "./test/TestMantineProvider";
 
 const t = i18n.getFixedT("en");
@@ -61,8 +60,6 @@ vi.mock("./commands/CommandEditor", () => ({
 
 vi.mock("./setup/SetupPage", () => ({ SetupPage: () => <div>Setup Mock</div> }));
 
-let eventListener: ((event: RuntimeEvent) => void) | null = null;
-
 vi.mock("./api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api/client")>();
   return {
@@ -83,7 +80,6 @@ vi.mock("./api/client", async (importOriginal) => {
     getCommandFileExecutionStatus: vi.fn(),
     runCommand: vi.fn(),
     uploadCommandInputFile: vi.fn(),
-    subscribeEvents: vi.fn(),
   };
 });
 
@@ -135,7 +131,6 @@ const deleteCommandFileMock = vi.mocked(deleteCommandFile);
 const updateCommandFileMock = vi.mocked(updateCommandFile);
 const executionStatusMock = vi.mocked(getCommandFileExecutionStatus);
 const runCommandMock = vi.mocked(runCommand);
-const subscribeEventsMock = vi.mocked(subscribeEvents);
 
 function configStatus(overrides: Partial<ConfigStatus> = {}): ConfigStatus {
   return {
@@ -193,7 +188,6 @@ function status(overrides: Partial<CommandFileExecutionStatus> = {}): CommandFil
 
 beforeEach(() => {
   notifications.clean();
-  eventListener = null;
   window.localStorage.clear();
   getConfigStatusMock.mockReset().mockResolvedValue(configStatus());
   authorCommandMock.mockReset().mockResolvedValue({
@@ -239,18 +233,12 @@ beforeEach(() => {
     runs.unshift(run("run-1", "success", [printed("done")]));
     return { trace_id: "run-1", output: "done" };
   });
-  subscribeEventsMock.mockReset().mockImplementation((listener) => {
-    eventListener = listener;
-    return () => {
-      eventListener = null;
-    };
-  });
 });
 
 async function renderPage(entry = "/commands") {
   const { CommandsPage } = await import("./commands/CommandsPage");
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <TestMantineProvider>
       <Notifications />
       <QueryClientProvider client={client}>
@@ -260,6 +248,7 @@ async function renderPage(entry = "/commands") {
       </QueryClientProvider>
     </TestMantineProvider>,
   );
+  return { ...view, client };
 }
 
 /**
@@ -1125,56 +1114,47 @@ describe("Command editor screen", () => {
       attrKey: "run.entry",
       attrValue: "command",
       limit: 1,
+      preferRunning: true,
     });
   });
 
-  it("follows a command run started on another screen, not an assistant's", async () => {
+  it("shows a previous server instance's unfinished command as interrupted", async () => {
+    runs = [run("earlier", "interrupted")];
+    getTraceDetailMock.mockResolvedValue(run("earlier", "running"));
     await renderPage();
+    await screen.findByLabelText("editor");
+
+    expect(await screen.findByText(t("diagnostics.executions.status.interrupted"))).toBeVisible();
+    expect(screen.queryByText(t("diagnostics.executions.status.running"))).toBeNull();
+  });
+
+  it("follows the workspace run list when a command starts on another screen", async () => {
+    const { client } = await renderPage();
     await screen.findByLabelText("editor");
     expect(await screen.findByText(t("commands.noRunsYet"))).toBeVisible();
 
-    runs = [run("assistant-1", "running")];
-    act(() =>
-      eventListener?.(
-        makeRuntimeEvent({ type: "command.started", trace_id: "assistant-1", attributes: {} }),
-      ),
-    );
     runs = [run("evt-1", "running")];
-    act(() =>
-      eventListener?.(
-        makeRuntimeEvent({
-          type: "command.started",
-          trace_id: "evt-1",
-          attributes: { "run.entry": "command" },
-        }),
-      ),
-    );
-
+    act(() => applyChange({ kind: "command", path: "commands" }, client));
     expect(await screen.findByText(t("diagnostics.executions.status.running"))).toBeVisible();
-    expect(getTraceDetailMock).not.toHaveBeenCalledWith("assistant-1");
+
+    runs = [run("evt-1", "success")];
+    act(() => applyChange({ kind: "command", path: "commands" }, client));
+    expect(await screen.findByText(t("diagnostics.executions.status.success"))).toBeVisible();
   });
 
-  it("shows the latest run instead of a run this workspace does not know", async () => {
+  it("keeps showing the current workspace run if another workspace changes", async () => {
     runs = [run("run-0", "success", [printed("this workspace")])];
     const user = userEvent.setup();
-    await renderPage();
+    const { client } = await renderPage();
     await screen.findByLabelText("editor");
     await screen.findByText(t("diagnostics.executions.status.success"));
 
-    // The event stream replays a run from before a workspace switch.
-    act(() =>
-      eventListener?.(
-        makeRuntimeEvent({
-          type: "command.started",
-          trace_id: "other-workspace",
-          attributes: { "run.entry": "command" },
-        }),
-      ),
-    );
-
-    await waitFor(() => expect(getTraceDetailMock).toHaveBeenCalledWith("other-workspace"));
+    act(() => applyChange({ kind: "command", path: "commands" }, client));
     await user.click(await screen.findByRole("tab", { name: t("commands.output") }));
     expect(await screen.findByText("this workspace")).toBeVisible();
+    expect(new Set(getTraceDetailMock.mock.calls.map(([traceId]) => traceId))).toEqual(
+      new Set(["run-0"]),
+    );
   });
 
   it("shows the run timeline without the diagnostics record filter", async () => {
@@ -1241,7 +1221,7 @@ describe("Command editor screen", () => {
       }),
     );
     const user = userEvent.setup();
-    await renderPage();
+    const { client } = await renderPage();
     await screen.findByLabelText("editor");
 
     await user.click(screen.getByRole("button", { name: t("commands.saveAndRun") }));
@@ -1252,15 +1232,7 @@ describe("Command editor screen", () => {
 
     // A run started elsewhere takes the console over, without that failure.
     runs = [run("evt-2", "running")];
-    act(() =>
-      eventListener?.(
-        makeRuntimeEvent({
-          type: "command.started",
-          trace_id: "evt-2",
-          attributes: { "run.entry": "command" },
-        }),
-      ),
-    );
+    act(() => applyChange({ kind: "command", path: "commands" }, client));
     expect(await screen.findByText(t("diagnostics.executions.status.running"))).toBeVisible();
     expect(screen.queryByText(t("commands.runFailed"))).not.toBeInTheDocument();
   });

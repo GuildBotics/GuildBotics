@@ -921,8 +921,8 @@ browser; the repository is a monorepo on purpose. The server runs from a checkou
 Hub: `guildbotics server start` in a terminal, or on macOS the LaunchAgent that
 [`scripts/hub-server.sh`](hub-server.md) installs. The LaunchAgent runs a signed copy of the locally built Rust executable, at one fixed path so that macOS keeps the access it granted, with Branvil in the same process.
 
-- **Local API boundary**: the browser calls the Rust backend (`gb-server`), which serves both the API under `/-/guildbotics/api` (REST,
-  and the `/-/guildbotics/api/events` WebSocket) and the screens themselves (the Vite build of
+- **Local API boundary**: the browser calls the Rust backend (`gb-server`), which serves both the API under `/-/guildbotics/api`,
+  the shared `/api/v1/events` change stream, and the screens themselves (the Vite build of
   `desktop/` served from `gb-server/src/ui.rs`). Assets are under `/assets/`, and the SPA
   is served on page paths such as `/workspaces/{workspace}/task-flow`, `/enter`, and `/authorize`. It listens on loopback only, on
   one fixed port (`GUILDBOTICS_SERVER_PORT`, 7878 by default), which every program of

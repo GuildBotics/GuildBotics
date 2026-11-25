@@ -941,11 +941,12 @@ describe("pages", () => {
     });
     fakeApi({
       ...SHELL,
+      "GET /-/guildbotics/api/session": json(200, SESSION),
       "GET /api/v1/admin/diagnostics": json(200, {
         upstream: { state: "following", problems: [] },
       }),
     });
-    renderApp("/settings/repositories/members");
+    renderApp("/settings/repositories/members", "en", true);
     await screen.findByRole("list", { name: "Members" });
     const stream = FakeEventSource.last as FakeEventSource;
     stream.open();

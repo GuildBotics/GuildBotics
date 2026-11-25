@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { onConnectionLost, type ConnectionLoss } from "../api/client";
+import { ChangeStreamLost, useChangeStream } from "../repository/query/events";
 import { AuthorizeView } from "./AuthorizeView";
 import { EnterView } from "./EnterView";
 import { AUTHORIZE_PATH, ENTER_PATH, SESSION_QUERY } from "./entryPages";
@@ -32,6 +33,14 @@ function AppSession({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const session = useQuery(SESSION_QUERY);
   const [lost, setLost] = useState<ConnectionLoss | null>(null);
+  const clearUnreachable = useCallback(() => {
+    setLost((previous) => (previous === "unreachable" ? null : previous));
+  }, []);
+  const streamLost = useChangeStream(
+    queryClient,
+    session.data === true && lost !== "signed_out",
+    clearUnreachable,
+  );
   // A session found gone stays gone: a later failure to reach the server
   // does not bring the screen back.
   useEffect(
@@ -59,9 +68,9 @@ function AppSession({ children }: { children: ReactNode }) {
     return notice ?? <Connecting />;
   }
   return (
-    <>
+    <ChangeStreamLost.Provider value={streamLost}>
       {children}
       {notice}
-    </>
+    </ChangeStreamLost.Provider>
   );
 }

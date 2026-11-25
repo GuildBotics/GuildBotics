@@ -45,7 +45,11 @@ test("runs a command in the isolated environment and streams its result", async 
   test.setTimeout(180_000);
   const ctx = readStackContext("environment");
 
-  await page.goto("/commands");
+  const stream = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/v1/events" && response.ok(),
+  );
+  await page.goto("/workspaces/acme/commands");
+  expect((await stream).headers()["content-type"]).toContain("text/event-stream");
   await expect(page.getByRole("heading", { name: "Edit Command" })).toBeVisible();
 
   await page.getByRole("button", { name: "New command" }).first().click();
@@ -82,11 +86,20 @@ test("runs a command in the isolated environment and streams its result", async 
 
   const run = page.getByRole("button", { name: "Save and run" });
   await expect(run).toBeEnabled({ timeout: 30_000 });
+  // This tab shares the first tab's stream and can only find the new run
+  // by rereading its workspace's list when the shared notice arrives.
+  const observer = await page.context().newPage();
+  await observer.goto(page.url());
+  await expect(observer.getByText("No command result yet.")).toBeVisible();
   await run.click();
 
-  // The result area reaches success through the real command.started /
-  // command.finished frames, well before the process left running ends.
-  await expect(page.getByText("Success")).toBeVisible({ timeout: 50_000 });
+  await expect(
+    observer.locator(".command-run-meta").getByText("Success", { exact: true }),
+  ).toBeVisible({ timeout: 50_000 });
+  // The result is visible well before the process left running ends.
+  await expect(page.locator(".command-run-meta").getByText("Success", { exact: true })).toBeVisible(
+    { timeout: 50_000 },
+  );
   const output = page.locator("pre.command-output").first();
   await expect(output).toContainText("Linux read e2e-image");
 

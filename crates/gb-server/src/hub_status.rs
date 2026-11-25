@@ -31,11 +31,6 @@ fn announce(api: &Shared) {
     if let Some(host) = api.branvil.get() {
         host.hub_status_changed();
     }
-    api.events.announce(
-        json!({"kind":"event", "type":"hub_status_changed", "payload":{},"timestamp":chrono::Utc::now().to_rfc3339()})
-            .as_object()
-            .unwrap(),
-    );
 }
 pub(crate) fn drain(api: &Shared, reason: Option<Kind>) {
     let mut state = api.hub_phase.lock().unwrap();

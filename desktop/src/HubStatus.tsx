@@ -1,6 +1,3 @@
-import { useEffect } from "react";
-import { subscribeEvents } from "./api/client";
-import { useQueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Text } from "@mantine/core";
@@ -14,15 +11,6 @@ const useHubStatus = () =>
   });
 export function HubBand() {
   const { t } = useTranslation();
-  const client = useQueryClient();
-  useEffect(
-    () =>
-      subscribeEvents((event) => {
-        if (event.type === "hub_status_changed")
-          void client.invalidateQueries({ queryKey: ["hub-status"] });
-      }),
-    [client],
-  );
   return <HubStatusBand status={useHubStatus().data} t={t} />;
 }
 export function HubVersion() {

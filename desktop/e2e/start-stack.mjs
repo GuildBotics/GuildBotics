@@ -210,7 +210,7 @@ backendEnv = Object.fromEntries(
     ].includes(key.toUpperCase()),
   ),
 );
-if (stackName === "setup" || shouldSeed) {
+if (stackName === "setup" || controlPort || shouldSeed) {
   backendEnv.GUILDBOTICS_BROWSER_TEST_BRANVIL = "1";
   backendEnv.GUILDBOTICS_CODE_HOST_DATA_DIR = join(homeDir, "branvil");
 }
@@ -382,7 +382,7 @@ async function seedWorkspace() {
 // Control server for the "down" journey (⑥): the spec takes the REAL backend
 // down under a loaded screen, and brings it back up. Each answer comes only
 // once the backend is gone, or answers again, so the spec's next step (the
-// screen noticing the loss, a retry) cannot race the backend.
+// screen noticing the loss, reconnecting) cannot race the backend.
 function startControlServer() {
   const actions = {
     "/control/stop-backend": stopBackend,

@@ -193,28 +193,26 @@ async fn team_failures_keep_json_error_shape_security_headers_and_cross_origin_p
         "http://localhost:1420",
         "http://localhost:9999",
     ] {
-        for path in ["/-/guildbotics/api/team", "/-/guildbotics/api/events"] {
-            let response = f
-                .respond(
-                    Request::builder()
-                        .method("OPTIONS")
-                        .uri(path)
-                        .header("host", "127.0.0.1:8765")
-                        .header("origin", origin)
-                        .body(HttpBody::empty())
-                        .unwrap(),
-                )
-                .await;
-            assert!(
-                !response
-                    .headers()
-                    .keys()
-                    .any(|h| h.as_str().starts_with("access-control-"))
-            );
-            let (status, body) = answer(response).await;
-            assert_eq!(status, StatusCode::FORBIDDEN);
-            assert_eq!(body["code"], "origin_mismatch");
-        }
+        let response = f
+            .respond(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/-/guildbotics/api/team")
+                    .header("host", "127.0.0.1:8765")
+                    .header("origin", origin)
+                    .body(HttpBody::empty())
+                    .unwrap(),
+            )
+            .await;
+        assert!(
+            !response
+                .headers()
+                .keys()
+                .any(|h| h.as_str().starts_with("access-control-"))
+        );
+        let (status, body) = answer(response).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["code"], "origin_mismatch");
     }
 }
 
@@ -655,169 +653,85 @@ async fn reset_without_subscribers_is_a_noop_even_while_another_writer_holds_the
 }
 
 #[tokio::test]
-async fn websocket_requires_cookie_and_origin_then_replays_and_delivers_live_in_order() {
-    use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+async fn workspace_hub_and_command_changes_share_the_sse_without_replay() {
     let f = fixture();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let app = crate::api::router(f.api.clone());
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let link = f.api.auth.entry_link("/");
-    let code = link.url.split_once('#').unwrap().1;
-    let (cookie, _) = f.api.auth.start_session(code).unwrap().unwrap();
-    let cookie = format!("{}={cookie}", f.api.auth.cookie);
-    let request = || {
-        let mut r = format!("ws://127.0.0.1:{port}/-/guildbotics/api/events")
-            .into_client_request()
-            .unwrap();
-        r.headers_mut()
-            .insert("host", "127.0.0.1:8765".parse().unwrap());
-        r
-    };
-    f.api.events.publish(
-        "first",
-        json!({"order":1}).as_object().unwrap().clone(),
-        Default::default(),
-    );
-    for (session, origin, bearer, protocol) in [
-        (None, Some("http://127.0.0.1:8765"), false, false),
-        (Some("bad"), Some("http://127.0.0.1:8765"), false, false),
-        (Some(cookie.as_str()), None, false, false),
-        (
-            Some(cookie.as_str()),
-            Some("http://127.0.0.1:1420"),
-            false,
-            false,
-        ),
-        (None, Some("http://127.0.0.1:8765"), true, false),
-        (None, Some("http://127.0.0.1:8765"), false, true),
-    ] {
-        let mut r = request();
-        if let Some(s) = session {
-            r.headers_mut().insert("cookie", s.parse().unwrap());
-        }
-        if let Some(o) = origin {
-            r.headers_mut().insert("origin", o.parse().unwrap());
-        }
-        if bearer {
-            r.headers_mut().insert(
-                "authorization",
-                format!("Bearer {}", f.token).parse().unwrap(),
-            );
-        }
-        if protocol {
-            r.headers_mut().insert(
-                "sec-websocket-protocol",
-                format!("guildbotics.session, {}", f.token).parse().unwrap(),
-            );
-            // Read the refusal frame directly: Tungstenite refuses a server
-            // that does not select any offered protocol before reading it.
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            let mut tcp = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
-                .await
-                .unwrap();
-            let mut wire = String::from("GET /-/guildbotics/api/events HTTP/1.1\r\n");
-            for (key, value) in r.headers() {
-                wire.push_str(&format!("{key}: {}\r\n", value.to_str().unwrap()));
-            }
-            wire.push_str("\r\n");
-            tcp.write_all(wire.as_bytes()).await.unwrap();
-            let mut response = Vec::new();
-            while !response.ends_with(b"\r\n\r\n") {
-                response.push(tcp.read_u8().await.unwrap());
-            }
-            assert!(response.starts_with(b"HTTP/1.1 101"));
-            assert!(
-                !String::from_utf8_lossy(&response)
-                    .to_lowercase()
-                    .contains("sec-websocket-protocol")
-            );
-            let mut frame = [0; 4];
-            tcp.read_exact(&mut frame).await.unwrap();
-            assert_eq!(frame, [0x88, 2, 3, 240]);
-            assert_eq!(f.api.events.subscriber_count(), 0);
-            continue;
-        }
-        let (mut socket, _) = tokio_tungstenite::connect_async(r).await.unwrap();
-        let message = tokio::time::timeout(Duration::from_secs(2), socket.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert!(matches!(message,Message::Close(Some(frame)) if u16::from(frame.code)==1008));
-        assert_eq!(f.api.events.subscriber_count(), 0);
-    }
-    // The WebSocket bypasses the HTTP guard, so its own Host check must refuse
-    // a valid session arriving for another host too.
-    let mut wrong_host = request();
-    wrong_host
-        .headers_mut()
-        .insert("host", "evil.invalid".parse().unwrap());
-    wrong_host
-        .headers_mut()
-        .insert("cookie", cookie.parse().unwrap());
-    wrong_host
-        .headers_mut()
-        .insert("origin", "http://127.0.0.1:8765".parse().unwrap());
-    let (mut refused, _) = tokio_tungstenite::connect_async(wrong_host).await.unwrap();
-    let message = tokio::time::timeout(Duration::from_secs(2), refused.next())
+    let host = branvil::test_support::Fixture::new("owner").await;
+    let data = host.data();
+    f.api.branvil.set(data.clone()).ok().unwrap();
+
+    let store = gb_observability::Diagnostics::open(&f.workspace());
+    let events = f.api.events.clone();
+    let run = gb_observability::Trace::open(&store, "manual")
+        .attribute("run.entry", "command")
+        .announced(Arc::new(move |record| events.announce(record)));
+    run.event("command.started", Default::default());
+
+    let endpoint = format!("{}/api/v1/events", data.base_url());
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let response = client.get(&endpoint).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let mut stream = client
+        .get(&endpoint)
+        .bearer_auth(&host.owner_token)
+        .send()
         .await
         .unwrap()
-        .unwrap()
+        .error_for_status()
         .unwrap();
-    assert!(matches!(message, Message::Close(Some(frame)) if u16::from(frame.code) == 1008));
-    assert_eq!(f.api.events.subscriber_count(), 0);
-    let mut r = request();
-    r.headers_mut().insert("cookie", cookie.parse().unwrap());
-    r.headers_mut()
-        .insert("origin", "http://127.0.0.1:8765".parse().unwrap());
-    let (mut socket, response) = tokio_tungstenite::connect_async(r).await.unwrap();
-    assert!(!response.headers().contains_key("sec-websocket-protocol"));
-    let replay: Value =
-        serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
-    assert_eq!(replay["type"], "first");
-    assert_eq!(replay["payload"], json!({"order":1}));
-    f.api.events.publish(
-        "second",
-        json!({"order":2}).as_object().unwrap().clone(),
-        Default::default(),
+    assert_eq!(stream.headers()["content-type"], "text/event-stream");
+
+    f.api
+        .events
+        .publish("scheduler.started", Default::default(), Default::default());
+    f.api.events.announce(
+        json!({"type":"command.started","source":"manual"})
+            .as_object()
+            .unwrap(),
     );
-    let live: Value =
-        serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
-    assert_eq!(live["type"], "second");
-    assert_eq!(live["payload"], json!({"order":2}));
-    socket.send(Message::Close(None)).await.unwrap();
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while f.api.events.subscriber_count() != 0 {
-            tokio::task::yield_now().await;
+    f.api
+        .events
+        .publish("workspace.changed", Default::default(), Default::default());
+    let (status, _) = f.call("POST", "/hub-status", json!({"clear":true})).await;
+    assert_eq!(status, StatusCode::OK);
+    run.event(
+        "command.finished",
+        json!({"output":"private result"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+
+    let notices = tokio::time::timeout(Duration::from_secs(2), async {
+        let mut pending = String::new();
+        let mut notices = Vec::new();
+        while notices.len() < 3 {
+            let chunk = stream.chunk().await.unwrap().unwrap();
+            pending.push_str(std::str::from_utf8(&chunk).unwrap());
+            while let Some((event, rest)) = pending.split_once("\n\n") {
+                if let Some(json) = event.lines().find_map(|line| line.strip_prefix("data: ")) {
+                    notices.push(serde_json::from_str::<Value>(json).unwrap());
+                }
+                pending = rest.to_owned();
+            }
         }
+        notices
     })
     .await
     .unwrap();
-    let mut r = request();
-    r.headers_mut().insert("cookie", cookie.parse().unwrap());
-    r.headers_mut()
-        .insert("origin", "http://127.0.0.1:8765".parse().unwrap());
-    let (mut socket, _) = tokio_tungstenite::connect_async(r).await.unwrap();
-    let _ = socket.next().await;
-    let _ = socket.next().await;
-    // A stop keeps the screens' events until the listener closes.
-    f.api.shutdown.request(false);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(f.api.events.subscriber_count(), 1);
-    f.api.shutdown.close();
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while f.api.events.subscriber_count() != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    for bytes in bytes_under(&f.workspace()).values() {
-        assert!(!String::from_utf8_lossy(bytes).contains(&f.token));
-    }
-    server.abort();
+    assert_eq!(
+        notices,
+        [
+            json!({"kind":"workspace.changed","path":"workspace","id":"","actor":null}),
+            json!({"kind":"hub_status_changed","path":"hub","id":"","actor":null}),
+            json!({"kind":"command","path":"commands","id":"","actor":null}),
+        ]
+    );
+    assert_eq!(
+        store.trace_detail(run.id()).unwrap()["summary"]["status"],
+        "success"
+    );
+    host.stop().await;
+    assert!(stream.chunk().await.unwrap().is_none());
 }
 
 #[tokio::test]

@@ -1,6 +1,6 @@
 import { createTheme } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { TFunction } from "i18next";
 import { HashRouter } from "react-router";
 import { describe, expect, it, vi } from "vitest";
@@ -30,14 +30,17 @@ import {
   dismissSystemAlert,
   getConfigStatus,
   getSystemAlerts,
-  subscribeEvents,
   runScenarioDiagnostics,
   verify,
 } from "./api/client";
-import type { RuntimeEvent, RuntimeUnitStatus, TraceSummary } from "./api/client";
+import type { RuntimeUnitStatus, TraceSummary } from "./api/client";
 import i18n from "./i18n";
+import { LOST_AFTER_MS } from "./repository/query/events";
+import { subscribeChangeStream, type StreamMessage } from "./repository/query/changeStream";
 import "./i18n";
-import { makeRuntimeEvent, makeTraceRecord } from "./test/factories";
+import { makeTraceRecord } from "./test/factories";
+import { EntryPage } from "./session/EntryPage";
+import { resumeSession } from "./api/client";
 import { TestMantineProvider } from "./test/TestMantineProvider";
 
 function t(): TFunction {
@@ -142,29 +145,46 @@ vi.mock("./api/client", async (importOriginal) => {
       },
     ]),
     getSystemAlerts: vi.fn(async () => ({ alerts: [] })),
+    resumeSession: vi.fn(),
     dismissSystemAlert: vi.fn(async () => ({ alerts: [] })),
-    subscribeEvents: vi.fn(() => () => {}),
   };
 });
 
+vi.mock("./repository/query/changeStream", () => ({
+  subscribeChangeStream: vi.fn(() => () => {}),
+}));
+
 describe("App", () => {
-  it("reloads what it shows when the server opens another workspace", async () => {
-    const listeners: ((event: RuntimeEvent) => void)[] = [];
-    vi.mocked(subscribeEvents).mockImplementation((listener) => {
-      listeners.push(listener);
+  it("refetches after a workspace change and shows a warning until the stream reconnects", async () => {
+    vi.stubGlobal("EventSource", vi.fn());
+    let receive: (message: StreamMessage) => void = () => undefined;
+    vi.mocked(subscribeChangeStream).mockImplementation((listener) => {
+      receive = listener;
       return () => undefined;
     });
-    renderApp();
+    vi.mocked(resumeSession).mockResolvedValue(true);
+    renderApp(true);
     await waitFor(() => expect(getConfigStatus).toHaveBeenCalled());
-    await waitFor(() => expect(listeners.length).toBeGreaterThan(0));
-    const reads = vi.mocked(getConfigStatus).mock.calls.length;
 
-    listeners.forEach((listener) =>
-      listener(makeRuntimeEvent({ type: "workspace.changed", payload: { workspace: "/other" } })),
+    const workspaceReads = vi.mocked(getConfigStatus).mock.calls.length;
+    act(() =>
+      receive({
+        type: "change",
+        data: JSON.stringify({ kind: "workspace.changed", path: "workspace" }),
+      }),
+    );
+    await waitFor(() =>
+      expect(vi.mocked(getConfigStatus).mock.calls.length).toBeGreaterThan(workspaceReads),
     );
 
+    act(() => receive({ type: "status", downSince: Date.now() - LOST_AFTER_MS }));
+    const warning = i18n.getFixedT("en", "repository")("alert.streamLost");
+    expect(await screen.findByText(warning)).toBeVisible();
+    const offlineReads = vi.mocked(getConfigStatus).mock.calls.length;
+    act(() => receive({ type: "status", downSince: null }));
+    await waitFor(() => expect(screen.queryByText(warning)).toBeNull());
     await waitFor(() =>
-      expect(vi.mocked(getConfigStatus).mock.calls.length).toBeGreaterThan(reads),
+      expect(vi.mocked(getConfigStatus).mock.calls.length).toBeGreaterThan(offlineReads),
     );
   });
 
@@ -970,7 +990,7 @@ describe("isStopTimeoutPending", () => {
   });
 });
 
-function renderApp() {
+function renderApp(withSession = false) {
   const theme = createTheme({
     primaryColor: "dark",
     defaultRadius: "md",
@@ -982,7 +1002,13 @@ function renderApp() {
     <TestMantineProvider theme={theme}>
       <QueryClientProvider client={queryClient}>
         <HashRouter>
-          <App />
+          {withSession ? (
+            <EntryPage>
+              <App />
+            </EntryPage>
+          ) : (
+            <App />
+          )}
         </HashRouter>
       </QueryClientProvider>
     </TestMantineProvider>,

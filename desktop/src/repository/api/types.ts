@@ -669,6 +669,8 @@ export interface ImageOperation {
 }
 
 export type ChangeKind =
+  | "workspace.changed"
+  | "command"
   | "hub_status_changed"
   | "verification"
   | "ticket"

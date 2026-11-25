@@ -18,7 +18,6 @@ import {
   troubleshoot,
   getTranscriptSettings,
   runScenarioDiagnostics,
-  subscribeEvents,
   updateTranscriptSettings,
   updateRuntimeDebug,
   type ConfigStatus,
@@ -74,7 +73,6 @@ vi.mock("./api/client", async (importOriginal) => {
     getTraceDetail: vi.fn(),
     getGlobalRecords: vi.fn(),
     troubleshoot: vi.fn(),
-    subscribeEvents: vi.fn(),
   };
 });
 
@@ -153,9 +151,6 @@ beforeEach(() => {
       message: "The GitHub token expired at 00:00:02.",
       trace_ids: ["trace-1"],
     });
-  vi.mocked(subscribeEvents)
-    .mockReset()
-    .mockReturnValue(() => {});
 });
 
 describe("Diagnostics settings tab", () => {

@@ -138,7 +138,7 @@ async fn served_returned(
     api: &Shared,
     headers: &HeaderMap,
     request: RunRequest,
-    launch: Launch,
+    mut launch: Launch,
     admitted: tokio::sync::OwnedRwLockReadGuard<()>,
     returned: gb_environment::worktree::transfer::Returned,
 ) -> Result<Ran, Response> {
@@ -167,6 +167,15 @@ async fn served_returned(
         work: &api.work,
         cancelled: &api.cancelled,
     };
+    if launch
+        .attributes
+        .get("run.entry")
+        .is_some_and(|entry| entry == "command")
+    {
+        launch
+            .attributes
+            .insert("server.instance_id".into(), api.instance_id.clone().into());
+    }
     let remotes = request.remotes.clone();
     let preflight = request.preflight;
     let mut ran = start(&state, headers, request, launch, Some(admitted), returned).await?;
@@ -466,6 +475,9 @@ async fn start(
         }) as gb_observability::Announce
     });
     let opened = move |place: &Option<Place>, mut trace: Trace| {
+        for (key, value) in launch.attributes {
+            trace = trace.attribute(&key, value);
+        }
         if let Some(announce) = announce {
             trace = trace.announced(announce);
         }
@@ -480,12 +492,9 @@ async fn start(
     }
     let diagnostic_check = launch.diagnostic_check;
     let joined = launch.trace.is_some();
-    let mut trace = launch.trace.unwrap_or_else(|| {
+    let trace = launch.trace.unwrap_or_else(|| {
         Trace::open(&Diagnostics::open(workspace), "manual").person(&person.person_id)
     });
-    for (key, value) in launch.attributes {
-        trace = trace.attribute(&key, value);
-    }
     let trace = opened(&place, trace);
     let trace_id = trace.id().to_owned();
     let run_id = if joined {

@@ -54,6 +54,7 @@ import {
 } from "lucide-react";
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useState,
@@ -106,7 +107,7 @@ import {
 import { useServiceProviders } from "./setup/providers";
 import { BranvilNavItem } from "./setup/providers/branvil/BranvilNavItem";
 import { normalizeLanguage, setAppLanguage, type AppLanguage } from "./i18n";
-import { onWorkspaceChange } from "./appEvents";
+import { ChangeStreamLost } from "./repository/query/events";
 import { ServerMachineBadge, useServerMachineLabel } from "./serverMachine";
 import { SetupPage } from "./setup/SetupPage";
 import {
@@ -139,6 +140,8 @@ const MEMORY_FOCUS_SEARCH_PARAMS = [
 
 export function App({ scoped }: { scoped?: boolean } = {}) {
   const { t, i18n } = useTranslation();
+  const { t: repositoryT } = useTranslation("repository");
+  const streamLost = useContext(ChangeStreamLost);
   const appLanguage = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
   const config = useQuery({
     queryKey: ["config"],
@@ -154,7 +157,6 @@ export function App({ scoped }: { scoped?: boolean } = {}) {
   });
   const serviceNavState = serviceRuntimeNavState(runtimeStatus.data);
   const commandNavState = commandRuntimeNavState(runtimeStatus.data);
-  useWorkspaceChangeReload();
   return (
     <AppShell
       sidebar={
@@ -219,6 +221,11 @@ export function App({ scoped }: { scoped?: boolean } = {}) {
       config.data.input_store_problem !== config.data.workspace_problem ? (
         <Alert color="danger" role="alert">
           {config.data.input_store_problem}
+        </Alert>
+      ) : null}
+      {streamLost ? (
+        <Alert color="warning" role="alert" icon={<TriangleAlert size={18} />}>
+          {repositoryT("alert.streamLost")}
         </Alert>
       ) : null}
       <HubBand />
@@ -499,15 +506,6 @@ function runtimeUnitsStopping(status: RuntimeStatus) {
     isStopTimeoutPending(status.scheduler) ||
     isStopTimeoutPending(status.events)
   );
-}
-
-/**
- * Reload what the screen shows once the server opens another workspace,
- * whichever screen -- this one or another tab -- switched it.
- */
-function useWorkspaceChangeReload() {
-  const queryClient = useQueryClient();
-  useEffect(() => onWorkspaceChange(() => void queryClient.invalidateQueries()), [queryClient]);
 }
 
 function ConfiguredRoute({ configured, loading }: { configured: boolean; loading: boolean }) {

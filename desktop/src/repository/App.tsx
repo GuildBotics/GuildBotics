@@ -1,14 +1,13 @@
 // Application shell: providers, the session gate, the sidebar, and route dispatch.
 
 import { Button, Stack, Text, Title } from "@mantine/core";
-import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { AlertBand } from "./components/AlertBand";
 import { Loading } from "./components/common";
 import { NewWorkspaceModal } from "./components/NewWorkspace";
 import { Sidebar } from "./components/Sidebar";
 import { useT } from "./i18n";
-import { useChangeStream } from "./query/events";
+import { ChangeStreamLost } from "./query/events";
 import { useSession } from "./query/hooks";
 import { Link, navigate, usePathname } from "./router/Router";
 import { href, parseRoute, type Route } from "./router/routes";
@@ -38,8 +37,7 @@ function Gate({ route }: { route: Route }) {
 }
 
 function SignedIn({ route }: { route: Route }) {
-  const client = useQueryClient();
-  const streamLost = useChangeStream(client, true);
+  const streamLost = useContext(ChangeStreamLost);
   const current = useCurrentWorkspace(route);
   return (
     <AppShell

@@ -338,13 +338,6 @@ export type Correlation = {
   attributes: Record<string, unknown>;
 };
 
-export type RuntimeEvent = Correlation & {
-  kind: "event";
-  type: string;
-  payload: Record<string, unknown>;
-  timestamp: string;
-};
-
 export type CommandRunResponse = {
   trace_id: string;
   output: string;
@@ -763,8 +756,6 @@ export type MemberTaskSchedule = {
 };
 
 export type MemberConfigUpdateRequest = MemberSetupRequest;
-
-export type StreamStatus = "connecting" | "connected" | "disconnected" | "error";
 
 export type RoutineCommandOptionsResponse = {
   options: CommandOption[];
@@ -1226,6 +1217,7 @@ export async function getTraces(params?: {
   attrKey?: string;
   attrValue?: string;
   limit?: number;
+  preferRunning?: boolean;
 }): Promise<TracesResponse> {
   const search = new URLSearchParams();
   if (params?.source) {
@@ -1243,6 +1235,9 @@ export async function getTraces(params?: {
   }
   if (params?.limit) {
     search.set("limit", String(params.limit));
+  }
+  if (params?.preferRunning) {
+    search.set("prefer_running", "true");
   }
   const suffix = search.toString();
   return request(`/diagnostics/traces${suffix ? `?${suffix}` : ""}`);
@@ -1596,23 +1591,6 @@ export async function importAvatarFromProvider(
     `/config/members/${encodeURIComponent(personId)}/avatar/${encodeURIComponent(provider)}`,
     { method: "POST" },
   );
-}
-
-export function subscribeEvents(
-  onEvent: (event: RuntimeEvent) => void,
-  onStatus?: (status: StreamStatus) => void,
-): () => void {
-  // The session cookie and the page's Origin authenticate the handshake.
-  const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const socket = new WebSocket(`${scheme}//${window.location.host}${API_PREFIX}/events`);
-  onStatus?.("connecting");
-  socket.onopen = () => onStatus?.("connected");
-  socket.onmessage = (message) => {
-    onEvent(JSON.parse(message.data) as RuntimeEvent);
-  };
-  socket.onerror = () => onStatus?.("error");
-  socket.onclose = () => onStatus?.("disconnected");
-  return () => socket.close();
 }
 
 /** A JSON request to an API path (relative to `/-/guildbotics/api`). */

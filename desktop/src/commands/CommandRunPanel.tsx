@@ -40,7 +40,7 @@ export type CommandRunPanelProps = {
   executionStatus: CommandFileExecutionStatus | null;
   runBusy: boolean;
   onSaveAndRun: () => void;
-  /** The run shown: the one started or seen starting, else the latest. */
+  /** The current workspace’s active run, or its latest result. */
   runTraceId: string | null;
   runSummary: TraceSummary | null;
   /** Why the last run request failed without naming a trace to show. */

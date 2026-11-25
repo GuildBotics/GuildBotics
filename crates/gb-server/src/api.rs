@@ -50,7 +50,7 @@ pub struct Api {
     pub(crate) switching: Arc<tokio::sync::RwLock<()>>,
     /// The code host the server runs, which the selected workspace's member
     /// backend and service reach in process.
-    pub branvil: std::sync::OnceLock<branvil::api::DataApi>,
+    pub branvil: Arc<std::sync::OnceLock<branvil::api::DataApi>>,
     pub events: Arc<crate::events::EventBus>,
     /// The one manual run that writes, by its trace, while it runs.
     pub(crate) command_results: crate::commands::Results,
@@ -97,7 +97,8 @@ impl Api {
         instance_id: String,
         data: PathBuf,
     ) -> Api {
-        let events = Arc::new(crate::events::EventBus::default());
+        let branvil = Arc::default();
+        let events = Arc::new(crate::events::EventBus::with_changes(Arc::clone(&branvil)));
         selected.service.service.attach_events(events.clone());
         crate::diagnostic_logging::attach(&events);
         if let Some(workspace) = &selected.workspace {
@@ -123,7 +124,7 @@ impl Api {
             login_runner: Default::default(),
             selection: std::sync::RwLock::new(Arc::new(selected)),
             switching: Arc::default(),
-            branvil: std::sync::OnceLock::new(),
+            branvil,
             events,
             manual: Arc::default(),
             command_results: Default::default(),
@@ -804,7 +805,6 @@ routes!(
     // The entry code is the credential; a browser holds nothing else yet.
     (Public, post, "/session", start_session),
     (Public, post, "/apps/token", app_token),
-    (Session, get, "/events", crate::events::stream),
     (
         Session,
         get,
@@ -871,14 +871,8 @@ async fn guard(
     req: Request,
     next: Next,
 ) -> Response {
-    let websocket = req.uri().path() == "/-/guildbotics/api/events"
-        && req.method() == axum::http::Method::GET
-        && req
-            .headers()
-            .get(header::UPGRADE)
-            .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"));
     let hook = integrated && branvil::hook_paths().any(|path| path == req.uri().path());
-    let checked = if websocket || hook {
+    let checked = if hook {
         Ok(())
     } else {
         loopback_auth::check_request(api.auth.base_url(), req.headers())

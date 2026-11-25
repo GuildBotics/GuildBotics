@@ -174,9 +174,11 @@ impl Trace {
         if let Some(announce) = &self.announce
             && record["kind"] == "event"
         {
+            self.diagnostics.record(record.clone());
             announce(&record);
+        } else {
+            self.diagnostics.record(record);
         }
-        self.diagnostics.record(record);
     }
 
     /// Append a domain event only when this trace transcript does not already contain its type.
