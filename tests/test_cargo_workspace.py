@@ -398,6 +398,7 @@ def test_python_ci_covers_its_inputs_and_skips_rust_and_desktop_sources() -> Non
         "docs/custom_command_guide.en.md",
         "docs/custom_command_guide.ja.md",
         "docker/agent-environment/cargo-wrapper.sh",
+        "rust-toolchain.toml",
         "pyproject.toml",
         "uv.lock",
         ".python-version",
@@ -405,6 +406,8 @@ def test_python_ci_covers_its_inputs_and_skips_rust_and_desktop_sources() -> Non
         "README.md",
         "LICENSE",
         "third_party_licenses",
+        ".gitattributes",
+        ".gitignore",
         ".guildbotics-ci.toml",
     }
     inputs.update(

@@ -44,8 +44,9 @@ paths = [
   "guildbotics/**", "tests/**", "scripts/**", ".cargo/**", "wire/**",
   "records/golden/**", "skills/guildbotics/**", ".agents/skills/**", ".claude/skills/**",
   "docs/custom_command_guide.*.md", "docker/agent-environment/cargo-wrapper.sh",
+  "rust-toolchain.toml",
   "pyproject.toml", "uv.lock", ".python-version", "AGENTS.md", "README.md",
-  "LICENSE", "third_party_licenses/**", ".guildbotics-ci.toml",
+  "LICENSE", "third_party_licenses/**", ".gitattributes", ".gitignore", ".guildbotics-ci.toml",
 ]
 image = "guildbotics/agent-environment:dev"
 commands = ['''
