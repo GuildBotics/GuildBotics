@@ -501,19 +501,9 @@ export const resources = {
       setup: {
         integrations: {
           title: "Integrations",
-          subtitle:
-            "Choose the service that hosts the code, the tickets, and the chat. Each is optional.",
+          subtitle: "Use Slack to assign work to members and receive their replies.",
           none: "Not used",
-          kinds: {
-            code_hosting_service: "Code hosting",
-            ticket_service: "Tickets",
-            chat_service: "Chat",
-          },
-          kindHints: {
-            code_hosting_service: "Where the members clone repositories and open pull requests.",
-            ticket_service: "Where the members take tickets from and report on them.",
-            chat_service: "Where the members are asked for work and reply.",
-          },
+          chat: "Chat",
         },
         title: "First setup",
         configuredTitle: "Settings",
@@ -546,16 +536,13 @@ export const resources = {
           next: "Next",
         },
         nav: {
-          groupWorkspace: "Workspace",
-          groupCodeHost: "Code host",
-          groupMachine: "This machine",
-          project: "Project",
+          project: "Workspace",
           intelligence: "LLM / AI CLI tools",
           environment: "Agent execution environment",
-          members: "Members",
+          members: "Members and patrol",
           integrations: "Integrations",
           verification: "Verification",
-          device: "Registered workspaces",
+          device: "This machine",
         },
         device: {
           clientTitle: "Hub clients",
@@ -565,6 +552,12 @@ export const resources = {
           linuxClientDownload: "Download for Linux x86_64",
           title: "This machine",
           subtitle: "These settings belong to this machine rather than to a workspace.",
+          git: {
+            title: "Git authentication",
+            hint: "To use the Hub as a Git remote, add this credential helper to your global Git configuration. Open it with git config --global --edit.",
+            copy: "Copy",
+            copied: "Copied",
+          },
           registeredWorkspaces: {
             title: "Registered workspaces",
             body: "Registered locations protect each workspace’s .guildbotics directory from agent directory grants, even when another workspace is selected. Remove a location only when you no longer use it. Removing its registration does not delete its files.",
@@ -581,10 +574,12 @@ export const resources = {
         verification: {
           title: "Verification",
           subtitle: "Verify the configuration and connection status of integrations.",
+          codeHosting: "Code hosting",
+          tickets: "Tickets",
         },
         project: {
-          title: "Project",
-          subtitle: "Choose your workspace, language, and other basic project settings.",
+          title: "Workspace",
+          subtitle: "Manage this workspace’s location, description, and default agent language.",
           agentLanguage: "Agent default language",
           agentLanguageDescription:
             "Used for command and role definitions, and for LLM output instructions.",
@@ -1620,18 +1615,9 @@ export const resources = {
       setup: {
         integrations: {
           title: "連携",
-          subtitle: "コード・チケット・チャットに使うサービスを選びます。どれも任意です。",
+          subtitle: "Slack でメンバーに作業を依頼し、返答を受け取れます。",
           none: "使わない",
-          kinds: {
-            code_hosting_service: "コードホスティング",
-            ticket_service: "チケット",
-            chat_service: "チャット",
-          },
-          kindHints: {
-            code_hosting_service: "メンバーがリポジトリを clone し、プルリクエストを作る場所です。",
-            ticket_service: "メンバーがチケットを受け取り、結果を報告する場所です。",
-            chat_service: "メンバーに作業を依頼し、メンバーが返信する場所です。",
-          },
+          chat: "チャット",
         },
         title: "はじめに",
         configuredTitle: "設定",
@@ -1663,16 +1649,13 @@ export const resources = {
           next: "次へ",
         },
         nav: {
-          groupWorkspace: "ワークスペース",
-          groupCodeHost: "コードホスト",
-          groupMachine: "このマシン",
-          project: "プロジェクト",
-          intelligence: "LLM・AI CLIツール",
+          project: "ワークスペース",
+          intelligence: "LLM・AI CLI ツール",
           environment: "エージェント実行環境",
-          members: "メンバー",
+          members: "メンバー・巡回",
           integrations: "連携",
           verification: "検証",
-          device: "登録済みのワークスペース",
+          device: "このマシン",
         },
         device: {
           clientTitle: "Hub クライアント",
@@ -1682,6 +1665,12 @@ export const resources = {
           linuxClientDownload: "Linux x86_64 版をダウンロード",
           title: "このマシン",
           subtitle: "ワークスペースではなく、このマシン自体に属する設定です。",
+          git: {
+            title: "Git の認証",
+            hint: "Hub を Git のリモートとして使うには、この認証ヘルパーをグローバルな Git 設定に追加してください。git config --global --edit で開けます。",
+            copy: "コピー",
+            copied: "コピーしました",
+          },
           registeredWorkspaces: {
             title: "登録済みのワークスペース",
             body: "別のワークスペースを選択している間も、ここに登録された場所の.guildboticsをエージェントへの共有から保護します。使わなくなった場所だけ登録を外してください。登録を外してもファイルは削除されません。",
@@ -1698,10 +1687,12 @@ export const resources = {
         verification: {
           title: "検証",
           subtitle: "設定したプロジェクトや連携サービスの動作状況をチェックします。",
+          codeHosting: "コードホスティング",
+          tickets: "チケット",
         },
         project: {
-          title: "プロジェクト",
-          subtitle: "ワークスペース、言語などの基本設定を指定します。",
+          title: "ワークスペース",
+          subtitle: "ワークスペースの場所、説明、エージェントの既定言語を管理します。",
           agentLanguage: "エージェントの既定言語",
           agentLanguageDescription: "コマンド、ロール定義、LLMへの指示で使う既定言語です。",
           description: "プロジェクトの説明",

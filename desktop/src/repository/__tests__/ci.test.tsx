@@ -103,6 +103,7 @@ const CI = {
   repositories: [
     { path: "acme/demo", ci_network: false },
     { path: "acme/web", ci_network: true },
+    { path: "sandbox/ci-check", ci_network: true },
   ],
 };
 
@@ -214,16 +215,14 @@ describe("CI settings", () => {
     );
     expect(await screen.findByRole("heading", { name: "CI" })).toBeInTheDocument();
     expect(
-      screen.getByText(
-        "The runner that runs jobs, what one job may use, and the images jobs run in.",
-      ),
+      screen.getByText("Manage runners, resource limits, and network access for CI jobs."),
     ).toBeInTheDocument();
 
     const runner = await screen.findByRole("region", { name: "Runner" });
     expect(within(runner).getByText("Ready")).toBeInTheDocument();
     expect(within(runner).getByText("1 runner(s) connected.")).toBeInTheDocument();
     expect(
-      within(runner).getByRole("switch", { name: /^Run the runner on the Branvil machine/ }),
+      within(runner).getByRole("switch", { name: /^Run the runner on the Hub/ }),
     ).toBeChecked();
     expect(
       within(within(runner).getByRole("list", { name: "Runners" })).getByText("branvil-runner"),
@@ -233,14 +232,17 @@ describe("CI settings", () => {
     expect(
       within(executor).getByText("/Users/u/.guildbotics/data/msb/bin/msb"),
     ).toBeInTheDocument();
-    expect(within(executor).getByText("/Users/u/.guildbotics/runner/msb-home")).toBeInTheDocument();
+    expect(
+      within(executor).getByRole("link", { name: "Manage images in Agent execution environment" }),
+    ).toHaveAttribute("href", "/workspaces/acme/setup?section=environment#agent-environment-image");
+    expect(screen.queryByRole("region", { name: "Images" })).not.toBeInTheDocument();
 
     // The only Save button is the job resources', inside their card.
     const limits = screen.getByRole("region", { name: "Job resources" });
     expect(screen.getAllByRole("button", { name: "Save" })).toEqual([
       within(limits).getByRole("button", { name: "Save" }),
     ]);
-    for (const other of ["Runner", "Executor", "Images", "Network"])
+    for (const other of ["Runner", "Executor", "Network"])
       expect(screen.getByRole("region", { name: other })).not.toContainElement(
         within(limits).getByRole("form"),
       );
@@ -256,21 +258,20 @@ describe("CI settings", () => {
     );
     expect(within(demo).getByText("Not allowed")).toBeInTheDocument();
     expect(within(web).getByText("Allowed")).toBeInTheDocument();
+    expect(within(network).queryByText("sandbox/ci-check")).not.toBeInTheDocument();
   });
 
   it("lists the cached images with their size, date, users, and digest, and copies the tag as the reference", async () => {
     fakeApi({ ...SHELL, "GET /api/v1/admin/ci": json(200, CI) });
     const user = userEvent.setup();
-    renderApp("/settings/repositories/ci");
+    renderApp("/workspaces/acme/setup?section=environment");
     const images = await screen.findByRole("region", { name: "Images" });
     expect(within(images).queryByRole("alert")).not.toBeInTheDocument();
     const [row] = within(within(images).getByRole("list", { name: "In the cache" })).getAllByRole(
       "listitem",
     ) as [HTMLElement];
     expect(within(row).getByText("guildbotics/agent-environment:dev")).toBeInTheDocument();
-    expect(row).toHaveTextContent(
-      "3.4 GiB · 10/18/2026 · Used by: sandbox/ci-check (tools, long) · acme/demo (test)",
-    );
+    expect(row).toHaveTextContent("3.4 GiB · 10/18/2026 · Used by: acme/demo (test)");
     expect(within(row).queryByText("Added")).not.toBeInTheDocument();
     // The digest of the version the cache holds on one line, cut in the middle; the full value in its title.
     expect(within(row).getByText(`sha256:44444444…${"4".repeat(9)}`)).toHaveAttribute(
@@ -288,7 +289,7 @@ describe("CI settings", () => {
       ...SHELL,
       "GET /api/v1/admin/ci": json(200, withImages({ cached: [{ ...CACHED, used_by: [] }] })),
     });
-    renderApp("/settings/repositories/ci");
+    renderApp("/workspaces/acme/setup?section=environment");
     const [row] = within(await screen.findByRole("list", { name: "In the cache" })).getAllByRole(
       "listitem",
     ) as [HTMLElement];
@@ -298,7 +299,7 @@ describe("CI settings", () => {
 
   it("invites to add an image when the cache holds none", async () => {
     fakeApi({ ...SHELL, "GET /api/v1/admin/ci": json(200, withImages({ cached: [] })) });
-    renderApp("/settings/repositories/ci");
+    renderApp("/workspaces/acme/setup?section=environment");
     const images = await screen.findByRole("region", { name: "Images" });
     expect(within(images).getByText("Add an image for jobs to run in")).toBeInTheDocument();
     expect(
@@ -315,7 +316,8 @@ describe("CI settings", () => {
       {
         image: "guildbotics/agent-environment:next",
         repositories: [
-          { repository: "GuildBotics/GuildBotics", jobs: ["test", "desktop-quality"] },
+          { repository: "acme/demo", jobs: ["test", "desktop-quality"] },
+          { repository: "sandbox/ci-check", jobs: ["foreign-check"] },
         ],
       },
       {
@@ -327,11 +329,11 @@ describe("CI settings", () => {
       },
     ];
     fakeApi({ ...SHELL, "GET /api/v1/admin/ci": json(200, withImages({ missing })) });
-    renderApp("/settings/repositories/ci");
+    renderApp("/workspaces/acme/setup?section=environment");
     const images = await screen.findByRole("region", { name: "Images" });
     const [agent, absent] = within(images).getAllByRole("alert") as [HTMLElement, HTMLElement];
     expect(agent).toHaveTextContent(
-      "The image that test, desktop-quality of GuildBotics/GuildBotics use is not in the cache",
+      "The image that test, desktop-quality of acme/demo use is not in the cache",
     );
     expect(within(agent).getByText("guildbotics/agent-environment:next")).toBeInTheDocument();
     expect(
@@ -361,7 +363,7 @@ describe("CI settings", () => {
       "POST /api/v1/admin/ci/images/load": json(202, { ...CI, operation: failed }),
     });
     const user = userEvent.setup();
-    renderApp("/settings/repositories/ci");
+    renderApp("/workspaces/acme/setup?section=environment");
     await user.click(
       within(await screen.findByRole("region", { name: "Images" })).getByRole("button", {
         name: "Add image",
@@ -375,17 +377,13 @@ describe("CI settings", () => {
     );
     expect(within(dialog).getByRole("button", { name: "Add" })).toBeDisabled();
 
-    await user.click(
-      within(dialog).getByRole("radio", { name: "Load from a file on the Branvil machine" }),
-    );
+    await user.click(within(dialog).getByRole("radio", { name: "Load from a file on the Hub" }));
     expect(
       within(dialog).queryByRole("textbox", { name: "Image reference" }),
     ).not.toBeInTheDocument();
     const path = within(dialog).getByRole("textbox", { name: "Absolute path of the archive" });
     expect(path).toHaveAttribute("placeholder", "/path/to/image.tar");
-    expect(path).toHaveAccessibleDescription(
-      "A docker save or OCI archive (.tar) on the machine that runs Branvil.",
-    );
+    expect(path).toHaveAccessibleDescription("A docker save or OCI archive (.tar) on the Hub.");
     await user.type(path, " /Users/u/image.tar ");
     await user.click(within(dialog).getByRole("button", { name: "Add" }));
     await waitFor(() => expect(fake.calls("POST", "/api/v1/admin/ci/images/load")).toHaveLength(1));
@@ -431,7 +429,7 @@ describe("CI settings", () => {
       ],
     });
     const user = userEvent.setup();
-    renderApp("/settings/repositories/ci");
+    renderApp("/workspaces/acme/setup?section=environment");
     await user.click(await screen.findByRole("button", { name: "Add image" }));
     const dialog = await screen.findByRole("dialog", { name: "Add image" });
     await user.type(
@@ -482,7 +480,7 @@ describe("CI settings", () => {
   it("says why Add is busy when an operation started elsewhere is running", async () => {
     fakeApi({ ...SHELL, "GET /api/v1/admin/ci": json(200, { ...CI, operation: RUNNING }) });
     const user = userEvent.setup();
-    renderApp("/settings/repositories/ci");
+    renderApp("/workspaces/acme/setup?section=environment");
     const images = await screen.findByRole("region", { name: "Images" });
     expect(
       within(images).getByText("An image is being added: /Users/u/image.tar"),
@@ -541,14 +539,10 @@ describe("CI settings", () => {
     });
     const user = userEvent.setup();
     renderApp("/settings/repositories/ci");
-    await user.click(
-      await screen.findByRole("switch", { name: /^Run the runner on the Branvil machine/ }),
-    );
+    await user.click(await screen.findByRole("switch", { name: /^Run the runner on the Hub/ }));
     expect(await screen.findByText("Contact lost")).toBeInTheDocument();
     expect(fake.calls("PUT", "/api/v1/admin/ci/runner")[0]?.body).toEqual({ mode: "off" });
-    expect(
-      screen.getByRole("switch", { name: /^Run the runner on the Branvil machine/ }),
-    ).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: /^Run the runner on the Hub/ })).not.toBeChecked();
   });
 
   it("shows a version mismatch warning for the only online runner when the automatic runner is off", async () => {

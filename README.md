@@ -79,16 +79,15 @@ The first start creates the code host's data in `~/.guildbotics/data/code-host`.
 
 ### Initial Setup
 
-Open the screens with `guildbotics open` on the Hub. The browser opens on **Project** setup, where you configure:
+Run `guildbotics open` on the Hub. For a workspace without initial settings, the browser opens **First setup**.
 
-- The agent default language (English / Japanese), used for command and role definitions and for LLM output instructions
-- The workspace folder. Keep it outside the repository the agents work on: for example, use `~/repos/myproject` for the repository and `~/teams/myproject` for the workspace. It also cannot be inside an explicit grant
-- The project description
+1. Under **Workspace**, confirm the folder and enter a **Project description**. The **Agent default language** is used for command and role definitions and prompts to the LLM. Keep the workspace outside the working repository and any explicit grant. For example, use `~/repos/myproject` for the repository and `~/teams/myproject` for the workspace.
+2. Under **LLM / AI CLI tools**, choose the default LLM and AI CLI tool and enter the LLM API key. With the OpenAI and Codex defaults, click **Configure OpenAI API key** and enter the key.
+3. Under **Integrations**, you can leave **Chat** set to **Not used**. You can enable Slack after initial setup.
+4. Under **Members and patrol**, enter a **Member ID**, **Display name**, and **Roles**, then click **Add member**. Add at least one active member.
+5. Click **Create initial settings**. **Initial settings created** confirms the save. Open **Service** in the main menu to view the service status.
 
-**Integrating with Branvil or Slack requires preparation on the service side before you start configuring.** Every integration is optional and can be enabled later under **Settings → Integrations**. If you just want to see GuildBotics run, leave them unused and move on.
-
-- **Slack**: for members to take requests in Slack, you need a Socket Mode Slack App and its bot / app tokens. See [Ask for Work in Slack](#ask-for-work-in-slack) for what to prepare
-- **Branvil**: a running Branvil, reachable at the same base URL on every machine. There is no connection step: GuildBotics sets up each AI member automatically. Your own checkouts can use it as their `origin` too. See the [Branvil Integration Guide](docs/branvil_integration.en.md)
+Initial setup configures the Hub's built-in code host and ticket service. Use the workspace selector at the top of the main sidebar to select a workspace, and **Settings → Repositories** to manage its repositories. [Code host setup guide](docs/branvil_integration.en.md)
 
 In GuildBotics, the folder that holds a project's settings and state is called the **workspace**. Plain text configuration files are written there:
 
@@ -101,13 +100,12 @@ Each member's identity (name, character, avatar, and service accounts) is the sa
 
 API keys and account tokens are kept in an encrypted local store, and only their key names are recorded in the files above (→ [Storing API Keys and Tokens](#storing-api-keys-and-tokens)).
 
-After project setup, configure the following on the screens:
+After saving initial settings, use **Settings** for any further configuration you need.
 
-- **LLM / AI CLI tools**: default LLM, AI CLI tool selection, and LLM API keys
-- **Agent execution environment**: build the environment on this machine with **Build**, and log in to the selected tool with the command it shows. Both are per machine
-- **Integrations**: choose and configure the services for code hosting, tickets, and chat. Each is optional.
-- **Members**: add and configure team members (service accounts are configured on the member’s service tab). The name, character, avatar, and service accounts are common to every workspace; roles, patrol, chat, and AI settings are for this workspace only. A member's ID cannot be changed once saved. **Add an existing member** adds a member another workspace already has. **Remove from this workspace** takes the member out of this workspace only (its identity, credentials, and service tokens stay). **Delete** removes the member from this workspace and deletes its identity and credentials; another workspace that still has the member leaves it out until it is removed there too
-- **Verification**: press **Validate settings** to run a read-only check across LLM, AI CLI tool, the integrated services, and Git. It does not update the integrated services' data
+- Under **Agent execution environment**, click **Build** to create the environment for this machine, then use the displayed command to log in to the selected AI CLI tool. This page also manages the images shared with CI.
+- To use Slack, set **Chat** to **Slack** under **Integrations** and save. Prepare a Socket Mode Slack App and its bot and app tokens, then configure them on the member's **Slack** tab under **Members and patrol**. [Ask for Work in Slack](#ask-for-work-in-slack)
+- Under **Members and patrol**, add or edit team members. A member's ID cannot be changed once saved. **Add an existing member** adds a member another workspace already has. **Remove from this workspace** takes the member out of this workspace only (its identity, credentials, and service tokens stay). **Delete** removes the member from this workspace and deletes its identity and credentials. Another workspace that still has the member leaves it out until it is removed there too.
+- Under **Verification**, click **Validate settings** to run read-only checks of the LLM, AI CLI tool, integrated services, and Git.
 
 ### Quick Start
 
@@ -147,7 +145,7 @@ Start your AI CLI tool in the repository you want to work in and ask for work, *
 Use the guildbotics skill and commit and push this change as the member alice
 ```
 
-Member commands use the workspace selected by the Hub. On the Hub, `member --workspace <path>` verifies the selected local workspace ID; it does not switch the server. On another machine, omit `--workspace`; the CLI reads the workspace ID from the Hub. To change it, finish active work and switch the workspace under **Settings → Project** on the Hub, or stop the Hub's server with `guildbotics server stop`, run `guildbotics workspace use <path>` on the Hub, and start it again. File content, downloads and commits in your current repository are handled by the CLI; provider credentials stay in the server.
+Member commands use the workspace selected by the Hub. On the Hub, `member --workspace <path>` verifies the selected local workspace ID; it does not switch the server. On another machine, omit `--workspace`; the CLI reads the workspace ID from the Hub. To change it, finish active work and switch the workspace under **Settings → Workspace** on the Hub, or stop the Hub's server with `guildbotics server stop`, run `guildbotics workspace use <path>` on the Hub, and start it again. File content, downloads and commits in your current repository are handled by the CLI; provider credentials stay in the server.
 
 The AI CLI tool loads the member's profile (roles, judgment criteria, speaking style) and memory, and responds as that member from then on. External actions such as commits, pushes, PR creation, and Slack posts are performed under the member's own identity.
 
@@ -171,7 +169,7 @@ On macOS, grant Documents folder access once to the app that launches GuildBotic
 
 ## Delegate Branvil Tickets
 
-The default `ticket_driven_workflow` investigates a Branvil ticket, implements the change, and opens a pull request. In **Settings → Integrations**, choose Branvil for code hosting and tickets. Both services use the project’s workspace. For the repositories and the board, see the [Branvil integration guide](docs/branvil_integration.en.md).
+The default `ticket_driven_workflow` investigates a ticket on the Hub, implements the change, and opens a pull request. Choose the workspace in the main sidebar. For repository and task flow setup, see the [code host setup guide](docs/branvil_integration.en.md).
 
 Under **Settings → Agent execution environment**, confirm that the environment is ready and that the AI CLI login is saved. From a terminal, run `guildbotics environment status`.
 
@@ -181,7 +179,7 @@ Open the **Service** screen and press **Run**. A worker starts for each active m
 
 The screen has three execution sources, each toggled individually with **Include in service run**; at least one stays included. The choices, the patrol interval, and the failure limit are saved on this machine's server, so every start runs with them: from any screen, from `guildbotics service start`, or by the server as it starts. A change made while the service runs applies from its next start.
 
-- **Patrol commands**: the ticket-driven workflow wakes on changes and works through all candidates. The **Patrol interval (minutes)** (default 3 minutes) is the interval for rechecking work that those changes do not cover. Other patrol commands run in round-robin order at this interval. When the project uses a ticket service, a new member gets the ticket-driven workflow as its default; otherwise it starts with no patrol commands, so pick them under **Settings → Members → Patrol**
+- **Patrol commands**: the ticket-driven workflow wakes on changes and works through all candidates. The **Patrol interval (minutes)** (default 3 minutes) is the interval for rechecking work that those changes do not cover. Other patrol commands run in round-robin order at this interval. When the project uses a ticket service, a new member gets the ticket-driven workflow as its default; otherwise it starts with no patrol commands, so pick them under **Settings → Members and patrol → Patrol**
 - **Scheduled commands**: runs the scheduled commands defined in member settings at the times you specify
 - **Event triggers**: receives events such as Slack messages and routes them to the chat workflow
 
@@ -240,7 +238,7 @@ Two things need to be configured:
 
 First choose Slack under **Settings → Integrations → Chat**; the members then have a Slack tab.
 
-1. **Create a Slack App**: under **Settings → Members → Slack**, choose **Register a new app** and press **Create the app on Slack**. The browser opens with the required scopes, Socket Mode and event subscriptions already configured, so you pick a workspace and create the app. Then press **Reinstall to Workspace** under **OAuth & Permissions** and copy the two tokens (`xoxb-...` / `xapp-...`) — the first bot token Slack issues does not carry the scopes, so the reinstall is required
+1. **Create a Slack App**: under **Settings → Members and patrol → Slack**, choose **Register a new app** and press **Create the app on Slack**. The browser opens with the required scopes, Socket Mode and event subscriptions already configured, so you pick a workspace and create the app. Then press **Reinstall to Workspace** under **OAuth & Permissions** and copy the two tokens (`xoxb-...` / `xapp-...`) — the first bot token Slack issues does not carry the scopes, so the reinstall is required
 2. **Register it with the member**: on the same Slack tab, configure the following
    - Paste the **Slack Bot token** (`xoxb-...`) and **Slack App token** (`xapp-...`), then press **Verify app** to confirm the bot name, workspace, granted scopes, and channel membership
    - **Channel**: add the channel names or IDs to watch
@@ -258,7 +256,7 @@ For the manual Slack App setup steps (including the list of required scopes), sh
 
 ## Automate Recurring Work
 
-Configure two kinds of automated execution per member under **Settings → Members → Patrol**. Both are run by the service you start on the **Service** screen.
+Configure two kinds of automated execution per member under **Settings → Members and patrol → Patrol**. Both are run by the service you start on the **Service** screen.
 
 - **Patrol commands**: turn on "Configure patrol commands for this member" and choose the saved commands. Members with it turned off do not run patrol work. The ticket-driven workflow (`workflows/ticket_driven_workflow`) wakes on changes and continues without waiting for the patrol interval while candidates remain. Other commands run one at a time in round-robin order at each interval. With the default shortened to 3 minutes, members configured with those other commands run them more often
 - **Scheduled commands**: use **Add schedule** to choose a command and its execution time (for example, periodic reports or cleanup). The time can be an Hourly / Daily / Weekly preset, or a **Detailed schedule** (five-field cron notation)
@@ -347,7 +345,7 @@ Return only the translated text.
 **How to run a command**:
 
 - **Run** on the **Edit Command** screen (you can supply input text and additional args)
-- Patrol / scheduled execution under **Settings → Members → Patrol** (→ [Automate Recurring Work](#automate-recurring-work))
+- Patrol / scheduled execution under **Settings → Members and patrol → Patrol** (→ [Automate Recurring Work](#automate-recurring-work))
 - Scheduled Slack posts (configured as a scheduled command combined with `workflows/chat_post_command`)
 - The CLI: `guildbotics run <command_name> [args...]` (→ [Run on a Server](#run-on-a-server))
 
@@ -625,7 +623,7 @@ For the complete list of CLI commands and options, see the [CLI Reference](docs/
 | --- | --- |
 | `guildbotics` command not found | Run `~/.guildbotics/bin/guildbotics` and check `~/.local/bin` in PATH. If neither exists, install them again (→ [Installation](#installation)) |
 | The server does not start, or has stopped | Read the output of `guildbotics server start` (see [Run the Server in a Terminal](#run-the-server-in-a-terminal)) |
-| Not sure which workspace is in use | Check and change it under **Settings → Project**. From the CLI, use `guildbotics workspace status` / `guildbotics workspace use <path>` |
+| Not sure which workspace is in use | Check and change it under **Settings → Workspace**. From the CLI, use `guildbotics workspace status` / `guildbotics workspace use <path>` |
 | A member does not work, or the configuration looks wrong | Validate the LLM, AI CLI tool, Branvil, and Slack settings under **Settings → Verification** |
 | Slack events are not received | Check Socket Mode, the App-Level Token, and the bot events, and whether **Event triggers** is included on the **Service** screen (every start of the services uses those settings) |
 | A command execution failed | Open the session on the **Diagnostics** screen and read the logs. You can also ask the AI assistant to investigate the cause |

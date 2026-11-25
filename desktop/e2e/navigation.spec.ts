@@ -68,9 +68,22 @@ test("uses one sidebar and session when changing screens and workspaces", async 
 test("opens the repository list and editor in the same settings layout", async ({ page }) => {
   await page.goto("/workspaces/acme/setup");
   const menu = page.getByRole("navigation", { name: "Settings sections" });
-  const project = menu.getByRole("button", { name: "Project" });
+  const project = menu.getByRole("link", { name: "Workspace", exact: true });
   const repos = menu.getByRole("link", { name: "Repositories" });
   await expect(project).toHaveAttribute("aria-current", "page");
+  await expect(menu.getByRole("link")).toHaveText([
+    "Workspace",
+    "Repositories",
+    "LLM / AI CLI tools",
+    "Agent execution environment",
+    "Integrations",
+    "Members and patrol",
+    "Review and authentication",
+    "CI",
+    "Notifications",
+    "This machine",
+    "Verification",
+  ]);
   const originalMenu = await menu.elementHandle();
   await repos.click();
   await expect(repos).toHaveAttribute("aria-current", "page");
@@ -86,6 +99,37 @@ test("opens the repository list and editor in the same settings layout", async (
   await project.click();
   await expect(project).toHaveAttribute("aria-current", "page");
   await expect(page).toHaveURL(/\/workspaces\/acme\/setup\?section=project$/);
+});
+
+test("opens each member screen directly and manages CI images with the agent environment", async ({
+  page,
+}) => {
+  await page.goto("/workspaces/acme/setup");
+  const menu = page.getByRole("navigation", { name: "Settings sections" });
+  const section = (name: string) => menu.getByRole("link", { name, exact: true });
+
+  await section("Members and patrol").click();
+  await expect(page.getByRole("list", { name: "Members" })).toBeVisible();
+  await section("Review and authentication").click();
+  await expect(section("Review and authentication")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("heading", { name: "Review and authentication" })).toBeVisible();
+
+  await section("CI").click();
+  await expect(page.getByRole("region", { name: "Network" })).toContainText("acme/demo");
+  await expect(page.getByRole("region", { name: "Images" })).toHaveCount(0);
+  await page.getByRole("link", { name: "Manage images in Agent execution environment" }).click();
+  await expect(page).toHaveURL(
+    /\/workspaces\/acme\/setup\?section=environment#agent-environment-image$/,
+  );
+  await expect(section("Agent execution environment")).toHaveAttribute("aria-current", "page");
+  const images = page.getByRole("region", { name: "Images" });
+  await expect(images).toHaveCount(1);
+  await expect(images.getByText("Base image")).toBeVisible();
+  await expect(images.getByRole("button", { name: "Add image" })).toBeVisible();
+
+  await section("Notifications").click();
+  await expect(page.getByRole("heading", { name: "Notifications" })).toBeVisible();
+  await expect(page.getByText("Webhook URL", { exact: true })).toBeVisible();
 });
 
 test("chooses the landing page using the viewed workspace's configuration", async ({ page }) => {

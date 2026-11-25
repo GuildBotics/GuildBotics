@@ -395,10 +395,10 @@ describe("SetupPage", () => {
     const nav = document.querySelector<HTMLElement>(".setup-nav");
     expect(nav).not.toBeNull();
     const navQueries = within(nav!);
-    const buttons = navQueries.getAllByRole("button");
-    const intelligence = navQueries.getByRole("button", { name: t("setup.nav.intelligence") });
-    const environment = navQueries.getByRole("button", { name: t("setup.nav.environment") });
-    expect(buttons.indexOf(environment)).toBe(buttons.indexOf(intelligence) + 1);
+    const links = navQueries.getAllByRole("link");
+    const intelligence = navQueries.getByRole("link", { name: t("setup.nav.intelligence") });
+    const environment = navQueries.getByRole("link", { name: t("setup.nav.environment") });
+    expect(links.indexOf(environment)).toBe(links.indexOf(intelligence) + 1);
     expect(
       screen.getByRole("heading", { name: t("setup.agentEnvironment.currentDevice.title") }),
     ).toBeInTheDocument();
@@ -527,8 +527,8 @@ describe("SetupPage", () => {
   it("puts the integrations before the members whose accounts follow them", async () => {
     renderSetupPage("/setup");
 
-    const integrations = await screen.findByRole("button", { name: t("setup.nav.integrations") });
-    const members = screen.getByRole("button", { name: t("setup.nav.members") });
+    const integrations = await screen.findByRole("link", { name: t("setup.nav.integrations") });
+    const members = screen.getByRole("link", { name: t("setup.nav.members") });
 
     expect(
       integrations.compareDocumentPosition(members) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -541,7 +541,7 @@ describe("SetupPage", () => {
 
     expect(await screen.findByText("Alice (alice)")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Project" }));
+    await user.click(screen.getByRole("link", { name: "Workspace" }));
 
     expect(await screen.findByLabelText("Workspace")).toBeInTheDocument();
     expect(screen.queryByText("Alice (alice)")).not.toBeInTheDocument();
@@ -609,14 +609,16 @@ describe("SetupPage", () => {
     );
   });
 
-  it("names the server machine beside the settings that belong to it", async () => {
-    renderSetupPage("/setup");
+  it("names the server machine beside the device settings", async () => {
+    renderSetupPage("/setup?section=device");
 
     const badge = await screen.findByLabelText(
       t("app.serverMachine.tooltip", { machine: "studio" }),
     );
     expect(badge).toHaveTextContent("studio");
-    expect(badge.closest(".nav-label")).toHaveTextContent(t("setup.nav.groupMachine"));
+    expect(badge.parentElement).toContainElement(
+      screen.getByRole("heading", { name: t("setup.device.title") }),
+    );
   });
 
   it("drops the previous workspace API key status after switching to an unconfigured workspace", async () => {
@@ -641,7 +643,7 @@ describe("SetupPage", () => {
     await openWorkspace(user, "/empty-workspace");
 
     expect(await screen.findByRole("heading", { name: "First setup" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
+    await user.click(screen.getByRole("link", { name: "LLM / AI CLI tools" }));
     expect(await screen.findByText(t("setup.intelligence.defaultProvider"))).toBeInTheDocument();
 
     // The new workspace stores no key yet, so no provider may claim otherwise
@@ -660,7 +662,7 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
 
     await screen.findByRole("heading", { name: "First setup" });
-    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
+    await user.click(screen.getByRole("link", { name: "LLM / AI CLI tools" }));
 
     // Selecting a provider and an AI CLI tool is not enough on its own.
     expect(
@@ -688,7 +690,7 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
 
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
+    await user.click(screen.getByRole("link", { name: "LLM / AI CLI tools" }));
 
     expect(await screen.findByText(t("setup.intelligence.defaultProvider"))).toBeInTheDocument();
     // The stored OpenAI key counts as configured without retyping it.
@@ -796,7 +798,7 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
     await screen.findByRole("heading", { name: "First setup" });
 
-    await user.click(screen.getByRole("button", { name: t("setup.nav.device") }));
+    await user.click(screen.getByRole("link", { name: t("setup.nav.device") }));
 
     expect(
       await screen.findByText(t("setup.device.registeredWorkspaces.body")),
@@ -813,9 +815,9 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
     await screen.findByRole("heading", { name: "First setup" });
 
-    expect(screen.getByRole("button", { name: t("setup.nav.device") })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: t("setup.nav.device") })).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: t("setup.nav.environment") }),
+      screen.queryByRole("link", { name: t("setup.nav.environment") }),
     ).not.toBeInTheDocument();
   });
 
@@ -856,7 +858,7 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
 
     await screen.findByRole("heading", { name: "First setup" });
-    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
+    await user.click(screen.getByRole("link", { name: "LLM / AI CLI tools" }));
 
     expect(await screen.findByText(t("setup.intelligence.defaultProvider"))).toBeInTheDocument();
     // The provider buttons expose the provider label as their accessible name;
@@ -927,7 +929,7 @@ describe("SetupPage", () => {
     renderSetupPage("/setup");
 
     await screen.findByRole("heading", { name: "First setup" });
-    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
+    await user.click(screen.getByRole("link", { name: "LLM / AI CLI tools" }));
 
     expect(await screen.findByRole("button", { name: "OpenAI Codex CLI" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Grok Build" })).toBeDisabled();
@@ -936,70 +938,35 @@ describe("SetupPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("offers per kind the providers serving it and shows the chosen one's fields", async () => {
+  it("shows Slack as the only integration", async () => {
     const user = userEvent.setup();
-    vi.mocked(getConfigStatus).mockResolvedValue(configStatus({ project_file_exists: false }));
-    vi.mocked(getTeam).mockRejectedValue(
-      new ApiRequestError({ code: "not_found", message: "missing", context: {} }),
-    );
-    renderSetupPage("/setup");
-    await screen.findByRole("heading", { name: "First setup" });
-    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
-    await user.click(
-      screen.getByRole("combobox", { name: t("setup.integrations.kinds.chat_service") }),
-    );
-    expect(await screen.findByRole("option", { name: "Slack" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "Branvil" })).not.toBeInTheDocument();
-    await user.keyboard("{Escape}");
-    await chooseProvider(user, "ticket_service", "Branvil");
-    await chooseProvider(user, "code_hosting_service", "Branvil");
-    expect(
-      screen.queryByRole("combobox", { name: t("setup.branvil.workspace") }),
-    ).not.toBeInTheDocument();
-    await chooseProvider(user, "ticket_service", t("setup.integrations.none"));
-    expect(
-      screen.queryByRole("combobox", { name: t("setup.branvil.workspace") }),
-    ).not.toBeInTheDocument();
+    renderSetupPage("/setup?section=integrations");
+    const chat = await screen.findByRole("combobox", { name: t("setup.integrations.chat") });
+    expect(screen.getAllByRole("combobox")).toEqual([chat]);
+    await user.click(chat);
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      t("setup.integrations.none"),
+      "Slack",
+    ]);
   });
 
-  it("shows the owner's git configuration once for every kind, outside the services", async () => {
+  it("saves Slack without replacing the workspace's code and ticket services", async () => {
     const user = userEvent.setup();
-    vi.mocked(getProviders).mockResolvedValue(PROVIDERS);
-    const branvil = { name: "branvil" };
+    const internal = { name: "branvil" };
     vi.mocked(getProjectConfig).mockResolvedValue(
-      projectConfig({ services: { code_hosting_service: branvil, ticket_service: branvil } }),
+      projectConfig({ services: { code_hosting_service: internal, ticket_service: internal } }),
     );
-    renderSetupPage("/setup");
-
-    const description = await screen.findByLabelText("Project description");
-    await waitFor(() => expect(description).toHaveValue("Existing project"));
-    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
-    // The git configuration is the same for every kind: it is shown once, and
-    // the services keep only the workspace.
-    const config = await screen.findAllByLabelText(t("setup.branvil.git.title"));
-    expect(config).toHaveLength(1);
-    expect(config[0]).toHaveTextContent('helper = "!guildbotics git-credential"');
-    await saveSection(user);
-
-    await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(updateProjectConfig).mock.calls[0][0].services).toEqual({
-      code_hosting_service: branvil,
-      ticket_service: branvil,
-    });
-  });
-
-  it("saves the chosen services from the integrations section", async () => {
-    const user = userEvent.setup();
-    renderSetupPage("/setup");
-    const description = await screen.findByLabelText("Project description");
-    await waitFor(() => expect(description).toHaveValue("Demo project"));
-    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
-    await chooseProvider(user, "ticket_service", "Branvil");
-    await chooseProvider(user, "code_hosting_service", "Branvil");
-    await chooseProvider(user, "chat_service", "Slack");
+    renderSetupPage("/setup?section=integrations");
+    await chooseSlack(user);
     await saveSection(user);
     await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
     expect(vi.mocked(updateProjectConfig).mock.calls[0][0].services).toEqual(CODE_HOST_AND_SLACK);
+  });
+
+  it("displays the Git credential helper in this machine's settings", async () => {
+    renderSetupPage("/setup?section=device", false, true);
+    const config = await screen.findByLabelText(t("setup.device.git.title"));
+    expect(config).toHaveTextContent('helper = "!guildbotics git-credential"');
   });
 
   it("navigates between sections with the next and back buttons", async () => {
@@ -1076,7 +1043,7 @@ describe("SetupPage", () => {
     // complete as it is.
     await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
     await fill(user, screen.getByLabelText("Project description"), "Demo project");
-    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
+    await user.click(screen.getByRole("link", { name: "LLM / AI CLI tools" }));
     await user.click(
       await screen.findByRole("button", {
         name: t("setup.intelligence.apiKeyButtonLabel", { provider: "OpenAI" }),
@@ -1086,7 +1053,7 @@ describe("SetupPage", () => {
 
     // Add one active member so the members section is complete; the add form is
     // shown by default and pre-filled with character defaults.
-    await user.click(screen.getByRole("button", { name: "Members" }));
+    await user.click(screen.getByRole("link", { name: "Members and patrol" }));
     await fillRequiredMemberBasics(user, { personId: "alice", personName: "Alice" });
     await user.click(screen.getByRole("button", { name: "Add member" }));
 
@@ -1273,12 +1240,10 @@ describe("SetupPage", () => {
 
     expect(await screen.findByText(t("overview.ready"))).toBeInTheDocument();
     expect(screen.getByText("1")).toBeInTheDocument();
-    // One row per kind of service: its provider, or that it is not used.
-    const row = (kind: string) =>
-      screen.getByText(t(`setup.integrations.kinds.${kind}`)).nextElementSibling;
-    await waitFor(() => expect(row("ticket_service")).toHaveTextContent("Branvil"));
-    expect(row("code_hosting_service")).toHaveTextContent(t("overview.disabled"));
-    expect(row("chat_service")).toHaveTextContent(t("overview.disabled"));
+    const status = (key: string) => screen.getByText(t(key)).nextElementSibling;
+    await waitFor(() => expect(status("setup.verification.tickets")).toHaveTextContent("Hub"));
+    expect(status("setup.verification.codeHosting")).toHaveTextContent(t("overview.disabled"));
+    expect(status("setup.integrations.chat")).toHaveTextContent(t("overview.disabled"));
 
     await user.click(screen.getByRole("button", { name: t("overview.scenarioDiagnostics.run") }));
 
@@ -1417,7 +1382,7 @@ async function openWorkspace(user: ReturnType<typeof userEvent.setup>, path: str
   await user.type(field, `${path}{Enter}`);
 }
 
-function renderSetupPage(path: string, strict = false) {
+function renderSetupPage(path: string, strict = false, repositoriesAvailable = false) {
   const theme = createTheme({
     primaryColor: "dark",
     defaultRadius: "md",
@@ -1430,7 +1395,7 @@ function renderSetupPage(path: string, strict = false) {
       <Notifications />
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[path]}>
-          <SetupPage />
+          <SetupPage repositoriesAvailable={repositoriesAvailable} />
         </MemoryRouter>
       </QueryClientProvider>
     </TestMantineProvider>
@@ -2881,10 +2846,10 @@ describe("MembersSection", () => {
       members: [],
     });
     renderSetupPage("/setup?section=integrations");
-    await chooseProvider(user, "chat_service", "Slack");
+    await chooseSlack(user);
 
     // Chosen but not saved: a member's save would not reach Slack yet.
-    await user.click(screen.getByRole("button", { name: t("setup.nav.members") }));
+    await user.click(screen.getByRole("link", { name: t("setup.nav.members") }));
     expect(
       await screen.findByRole("tab", { name: t("setup.members.tabs.basic") }),
     ).toBeInTheDocument();
@@ -2895,10 +2860,10 @@ describe("MembersSection", () => {
       vi.mocked(getProjectConfig).mockResolvedValue({ ...saved, services: request.services });
       return configWriteResponse();
     });
-    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
+    await user.click(screen.getByRole("link", { name: t("setup.nav.integrations") }));
     await saveSection(user);
     await waitFor(() => expect(updateProjectConfig).toHaveBeenCalledTimes(1));
-    await user.click(screen.getByRole("button", { name: t("setup.nav.members") }));
+    await user.click(screen.getByRole("link", { name: t("setup.nav.members") }));
     expect(await screen.findByRole("tab", { name: "Slack" })).toBeInTheDocument();
   });
 
@@ -2914,9 +2879,7 @@ describe("MembersSection", () => {
     });
     renderSetupPage("/setup?section=members");
 
-    await user.click(
-      await screen.findByRole("tab", { name: t("setup.integrations.kinds.chat_service") }),
-    );
+    await user.click(await screen.findByRole("tab", { name: t("setup.integrations.chat") }));
 
     expect(
       await screen.findByRole("textbox", { name: t("setup.members.chatChannelAdd") }),
@@ -3435,9 +3398,9 @@ describe("MembersSection", () => {
     expect(await screen.findByText("Carol (carol)")).toBeInTheDocument();
     expect(screen.getByText("Input progress: 2 of 4 sections completed")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Project" }));
+    await user.click(screen.getByRole("link", { name: "Workspace" }));
     expect(screen.queryByText("Carol (carol)")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Members" }));
+    await user.click(screen.getByRole("link", { name: "Members and patrol" }));
 
     expect(await screen.findByText("Carol (carol)")).toBeInTheDocument();
   });
@@ -4141,15 +4104,9 @@ function memberIntelligenceConfig(overrides: Partial<IntelligenceConfig> = {}): 
 }
 
 /** Saving is deliberate now, so every settings test has to press the button. */
-async function chooseProvider(
-  user: ReturnType<typeof userEvent.setup>,
-  kind: "code_hosting_service" | "ticket_service" | "chat_service",
-  option: string,
-) {
-  await user.click(
-    await screen.findByRole("combobox", { name: t(`setup.integrations.kinds.${kind}`) }),
-  );
-  await user.click(await screen.findByRole("option", { name: option }));
+async function chooseSlack(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("combobox", { name: t("setup.integrations.chat") }));
+  await user.click(await screen.findByRole("option", { name: "Slack" }));
 }
 
 async function saveSection(user: ReturnType<typeof userEvent.setup>) {
@@ -4160,7 +4117,7 @@ async function openTeamIntelligenceAdvanced(user: ReturnType<typeof userEvent.se
   renderSetupPage("/setup");
   // The intelligence section is reached through the sidebar nav (only the
   // members section is deep-linkable via the URL).
-  await user.click(await screen.findByRole("button", { name: t("setup.nav.intelligence") }));
+  await user.click(await screen.findByRole("link", { name: t("setup.nav.intelligence") }));
   await user.click(await screen.findByRole("button", { name: t("setup.intelligence.advanced") }));
   // The advanced editor loads its config lazily; wait for a unique label.
   await screen.findByText(t("setup.intelligence.tabs.models"));

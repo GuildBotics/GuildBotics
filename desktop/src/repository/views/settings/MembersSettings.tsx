@@ -52,7 +52,7 @@ export function MembersSettings() {
     <Card p="lg">
       <Header
         order={3}
-        title={t("settings.members")}
+        title={t("settings.reviewSettings")}
         description={t("settings.membersHelp")}
         action={
           <Button

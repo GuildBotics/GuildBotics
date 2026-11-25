@@ -13,6 +13,8 @@ import {
 } from "../api/client";
 import i18n from "../i18n";
 import "../i18n";
+import type { CachedImage } from "../repository/api/types";
+import { keys } from "../repository/query/keys";
 import { AgentEnvironmentCard } from "./AgentEnvironmentCard";
 import { TestMantineProvider } from "../test/TestMantineProvider";
 
@@ -107,13 +109,21 @@ function status(
   };
 }
 
-function renderCard(focusElement?: string) {
+function renderCard(focusElement?: string, cachedImage?: CachedImage) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  if (cachedImage) {
+    client.setQueryDefaults(keys.ci(), { staleTime: Infinity });
+    client.setQueryData(keys.ci(), {
+      runner: { mode: "off" },
+      images: { cached: [cachedImage], missing: [], error: null },
+      operation: null,
+    });
+  }
   const rendered = render(
     <TestMantineProvider>
       <QueryClientProvider client={client}>
         <MemoryRouter>
-          <AgentEnvironmentCard focusElement={focusElement} />
+          <AgentEnvironmentCard focusElement={focusElement} manageImages={Boolean(cachedImage)} />
         </MemoryRouter>
       </QueryClientProvider>
     </TestMantineProvider>,
@@ -171,16 +181,20 @@ describe("AgentEnvironmentCard", () => {
       expect(
         screen
           .getAllByRole("columnheader")
-          .slice(0, 6)
+          .slice(0, 5)
           .map((header) => header.textContent),
       ).toEqual([
         tr("setup.intelligence.environment.runtime"),
-        tr("setup.intelligence.environment.image"),
         tr("setup.intelligence.environment.snapshot"),
         tr("setup.intelligence.environment.resources"),
         tr("setup.intelligence.environment.network"),
         tr("setup.intelligence.environment.dns"),
       ]);
+      expect(
+        within(
+          screen.getByRole("region", { name: language === "en" ? "Images" : "イメージ" }),
+        ).getByText(tr("setup.intelligence.environment.image")),
+      ).toBeVisible();
     },
   );
 
@@ -522,6 +536,36 @@ describe("AgentEnvironmentCard", () => {
     expect(
       screen.getByRole("button", { name: t("setup.intelligence.environment.build") }),
     ).toBeInTheDocument();
+  });
+
+  it("shows a shared cached image once with both its base image status and its CI usage", async () => {
+    await i18n.changeLanguage("en");
+    const data = status();
+    const reference = "local/agent:1";
+    const digest = "sha256:" + "c".repeat(64);
+    data.image = {
+      ...data.image,
+      reference,
+      digest,
+      digests: { arm64: digest },
+      held: digest,
+      present: true,
+    };
+    vi.mocked(getAgentEnvironmentStatus).mockResolvedValue(data);
+    renderCard(undefined, {
+      reference,
+      digest,
+      used_by: [{ repository: "acme/demo", jobs: ["test"] }],
+      size_bytes: 10485760,
+      created_at: "2026-10-18T12:00:00Z",
+    });
+
+    const images = await screen.findByRole("region", { name: "Images" });
+    const image = within(images).getByRole("listitem");
+    expect(await within(image).findByText("Base image")).toBeInTheDocument();
+    expect(image).toHaveTextContent("Used by: acme/demo (test)");
+    expect(images).toHaveTextContent("local/agent:1");
+    expect(images.textContent?.split(reference)).toHaveLength(2);
   });
 
   it("says when turns run on a loaded image the declaration did not name", async () => {

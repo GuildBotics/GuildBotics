@@ -176,12 +176,9 @@ The server uses one browser entry and session for all of its screens.
 
 ## Set up the code host and the tickets
 
-On the Hub's screens, under **Settings → Integrations**:
-
-1. Choose **Branvil** for the code host and for the tickets. Both use the same service on
-   the Hub.
-2. Choose the **Workspace** the members work in, or create one there. Members write only
-   to its repositories and take tickets from its board; reads are not limited.
+Choose or create a workspace at the top of the sidebar. Open **Settings → Repositories**
+to manage its repositories. Members write only to those repositories and take tickets
+from that workspace. Initial setup configures both built-in services automatically.
 
 There is no connection step. The server calls the service in its own process directly, as
 the owner and as each AI member. It keeps no token for this and hands none to a member, a
@@ -189,16 +186,14 @@ command, or an isolated environment.
 
 Choose a workspace at the top of the sidebar to open its **Task flow** or **Pull requests**.
 
-Without the GUI, the same settings are in `team/project.yml`:
+When configuring `team/project.yml` directly, use the following service settings.
 
 ```yaml
 services:
   code_hosting_service:
     name: branvil
-    workspace: acme
   ticket_service:
     name: branvil
-    workspace: acme
 ```
 
 Press **Validate settings** under **Settings → Verification**: it checks that the chosen
@@ -226,8 +221,7 @@ You, the human member, are Branvil's owner, and you can make Branvil the `origin
 checkouts on the Hub. Branvil's git asks for a member's name and
 token. GuildBotics hands git yours, so git never asks for a name or a password:
 
-1. Under **Settings → Integrations**, the code host or the tickets show **Your own git on this
-   machine** above the workspace choice, with the lines to add. Copy them.
+1. Copy the credential helper configuration from **Settings → This machine → Git authentication**.
 2. Open your global git configuration with `git config --global --edit` and paste the lines
    **at the end**:
 
@@ -246,7 +240,7 @@ On its first request, the helper asks the running GuildBotics server to issue th
 for the requesting machine. A valid cached token is checked directly at its own origin and reused without asking
 the GuildBotics API; issuance requires the server to be running. The token is labelled `git:<device name> (<last 8 characters of the device ID>)`
 and kept in the machine's OS keychain only. It is never written to a URL, a git configuration,
-your shell history, or a workspace file. You can revoke it under Branvil's **Settings → Members →
+your shell history, or a workspace file. You can revoke it under **Settings → Review and authentication →
 owner → Tokens**. Once Branvil no longer accepts the token, the next request issues a new one in
 its place and revokes the machine's other `git:` tokens.
 

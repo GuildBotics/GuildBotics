@@ -60,10 +60,10 @@ test("renders readiness badges and reports the missing-key LLM check from scenar
 
   // Readiness badges are derived from the real /config/status, /team and
   // /config/project responses for the seeded workspace: config "Configured",
-  // Branvil for tickets/code, and local chat.
+  // the Hub for tickets and code, and the local chat used by the fixture.
   await expect(page.getByText("Configured", { exact: true })).toBeVisible({ timeout: 30_000 });
   const status = page.locator("dl.status-list");
-  await expect(status.getByText("Branvil", { exact: true })).toHaveCount(2);
+  await expect(status.getByText("Hub", { exact: true })).toHaveCount(2);
   await expect(status.getByText("local", { exact: true })).toHaveCount(1);
   // Run the real read-only scenario diagnostics. With no OpenAI key configured
   // the backend short-circuits BEFORE any network call, so this resolves in

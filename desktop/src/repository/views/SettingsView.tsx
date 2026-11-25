@@ -44,7 +44,7 @@ export function RepositorySettingsPanel({
 
   switch (settings.current) {
     case "ci":
-      return <CiSettings />;
+      return <CiSettings workspace={settings.workspace} />;
     case "notifications":
       return <NotificationsSettings />;
     case "members":

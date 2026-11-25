@@ -177,26 +177,10 @@ body {
   grid-template-columns: 270px minmax(0, 1fr);
 }
 
-.setup-nav,
-.setup-nav-group {
+.setup-nav {
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-.setup-nav-group + .setup-nav-group {
-  border-top: 1px solid var(--color-border);
-  margin-top: 6px;
-  padding-top: 6px;
-}
-
-.nav-label {
-  color: var(--color-text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  padding: 10px 10px 4px;
-  text-transform: uppercase;
 }
 
 .setup-nav-item {
@@ -207,6 +191,7 @@ body {
   gap: 10px;
   min-height: 44px;
   padding: 0 10px;
+  text-decoration: none;
 }
 
 .setup-nav-item:hover {
@@ -217,10 +202,6 @@ body {
   background: var(--color-brand-bg-subtle);
   color: var(--color-brand-hover);
   font-weight: 600;
-}
-
-.setup-nav-item {
-  text-decoration: none;
 }
 
 .setup-nav-item > svg {
@@ -583,14 +564,6 @@ pre {
 
   .service-unit-switch {
     flex: 0 0 auto;
-  }
-
-  .setup-nav-item {
-    background: transparent;
-    border: 0;
-    cursor: pointer;
-    font: inherit;
-    text-align: left;
   }
 
   .guide-banner {

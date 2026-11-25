@@ -1,11 +1,11 @@
 // Query hooks: one per resource the views show. Views never call the API
 // client for reads directly.
 
-import { QueryClient, useQuery } from "@tanstack/react-query";
+import { QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { ApiError } from "../../api/client";
 import * as api from "../api/endpoints";
-import type { MemberKind } from "../api/types";
+import type { CiSettings, MemberKind } from "../api/types";
 import { keys } from "./keys";
 
 export function createQueryClient(): QueryClient {
@@ -123,10 +123,11 @@ export const useWebhook = () =>
   });
 
 /** The CI settings; polled to refresh runner reports and image operations. */
-export const useCiSettings = () =>
+export const useCiSettings = (enabled = true) =>
   useQuery({
     queryKey: keys.ci(),
     queryFn: () => api.admin.ci(),
+    enabled,
     // Follow a running image operation, and a runner switched on until it reports.
     refetchInterval: (query) => {
       const s = query.state.data;
@@ -134,6 +135,15 @@ export const useCiSettings = () =>
       return s?.runner.mode === "auto" && s.runner.state !== "ready" ? 3_000 : 30_000;
     },
   });
+
+/** Changes return the updated settings, including any image operation to poll. */
+export function useCiChange<Value>(change: (value: Value) => Promise<CiSettings>) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: change,
+    onSuccess: (settings) => client.setQueryData(keys.ci(), settings),
+  });
+}
 
 export const useTicket = (repo: string, key: string) =>
   useQuery({ queryKey: keys.ticket(repo, key), queryFn: () => api.tickets.get(repo, key) });

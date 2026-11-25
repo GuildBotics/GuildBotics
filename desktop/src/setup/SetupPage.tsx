@@ -51,17 +51,22 @@ import { notifications } from "@mantine/notifications";
 import { schemaResolver } from "@mantine/form";
 import {
   Bell,
+  BrainCircuit,
   Check,
   CheckCircle2,
   CircleAlert,
+  ClipboardCheck,
   Copy,
   Cpu,
   Eraser,
   Folder,
   FolderGit2,
   History,
+  Monitor,
+  Plug,
   Plus,
   Save,
+  ShieldCheck,
   Trash2,
   TriangleAlert,
   Users,
@@ -74,7 +79,7 @@ import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } fr
 import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 
 import {
   type CommandOption,
@@ -133,8 +138,6 @@ import {
   SERVICE_KINDS,
   type ProjectServices,
   type ProviderOption,
-  type ServiceKind,
-  type ServiceSelection,
 } from "../api/client";
 import {
   cliAgentLabelFromConfig,
@@ -144,35 +147,28 @@ import {
 } from "../cliAgent";
 import { CliAgentLastTurnDetails } from "./CliAgentLastTurnDetails";
 import { InferenceFailureNotice, useInferenceFailures } from "./InferenceFailureNotice";
-import { PROVIDER_UIS, serviceErrors, servicesReady, useServiceProviders } from "./providers";
+import { PROVIDER_UIS, useServiceProviders } from "./providers";
 import type { MemberContext } from "./providers/types";
 import { DeviceSettings } from "./DeviceSettings";
 import { isBusyConfigSave, isStaleConfigSave } from "./configRevisions";
 import { EffortSettingsField, ToolSettingsField } from "./EffortSettingsField";
 import { AgentEnvironmentCard } from "./AgentEnvironmentCard";
 import { AgentEnvironmentDeclarationCard } from "./AgentEnvironmentDeclarationCard";
+import { EnvironmentImages } from "./EnvironmentImages";
 import { DeviceAccessCard, DocumentsCard } from "./GrantsCards";
 import { normalizeLanguage } from "../i18n";
 
 export function createProjectSchema(t: TFunction | ((key: string) => string)) {
-  return z
-    .object({
-      workspaceDir: z.string().min(1, t("setup.validation.workspaceRequired")),
-      language: z.enum(["en", "ja"]),
-      description: z.string().trim().min(1, t("setup.validation.descriptionRequired")),
-      llmApiType: z.string(),
-      cliAgent: z.string(),
-      // provider id -> API key value typed in the form (server maps to env vars)
-      providerApiKeys: z.record(z.string(), z.string()),
-      services: z.custom<ProjectServices>(),
-    })
-    .superRefine((values, ctx) => {
-      for (const [kind, errors] of Object.entries(serviceErrors(values.services, t))) {
-        if (Object.keys(errors ?? {}).length > 0) {
-          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["services", kind], message: "" });
-        }
-      }
-    });
+  return z.object({
+    workspaceDir: z.string().min(1, t("setup.validation.workspaceRequired")),
+    language: z.enum(["en", "ja"]),
+    description: z.string().trim().min(1, t("setup.validation.descriptionRequired")),
+    llmApiType: z.string(),
+    cliAgent: z.string(),
+    // provider id -> API key value typed in the form (server maps to env vars)
+    providerApiKeys: z.record(z.string(), z.string()),
+    services: z.custom<ProjectServices>(),
+  });
 }
 
 type ProjectFormValues = z.infer<ReturnType<typeof createProjectSchema>>;
@@ -186,39 +182,23 @@ type IntelligenceDraftState = {
 const CORE_SETUP_SECTIONS_INITIAL = [
   "project",
   "intelligence",
-  // The integrations come first: a member's accounts are those of the
-  // providers they choose.
   "integrations",
   "members",
-  "verification",
   // The registered workspaces belong to the machine rather than to a
   // workspace, so the section has to be reachable before there is one.
   "device",
+  "verification",
 ] as const;
 const CORE_SETUP_SECTIONS_CONFIGURED = [
   "project",
   "intelligence",
   "environment",
-  // The integrations come first: a member's accounts are those of the
-  // providers they choose.
   "integrations",
   "members",
-  "verification",
   "device",
+  "verification",
 ] as const;
 type CoreSection = (typeof CORE_SETUP_SECTIONS_CONFIGURED)[number];
-// Sections that configure this machine rather than the selected workspace.
-// The nav draws them under their own heading so the boundary is visible.
-const MACHINE_SECTIONS: ReadonlySet<CoreSection> = new Set(["device"]);
-const CORE_SECTION_LABEL_KEYS = {
-  project: "setup.nav.project",
-  intelligence: "setup.nav.intelligence",
-  environment: "setup.nav.environment",
-  members: "setup.nav.members",
-  integrations: "setup.nav.integrations",
-  verification: "setup.nav.verification",
-  device: "setup.nav.device",
-} as const satisfies Record<CoreSection, string>;
 function MemberCliAgentBadge({ personId, enabled }: { personId: string; enabled: boolean }) {
   const label = useMemberCliAgentLabel(personId, enabled);
   if (!label) {
@@ -363,7 +343,6 @@ export function SetupPage({
   repositorySettings?: Extract<Route, { name: "settings" }>;
 } = {}) {
   const { t, i18n } = useTranslation();
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["config"], queryFn: getConfigStatus });
@@ -398,12 +377,12 @@ export function SetupPage({
     retry: false,
   });
   const hasExistingProject = Boolean(config.data?.project_file_exists);
-  const showCodeHostSettings =
-    Boolean(repositorySettings) || (repositoriesAvailable && hasExistingProject);
+  const showRepositorySettings =
+    Boolean(repositorySettings) || (repositoriesAvailable && Boolean(workspace));
   const repository = useRepositorySettings(
     repositorySettings?.section ?? null,
     workspace,
-    showCodeHostSettings,
+    showRepositorySettings,
   );
   const projectConfig = useQuery({
     queryKey: ["project-config"],
@@ -419,7 +398,7 @@ export function SetupPage({
         }
         return updateProjectConfig(toProjectUpdateRequest(values, config.data, projectConfig.data));
       }
-      return initConfig(toInitialProjectSetupRequest(values));
+      return initConfig(toProjectSetupRequest(values, repositoriesAvailable));
     },
     onSuccess: (written) => {
       // Take the revisions from the reply rather than waiting for the refetch
@@ -486,14 +465,7 @@ export function SetupPage({
     sectionParam && (CORE_SETUP_SECTIONS_CONFIGURED as readonly string[]).includes(sectionParam)
       ? (sectionParam as CoreSection)
       : "project";
-  const setSection = (value: CoreSection) => {
-    if (!repositorySettings) {
-      setSearchParams({ section: value }, { replace: true });
-      return;
-    }
-    const scope = workspace ? workspacePath(workspace) : "";
-    void navigate(scope + "/setup?" + new URLSearchParams({ section: value }));
-  };
+  const setSection = (value: CoreSection) => setSearchParams({ section: value }, { replace: true });
   const requestedMemberTab = searchParams.get("tab");
   const [focusMemberTab] = useState<MemberEditorTab | undefined>(
     requestedMemberTab &&
@@ -542,9 +514,10 @@ export function SetupPage({
     }
     return result;
   }, [llmProviders.data, form.values, storedProviderKeys]);
-  const coreSections: readonly CoreSection[] = hasExistingProject
-    ? CORE_SETUP_SECTIONS_CONFIGURED
-    : CORE_SETUP_SECTIONS_INITIAL;
+  const coreSections: readonly CoreSection[] =
+    hasExistingProject || repository.owner
+      ? CORE_SETUP_SECTIONS_CONFIGURED
+      : CORE_SETUP_SECTIONS_INITIAL;
   const initialProgress = useMemo(
     () =>
       getInitialCoreStatus(
@@ -552,9 +525,8 @@ export function SetupPage({
         activeMemberCount,
         selectedCliAgentProvisioned,
         storedProviderKeys,
-        t,
       ),
-    [activeMemberCount, form.values, selectedCliAgentProvisioned, storedProviderKeys, t],
+    [activeMemberCount, form.values, selectedCliAgentProvisioned, storedProviderKeys],
   );
   const activeSection = coreSections.includes(section) ? section : coreSections[0];
   const currentCoreSectionIndex = coreSections.indexOf(activeSection);
@@ -585,7 +557,7 @@ export function SetupPage({
     form.resetDirty(initialValues);
   }, [form, initialValues, serializedInitialValues]);
 
-  const setupStatus = useSetupStatus(config.data, activeMemberCount, form.values);
+  const setupStatus = getSetupStatus(hasExistingProject, hasExistingProject, activeMemberCount);
   const visibleStatus = hasExistingProject ? setupStatus : initialProgress;
   const currentSectionReady = currentCoreSection
     ? isCoreSectionReady(currentCoreSection, visibleStatus)
@@ -607,7 +579,7 @@ export function SetupPage({
     }
     const creatingInitialSetup = !hasExistingProject;
     const initialSetupRequest = creatingInitialSetup
-      ? toInitialProjectSetupRequest(form.values)
+      ? toProjectSetupRequest(form.values, repositoriesAvailable)
       : null;
     let revisionsWritten: ConfigRevisions | null = null;
     setSaveState("saving");
@@ -782,14 +754,12 @@ export function SetupPage({
       <div className="setup-layout">
         <SetupSectionNav
           active={repositorySettings ? null : activeSection}
-          onChange={setSection}
           sections={coreSections}
-          status={visibleStatus}
-          repositoriesAvailable={repositoriesAvailable || Boolean(repositorySettings)}
+          initialStatus={hasExistingProject ? undefined : initialProgress}
+          repositoriesAvailable={showRepositorySettings}
           repositorySection={
             repositorySettings && !repository.pending ? repository.current : undefined
           }
-          showCodeHostSettings={showCodeHostSettings}
           owner={repository.owner}
           workspace={workspace}
         />
@@ -820,13 +790,22 @@ export function SetupPage({
                 providers={llmProviders.data ?? []}
               />
             ) : null}
-            {activeSection === "environment" ? (
-              <AgentEnvironmentSection
-                focusElement={focusElement}
-                focusGrant={focusGrant}
-                status={environmentStatus.data}
-              />
-            ) : null}
+            {activeSection === "environment" &&
+              (hasExistingProject ? (
+                <AgentEnvironmentSection
+                  focusElement={focusElement}
+                  focusGrant={focusGrant}
+                  status={environmentStatus.data}
+                  workspace={workspace}
+                  manageImages={repository.owner}
+                />
+              ) : (
+                <EnvironmentImages
+                  focusElement={focusElement}
+                  workspace={workspace}
+                  manageImages={repository.owner}
+                />
+              ))}
             {activeSection === "integrations" ? (
               <IntegrationsSection
                 form={form}
@@ -836,7 +815,9 @@ export function SetupPage({
                 onSave={saveNow}
               />
             ) : null}
-            {activeSection === "device" ? <DeviceSettings /> : null}
+            {activeSection === "device" ? (
+              <DeviceSettings gitAvailable={repositoriesAvailable} />
+            ) : null}
             {activeSection === "verification" ? (
               <VerificationSection
                 config={config.data}
@@ -911,7 +892,7 @@ function SetupStatusBanner({
 }: {
   status: SetupStatus;
   hasExistingProject: boolean;
-  initialProgress: InitialProgress;
+  initialProgress: SetupStatus;
   onCreateInitial: () => Promise<void>;
   creating: boolean;
   canGoBack: boolean;
@@ -999,43 +980,57 @@ function isWorkspaceSwitchBlocked(error: unknown): boolean {
  */
 function SetupSectionNav({
   active,
-  onChange,
   sections,
-  status,
+  initialStatus,
   repositoriesAvailable,
   repositorySection,
-  showCodeHostSettings,
   owner,
   workspace,
 }: {
   active: CoreSection | null;
-  onChange: (value: CoreSection) => void;
   sections: readonly CoreSection[];
-  status: SetupStatus;
+  initialStatus?: SetupStatus;
   repositoriesAvailable: boolean;
   repositorySection?: RepositorySection;
-  showCodeHostSettings: boolean;
   owner: boolean;
   workspace: string | null;
 }) {
   const { t } = useTranslation();
   const repoT = useT();
-  const repositorySections = [
-    { section: "members", label: repoT("settings.reviewSettings"), icon: Users },
-    ...(owner
-      ? [
-          { section: "ci", label: repoT("ci.settings.title"), icon: Cpu },
-          { section: "notifications", label: repoT("settings.notifications"), icon: Bell },
-        ]
-      : []),
+  const scope = workspace ? workspacePath(workspace) : "";
+  const core = (section: CoreSection, icon: typeof Folder) => ({
+    label: t(`setup.nav.${section}`),
+    to: `${scope}/setup?section=${section}`,
+    selected: active === section,
+    visible: sections.includes(section),
+    ready: initialStatus && isCoreSectionReady(section, initialStatus),
+    icon,
+  });
+  const repo = (section: RepositorySection, label: string, icon: typeof Folder) => ({
+    label,
+    to: repositoryHref.settings(
+      section === "repositories" ? undefined : section,
+      workspace ?? undefined,
+    ),
+    selected: repositorySection === section,
+    visible:
+      repositoriesAvailable && (section === "repositories" || section === "members" || owner),
+    ready: undefined,
+    icon,
+  });
+  const items = [
+    core("project", Folder),
+    repo("repositories", repoT("settings.repositories"), FolderGit2),
+    core("intelligence", BrainCircuit),
+    core("environment", Cpu),
+    core("integrations", Plug),
+    core("members", Users),
+    repo("members", repoT("settings.reviewSettings"), ShieldCheck),
+    repo("ci", repoT("ci.settings.title"), CheckCircle2),
+    repo("notifications", repoT("settings.notifications"), Bell),
+    core("device", Monitor),
+    core("verification", ClipboardCheck),
   ];
-  const groups = [
-    { labelKey: "setup.nav.groupWorkspace", machine: false },
-    { labelKey: "setup.nav.groupMachine", machine: true },
-  ].map((group) => ({
-    ...group,
-    sections: sections.filter((value) => MACHINE_SECTIONS.has(value) === group.machine),
-  }));
   return (
     <Card
       component="nav"
@@ -1045,57 +1040,23 @@ function SetupSectionNav({
       p="xs"
       className="setup-nav"
     >
-      {groups.map((group) => (
-        <Fragment key={group.labelKey}>
-          {group.machine && showCodeHostSettings && (
-            <div className="setup-nav-group">
-              <div className="nav-label">{t("setup.nav.groupCodeHost")}</div>
-              {repositorySections.map(({ section, label, icon: Icon }) => (
-                <Link
-                  key={section}
-                  className={`setup-nav-item ${repositorySection === section ? "active" : ""}`}
-                  aria-current={repositorySection === section ? "page" : undefined}
-                  to={repositoryHref.settings(section, workspace ?? undefined)}
-                >
-                  <Icon size={18} aria-hidden="true" />
-                  <span>{label}</span>
-                </Link>
-              ))}
-            </div>
-          )}
-          {group.sections.length > 0 && (
-            <div className="setup-nav-group">
-              <Group className="nav-label" gap={6}>
-                {t(group.labelKey)}
-                {group.machine ? <ServerMachineBadge /> : null}
-              </Group>
-              {group.sections.map((value) => (
-                <Fragment key={value}>
-                  <button
-                    className={`setup-nav-item ${active === value ? "active" : ""}`}
-                    type="button"
-                    aria-current={active === value ? "page" : undefined}
-                    onClick={() => onChange(value)}
-                  >
-                    <StatusIcon ok={isCoreSectionReady(value, status)} />
-                    <span>{t(CORE_SECTION_LABEL_KEYS[value])}</span>
-                  </button>
-                  {value === "project" && repositoriesAvailable && (
-                    <Link
-                      className={`setup-nav-item ${repositorySection === "repositories" ? "active" : ""}`}
-                      aria-current={repositorySection === "repositories" ? "page" : undefined}
-                      to={repositoryHref.settings(undefined, workspace ?? undefined)}
-                    >
-                      <FolderGit2 size={18} aria-hidden="true" />
-                      <span>{repoT("settings.repositories")}</span>
-                    </Link>
-                  )}
-                </Fragment>
-              ))}
-            </div>
-          )}
-        </Fragment>
-      ))}
+      {items
+        .filter((item) => item.visible)
+        .map(({ label, to, selected, ready, icon: Icon }) => (
+          <Link
+            key={to}
+            className={`setup-nav-item ${selected ? "active" : ""}`}
+            aria-current={selected ? "page" : undefined}
+            to={to}
+          >
+            {ready === undefined ? (
+              <Icon size={18} aria-hidden="true" />
+            ) : (
+              <StatusIcon ok={ready} />
+            )}
+            <span>{label}</span>
+          </Link>
+        ))}
     </Card>
   );
 }
@@ -1177,14 +1138,7 @@ function IntegrationsSection({
   onSave: () => Promise<ConfigRevisions | null>;
 }) {
   const { t } = useTranslation();
-  const providers = useServiceProviders();
   const services = form.values.services;
-  const errors = serviceErrors(services, t);
-  const setService = (kind: ServiceKind, value: ServiceSelection | undefined) => {
-    const next = { ...services, [kind]: value };
-    if (!value) delete next[kind];
-    form.setFieldValue("services", next);
-  };
   return (
     <Card withBorder radius="md" p="lg">
       <PanelHeader
@@ -1192,46 +1146,25 @@ function IntegrationsSection({
         subtitle={t("setup.integrations.subtitle")}
         save={persisted ? { state: saveState, saving, onSave: () => void onSave() } : undefined}
       />
-      <Stack mt="md" gap="lg">
-        {SERVICE_KINDS.map((kind) => {
-          const selected = services[kind];
-          const ui = selected ? PROVIDER_UIS[selected.name]?.services[kind] : undefined;
-          return (
-            <Stack key={kind} gap="sm">
-              <Select
-                label={t(`setup.integrations.kinds.${kind}`)}
-                description={t(`setup.integrations.kindHints.${kind}`)}
-                data={[
-                  { value: "", label: t("setup.integrations.none") },
-                  ...providers
-                    .filter((provider) => provider.kinds.includes(kind))
-                    .map((provider) => ({ value: provider.name, label: provider.title })),
-                  // A provider the screens do not offer (the reference one)
-                  // stays shown while the project names it.
-                  ...(selected && !providers.some((provider) => provider.name === selected.name)
-                    ? [{ value: selected.name, label: selected.name }]
-                    : []),
-                ]}
-                value={selected?.name ?? ""}
-                allowDeselect={false}
-                onChange={(name) => {
-                  const items = name
-                    ? (PROVIDER_UIS[name]?.services[kind]?.initial(services) ?? {})
-                    : undefined;
-                  setService(kind, name ? { ...items, name } : undefined);
-                }}
-              />
-              {selected && ui ? (
-                <ui.Fields
-                  value={selected}
-                  onChange={(value) => setService(kind, value)}
-                  errors={errors[kind] ?? {}}
-                  services={services}
-                />
-              ) : null}
-            </Stack>
-          );
-        })}
+      <Stack mt="md">
+        <Select
+          label={t("setup.integrations.chat")}
+          data={[
+            { value: "", label: t("setup.integrations.none") },
+            { value: "slack", label: "Slack" },
+          ]}
+          value={services.chat_service?.name === "slack" ? "slack" : ""}
+          allowDeselect={false}
+          onChange={(name) => {
+            const next = { ...services };
+            if (name === "slack") {
+              next.chat_service = { name };
+            } else {
+              delete next.chat_service;
+            }
+            form.setFieldValue("services", next);
+          }}
+        />
       </Stack>
     </Card>
   );
@@ -1463,10 +1396,14 @@ function AgentEnvironmentSection({
   focusElement,
   focusGrant,
   status,
+  workspace,
+  manageImages,
 }: {
   focusElement?: string;
   focusGrant?: string;
   status?: AgentEnvironmentStatusResponse;
+  workspace: string | null;
+  manageImages: boolean;
 }) {
   const { t } = useTranslation();
   const machine = useServerMachineLabel();
@@ -1563,7 +1500,11 @@ function AgentEnvironmentSection({
           badge={t("setup.agentEnvironment.scope.device")}
           device
         />
-        <AgentEnvironmentCard focusElement={focusElement} />
+        <AgentEnvironmentCard
+          focusElement={focusElement}
+          workspace={workspace}
+          manageImages={manageImages}
+        />
 
         <Divider />
         <EnvironmentScopeHeader
@@ -3597,7 +3538,7 @@ function MembersSection({
     {
       tab:
         accountTabs.find((provider) => provider.name === chatProvider)?.title ??
-        t("setup.integrations.kinds.chat_service"),
+        t("setup.integrations.chat"),
       messages: [memberErrors.chatChannels].filter(Boolean),
     },
     { tab: t("setup.members.tabs.patrol"), messages: patrolMessages },
@@ -4108,7 +4049,7 @@ function MembersSection({
                       ) : null
                     }
                   >
-                    {t("setup.integrations.kinds.chat_service")}
+                    {t("setup.integrations.chat")}
                   </Tabs.Tab>
                 ) : null}
                 {accountTabs.map((provider) => (
@@ -5457,74 +5398,36 @@ function TabErrorIcon({ label }: { label: string }) {
   );
 }
 
-function useSetupStatus(
-  config: ConfigStatus | undefined,
+function getSetupStatus(
+  projectReady: boolean,
+  intelligenceReady: boolean,
   activeMemberCount: number,
-  values: ProjectFormValues,
-): SetupStatus {
-  const { t } = useTranslation();
-  const projectReady = Boolean(config?.project_file_exists);
-  const integrationsReady = servicesReady(values.services, t);
-  const intelligenceReady = projectReady;
+) {
   const membersReady = activeMemberCount > 0;
-  const verificationReady = projectReady && integrationsReady && intelligenceReady && membersReady;
-  const done = [projectReady, intelligenceReady, integrationsReady, membersReady].filter(
-    Boolean,
-  ).length;
+  // The optional Slack integration is ready even when it is disabled.
+  const checks = [projectReady, intelligenceReady, true, membersReady];
+  const done = checks.filter(Boolean).length;
+  const total = checks.length;
+  const ready = done === total;
   return {
     projectReady,
     intelligenceReady,
-    integrationsReady,
     membersReady,
-    verificationReady,
+    verificationReady: ready,
     done,
-    total: 4,
-    ready: projectReady && intelligenceReady && integrationsReady && membersReady,
+    total,
+    ready,
+    percent: Math.round((done / total) * 100),
   };
 }
 
-type SetupStatus = {
-  projectReady: boolean;
-  intelligenceReady: boolean;
-  integrationsReady: boolean;
-  membersReady: boolean;
-  verificationReady: boolean;
-  done: number;
-  total: number;
-  ready: boolean;
-};
+type SetupStatus = ReturnType<typeof getSetupStatus>;
 
-type InitialProgress = {
-  projectReady: boolean;
-  intelligenceReady: boolean;
-  integrationsReady: boolean;
-  membersReady: boolean;
-  verificationReady: boolean;
-  done: number;
-  total: number;
-  percent: number;
-  ready: boolean;
-};
-
-function isCoreSectionReady(section: CoreSection, status: SetupStatus | InitialProgress): boolean {
-  if (section === "project") {
-    return status.projectReady;
-  }
-  if (section === "intelligence") {
-    return status.intelligenceReady;
-  }
-  if (section === "integrations") {
-    return status.integrationsReady;
-  }
-  if (section === "members") {
-    return status.membersReady;
-  }
-  if (section === "verification") {
-    return status.verificationReady;
-  }
-  // This machine's own settings ask for nothing before the project can run,
-  // so they are never the step that is still missing -- and never the step
-  // that stops the first-run walkthrough.
+function isCoreSectionReady(section: CoreSection, status: SetupStatus): boolean {
+  if (section === "project") return status.projectReady;
+  if (section === "intelligence") return status.intelligenceReady;
+  if (section === "members") return status.membersReady;
+  if (section === "verification") return status.verificationReady;
   return true;
 }
 
@@ -5533,8 +5436,7 @@ function getInitialCoreStatus(
   activeMemberCount: number,
   selectedCliAgentProvisioned: boolean,
   storedProviderKeys: Record<string, boolean> | undefined,
-  t: TFunction,
-): InitialProgress {
+): SetupStatus {
   const projectReady =
     values.workspaceDir.trim().length > 0 && values.description.trim().length > 0;
   const intelligenceReady =
@@ -5542,23 +5444,7 @@ function getInitialCoreStatus(
     Boolean(values.cliAgent) &&
     selectedCliAgentProvisioned &&
     isProviderKeyAvailable(values.llmApiType, values, storedProviderKeys);
-  const integrationsReady = servicesReady(values.services, t);
-  const membersReady = activeMemberCount > 0;
-  const verificationReady = projectReady && intelligenceReady && integrationsReady && membersReady;
-  const checks = [projectReady, intelligenceReady, integrationsReady, membersReady];
-  const done = checks.filter(Boolean).length;
-  const total = checks.length;
-  return {
-    projectReady,
-    intelligenceReady,
-    integrationsReady,
-    membersReady,
-    verificationReady,
-    done,
-    total,
-    percent: Math.round((done / total) * 100),
-    ready: done === total,
-  };
+  return getSetupStatus(projectReady, intelligenceReady, activeMemberCount);
 }
 
 type MemberFieldErrors = Partial<
@@ -5674,10 +5560,6 @@ function isProviderKeyAvailable(
   );
 }
 
-function toInitialProjectSetupRequest(values: ProjectFormValues): ProjectSetupRequest {
-  return toProjectSetupRequest(values);
-}
-
 export function initialProjectValues(
   config: ConfigStatus | undefined,
   appLanguage: ProjectFormValues["language"],
@@ -5706,12 +5588,20 @@ export function initialProjectValues(
   };
 }
 
-export function toProjectSetupRequest(values: ProjectFormValues): ProjectSetupRequest {
+export function toProjectSetupRequest(
+  values: ProjectFormValues,
+  repositoriesAvailable = false,
+): ProjectSetupRequest {
+  const services = { ...values.services };
+  if (repositoriesAvailable) {
+    services.code_hosting_service = { name: "branvil" };
+    services.ticket_service = { name: "branvil" };
+  }
   return {
     config_dir: resolveConfigDir(values.workspaceDir),
     language: values.language,
     description: values.description,
-    services: values.services,
+    services,
     llm_api_type: values.llmApiType,
     cli_agent: values.cliAgent,
     provider_api_keys: values.providerApiKeys,
@@ -6369,6 +6259,11 @@ function VerificationSection({
 
   const hasProjectConfig = Boolean(config?.project_file_exists);
   const providers = useServiceProviders();
+  const serviceLabels = {
+    code_hosting_service: t("setup.verification.codeHosting"),
+    ticket_service: t("setup.verification.tickets"),
+    chat_service: t("setup.integrations.chat"),
+  };
 
   return (
     <Card withBorder radius="md" p="lg">
@@ -6399,14 +6294,16 @@ function VerificationSection({
           <dd>{activeMemberCount}</dd>
           {SERVICE_KINDS.map((kind) => {
             const name = projectConfig?.services?.[kind]?.name;
+            const provider =
+              name === "branvil"
+                ? "Hub"
+                : (providers.find((option) => option.name === name)?.title ?? name);
             return (
               <Fragment key={kind}>
-                <dt>{t(`setup.integrations.kinds.${kind}`)}</dt>
+                <dt>{serviceLabels[kind]}</dt>
                 <dd>
                   <Badge color={name ? "success" : "neutral"} variant="light">
-                    {name
-                      ? (providers.find((provider) => provider.name === name)?.title ?? name)
-                      : t("overview.disabled")}
+                    {provider ?? t("overview.disabled")}
                   </Badge>
                 </dd>
               </Fragment>

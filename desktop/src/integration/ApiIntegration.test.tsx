@@ -539,18 +539,12 @@ describe("Setup integration (real client + mock server)", () => {
     await waitFor(() => expect(screen.getByLabelText("Workspace")).toHaveValue("/workspace"));
 
     await fill(user, screen.getByLabelText("Project description"), "Demo project");
-    // Each kind of service starts unused; the chat is taken by Slack.
-    await user.click(screen.getByRole("button", { name: t("setup.nav.integrations") }));
-    for (const kind of ["code_hosting_service", "ticket_service"] as const) {
-      expect(
-        await screen.findByRole("combobox", { name: t(`setup.integrations.kinds.${kind}`) }),
-      ).toHaveValue(t("setup.integrations.none"));
-    }
-    await user.click(
-      screen.getByRole("combobox", { name: t("setup.integrations.kinds.chat_service") }),
-    );
+    await user.click(screen.getByRole("link", { name: t("setup.nav.integrations") }));
+    const chat = screen.getByRole("combobox", { name: t("setup.integrations.chat") });
+    expect(chat).toHaveValue(t("setup.integrations.none"));
+    await user.click(chat);
     await user.click(await screen.findByRole("option", { name: "Slack" }));
-    await user.click(screen.getByRole("button", { name: "LLM / AI CLI tools" }));
+    await user.click(screen.getByRole("link", { name: "LLM / AI CLI tools" }));
     await user.click(
       await screen.findByRole("button", {
         name: t("setup.intelligence.apiKeyButtonLabel", { provider: "OpenAI" }),
@@ -558,7 +552,7 @@ describe("Setup integration (real client + mock server)", () => {
     );
     await fill(user, await screen.findByLabelText("OpenAI API key"), "sk-test");
 
-    await user.click(screen.getByRole("button", { name: "Members" }));
+    await user.click(screen.getByRole("link", { name: "Members and patrol" }));
     await fill(user, await screen.findByLabelText("Member ID"), "alice");
     await fill(user, screen.getByLabelText("Display name"), "Alice");
     await fill(user, screen.getByLabelText("Roles"), "product");

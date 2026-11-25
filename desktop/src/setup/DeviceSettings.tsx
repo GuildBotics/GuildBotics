@@ -1,16 +1,29 @@
-import { Alert, Badge, Button, Card, Code, Group, Modal, Stack, Text, Title } from "@mantine/core";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Code,
+  CopyButton,
+  Group,
+  Modal,
+  Stack,
+  Text,
+  Title,
+} from "@mantine/core";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import { getConfigStatus, getRegisteredWorkspaces, unregisterWorkspace } from "../api/client";
 import { ServerMachineBadge } from "../serverMachine";
+import { getGitConfig } from "./providers/branvil/api";
 
 /**
  * Settings that belong to this machine rather than to a workspace, so nothing
  * here waits for one to be selected.
  */
-export function DeviceSettings() {
+export function DeviceSettings({ gitAvailable = false }: { gitAvailable?: boolean }) {
   const { t } = useTranslation();
   return (
     <Stack gap="md">
@@ -44,7 +57,38 @@ export function DeviceSettings() {
         </Stack>
       </Card>
       <RegisteredWorkspacesCard />
+      {gitAvailable && <GitConfig />}
     </Stack>
+  );
+}
+
+function GitConfig() {
+  const { t } = useTranslation();
+  const config = useQuery({ queryKey: ["git-config"], queryFn: getGitConfig }).data?.git_config;
+  if (!config) {
+    return null;
+  }
+  return (
+    <Card withBorder radius="md" p="md">
+      <Stack gap="sm">
+        <Title order={4}>{t("setup.device.git.title")}</Title>
+        <Text size="xs" c="dimmed">
+          {t("setup.device.git.hint")}
+        </Text>
+        <Code block aria-label={t("setup.device.git.title")}>
+          {config}
+        </Code>
+        <Group>
+          <CopyButton value={config}>
+            {({ copied, copy }) => (
+              <Button size="compact-sm" variant="light" onClick={copy}>
+                {t(copied ? "setup.device.git.copied" : "setup.device.git.copy")}
+              </Button>
+            )}
+          </CopyButton>
+        </Group>
+      </Stack>
+    </Card>
   );
 }
 
