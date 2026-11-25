@@ -1474,6 +1474,9 @@ async fn a_command_that_cannot_start_its_environment_ends_failed_in_its_trace() 
     std::fs::create_dir_all(msb.parent().unwrap()).unwrap();
     std::fs::write(&msb, "not a directory").unwrap();
     let server = Server::spawn(command, dir.path(), port);
+    let health = server.health().await;
+    let instance_id = health["service_instance_id"].as_str().unwrap();
+    assert!(!instance_id.is_empty());
     let refusals = [
         gb_server::i18n::t(
             "ja",
@@ -1534,7 +1537,10 @@ async fn a_command_that_cannot_start_its_environment_ends_failed_in_its_trace() 
             (&last["source"], &last["person_id"], &last["command"]),
             (&json!("manual"), &json!("yuki"), &json!("look"))
         );
-        assert_eq!(last["attributes"], json!({"run.entry": "command"}));
+        assert_eq!(
+            last["attributes"],
+            json!({"run.entry": "command", "server.instance_id": instance_id})
+        );
         assert_eq!(last["payload"]["error_type"], "CommandError");
     }
 
