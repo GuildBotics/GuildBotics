@@ -544,17 +544,14 @@ from a cross-site frame.
 
 ## GUI files
 
-A workspace's task flow is at `/{workspace}` and its pull requests are at
-`/{workspace}/-/pulls`. `/` and workspace creation always open the task flow.
-Switching workspaces keeps the task flow, pull requests, or settings. Other
-pages lead to the task flow. The former `/{workspace}/-/board` and
-`/{workspace}/-/relations` URLs show the page-not-found screen.
+The shared GUI starts at `/`. A workspace's task flow is at
+`/workspaces/{workspace}/task-flow` and its pull request list is at
+`/workspaces/{workspace}/pulls`.
 
-The GUI is built with Mantine and looks like GuildBotics Desktop: the same
-Mantine version and theme (`web/src/theme.ts`), and GuildBotics' design tokens
-and component overrides copied into `web/src/styles.css` (kept identical), so
-it can sit beside or inside Desktop. The sidebar shows the workspace and links
-to its task flow, pull requests, and settings.
+The repository views live in `desktop/src/repository/` and use the app's
+Mantine theme in `desktop/src/ui/theme.ts` and its styles in
+`desktop/src/styles.css`. The shared sidebar shows the current workspace and
+links to its task flow, pull requests, and settings.
 The GUI includes the task flow (the board's cards laid out left to right by their blockers, a
 column's tickets in progress first, then ready, new, and done, each lane in the
 board's order, a ticket pushed down, that order kept, to stand level with the
@@ -588,7 +585,7 @@ a number that will not start (`pickup.ts`), and a number opening that order
 beside the figure, which narrows for it, where its rows mark their cards in
 the figure and are reordered by dragging or with the keyboard
 (`PickupPanel.tsx`);
-`web/src/views/relations/`), a ticket (body and comments, with comments editable
+`desktop/src/repository/views/relations/`), a ticket (body and comments, with comments editable
 and permanently deletable by their author or the owner after confirmation; its lane, labels,
 upstream issue, relations to other tickets, and assignee; from the task flow
 it opens in a drawer at the task flow's URL, with a button that copies the

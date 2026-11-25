@@ -452,7 +452,7 @@ For a macOS Hub that runs GuildBotics and Branvil at login, follow the [Hub inst
 
 ### Use It from a Browser
 
-The server serves GuildBotics' screens (service, commands, settings, diagnostics) at `http://127.0.0.1:7878/-/guildbotics/`, and you use them in a browser.
+The server serves GuildBotics' screens (service, commands, settings, diagnostics) at `http://127.0.0.1:7878/`, and you use them in a browser.
 
 **On the machine where the server runs**:
 

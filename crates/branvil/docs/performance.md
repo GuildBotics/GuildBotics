@@ -519,19 +519,18 @@ doubles the largest entries, which the cache copies twice per job (2.6 s and
 
 ### Web tests
 
-`cd web && npm run test` records file and test durations in
-`web/test-results/timing.json`. The `web` CI job uploads that file as the
-`web-tests` artifact, including on test failure, and streams Vitest output
-into the job log. To keep a
-local measurement outside the checkout:
+The `desktop-quality` CI job uploads `desktop/test-results/timing.json` as
+the `web-tests` artifact. To record local timings outside the checkout, run
+this command from the repository root:
 
 ```sh
-cd web
-GUILDBOTICS_TEST_RESULTS=/tmp/branvil-web-timing npm run test
+GUILDBOTICS_TEST_RESULTS=/tmp/desktop-web-timing npm run test --workspace desktop
 ```
 
-Initial measurements for #78 on 2026-10-24: 231 tests in 20 files, Vitest 5.0.2,
-jsdom 30.1.1, Node.js 24.22.1, at most four workers. The host is an Apple
+The measurements below are from the separate web workspace and its `web`
+CI job before the UI integration. Initial measurements for #78 on 2026-10-24:
+231 tests in 20 files, Vitest 5.0.2, jsdom 30.1.1, Node.js 24.22.1, at most
+four workers. The host is an Apple
 M1 Pro (10 cores, 16 GiB), macOS 26.7.1. Production CI uses a Linux 6.12.99
 microVM with four CPUs and 6144 MiB per job, image configuration
 `sha256:67d06b064a73876d72ccf609b0b9854cb5f19b19cfc6ea9dd8f39b8b1d067932`,

@@ -138,21 +138,17 @@ cargo nextest run --locked --workspace
 The tests run with [cargo-nextest](https://nexte.st/), each in a process of
 its own (`cargo install --locked cargo-nextest`).
 
-To run the GUI checks (lint, types, and the Vitest tests):
+To run the GUI checks from the repository root:
 
 ```sh
-npm ci --prefix ../..
-cd web
-npm run lint
-npm run typecheck
-npm run test
+npm ci
+npm run quality --workspace desktop
 ```
 
-The tests use at most four workers and write file and test timings to
-`web/test-results/timing.json`; CI keeps this in the `web-tests` artifact
-and streams Vitest output into the job log. Measurements and interpretation
-are in
-[`docs/performance.md`](docs/performance.md#web-tests).
+Vitest uses at most two workers and writes file and test timings to
+`desktop/test-results/timing.json`. The `desktop-quality` CI job uploads this
+file as the `web-tests` artifact and streams Vitest output into the job log.
+See [Web test measurements](docs/performance.md#web-tests).
 
 The integration tests restart their own test executable as a test server
 (`test_support::serve`, with a host of its own that stands in for GuildBotics'
