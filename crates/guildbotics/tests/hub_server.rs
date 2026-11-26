@@ -1125,10 +1125,14 @@ impl Hub {
         .into()
     }
 
-    fn verified(&self, commits: &[&str]) {
+    fn releases(&self, commits: &[&str]) {
+        let releases: Vec<_> = commits
+            .iter()
+            .map(|sha| serde_json::json!({"name": format!("release/{sha}"), "sha": sha}))
+            .collect();
         fs::write(
-            self.root().join("verified"),
-            serde_json::json!({"since_on_main":true,"verified":commits}).to_string(),
+            self.root().join("releases"),
+            serde_json::json!({"since_on_main":true,"releases":releases}).to_string(),
         )
         .unwrap();
     }
@@ -1152,11 +1156,11 @@ impl Hub {
 }
 
 #[test]
-fn auto_update_ignores_unverified_main_and_installs_latest_verified() {
+fn auto_update_ignores_unreleased_main_and_installs_latest_release() {
     let hub = Hub::new();
     hub.install();
     hub.auto_candidate();
-    let verified = String::from_utf8(
+    let released = String::from_utf8(
         hub.command("git")
             .args(["rev-parse", "origin/main"])
             .output()
@@ -1166,20 +1170,20 @@ fn auto_update_ignores_unverified_main_and_installs_latest_verified() {
     .unwrap()
     .trim()
     .to_owned();
-    hub.verified(&[]);
+    hub.releases(&[]);
     hub.run("auto-once", None, true);
     hub.run("auto-once", None, true);
     hub.assert_runs_signed("old");
     assert!(!hub.root().join("notifications").exists());
     hub.git(&["merge", "--ff-only", "origin/main"]);
-    hub.commit("unverified");
+    hub.commit("unreleased");
     hub.git(&["push", "origin", "main"]);
     hub.git(&["reset", "--hard", "HEAD^^"]);
-    hub.verified(&[&verified]);
+    hub.releases(&[&released]);
     hub.run("auto-once", None, true);
     hub.assert_runs_signed("new");
-    // The unverified tip still does not cause another update.
-    hub.verified(&[]);
+    // The unreleased tip still does not cause another update.
+    hub.releases(&[]);
     hub.run("auto-once", None, true);
     hub.assert_runs_signed("new");
     assert!(!hub.root().join("notifications").exists());
@@ -1187,7 +1191,7 @@ fn auto_update_ignores_unverified_main_and_installs_latest_verified() {
     hub.commit("later");
     hub.git(&["push", "origin", "main"]);
     hub.git(&["reset", "--hard", "HEAD^"]);
-    fs::remove_file(hub.root().join("verified")).unwrap();
+    fs::remove_file(hub.root().join("releases")).unwrap();
     hub.run("auto-once", None, true);
     hub.assert_runs_signed("later");
 }
@@ -1207,12 +1211,12 @@ fn auto_update_selects_latest_compatible_schema_and_advances_one_step() {
         let c2 = hub.sha();
         hub.git(&["push", "origin", "main"]);
         hub.git(&["reset", "--hard", "HEAD~3"]);
-        hub.verified(&[&c2, &c1]);
+        hub.releases(&[&c2, &c1]);
         hub.run("auto-once", None, true);
         match versions {
             [11, 12] => {
                 hub.assert_runs_signed("c1");
-                hub.verified(&[&c2]);
+                hub.releases(&[&c2]);
                 hub.run("auto-once", None, true);
                 hub.assert_runs_signed("c2");
             }
@@ -1237,7 +1241,7 @@ fn removed_hub_checks_command_is_rejected() {
 }
 
 #[test]
-fn failed_candidate_is_not_retried_but_a_newer_verified_commit_is() {
+fn failed_candidate_is_not_retried_but_a_newer_release_is() {
     let hub = Hub::new();
     hub.install();
     hub.auto_candidate();
@@ -1249,7 +1253,7 @@ fn failed_candidate_is_not_retried_but_a_newer_verified_commit_is() {
     assert!(!hub.lines("calls").contains("npm|"));
     assert!(
         hub.lines("notifications")
-            .contains("a newer verified commit is required for automatic retry")
+            .contains("a newer release is required for automatic retry")
     );
     hub.commit("newer");
     hub.git(&["push", "origin", "main"]);
@@ -1271,7 +1275,7 @@ fn checkout_outside_first_parent_notifies_once() {
     assert_eq!(hub.lines("notifications").lines().count(), 1);
     assert!(
         hub.lines("notifications")
-            .contains("Checkout cannot fast-forward to the verified commit")
+            .contains("Checkout cannot fast-forward to the release")
     );
 }
 
@@ -1538,7 +1542,7 @@ fn auto_update_finishes_snapshot_cleanup_on_a_later_pass() {
 }
 
 #[test]
-fn auto_cleanup_errors_never_prevent_a_new_verified_update() {
+fn auto_cleanup_errors_never_prevent_a_new_release_update() {
     for failure in ["status", "state"] {
         let hub = Hub::new();
         hub.install();
@@ -1877,7 +1881,7 @@ fn auto_update_uses_the_agents_identity_root_instead_of_the_shells() {
         }
         hub.run_with("install", &env, true);
         hub.auto_candidate();
-        hub.mark("fail-verified");
+        hub.mark("fail-releases");
         hub.run_with(
             "auto-once",
             &[("GUILDBOTICS_IDENTITY_ROOT", "/unrelated/identity")],
@@ -1981,7 +1985,7 @@ fn auto_state_notifications_follow_each_episode_instead_of_the_commit() {
         let hub = Hub::new();
         hub.install();
         hub.auto_candidate();
-        hub.verified(&[]);
+        hub.releases(&[]);
         for episode in 1..=2 {
             let file = match stage {
                 "operation" => hub.builds().parent().unwrap().join("operation"),
@@ -1995,7 +1999,7 @@ fn auto_state_notifications_follow_each_episode_instead_of_the_commit() {
                 _ => fs::write(&file, "").unwrap(),
             }
             if stage == "service" {
-                fs::remove_file(hub.root().join("verified")).ok();
+                fs::remove_file(hub.root().join("releases")).ok();
             }
             hub.run("auto-once", None, true);
             hub.assert_runs_signed("old");

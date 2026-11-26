@@ -24,7 +24,7 @@ pub type Tbl = TableDefinition<'static, &'static [u8], &'static [u8]>;
 /// The schema version this build reads and writes. A database of any other
 /// version is refused instead of being misread; one of the previous version
 /// is upgraded by `upgrade` (`guildbotics server hub-data upgrade` and `restore`).
-pub const SCHEMA_VERSION: u64 = 48;
+pub const SCHEMA_VERSION: u64 = 49;
 
 pub const META: Tbl = TableDefinition::new("meta");
 pub const COUNTERS: Tbl = TableDefinition::new("counters");
@@ -53,6 +53,10 @@ pub const IX_OPEN_REPAIRS: Tbl = TableDefinition::new("ix_open_repairs");
 pub const CI_NARROWINGS: Tbl = TableDefinition::new("ci_narrowings");
 pub const IX_CI_NARROWING: Tbl = TableDefinition::new("ix_ci_narrowing");
 pub const CI_VERIFICATIONS: Tbl = TableDefinition::new("ci_verifications");
+/// Repository id → the latest release time its schedule handled.
+pub const CI_RELEASES: Tbl = TableDefinition::new("ci_releases");
+/// (repository id, commit) → the release points its verification printed.
+pub const CI_RELEASE_POINTS: Tbl = TableDefinition::new("ci_release_points");
 pub const CI_RUNS: Tbl = TableDefinition::new("ci_runs");
 pub const CI_ATTEMPTS: Tbl = TableDefinition::new("ci_attempts");
 
@@ -107,6 +111,8 @@ pub const PRIMARY_TABLES: &[Tbl] = &[
     IDEMPOTENCY,
     CI_NARROWINGS,
     CI_VERIFICATIONS,
+    CI_RELEASES,
+    CI_RELEASE_POINTS,
     REPAIR_PENDING,
     CI_RUNS,
     CI_ATTEMPTS,

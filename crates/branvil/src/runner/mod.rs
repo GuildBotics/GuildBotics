@@ -802,6 +802,28 @@ fi
                 .unwrap()
         }
 
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn the_runner_reports_the_release_points_its_job_printed() {
+            let service = service(
+                "[[jobs]]\nname = 'schema'\nimage = 'alpine'\ncommands = ['echo build', 'echo ::release-point:: storage 47 to 48', 'echo say ::release-point::inside']\n",
+            )
+            .await;
+            let runner = Runner::new(
+                Api::new(&service.url, &service.runner_token),
+                service.dir.path().join("runner"),
+            )
+            .idle_wait(TEST_IDLE_WAIT);
+            assert!(runner.once(&Fake::new()).await.unwrap());
+            let id = service.repo.id.clone();
+            let sha = service.app.git.branch_tips(&service.bare).await.unwrap()["main"].clone();
+            let attempts = service
+                .app
+                .store
+                .read_sync(|r| crate::ci::queue::attempts_of(r, &id, &sha))
+                .unwrap();
+            assert_eq!(attempts[0].release_points, ["storage 47 to 48"]);
+        }
+
         /// The same runner must recover on the next attempt after msb arrives.
         #[cfg(unix)]
         #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

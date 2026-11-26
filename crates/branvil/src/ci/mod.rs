@@ -25,6 +25,7 @@ mod order;
 pub mod pipeline;
 pub mod priority;
 pub mod queue;
+pub mod release;
 #[cfg(test)]
 mod repair_tests;
 mod selection;

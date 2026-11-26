@@ -14,6 +14,7 @@ test("uses one sidebar and session when changing screens and workspaces", async 
     "Activity",
     "Task flow",
     "Pull requests",
+    "Releases",
     "Service",
     "Edit Command",
     "Diagnostics",
@@ -38,6 +39,12 @@ test("uses one sidebar and session when changing screens and workspaces", async 
   await expect(workspace).toHaveValue("navigation-test");
   await nav.getByRole("link", { name: "Pull requests" }).click();
   await expect(page).toHaveURL(/\/workspaces\/navigation-test\/pulls$/);
+  // A workspace without repositories says so on its releases page.
+  await nav.getByRole("link", { name: "Releases" }).click();
+  await expect(page).toHaveURL(/\/workspaces\/navigation-test\/releases$/);
+  await expect(
+    page.getByText("The workspace navigation-test has no repositories yet."),
+  ).toBeVisible();
   await page.reload();
   await expect(workspace).toHaveValue("navigation-test");
   await expect(nav.getByRole("link", { name: "Settings" })).toHaveAttribute(

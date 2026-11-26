@@ -556,7 +556,7 @@ impl Hub {
         let repo = self.checkout.to_string_lossy().into_owned();
         let history = self.cli(&[
             "server",
-            "hub-verified",
+            "hub-releases",
             "--checkout",
             &repo,
             "--since",
@@ -583,7 +583,7 @@ impl Hub {
             self.blocker(
                 &head,
                 stage,
-                "Checkout cannot fast-forward to the verified commit",
+                "Checkout cannot fast-forward to the release",
                 &format!("restore {checkout} to a checkout on origin/main"),
                 None,
                 0,
@@ -591,10 +591,10 @@ impl Hub {
             return Ok(());
         }
         self.clear_blocker(stage);
-        let verified = history["verified"]
+        let releases = history["releases"]
             .as_array()
-            .ok_or_else(|| anyhow::anyhow!("Invalid verified history"))?;
-        if verified.is_empty() {
+            .ok_or_else(|| anyhow::anyhow!("Invalid release history"))?;
+        if releases.is_empty() {
             self.clear_blocker("migration");
             return Ok(());
         }
@@ -605,13 +605,13 @@ impl Hub {
             .ok_or_else(|| anyhow::anyhow!("Invalid running build source"))?;
         let version = self.schema_version(running)?;
         let mut candidate = None;
-        for commit in verified {
-            let commit = commit
+        for release in releases {
+            let commit = release["sha"]
                 .as_str()
-                .ok_or_else(|| anyhow::anyhow!("Invalid verified SHA"))?;
+                .ok_or_else(|| anyhow::anyhow!("Invalid release SHA"))?;
             anyhow::ensure!(
                 commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()),
-                "Invalid verified SHA"
+                "Invalid release SHA"
             );
             let target_version = self.schema_version(commit)?;
             if candidate.is_none() && target_version <= version.saturating_add(1) {
@@ -622,8 +622,8 @@ impl Hub {
             self.blocker(
                 &head,
                 stage,
-                "No verified commit raises the storage format by one step",
-                "wait for a compatible verified commit or update manually",
+                "No release raises the storage format by one step",
+                "wait for a compatible release or update manually",
                 None,
                 0,
             );
@@ -794,7 +794,7 @@ impl Hub {
                     detail.push_str(" Interrupted update remains; recovery required.");
                 }
                 let next = format!(
-                    "inspect the Hub log; run {} recover if needed; a newer verified commit is required for automatic retry",
+                    "inspect the Hub log; run {} recover if needed; a newer release is required for automatic retry",
                     self.hub_server()
                 );
                 self.notify(sha, stage, &detail, &next, None);

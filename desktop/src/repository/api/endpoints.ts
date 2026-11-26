@@ -9,6 +9,7 @@ import {
 } from "../../api/client";
 import type { RunnerSelection } from "./types";
 import type {
+  Releases,
   Verification,
   VerificationCommit,
   AccountCredential,
@@ -137,6 +138,10 @@ export const repos = {
       cursor,
       limit: 30,
     }),
+  releases: (repo: string) => get<Releases>(`/repos/${enc(repo)}/releases`),
+  /** `name` follows the release tag prefix; absent takes the default name. */
+  release: (repo: string, sha: string, name?: string) =>
+    request<Releases>("POST", `/repos/${enc(repo)}/releases`, { body: { sha, name } }),
   commitChecks: (repo: string, sha: string) =>
     get<CommitChecks>(`/repos/${enc(repo)}/commits/${enc(sha)}/checks`),
   /** `reader`: a member names it, `null` picks again, absent keeps it. */

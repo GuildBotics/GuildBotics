@@ -290,6 +290,9 @@ pub struct Attempt {
     pub reused_from: Option<String>,
     /// The computed dependency-cache key of an execution.
     pub cache_key: Option<String>,
+    /// The release points the job's output printed, as its runner reported
+    /// them (`ci::release`).
+    pub release_points: Vec<String>,
     /// Manual and automatic retries (including interruption requeues) must execute.
     pub allow_reuse: bool,
     pub number: u64,
@@ -832,6 +835,7 @@ fn new_job(
         peak_memory_mib: None,
         reused_from: None,
         cache_key: None,
+        release_points: Vec::new(),
         allow_reuse: true,
         number,
         seq: w.next("ci_seq")?,
@@ -2067,6 +2071,22 @@ pub fn heartbeat(w: &Wtx, id: &str, lease: &str, lease_secs: u64, now: &str) -> 
     a.lease_expires_at = Some(later(now, lease_secs));
     put_attempt(w, Some(&old), &a)?;
     Ok(a)
+}
+
+/// Keeps the release points a finished attempt's runner reported.
+pub(super) fn record_release_points(
+    w: &Wtx,
+    a: &Attempt,
+    points: Vec<String>,
+) -> AppResult<Attempt> {
+    let mut next = a.clone();
+    next.release_points = points
+        .iter()
+        .take(gb_runner::ci::queue::MAX_RELEASE_POINTS)
+        .map(|p| gb_runner::ci::queue::release_point_message(p))
+        .collect();
+    put_attempt(w, Some(a), &next)?;
+    Ok(next)
 }
 
 /// Concludes a leased attempt with the runner's result. A cancellation that

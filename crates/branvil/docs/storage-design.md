@@ -294,7 +294,7 @@ fields and `ix_ci_unnotified` / `ix_ci_recovered`. Existing repair tickets get
 
 The 34 → 35 upgrade adds `hold_while_failing: false` to every repository.
 
-The 47 → 48 upgrade adds `review_rounds: 3` to every repository.
+The 48 → 49 upgrade adds `review_rounds: 3` to every repository.
 
 The 35 → 36 upgrade revokes the tokens GuildBotics kept: those labelled
 `guildbotics` and those labelled `app:<client>`.

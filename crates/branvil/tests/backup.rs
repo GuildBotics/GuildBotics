@@ -322,7 +322,7 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("from schema version 47 to 48"),
+        text(&out).contains("from schema version 48 to 49"),
         "{}",
         text(&out)
     );

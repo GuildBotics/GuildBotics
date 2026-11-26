@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Keep each verified Branvil build reachable by a single schema upgrade."""
+"""Keep each verified Branvil build reachable by a single schema upgrade, and
+mark a build that raises the schema as a release point."""
 
 import os
 from pathlib import Path
@@ -48,6 +49,9 @@ def main() -> int:
         )
         return 1
     print(f"schema-raise passed: verified version {before}, checkout version {after}.")
+    if after != before:
+        # The Hub upgrades one step at a time: this commit is released by itself.
+        print(f"::release-point::Branvil storage format {before} → {after}")
     return 0
 
 

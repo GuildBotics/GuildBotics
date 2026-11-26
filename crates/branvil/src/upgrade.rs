@@ -1,4 +1,4 @@
-//! 47 → 48: repositories have `review_rounds`, the heads a member reviews
+//! 48 → 49: repositories have `review_rounds`, the heads a member reviews
 //! before its automatic re-review stops (3, the limit every repository had).
 //! Every upgrade also binds the GuildBotics workspaces' execution roots.
 use std::{collections::BTreeMap, path::PathBuf};
@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 use crate::config::Layout;
 use crate::store::{self, Rd, Store, Upgraded, Upgrading, Wtx};
 
-pub const FROM: u64 = 47;
+pub const FROM: u64 = 48;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
@@ -111,11 +111,13 @@ mod tests {
             })
             .unwrap();
         drop(db);
+        assert!(store::check_version(&layout.db()).is_err());
         let root = temporary.path().join("execution");
         let done = upgrade_with_roots(&layout, [("acme".into(), root.clone())].into())
             .unwrap()
             .unwrap();
         assert_eq!(done.summary, "added review_rounds=3 to repositories");
+        assert!(done.copy.is_file());
         assert!(upgrade(&layout).unwrap().is_none());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
         let repos: Vec<Repo> = db.read_sync(|r| r.prefix_all(store::REPOS, &[])).unwrap();

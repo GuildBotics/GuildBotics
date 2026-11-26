@@ -135,6 +135,9 @@ async fn sweep(app: &App, dirty: &Dirty) {
         if let Err(e) = crate::ci::collection::advance(app, repo).await {
             tracing::warn!("collection verification of {}: {e}", repo.path);
         }
+        if let Err(e) = crate::ci::release::advance(app, repo).await {
+            tracing::warn!("releases of {}: {e}", repo.path);
+        }
     }
     if let Err(e) = crate::repair::sweep(app).await {
         tracing::warn!("repair tickets: {e}");

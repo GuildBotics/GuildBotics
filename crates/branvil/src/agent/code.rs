@@ -7,6 +7,13 @@ impl CodeAgent {
     pub fn commit_url_for(api: &crate::api::DataApi, repo: &str, sha: &str) -> String {
         crate::util::item_url(api.base_url(), repo, "commits", sha)
     }
+    pub fn releases_url_for(api: &crate::api::DataApi, repo: &str) -> String {
+        format!(
+            "{}{}/releases",
+            api.base_url(),
+            crate::util::repository_page(repo)
+        )
+    }
     pub fn repository_for_remote(api: &crate::api::DataApi, url: &str) -> Option<String> {
         let path = url
             .trim()

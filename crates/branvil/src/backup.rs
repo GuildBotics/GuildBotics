@@ -519,7 +519,7 @@ pub async fn restore(from: &Path, data_dir: &Path) -> anyhow::Result<u8> {
     layout.create()?;
     std::fs::copy(inside(from, DB_FILE)?, layout.db()).context("copying the database")?;
     if from.join(CONFIG_FILE).exists() {
-        std::fs::copy(from.join(CONFIG_FILE), layout.root.join(CONFIG_FILE))?;
+        std::fs::copy(from.join(CONFIG_FILE), layout.config_file())?;
     }
     for dir in [
         layout.ci_logs(),

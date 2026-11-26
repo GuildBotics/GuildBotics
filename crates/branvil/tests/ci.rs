@@ -583,12 +583,19 @@ async fn previous_schema_upgrade_preserves_records() {
             .1
             .contains("guildbotics server hub-data upgrade")
     );
+    let mut repos = records(&db, "repos");
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 47 to 48"), "{output}");
+    assert!(output.contains("from schema version 48 to 49"), "{output}");
+    // Every repository gains review rounds 3, and nothing else.
+    for repo in &mut repos {
+        repo["review_rounds"] = json!(3);
+    }
+    assert!(!repos.is_empty());
+    assert_eq!(records(&db, "repos"), repos);
     let upgraded = tables(&db);
     let unchanged = |mut snapshot: Tables| {
-        snapshot.retain(|name, _| !matches!(name.as_str(), "meta" | "repos"));
+        snapshot.retain(|name, _| name != "meta" && name != "repos");
         snapshot
     };
     let after = unchanged(upgraded.clone());
@@ -601,7 +608,6 @@ async fn previous_schema_upgrade_preserves_records() {
         assert!(after[&name] == rows, "upgrade changed table {name}");
     }
     assert_eq!(records(&db, "repos")[0]["responder"], "aiko");
-    assert_eq!(records(&db, "repos")[0]["review_rounds"], 3);
     let runs = records(&db, "ci_runs");
     let run = runs.iter().find(|r| r["sha"] == head).unwrap();
     assert_eq!(run["protected_branches"], json!(["main"]));

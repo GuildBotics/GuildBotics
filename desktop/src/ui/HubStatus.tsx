@@ -6,9 +6,18 @@ export interface HubVersion {
   subject: string;
   url: string | null;
 }
+export interface HubReleases {
+  /** The code host's releases page of the Hub's repository. */
+  url: string;
+  /** The release tag of the running version, when it is a release. */
+  running: string | null;
+  /** Releases newer than the running version, newest first. */
+  pending: { name: string; sha: string; subject: string }[];
+}
 export interface HubStatus {
   current: HubVersion | null;
   target: HubVersion | null;
+  releases: HubReleases | null;
   operation: null | {
     kind: "update" | "restart" | "stop";
     phase: "preparing" | "draining";

@@ -762,3 +762,47 @@ async fn narrowing_history_retries_without_losing_failure_evidence() {
     assert_eq!(after.pending.as_ref().unwrap().0, 0);
     assert_eq!(f.record().state, "failed");
 }
+
+#[tokio::test]
+async fn a_passing_verification_records_the_release_points_its_jobs_reported() {
+    let f = Fixture::new(&["lint", "test"]).await;
+    f.advance().await;
+    let mut marked = String::new();
+    for _ in 0..2 {
+        let c = f.claim();
+        let id = c.attempt.id.clone();
+        let test = c.attempt.job.name == "test";
+        f.finish(c, "success");
+        // As the finish of the runner API keeps them; no log is read, so a
+        // log pruned or left out of a backup keeps them too.
+        if test {
+            marked = id.clone();
+            f.ci.inner
+                .store
+                .write_sync(|w| {
+                    let a = queue::get_attempt(w, &id)?.unwrap();
+                    let points = vec![" storage format 47 → 48 ".into(), "x".repeat(300)];
+                    queue::record_release_points(w, &a, points)
+                })
+                .unwrap();
+        }
+    }
+    f.advance().await;
+    assert_eq!(f.record().state, "passed");
+    let key = Key::new().s(&f.repo.id).s(&f.sha).bytes();
+    let notes: Vec<release::Note> =
+        f.ci.inner
+            .store
+            .read_sync(|r| r.get(store::CI_RELEASE_POINTS, &key))
+            .unwrap()
+            .unwrap();
+    let note = |message: String| release::Note {
+        job: "test".into(),
+        attempt_id: marked.clone(),
+        message,
+    };
+    assert_eq!(
+        notes,
+        [note("storage format 47 → 48".into()), note("x".repeat(200))]
+    );
+}
