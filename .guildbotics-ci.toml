@@ -190,20 +190,23 @@ paths = [
   ".cargo/**",
   # The nextest settings every run of the tests reads.
   ".config/nextest.toml",
+  "scripts/ci-measure-tmp.py",
   "clippy.toml",
   "rustfmt.toml",
 ]
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu
+python3 scripts/ci-measure-tmp.py target/nextest/ci/tmp-usage.json sh -eu <<'RUST_TEST'
 export CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0
 find crates -exec touch -c {} +
 python3 .cargo/ci-cache.py run cargo nextest run --locked --profile ci --workspace --exclude branvil --exclude loopback-auth
 python3 .cargo/ci-cache.py run cargo nextest run --locked -p guildbotics --no-default-features --test main
 cargo clean --workspace --offline --locked
 python3 .cargo/ci-cache.py prune
+RUST_TEST
 ''']
-artifacts = [{ name = "rust-test-results", paths = ["target/nextest/ci/junit.xml"] }]
+artifacts = [{ name = "rust-test-results", paths = ["target/nextest/ci/junit.xml", "target/nextest/ci/tmp-usage.json"] }]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
 

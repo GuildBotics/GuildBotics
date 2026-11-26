@@ -19,6 +19,24 @@ def _load(path: str) -> dict:
     return tomllib.loads((ROOT / path).read_text(encoding="utf-8"))
 
 
+def test_cli_tests_that_fill_tmp_share_two_nextest_slots() -> None:
+    config = _load(".config/nextest.toml")
+    group = "cli-tmp"
+    assert config["test-groups"][group]["max-threads"] == 2
+    [override] = [
+        entry
+        for entry in config["profile"]["default"]["overrides"]
+        if entry.get("test-group") == group
+    ]
+    assert {
+        "package(=guildbotics)",
+        "binary(=main)",
+        "test(/^install_(cli|isolation)::/)",
+        "test(=client_only::relocated_client_installs_embedded_skills_and_has_only_client_commands)",
+        "test(=image_cli::loads_and_reloads_real_archives_without_booting_a_vm)",
+    } <= set(override["filter"].split())
+
+
 def test_the_blackbox_ci_selects_every_ordinary_journey() -> None:
     job = next(
         j
