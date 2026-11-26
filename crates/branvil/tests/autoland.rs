@@ -832,8 +832,9 @@ async fn a_webhook_set_later_is_told_when_automatic_landing_is_enabled() {
     assert_eq!(hook.received().len(), 1);
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn changing_the_upstream_waits_for_a_notice_being_sent_about_the_old_one() {
+/// A repository landing automatically whose notice about its automatic
+/// publication to octo/demo is being sent: the webhook holds its answer.
+async fn a_notice_being_sent() -> (World, crate::common::github::FakeGitHub, Hook) {
     let (w, gh) = followed().await;
     with_aiko_account(&w).await;
     gh.repository("octo/other", &w.work);
@@ -841,25 +842,50 @@ async fn changing_the_upstream_waits_for_a_notice_being_sent_about_the_old_one()
     let hook = Hook::held(&w, &[]).await;
     w.push_change("feat", "f.txt", "one\n");
     number(&w.open_pull("feat", json!([])).await);
-    // The notice about the publication to octo/demo is being sent.
     eventually("the notice", || async { hook.received().len() == 1 }).await;
-    let path = format!("{}/upstream", w.repo_path());
-    let change = w.server.put(
-        &path,
-        &w.owner,
-        json!({"provider":"github","repository":"octo/other"}),
-    );
+    (w, gh, hook)
+}
+
+/// The owner's `change` of what the notice was decided under waits until it
+/// is sent: no notice is about settings the owner has since changed.
+async fn waits_for_the_notice(hook: &Hook, change: impl std::future::Future<Output = ()>) {
     tokio::pin!(change);
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(500), &mut change)
             .await
             .is_err(),
-        "the setting changed while a notice decided under it was being sent"
+        "the change went through while a notice decided before it was being sent"
     );
     hook.release();
-    let (st, result) = change.await;
-    assert_eq!(st, StatusCode::OK, "{result}");
+    change.await;
     assert_eq!(hook.received().len(), 1, "{:?}", hook.received());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn changing_the_upstream_waits_for_a_notice_being_sent_about_the_old_one() {
+    let (w, _gh, hook) = a_notice_being_sent().await;
+    let path = format!("{}/upstream", w.repo_path());
+    waits_for_the_notice(&hook, async {
+        let (st, result) = w
+            .server
+            .put(
+                &path,
+                &w.owner,
+                json!({"provider":"github","repository":"octo/other"}),
+            )
+            .await;
+        assert_eq!(st, StatusCode::OK, "{result}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn turning_automatic_landing_off_waits_for_a_notice_being_sent() {
+    let (w, _gh, hook) = a_notice_being_sent().await;
+    waits_for_the_notice(&hook, async {
+        settings(&w, json!({"auto_land": false})).await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

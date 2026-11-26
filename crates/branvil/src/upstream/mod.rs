@@ -62,8 +62,8 @@ pub struct Upstream {
     pulls: KeyedLocks,
     /// One poll of a repository at a time (the poller and "Check now").
     repos: KeyedLocks,
-    /// A change of a repository's upstream setting waits for a webhook
-    /// notice being decided and sent under the setting it replaces
+    /// A change of a repository's upstream or settings waits for a webhook
+    /// notice being decided and sent under the ones it replaces
     /// (`setting_lock`).
     settings: KeyedLocks,
 }
@@ -93,10 +93,11 @@ impl Upstream {
             .await
     }
 
-    /// Held by a change of the repository's upstream setting, and by a
-    /// webhook notice from the read it decides on until it is sent, so that
-    /// no notice reaches a webhook about a publication the setting no longer
-    /// points to. Taken before `pull_lock`.
+    /// Held by a change of the repository's upstream or of its settings, and
+    /// by a webhook notice from the read it decides on until it is sent, so
+    /// that no notice is decided under settings the owner has since changed
+    /// (another destination, automatic landing turned off). Taken before
+    /// `pull_lock` and the repository's lock.
     pub async fn setting_lock(&self, repo_id: &str) -> KeyedGuard<'_> {
         self.settings.lock(repo_id.as_bytes()).await
     }
