@@ -11,7 +11,7 @@ pub enum HubDataCommand {
         /// Directory to fill, on this machine
         #[arg(long)]
         to: PathBuf,
-        /// Leave out CI logs and artifacts; a restore keeps the jobs' results without their files
+        /// Leave out CI logs and artifacts; the backup keeps the jobs' results without their files and interrupts the running jobs
         #[arg(long)]
         without_ci_files: bool,
     },

@@ -50,10 +50,6 @@ pub struct Manifest {
     pub files: Vec<FileEntry>,
     /// What is deliberately not in the backup.
     pub excluded: Vec<String>,
-    /// CI logs and artifacts were left out: a restore marks the finished
-    /// jobs' files as pruned. Absent in backups made before this choice.
-    #[serde(default)]
-    pub without_ci_files: bool,
     /// Members' upstream accounts whose credential (a token or an app's
     /// key) must be set again after a restore.
     pub account_tokens_excluded: Vec<AccountEntry>,
@@ -89,8 +85,7 @@ const EXCLUDED: &[&str] = &[
     "hooks/ and git/ (written again at every start)",
     "Git reflogs and repository-local Git configuration (re-applied at every start)",
 ];
-const CI_FILES_EXCLUDED: &str =
-    "CI logs and artifacts (a restore keeps the jobs' results and marks their files as pruned)";
+const CI_FILES_EXCLUDED: &str = "CI logs and artifacts (the database copy marks every started job's files as pruned and interrupts the running jobs)";
 
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
@@ -115,6 +110,42 @@ pub async fn http_backup(
     Ok(axum::Json(manifest).into_response())
 }
 
+/// Makes the database copy of a backup without CI files hold what a service
+/// restored from it, by any build, can serve: the running jobs are
+/// interrupted, as when the service stops (their runners' leases end and the
+/// first interruption is queued again as a new job), and every job that had
+/// started has its files pruned, as retention leaves it: the logs read
+/// empty, the artifacts are gone, and no later check reuses them.
+fn prune_ci_files(db: &Path) -> AppResult<()> {
+    let copy = Store::open(db, 16 << 20, 1).map_err(AppError::internal)?;
+    copy.write_sync(|w| {
+        let now = util::now();
+        crate::ci::queue::interrupt_running(
+            w,
+            None,
+            "the backup left out CI files, so the restored service has no log or artifacts of this job",
+            &now,
+        )?;
+        let attempts: Vec<crate::ci::queue::Attempt> = w.prefix_all(store::CI_ATTEMPTS, &[])?;
+        for a in attempts {
+            if a.started_at.is_some() && !a.files_pruned {
+                crate::ci::queue::mark_pruned(w, &a.id)?;
+            }
+        }
+        Ok(())
+    })
+}
+
+/// A full backup's request names only the directory, as before the choice
+/// existed, so a server of the previous build still takes it.
+fn request_body(to: &Path, without_ci_files: bool) -> serde_json::Value {
+    if without_ci_files {
+        serde_json::json!({"to": to, "without_ci_files": true})
+    } else {
+        serde_json::json!({"to": to})
+    }
+}
+
 /// Asks the server at `url` for a backup into `to`, as its owner (`token`).
 /// The directory is on the server's machine; a relative path is made
 /// absolute here first.
@@ -128,7 +159,7 @@ pub async fn request(
     let response = reqwest::Client::new()
         .post(format!("{url}/api/v1/admin/backup"))
         .bearer_auth(token)
-        .json(&serde_json::json!({"to": to, "without_ci_files": without_ci_files}))
+        .json(&request_body(&to, without_ci_files))
         .send()
         .await
         .with_context(|| format!("the server is not reachable at {url}"))?;
@@ -249,6 +280,12 @@ pub async fn create(app: &App, to: &Path, without_ci_files: bool) -> AppResult<M
         copy_tree(&dir, &target.join(&rel)).map_err(AppError::internal)?;
     }
     drop(deletions);
+    if without_ci_files {
+        let db = target.join(DB_FILE);
+        tokio::task::spawn_blocking(move || prune_ci_files(&db))
+            .await
+            .map_err(AppError::internal)??;
+    }
     if app.layout.config_file().exists() {
         std::fs::copy(app.layout.config_file(), target.join(CONFIG_FILE))
             .map_err(AppError::internal)?;
@@ -287,7 +324,6 @@ pub async fn create(app: &App, to: &Path, without_ci_files: bool) -> AppResult<M
             .chain(without_ci_files.then_some(&CI_FILES_EXCLUDED))
             .map(|s| s.to_string())
             .collect(),
-        without_ci_files,
         account_tokens_excluded,
     };
     let text = serde_json::to_string_pretty(&manifest).map_err(AppError::internal)?;
@@ -536,9 +572,6 @@ pub async fn restore(from: &Path, data_dir: &Path) -> anyhow::Result<u8> {
         let done = crate::upgrade::upgrade(&layout)?;
         println!("{}", store::upgrade_report(&layout.db(), &done));
     }
-    if manifest.without_ci_files {
-        prune_ci_files(&layout)?;
-    }
     for a in &manifest.account_tokens_excluded {
         println!(
             "warning: the {} account of {} had a credential, which backups do not carry; set it again (PUT .../members/{}/accounts/{})",
@@ -560,24 +593,6 @@ pub async fn restore(from: &Path, data_dir: &Path) -> anyhow::Result<u8> {
         }
         Ok(1)
     }
-}
-
-/// Marks every job that had started by the time of a backup without CI
-/// files, running ones included (they may have uploaded artifacts already),
-/// as retention does once it deletes the files: their logs read empty, their
-/// artifacts are gone, and no later check reuses them.
-fn prune_ci_files(layout: &Layout) -> anyhow::Result<()> {
-    let db = Store::open(&layout.db(), 16 << 20, 1)?;
-    db.write_sync(|w| {
-        let attempts: Vec<crate::ci::queue::Attempt> = w.prefix_all(store::CI_ATTEMPTS, &[])?;
-        for a in attempts {
-            if a.status != "queued" && !a.files_pruned {
-                crate::ci::queue::mark_pruned(w, &a.id)?;
-            }
-        }
-        Ok(())
-    })
-    .map_err(|e| anyhow::anyhow!("{}", e.message))
 }
 
 /// The restore's own `admin check`: database structure and indexes, and a
@@ -759,17 +774,16 @@ mod tests {
     }
 
     #[test]
-    fn a_manifest_of_the_previous_build_reads_as_a_full_backup() {
-        // During a Hub update the running build writes the backup that the
-        // new build restores.
-        let manifest: Manifest = serde_json::from_value(serde_json::json!({
-            "format": FORMAT, "service": "branvil", "branvil_version": "0.1.0",
-            "schema_version": store::SCHEMA_VERSION, "git_version": "", "created_at": "",
-            "base_url": "", "tables": {}, "repositories": [], "files": [], "excluded": [],
-            "account_tokens_excluded": [],
-        }))
-        .unwrap();
-        assert!(!manifest.without_ci_files);
+    fn only_a_backup_without_ci_files_names_the_choice_in_its_request() {
+        let to = Path::new("/backup");
+        assert_eq!(
+            request_body(to, false),
+            serde_json::json!({"to": "/backup"})
+        );
+        assert_eq!(
+            request_body(to, true),
+            serde_json::json!({"to": "/backup", "without_ci_files": true})
+        );
     }
 
     #[test]

@@ -3596,15 +3596,25 @@ async fn the_owner_alone_may_open_the_network_of_jobs() {
 /// A pull request whose required check logged a line and uploaded an
 /// artifact, backed up (`without_ci_files` as asked) after or, unless
 /// `finished`, before the check finished, and restored into a new data
-/// directory that the server now serves.
+/// directory that the server now serves at the same address.
 struct RestoredCi {
-    _w: World,
+    w: World,
+    runner: Runner,
+    claim: Value,
+    head: String,
     backup: std::path::PathBuf,
+    manifest: Value,
     before: Value,
     after: Value,
-    log: Value,
-    artifact: reqwest::Response,
     _target: tempfile::TempDir,
+}
+
+const CI_LOG: &[u8] = b"kept in the backup\n";
+
+fn ci_zip() -> Vec<u8> {
+    let mut zip = b"PK\x05\x06".to_vec();
+    zip.extend_from_slice(&[0; 18]);
+    zip
 }
 
 async fn restored_ci(without_ci_files: bool, finished: bool) -> RestoredCi {
@@ -3622,23 +3632,16 @@ async fn restored_ci(without_ci_files: bool, finished: bool) -> RestoredCi {
     let head = w.push_change("feature", "f.txt", "1\n");
     let p = w.open_pull("feature", json!([])).await;
     let n = p["number"].as_u64().unwrap();
-    let c = runner.claim().await.unwrap();
+    let claim = runner.claim().await.unwrap();
     runner
-        .raw(
-            reqwest::Method::POST,
-            &c,
-            "log",
-            b"kept in the backup\n".to_vec(),
-        )
+        .raw(reqwest::Method::POST, &claim, "log", CI_LOG.to_vec())
         .await;
-    let mut zip = b"PK\x05\x06".to_vec();
-    zip.extend_from_slice(&[0; 18]);
     let (st, _) = runner
-        .raw(reqwest::Method::PUT, &c, "artifacts/report", zip.clone())
+        .raw(reqwest::Method::PUT, &claim, "artifacts/report", ci_zip())
         .await;
     assert_eq!(st, 200);
     if finished {
-        assert_eq!(runner.finish(&c, "success").await.0, 200);
+        assert_eq!(runner.finish(&claim, "success").await.0, 200);
         eventually("the landing gate before backup", || async {
             checks(&w, n).await["checks"]
                 .as_array()
@@ -3651,16 +3654,25 @@ async fn restored_ci(without_ci_files: bool, finished: bool) -> RestoredCi {
     let before = checks(&w, n).await;
 
     let backup = w.dir.path().join("backup");
-    let (st, v) = w
-        .server
-        .post(
-            "/admin/backup",
-            &w.owner,
-            json!({"to": backup, "without_ci_files": without_ci_files}),
-        )
-        .await;
-    assert_eq!(st, 200, "{v}");
-    assert_eq!(v["without_ci_files"], without_ci_files);
+    let request = if without_ci_files {
+        json!({"to": backup, "without_ci_files": true})
+    } else {
+        json!({"to": backup})
+    };
+    let (st, manifest) = w.server.post("/admin/backup", &w.owner, request).await;
+    assert_eq!(st, 200, "{manifest}");
+    if !finished {
+        // The backup leaves the running job of the live service alone.
+        let (st, _) = runner
+            .raw(
+                reqwest::Method::POST,
+                &claim,
+                "log",
+                b"after the backup\n".to_vec(),
+            )
+            .await;
+        assert_eq!(st, 200);
+    }
     let target = tempfile::tempdir().unwrap();
     let out = branvil_command()
         .args(["restore", "--from"])
@@ -3678,34 +3690,60 @@ async fn restored_ci(without_ci_files: bool, finished: bool) -> RestoredCi {
     w.server.stop();
     w.server = Server::start_on(target.path(), &listen, &[]);
     let after = checks(&w, n).await;
-    let id = check(&after, "test")["attempt_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let log = w
-        .server
-        .ok(&format!("{}/jobs/{id}/log", w.repo_path()), &w.aiko)
-        .await;
-    let artifact = w
-        .server
-        .http
-        .get(format!(
-            "{}/api/v1{}/commits/{head}/artifacts/report",
-            w.server.url,
-            w.repo_path()
-        ))
-        .bearer_auth(&w.aiko)
-        .send()
-        .await
-        .unwrap();
     RestoredCi {
-        _w: w,
+        w,
+        runner,
+        claim,
+        head,
         backup,
+        manifest,
         before,
         after,
-        log,
-        artifact,
         _target: target,
+    }
+}
+
+impl RestoredCi {
+    /// The log read of the job that ran before the backup.
+    async fn log(&self) -> Value {
+        let id = self.claim["attempt_id"].as_str().unwrap();
+        self.w
+            .server
+            .ok(
+                &format!("{}/jobs/{id}/log", self.w.repo_path()),
+                &self.w.aiko,
+            )
+            .await
+    }
+
+    async fn artifact(&self) -> reqwest::Response {
+        self.w
+            .server
+            .http
+            .get(format!(
+                "{}/api/v1{}/commits/{}/artifacts/report",
+                self.w.server.url,
+                self.w.repo_path(),
+                self.head
+            ))
+            .bearer_auth(&self.w.aiko)
+            .send()
+            .await
+            .unwrap()
+    }
+
+    fn assert_left_out_ci_files(&self) {
+        assert!(!self.backup.join("ci/logs").exists());
+        assert!(!self.backup.join("ci/artifacts").exists());
+        assert!(
+            self.manifest["excluded"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e.as_str().unwrap().starts_with("CI logs and artifacts")),
+            "{}",
+            self.manifest["excluded"]
+        );
     }
 }
 
@@ -3714,22 +3752,18 @@ async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
     let r = restored_ci(false, true).await;
     assert!(r.backup.join("ci/logs").is_dir());
     assert_eq!(r.after["checks"], r.before["checks"]);
-    assert_eq!(r.log["log"], "kept in the backup\n");
-    assert_eq!(r.log["pruned"], false);
-    assert_eq!(r.artifact.status(), 200);
-    let mut zip = b"PK\x05\x06".to_vec();
-    zip.extend_from_slice(&[0; 18]);
-    assert_eq!(r.artifact.bytes().await.unwrap().to_vec(), zip);
+    let log = r.log().await;
+    assert_eq!(log["log"], "kept in the backup\n");
+    assert_eq!(log["pruned"], false);
+    let artifact = r.artifact().await;
+    assert_eq!(artifact.status(), 200);
+    assert_eq!(artifact.bytes().await.unwrap().to_vec(), ci_zip());
 }
 
 #[tokio::test]
 async fn a_backup_without_ci_files_restores_the_results_with_their_files_pruned() {
     let r = restored_ci(true, true).await;
-    assert!(!r.backup.join("ci/logs").exists());
-    assert!(!r.backup.join("ci/artifacts").exists());
-    let manifest: Value =
-        serde_json::from_slice(&std::fs::read(r.backup.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(manifest["without_ci_files"], true);
+    r.assert_left_out_ci_files();
     // The checks keep their results, as after retention deleted the files.
     let result = |checks: &Value| {
         checks["checks"]
@@ -3747,23 +3781,59 @@ async fn a_backup_without_ci_files_restores_the_results_with_their_files_pruned(
     };
     assert_eq!(result(&r.after), result(&r.before));
     assert_eq!(check(&r.after, "test")["artifact_names"], json!([]));
-    assert_eq!(r.log["log"], "");
-    assert_eq!(r.log["pruned"], true);
-    assert_ne!(r.artifact.status(), 200);
+    let log = r.log().await;
+    assert_eq!(log["log"], "");
+    assert_eq!(log["pruned"], true);
+    assert_ne!(r.artifact().await.status(), 200);
 }
 
 #[tokio::test]
-async fn a_backup_without_ci_files_prunes_a_job_that_was_running() {
+async fn a_backup_without_ci_files_interrupts_a_running_job_and_queues_it_again() {
     // The job had uploaded its artifact but not finished at backup time.
     let r = restored_ci(true, false).await;
+    r.assert_left_out_ci_files();
     assert_eq!(
         check(&r.before, "test")["artifact_names"],
         json!(["report"])
     );
-    assert_eq!(check(&r.after, "test")["artifact_names"], json!([]));
-    assert_eq!(r.log["log"], "");
-    assert_eq!(r.log["pruned"], true);
-    assert_ne!(r.artifact.status(), 200);
+    let again = check(&r.after, "test");
+    assert_eq!(again["status"], "queued", "{again}");
+    assert_ne!(again["attempt_id"], r.claim["attempt_id"]);
+    let log = r.log().await;
+    assert_eq!(log["log"], "");
+    assert_eq!(log["pruned"], true);
+    assert_ne!(r.artifact().await.status(), 200);
+    // The runner's lease ended with the backup: nothing it sends lands.
+    let (st, _) = r
+        .runner
+        .raw(reqwest::Method::POST, &r.claim, "log", b"late\n".to_vec())
+        .await;
+    assert_eq!(st, StatusCode::CONFLICT);
+    assert_eq!(
+        r.runner.finish(&r.claim, "success").await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(r.log().await["log"], "");
+    // The job queued again is not pruned: what it writes is its own.
+    let next = r.runner.next_claim().await;
+    assert_eq!(next["attempt_id"], again["attempt_id"]);
+    let (st, _) = r
+        .runner
+        .raw(
+            reqwest::Method::POST,
+            &next,
+            "log",
+            b"after the restore\n".to_vec(),
+        )
+        .await;
+    assert_eq!(st, 200);
+    let id = next["attempt_id"].as_str().unwrap();
+    let log =
+        r.w.server
+            .ok(&format!("{}/jobs/{id}/log", r.w.repo_path()), &r.w.aiko)
+            .await;
+    assert_eq!(log["log"], "after the restore\n");
+    assert_eq!(log["pruned"], false);
 }
 
 #[tokio::test]

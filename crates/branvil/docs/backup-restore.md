@@ -89,7 +89,8 @@ next pass (`App::file_deletions`). A
 file written later is an orphan the restored service removes at start. A log
 copied while a job runs may hold a few more lines than the database snapshot
 knows of. An attempt that was in progress at backup time is interrupted by
-the restored service when its lease runs out (`docs/ci.md`).
+the restored service when its lease runs out (`docs/ci.md`); a backup without
+CI files interrupts it in the copy instead (below).
 Queued automatic retries retain their retry number. Eligible protected required
 checks may queue another automatic retry after a second interruption, within
 the three-retry budget. Restore does not restart completed failures on its own.
@@ -100,8 +101,13 @@ the backup, even if a later edit removed the last reference and the sweep
 (`docs/storage-design.md`) then deleted it.
 
 `--without-ci-files` (`"without_ci_files": true`) leaves out `ci/logs/` and
-`ci/artifacts/`, and the manifest records it (`without_ci_files`, and a line
-in `excluded`). Everything else is the same.
+`ci/artifacts/`, and the manifest's `excluded` says so. The database copy then
+holds what a service restored from it can serve, whichever build restores it:
+the running jobs are interrupted as when the service stops (their runners'
+leases end, and a first interruption is queued again as a new job), and every
+job that had started has its files pruned as retention leaves it (the checks
+keep their results, the logs read empty, the artifacts are gone, and no later
+check reuses them). Everything else is the same.
 
 ## Restore
 
@@ -120,10 +126,6 @@ in `excluded`). Everything else is the same.
 6. upgrades the database when the backup has the previous schema version
    ("Upgrading"; it reads the restored repositories; the restored database is
    then marked, so it needs `guildbotics server hub-data check` before it serves);
-   for a backup without CI files, marks the files of every job that had
-   started as pruned (running jobs too: they may have uploaded artifacts), as
-   retention does once it deletes them: the checks keep their results, the
-   logs read empty, the artifacts are gone, and no later check reuses them;
 7. runs the checks of `guildbotics server hub-data check` (redb structure, every index
    against the records) plus a Git directory for every repository record, and
    exits `1` when one fails.

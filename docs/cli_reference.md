@@ -399,7 +399,7 @@ Options:
           Directory to fill, on this machine
 
       --without-ci-files
-          Leave out CI logs and artifacts; a restore keeps the jobs' results without their files
+          Leave out CI logs and artifacts; the backup keeps the jobs' results without their files and interrupts the running jobs
 
   -h, --help
           Print help
