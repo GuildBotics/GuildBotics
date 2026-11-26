@@ -3593,8 +3593,21 @@ async fn the_owner_alone_may_open_the_network_of_jobs() {
     assert_eq!(v["ci_network"], true);
 }
 
-#[tokio::test]
-async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
+/// A pull request whose required check logged a line and uploaded an
+/// artifact, backed up (`without_ci_files` as asked) after or, unless
+/// `finished`, before the check finished, and restored into a new data
+/// directory that the server now serves.
+struct RestoredCi {
+    _w: World,
+    backup: std::path::PathBuf,
+    before: Value,
+    after: Value,
+    log: Value,
+    artifact: reqwest::Response,
+    _target: tempfile::TempDir,
+}
+
+async fn restored_ci(without_ci_files: bool, finished: bool) -> RestoredCi {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     land(
@@ -3624,23 +3637,30 @@ async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
         .raw(reqwest::Method::PUT, &c, "artifacts/report", zip.clone())
         .await;
     assert_eq!(st, 200);
-    assert_eq!(runner.finish(&c, "success").await.0, 200);
-    eventually("the landing gate before backup", || async {
-        checks(&w, n).await["checks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|check| check["name"] == "test" && check["conclusion"] == "success")
-    })
-    .await;
+    if finished {
+        assert_eq!(runner.finish(&c, "success").await.0, 200);
+        eventually("the landing gate before backup", || async {
+            checks(&w, n).await["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|check| check["name"] == "test" && check["conclusion"] == "success")
+        })
+        .await;
+    }
     let before = checks(&w, n).await;
 
     let backup = w.dir.path().join("backup");
     let (st, v) = w
         .server
-        .post("/admin/backup", &w.owner, json!({"to": backup}))
+        .post(
+            "/admin/backup",
+            &w.owner,
+            json!({"to": backup, "without_ci_files": without_ci_files}),
+        )
         .await;
     assert_eq!(st, 200, "{v}");
+    assert_eq!(v["without_ci_files"], without_ci_files);
     let target = tempfile::tempdir().unwrap();
     let out = branvil_command()
         .args(["restore", "--from"])
@@ -3658,7 +3678,6 @@ async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
     w.server.stop();
     w.server = Server::start_on(target.path(), &listen, &[]);
     let after = checks(&w, n).await;
-    assert_eq!(after["checks"], before["checks"]);
     let id = check(&after, "test")["attempt_id"]
         .as_str()
         .unwrap()
@@ -3667,8 +3686,7 @@ async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
         .server
         .ok(&format!("{}/jobs/{id}/log", w.repo_path()), &w.aiko)
         .await;
-    assert_eq!(log["log"], "kept in the backup\n");
-    let resp = w
+    let artifact = w
         .server
         .http
         .get(format!(
@@ -3680,8 +3698,72 @@ async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200);
-    assert_eq!(resp.bytes().await.unwrap().to_vec(), zip);
+    RestoredCi {
+        _w: w,
+        backup,
+        before,
+        after,
+        log,
+        artifact,
+        _target: target,
+    }
+}
+
+#[tokio::test]
+async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
+    let r = restored_ci(false, true).await;
+    assert!(r.backup.join("ci/logs").is_dir());
+    assert_eq!(r.after["checks"], r.before["checks"]);
+    assert_eq!(r.log["log"], "kept in the backup\n");
+    assert_eq!(r.log["pruned"], false);
+    assert_eq!(r.artifact.status(), 200);
+    let mut zip = b"PK\x05\x06".to_vec();
+    zip.extend_from_slice(&[0; 18]);
+    assert_eq!(r.artifact.bytes().await.unwrap().to_vec(), zip);
+}
+
+#[tokio::test]
+async fn a_backup_without_ci_files_restores_the_results_with_their_files_pruned() {
+    let r = restored_ci(true, true).await;
+    assert!(!r.backup.join("ci/logs").exists());
+    assert!(!r.backup.join("ci/artifacts").exists());
+    let manifest: Value =
+        serde_json::from_slice(&std::fs::read(r.backup.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["without_ci_files"], true);
+    // The checks keep their results, as after retention deleted the files.
+    let result = |checks: &Value| {
+        checks["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                (
+                    c["name"].clone(),
+                    c["status"].clone(),
+                    c["conclusion"].clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(result(&r.after), result(&r.before));
+    assert_eq!(check(&r.after, "test")["artifact_names"], json!([]));
+    assert_eq!(r.log["log"], "");
+    assert_eq!(r.log["pruned"], true);
+    assert_ne!(r.artifact.status(), 200);
+}
+
+#[tokio::test]
+async fn a_backup_without_ci_files_prunes_a_job_that_was_running() {
+    // The job had uploaded its artifact but not finished at backup time.
+    let r = restored_ci(true, false).await;
+    assert_eq!(
+        check(&r.before, "test")["artifact_names"],
+        json!(["report"])
+    );
+    assert_eq!(check(&r.after, "test")["artifact_names"], json!([]));
+    assert_eq!(r.log["log"], "");
+    assert_eq!(r.log["pruned"], true);
+    assert_ne!(r.artifact.status(), 200);
 }
 
 #[tokio::test]

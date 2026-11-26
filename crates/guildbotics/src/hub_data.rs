@@ -11,6 +11,9 @@ pub enum HubDataCommand {
         /// Directory to fill, on this machine
         #[arg(long)]
         to: PathBuf,
+        /// Leave out CI logs and artifacts; a restore keeps the jobs' results without their files
+        #[arg(long)]
+        without_ci_files: bool,
     },
     /// Restore a backup into a new or empty directory and check it; check and upgrade take the result as --data-dir
     Restore {
@@ -45,7 +48,10 @@ pub async fn run(command: HubDataCommand) -> anyhow::Result<()> {
     use branvil::Maintenance;
     let language = gb_server::client::language().await;
     let result = match command {
-        HubDataCommand::Backup { to } => gb_server::hub_data::backup(&to).await,
+        HubDataCommand::Backup {
+            to,
+            without_ci_files,
+        } => gb_server::hub_data::backup(&to, without_ci_files).await,
         HubDataCommand::Restore { from, data_dir } => {
             gb_server::hub_data::restore(&from, &data_dir).await
         }

@@ -89,6 +89,7 @@ async fn process(args: Vec<String>) -> i32 {
                 &env("GUILDBOTICS_RUNNER_URL"),
                 &env("GUILDBOTICS_RUNNER_TOKEN"),
                 Path::new(to),
+                false,
             )
             .await
             .map(|()| 0)

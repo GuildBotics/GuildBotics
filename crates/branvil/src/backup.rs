@@ -50,6 +50,10 @@ pub struct Manifest {
     pub files: Vec<FileEntry>,
     /// What is deliberately not in the backup.
     pub excluded: Vec<String>,
+    /// CI logs and artifacts were left out: a restore marks the finished
+    /// jobs' files as pruned. Absent in backups made before this choice.
+    #[serde(default)]
+    pub without_ci_files: bool,
     /// Members' upstream accounts whose credential (a token or an app's
     /// key) must be set again after a restore.
     pub account_tokens_excluded: Vec<AccountEntry>,
@@ -85,6 +89,8 @@ const EXCLUDED: &[&str] = &[
     "hooks/ and git/ (written again at every start)",
     "Git reflogs and repository-local Git configuration (re-applied at every start)",
 ];
+const CI_FILES_EXCLUDED: &str =
+    "CI logs and artifacts (a restore keeps the jobs' results and marks their files as pruned)";
 
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
@@ -92,6 +98,10 @@ pub struct BackupInput {
     /// Absolute path on the machine the service runs on; must not exist or be
     /// an empty directory.
     pub to: String,
+    /// Leave out CI logs and artifacts, the bulk of a backup, for one taken
+    /// often.
+    #[serde(default)]
+    pub without_ci_files: bool,
 }
 
 /// `POST /api/v1/admin/backup` (owner).
@@ -101,19 +111,24 @@ pub async fn http_backup(
     J(input): J<BackupInput>,
 ) -> AppResult<Response> {
     c.require_owner()?;
-    let manifest = create(&app, Path::new(&input.to)).await?;
+    let manifest = create(&app, Path::new(&input.to), input.without_ci_files).await?;
     Ok(axum::Json(manifest).into_response())
 }
 
 /// Asks the server at `url` for a backup into `to`, as its owner (`token`).
 /// The directory is on the server's machine; a relative path is made
 /// absolute here first.
-pub async fn request(url: &str, token: &str, to: &Path) -> anyhow::Result<()> {
+pub async fn request(
+    url: &str,
+    token: &str,
+    to: &Path,
+    without_ci_files: bool,
+) -> anyhow::Result<()> {
     let to = std::path::absolute(to)?;
     let response = reqwest::Client::new()
         .post(format!("{url}/api/v1/admin/backup"))
         .bearer_auth(token)
-        .json(&serde_json::json!({"to": to}))
+        .json(&serde_json::json!({"to": to, "without_ci_files": without_ci_files}))
         .send()
         .await
         .with_context(|| format!("the server is not reachable at {url}"))?;
@@ -179,7 +194,7 @@ fn empty_or_missing(dir: &Path) -> std::io::Result<bool> {
 }
 
 /// Makes a backup of the running service at `to`.
-pub async fn create(app: &App, to: &Path) -> AppResult<Manifest> {
+pub async fn create(app: &App, to: &Path, without_ci_files: bool) -> AppResult<Manifest> {
     if !to.is_absolute() {
         return Err(AppError::invalid("The backup path must be absolute."));
     }
@@ -221,11 +236,12 @@ pub async fn create(app: &App, to: &Path) -> AppResult<Manifest> {
     // are recorded, and retention and the attachment sweep delete them only
     // while `deletions` is not held, so copying them after the snapshot
     // keeps every reference.
-    for dir in [
-        app.layout.ci_logs(),
-        app.layout.ci_artifacts(),
-        app.layout.attachments(),
-    ] {
+    let mut dirs = Vec::new();
+    if !without_ci_files {
+        dirs.extend([app.layout.ci_logs(), app.layout.ci_artifacts()]);
+    }
+    dirs.push(app.layout.attachments());
+    for dir in dirs {
         let rel = dir
             .strip_prefix(&app.layout.root)
             .map_err(AppError::internal)?
@@ -266,7 +282,12 @@ pub async fn create(app: &App, to: &Path) -> AppResult<Manifest> {
         tables: tables.into_iter().collect(),
         repositories: entries,
         files,
-        excluded: EXCLUDED.iter().map(|s| s.to_string()).collect(),
+        excluded: EXCLUDED
+            .iter()
+            .chain(without_ci_files.then_some(&CI_FILES_EXCLUDED))
+            .map(|s| s.to_string())
+            .collect(),
+        without_ci_files,
         account_tokens_excluded,
     };
     let text = serde_json::to_string_pretty(&manifest).map_err(AppError::internal)?;
@@ -515,6 +536,9 @@ pub async fn restore(from: &Path, data_dir: &Path) -> anyhow::Result<u8> {
         let done = crate::upgrade::upgrade(&layout)?;
         println!("{}", store::upgrade_report(&layout.db(), &done));
     }
+    if manifest.without_ci_files {
+        prune_ci_files(&layout)?;
+    }
     for a in &manifest.account_tokens_excluded {
         println!(
             "warning: the {} account of {} had a credential, which backups do not carry; set it again (PUT .../members/{}/accounts/{})",
@@ -536,6 +560,24 @@ pub async fn restore(from: &Path, data_dir: &Path) -> anyhow::Result<u8> {
         }
         Ok(1)
     }
+}
+
+/// Marks every job that had started by the time of a backup without CI
+/// files, running ones included (they may have uploaded artifacts already),
+/// as retention does once it deletes the files: their logs read empty, their
+/// artifacts are gone, and no later check reuses them.
+fn prune_ci_files(layout: &Layout) -> anyhow::Result<()> {
+    let db = Store::open(&layout.db(), 16 << 20, 1)?;
+    db.write_sync(|w| {
+        let attempts: Vec<crate::ci::queue::Attempt> = w.prefix_all(store::CI_ATTEMPTS, &[])?;
+        for a in attempts {
+            if a.status != "queued" && !a.files_pruned {
+                crate::ci::queue::mark_pruned(w, &a.id)?;
+            }
+        }
+        Ok(())
+    })
+    .map_err(|e| anyhow::anyhow!("{}", e.message))
 }
 
 /// The restore's own `admin check`: database structure and indexes, and a
@@ -711,9 +753,23 @@ mod tests {
                 }
             })
         };
-        create(&app, &target).await.unwrap();
+        create(&app, &target, false).await.unwrap();
         done.store(true, SeqCst);
         deletion.await.unwrap();
+    }
+
+    #[test]
+    fn a_manifest_of_the_previous_build_reads_as_a_full_backup() {
+        // During a Hub update the running build writes the backup that the
+        // new build restores.
+        let manifest: Manifest = serde_json::from_value(serde_json::json!({
+            "format": FORMAT, "service": "branvil", "branvil_version": "0.1.0",
+            "schema_version": store::SCHEMA_VERSION, "git_version": "", "created_at": "",
+            "base_url": "", "tables": {}, "repositories": [], "files": [], "excluded": [],
+            "account_tokens_excluded": [],
+        }))
+        .unwrap();
+        assert!(!manifest.without_ci_files);
     }
 
     #[test]

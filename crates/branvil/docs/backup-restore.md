@@ -3,6 +3,8 @@
 ```sh
 # On the Hub machine, while the server runs (its owner's token from the machine):
 guildbotics server hub-data backup --to /srv/backups/hub-2026-10-14
+# Often, leaving out CI logs and artifacts (most of a backup's size):
+guildbotics server hub-data backup --to /srv/backups/hub-2026-10-14T09 --without-ci-files
 
 # The server need not run; the target must be a new directory:
 guildbotics server hub-data restore --from /srv/backups/hub-2026-10-14 --data-dir /srv/hub-restored
@@ -97,6 +99,10 @@ recorded too, so every image the copied tickets and comments refer to is in
 the backup, even if a later edit removed the last reference and the sweep
 (`docs/storage-design.md`) then deleted it.
 
+`--without-ci-files` (`"without_ci_files": true`) leaves out `ci/logs/` and
+`ci/artifacts/`, and the manifest records it (`without_ci_files`, and a line
+in `excluded`). Everything else is the same.
+
 ## Restore
 
 `guildbotics server hub-data restore --from <backup> --data-dir <new dir>`:
@@ -114,6 +120,10 @@ the backup, even if a later edit removed the last reference and the sweep
 6. upgrades the database when the backup has the previous schema version
    ("Upgrading"; it reads the restored repositories; the restored database is
    then marked, so it needs `guildbotics server hub-data check` before it serves);
+   for a backup without CI files, marks the files of every job that had
+   started as pruned (running jobs too: they may have uploaded artifacts), as
+   retention does once it deletes them: the checks keep their results, the
+   logs read empty, the artifacts are gone, and no later check reuses them;
 7. runs the checks of `guildbotics server hub-data check` (redb structure, every index
    against the records) plus a Git directory for every repository record, and
    exits `1` when one fails.

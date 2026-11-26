@@ -370,7 +370,7 @@ Hub の LaunchAgent と同じ OS ユーザー・`GUILDBOTICS_HOME`、運用ワ�
 `guildbotics server hub-data` が、GuildBotics の記録とコードホストのデータを1つのコマンドで扱います。
 
 ```sh
-guildbotics server hub-data backup --to <空のディレクトリ>            # サーバーの稼働中
+guildbotics server hub-data backup --to <空のディレクトリ> [--without-ci-files]   # サーバーの稼働中
 guildbotics server hub-data restore --from <退避> --data-dir <空のディレクトリ>
 guildbotics server hub-data check [--data-dir <復元先>]               # サーバーの停止中
 guildbotics server hub-data upgrade [--data-dir <復元先>]             # 検査を含む
@@ -378,6 +378,8 @@ guildbotics server hub-data reindex [--data-dir <復元先>]
 ```
 
 `backup` は、稼働中のサーバーにコードホストのデータの退避を `code-host/` へ書かせ、続けて GuildBotics の記録を写します。サーバーへの要求には、このマシンのサーバーのオーナーのトークンを使います。最後に `manifest.json` を書き、その有無で退避の完了を表します。
+
+`--without-ci-files` は、コードホストの CI のログと成果物を写しません。退避の大半を占めるのはこの 2 つで、設定・チケット・文書を短い間隔で別のマシンへ写すときに使います。この退避から `restore` すると、完了したジョブは結果を保ったまま、保持期間を過ぎてファイルを消したときと同じ状態になります（ログは空、成果物は無し）。更新の退避は、CI のログと成果物を含めて写します。
 
 GuildBotics の記録は、このマシンの `data/workspaces.json` に登録した全ワークスペース（`gb_workspace::selection::registered`）と identity root の `.guildbotics/config`・`state`・`local` です。写しの番号は identity root が 0 で、ワークスペースが続きます。manifest の版は 2 で、ほかの版の退避は扱いません。identity root は `GUILDBOTICS_IDENTITY_ROOT`、未指定なら `GUILDBOTICS_HOME/identity` です。共有書き込みと同じ identity → workspace のロックを取り、通常ファイルをコピーします。リンクと特殊ファイルは拒否し、退避先は所有者だけが開けます。
 
