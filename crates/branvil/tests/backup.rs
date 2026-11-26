@@ -279,8 +279,7 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     );
     assert!(text(&out).contains(&serves), "{}", text(&out));
 
-    // A backup of the previous schema version, with its configuration file
-    // under the previous name.
+    // A backup of the previous schema version.
     let previous = out_dir.path().join("previous");
     copy_backup(&backup, &previous, &manifest);
     let db = previous.join("branvil.redb");
@@ -290,9 +289,6 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     old["schema_version"] = json!(PREVIOUS_SCHEMA_VERSION);
     // Refresh the checksum of the database rewritten by the fixture.
     for f in old["files"].as_array_mut().unwrap() {
-        if f["path"] == "config.toml" {
-            f["path"] = json!(PREVIOUS_CONFIG_FILE);
-        }
         if f["path"] == "branvil.redb" {
             let bytes = std::fs::read(previous.join(f["path"].as_str().unwrap())).unwrap();
             f["bytes"] = json!(bytes.len());
@@ -326,22 +322,20 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("from schema version 46 to 47"),
+        text(&out).contains("from schema version 47 to 48"),
         "{}",
         text(&out)
     );
     assert!(
-        text(&out).contains("copied branvil.toml to config.toml"),
+        text(&out).contains("added review_rounds=3 to repositories"),
         "{}",
         text(&out)
     );
     let restored_data = target.path().join("data");
-    for name in ["config.toml", PREVIOUS_CONFIG_FILE] {
-        assert_eq!(
-            std::fs::read_to_string(restored_data.join(name)).unwrap(),
-            settings
-        );
-    }
+    assert_eq!(
+        std::fs::read_to_string(restored_data.join("config.toml")).unwrap(),
+        settings
+    );
     // Upgraded on the way: it has to pass its check before it serves.
     let checks_first = format!(
         "restored into {}; `guildbotics server hub-data check` has to pass before the server opens {}",

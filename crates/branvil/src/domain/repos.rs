@@ -21,6 +21,7 @@ pub struct RepoView {
     pub required_approvals: u64,
     pub auto_land: bool,
     pub hold_while_failing: bool,
+    pub review_rounds: u32,
     pub ci_network: bool,
     pub responder: crate::repair::Responder,
     pub labels: Vec<String>,
@@ -44,6 +45,7 @@ pub async fn repo_view(app: &App, r: &Repo) -> AppResult<RepoView> {
         required_approvals: r.required_approvals,
         auto_land: r.auto_land,
         hold_while_failing: r.hold_while_failing,
+        review_rounds: r.review_rounds,
         ci_network: r.ci_network,
         responder,
         labels: r.labels.clone(),
@@ -163,6 +165,7 @@ async fn create_locked(
         required_approvals: 1,
         auto_land: false,
         hold_while_failing: false,
+        review_rounds: 3,
         ci_network: false,
         responder: None,
         labels,
@@ -205,6 +208,7 @@ pub struct RepoPatch {
     pub required_approvals: Option<u64>,
     pub auto_land: Option<bool>,
     pub hold_while_failing: Option<bool>,
+    pub review_rounds: Option<u32>,
     pub protected_branches: Option<Vec<String>>,
     pub ci_network: Option<bool>,
     #[serde(default, deserialize_with = "crate::domain::double_option")]
@@ -237,6 +241,11 @@ pub async fn update(
     }
     if let Some(l) = &patch.labels {
         check_labels(l)?;
+    }
+    if let Some(n) = patch.review_rounds
+        && !model::REVIEW_ROUNDS.contains(&n)
+    {
+        return Err(AppError::invalid("review_rounds must be within 1–20."));
     }
     // HEAD follows the default branch: under the lock, to its end. A webhook
     // notice decided under the settings is sent first
@@ -295,6 +304,9 @@ async fn update_record(app: &App, id: String, patch: RepoPatch) -> AppResult<Rep
             }
             if let Some(a) = patch.hold_while_failing {
                 r.hold_while_failing = a;
+            }
+            if let Some(n) = patch.review_rounds {
+                r.review_rounds = n;
             }
             if let Some(a) = patch.auto_land {
                 r.auto_land = a;

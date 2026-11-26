@@ -215,24 +215,9 @@ new data directory; when the upgrade fails, the restored directory is left
 at the previous version, and `guildbotics server hub-data upgrade --data-dir <it>` finishes
 it once the cause is fixed).
 
-Version 46 → 47 (`src/upgrade.rs`): the configuration file `branvil.toml` in
-the data directory is copied to `config.toml`. The automatic runner's member
-`branvil-runner` becomes `hub-runner`: its tokens are revoked (the service
-mints the automatic token at every start), its saved limits in `config.toml`
-move to the new name, and its display name becomes "GuildBotics runner
-(automatic)" unless the owner changed it. Past attempts keep the name they
-ran under, and so does a queued retry that selects or excludes the runner by
-name (cancel it). A `branvil-runner` that is not a runner, or that holds a
-token issued by hand (the previous build let anyone take the name, and
-registering a runner issues a `runner` token), is not the automatic runner and
-stays as it is;
-when a member `hub-runner` already exists, both keep their names. The
-automatic runner then runs as that member (or cannot start when it is not a
-runner), so such a Hub keeps the runner mode off. `branvil.toml` stays for the previous build, which a rolled
-back update runs again; the owner removes it once the update is confirmed. A
-backup of version 46 holds the file under its old name; restore places it as
-it is, and its upgrade copies it. Every upgrade also binds the GuildBotics
-workspaces' execution roots.
+Version 47 → 48 (`src/upgrade.rs`): every repository gets `review_rounds`
+3, the automatic re-review limit every repository had before. Every upgrade
+also binds the GuildBotics workspaces' execution roots.
 
 ### The integrated Hub service
 

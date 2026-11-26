@@ -16,6 +16,7 @@ fn repo(w: &Wtx, approvals: u64) -> AppResult<()> {
             required_approvals: approvals,
             auto_land: false,
             hold_while_failing: false,
+            review_rounds: 3,
             ci_network: false,
             responder: None,
             labels: vec![],

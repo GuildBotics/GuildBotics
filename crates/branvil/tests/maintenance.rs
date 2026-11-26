@@ -87,11 +87,6 @@ async fn an_upgraded_database_serves_only_after_a_successful_check() {
     let out = admin("upgrade");
     assert!(out.status.success(), "{}", text(&out));
     assert!(text(&out).contains("upgraded"), "{}", text(&out));
-    // The previous build, should the update roll back, still reads its file.
-    assert_eq!(
-        std::fs::read_to_string(data.join(PREVIOUS_CONFIG_FILE)).unwrap(),
-        settings
-    );
     assert_eq!(
         std::fs::read_to_string(data.join("config.toml")).unwrap(),
         settings

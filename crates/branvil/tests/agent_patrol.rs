@@ -127,7 +127,7 @@ fn theirs() -> PatrolPullRequest {
     }
 }
 fn work(pr: &PatrolPullRequest) -> Option<&'static str> {
-    pull_request_work(pr, ME, now())
+    pull_request_work(pr, ME, now(), 3)
 }
 fn review(author: &str, head: &str, at: &str, body: &str) -> PatrolReview {
     PatrolReview {

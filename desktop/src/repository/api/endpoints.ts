@@ -101,6 +101,7 @@ export interface RepoPatch {
   required_approvals?: number;
   auto_land?: boolean;
   hold_while_failing?: boolean;
+  review_rounds?: number;
   ci_network?: boolean;
   responder?: string | null;
   protected_branches?: string[];

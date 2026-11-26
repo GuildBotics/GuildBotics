@@ -25,6 +25,7 @@ const REPO = {
   required_approvals: 1,
   auto_land: false,
   hold_while_failing: false,
+  review_rounds: 3,
   ci_network: false,
   responder: { member: "aiko", chosen: false, automatic: "aiko" },
   labels: ["bug"],
@@ -280,6 +281,7 @@ describe("settings", () => {
       required_approvals: 2,
       auto_land: false,
       hold_while_failing: false,
+      review_rounds: 3,
       ci_network: true,
       responder: null,
       labels: ["bug", "ui"],
@@ -470,6 +472,41 @@ describe("settings", () => {
       required_approvals: 0,
     });
   });
+
+  it.each([
+    { lang: "en", help: /a new push no longer starts its re-review/ },
+    { lang: "ja", help: /新しい push で再レビューを始めず/ },
+  ] as const)(
+    "saves the automatic re-review limit from the CI tab ($lang)",
+    async ({ lang, help }) => {
+      const words = lang === "ja" ? ja : en;
+      const fake = fakeApi({
+        ...SHELL,
+        "GET /api/v1/repos": page([REPO]),
+        "GET /api/v1/members": page([]),
+        "PATCH /api/v1/repos/acme/demo": json(200, { ...REPO, review_rounds: 5, revision: 5 }),
+      });
+      const user = userEvent.setup();
+      renderApp("/settings/repositories", lang);
+      await user.click(await screen.findByRole("button", { name: words["common.edit"] }));
+      await user.click(screen.getByRole("tab", { name: "CI" }));
+      const ci = screen.getByRole("tabpanel", { name: "CI" });
+      expect(within(ci).getByText(help)).toBeInTheDocument();
+      const rounds = within(ci).getByRole("textbox", { name: words["settings.reviewRounds"] });
+      expect(rounds).toHaveValue("3");
+      await user.clear(rounds);
+      const save = within(ci).getByRole("button", { name: words["common.save"] });
+      // An empty limit cannot be saved.
+      expect(save).toBeDisabled();
+      await user.type(rounds, "5");
+      await user.click(save);
+      await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")).toHaveLength(1));
+      expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({
+        revision: 4,
+        review_rounds: 5,
+      });
+    },
+  );
 
   it("sets an agent's code host account with a token that is sent once and never shown", async () => {
     const aiko = { name: "aiko", display_name: "Aiko", kind: "agent", accounts: [], reviewers: [] };

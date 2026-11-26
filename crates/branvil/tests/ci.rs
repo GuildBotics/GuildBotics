@@ -585,10 +585,10 @@ async fn previous_schema_upgrade_preserves_records() {
     );
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 46 to 47"), "{output}");
+    assert!(output.contains("from schema version 47 to 48"), "{output}");
     let upgraded = tables(&db);
     let unchanged = |mut snapshot: Tables| {
-        snapshot.retain(|name, _| !matches!(name.as_str(), "meta" | "members" | "tokens"));
+        snapshot.retain(|name, _| !matches!(name.as_str(), "meta" | "repos"));
         snapshot
     };
     let after = unchanged(upgraded.clone());
@@ -601,6 +601,7 @@ async fn previous_schema_upgrade_preserves_records() {
         assert!(after[&name] == rows, "upgrade changed table {name}");
     }
     assert_eq!(records(&db, "repos")[0]["responder"], "aiko");
+    assert_eq!(records(&db, "repos")[0]["review_rounds"], 3);
     let runs = records(&db, "ci_runs");
     let run = runs.iter().find(|r| r["sha"] == head).unwrap();
     assert_eq!(run["protected_branches"], json!(["main"]));

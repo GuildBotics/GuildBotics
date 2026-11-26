@@ -661,6 +661,51 @@ async fn review_limit_is_read_only_and_requests_override_it() {
     f.close(&p).await;
     context.stop().await;
 }
+async fn set_review_rounds(owner: &::branvil::api::MemberApi, rounds: u32) -> Result<u32, String> {
+    let revision = owner.repos_get(REPOSITORY).await.unwrap().revision;
+    owner
+        .repos_update(
+            REPOSITORY,
+            input(json!({"revision":revision,"review_rounds":rounds})),
+        )
+        .await
+        .map(|r| r.review_rounds)
+        .map_err(|e| e.code.to_string())
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_limit_follows_the_repository_setting() {
+    let context = Context::with_repository(REPOSITORY).await;
+    let mut f = Fixture::new(&context).await;
+    assert_eq!(
+        f.owner.repos_get(REPOSITORY).await.unwrap().review_rounds,
+        3
+    );
+    for refused in [0, 21] {
+        assert_eq!(
+            set_review_rounds(f.owner, refused).await.unwrap_err(),
+            "invalid"
+        );
+    }
+    let mut p = f.open(false, vec![]).await;
+    for _ in 0..2 {
+        f.code
+            .review(&p.url, "Reviewed", ReviewVerdict::Comment, &p.head)
+            .await
+            .unwrap();
+        f.advance(&mut p).await;
+    }
+    let task = f.expected(&p, Some("pull_request_review"), true).await;
+    assert_eq!(task.unwrap().review_rounds, Some(3));
+    assert_eq!(set_review_rounds(f.owner, 2).await, Ok(2));
+    let task = f
+        .expected(&p, Some("pull_request_review_limit"), false)
+        .await;
+    assert_eq!(task.unwrap().review_rounds, Some(2));
+    assert_eq!(set_review_rounds(f.owner, 20).await, Ok(20));
+    f.expected(&p, Some("pull_request_review"), true).await;
+    f.close(&p).await;
+    context.stop().await;
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn draft_conversion_preserves_other_writers() {
     let context = Context::with_repository(REPOSITORY).await;

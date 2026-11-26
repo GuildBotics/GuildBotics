@@ -66,6 +66,8 @@ export interface Repository {
   /** Its pull requests land by themselves (merged, or published to the upstream) once they can. */
   auto_land: boolean;
   hold_while_failing: boolean;
+  /** The heads a member reviews before its automatic re-review stops (1–20). */
+  review_rounds: number;
   /** Whether its CI jobs may reach public network destinations. */
   ci_network: boolean;
   responder: { member: string; chosen: boolean; automatic: string };

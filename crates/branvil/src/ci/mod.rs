@@ -1721,6 +1721,7 @@ mod tests {
             required_approvals: 1,
             auto_land: false,
             hold_while_failing: false,
+            review_rounds: 3,
             ci_network: false,
             responder: None,
             labels: vec![],

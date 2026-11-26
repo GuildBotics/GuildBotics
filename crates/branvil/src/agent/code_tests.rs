@@ -236,6 +236,17 @@ async fn interactive_links_are_read_only_after_pull_patrol_selects_work() {
         "aiko".into(),
         "Aiko".into(),
     );
+    // The patrol reads the repository's review limit, so it exists; its pull
+    // request 1 does not.
+    let owner = running.data.owner();
+    owner
+        .repos_create_workspace(decode(json!({"name":"test"})).unwrap())
+        .await
+        .unwrap();
+    owner
+        .repos_create(decode(json!({"path":"test/repo"})).unwrap())
+        .await
+        .unwrap();
     let mut pull = json!({"url":format!("{}/workspaces/test/repos/repo/pulls/1", running.data.base_url()),"repository":"test/repo","author":"aiko","head_sha":"head","state":"open","tickets":[{"url":format!("{}/workspaces/test/repos/repo/tickets/999",running.data.base_url())}]});
     for patch in [
         json!({}),
@@ -273,15 +284,6 @@ async fn interactive_links_are_read_only_after_pull_patrol_selects_work() {
             .is_some()
     );
     pull["author"] = json!("aiko");
-    let owner = running.data.owner();
-    owner
-        .repos_create_workspace(decode(json!({"name":"test"})).unwrap())
-        .await
-        .unwrap();
-    owner
-        .repos_create(decode(json!({"path":"test/repo"})).unwrap())
-        .await
-        .unwrap();
     let ticket = owner
         .tickets_create_ticket(
             "test/repo",

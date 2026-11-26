@@ -109,6 +109,16 @@ impl CodeAgent {
             .await
             .map_err(|e| error(e, "interactive"))
     }
+    /// The heads a member reviews before its automatic re-review of the
+    /// repository's pull requests stops (the CI tab of its settings).
+    async fn review_rounds(&self, repo: &str) -> Result<u32, ServiceError> {
+        self.member()
+            .await?
+            .repos_visible(repo)
+            .await
+            .map(|r| r.review_rounds)
+            .map_err(|e| error(e, "review_rounds"))
+    }
     pub(super) async fn pull_work(
         &self,
         p: &Value,
@@ -128,6 +138,7 @@ impl CodeAgent {
             "branvil",
             self.person_id(),
             Utc::now(),
+            self.review_rounds(text(p, "repository")).await?,
         )
         .await;
         if task.is_some() && fold(text(p, "author")) == me && self.pull_interactive(p).await? {
@@ -209,7 +220,12 @@ impl CodeAgent {
                 .map_err(|e| error(e, "pulls_activity"))?,
         )?;
         Ok(matches!(
-            super::pr_patrol::pull_request_work(&self.snapshot(&p, &a), &me, Utc::now()),
+            super::pr_patrol::pull_request_work(
+                &self.snapshot(&p, &a),
+                &me,
+                Utc::now(),
+                self.review_rounds(&r).await?
+            ),
             Some("pull_request_feedback" | "pull_request_review")
         ))
     }
