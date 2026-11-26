@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use redb::{
-    Database, ReadTransaction, ReadableDatabase, ReadableTable, TableDefinition, WriteTransaction,
+    Database, ReadTransaction, ReadableDatabase, ReadableTable, ReadableTableMetadata,
+    TableDefinition, WriteTransaction,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -936,6 +937,18 @@ fn is_unchecked(r: &impl Rd) -> AppResult<bool> {
 pub fn needs_check(path: &Path) -> anyhow::Result<bool> {
     let db = open_db(path, 1 << 20)?;
     is_unchecked(&db.begin_read()?).map_err(|e| anyhow::anyhow!("{}", e.message))
+}
+
+/// The table names and entry counts `txn` sees.
+pub fn table_counts(txn: &ReadTransaction) -> AppResult<Vec<(String, u64)>> {
+    let mut counts = Vec::new();
+    for handle in txn.list_tables()? {
+        let name = redb::TableHandle::name(&handle).to_string();
+        let def: TableDefinition<&[u8], &[u8]> = TableDefinition::new(&name);
+        let n = txn.open_table(def)?.len()?;
+        counts.push((name, n));
+    }
+    Ok(counts)
 }
 
 /// Copies every table, as `txn` sees it, into a new database file at `path`

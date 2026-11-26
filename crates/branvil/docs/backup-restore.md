@@ -102,12 +102,14 @@ the backup, even if a later edit removed the last reference and the sweep
 
 `--without-ci-files` (`"without_ci_files": true`) leaves out `ci/logs/` and
 `ci/artifacts/`, and the manifest's `excluded` says so. The database copy then
-holds what a service restored from it can serve, whichever build restores it:
-the running jobs are interrupted as when the service stops (their runners'
-leases end, and a first interruption is queued again as a new job), and every
-job that had started has its files pruned as retention leaves it (the checks
-keep their results, the logs read empty, the artifacts are gone, and no later
-check reuses them). Everything else is the same.
+holds what a service restored from it can serve, whichever build restores it.
+The running service's jobs go on; only the copy records the running jobs as
+interrupted as when the service stops (their leases end there, and a first
+interruption is queued again as a new job), and every job that had started
+with its files pruned as retention leaves it (the checks keep their results,
+the logs read empty, the artifacts are gone, and no later check reuses them).
+The manifest's `tables` count the copy as rewritten. Everything else is the
+same.
 
 ## Restore
 

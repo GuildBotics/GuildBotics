@@ -3611,6 +3611,24 @@ struct RestoredCi {
 
 const CI_LOG: &[u8] = b"kept in the backup\n";
 
+/// The entry count of every table of the database file `db`, read from a
+/// copy (opening a redb file writes to it).
+fn table_counts(db: &std::path::Path) -> Value {
+    let dir = tempfile::tempdir().unwrap();
+    let copy = dir.path().join("counted.redb");
+    std::fs::copy(db, &copy).unwrap();
+    let database = redb::Database::open(&copy).unwrap();
+    let txn = redb::ReadableDatabase::begin_read(&database).unwrap();
+    let mut counts = serde_json::Map::new();
+    for handle in txn.list_tables().unwrap() {
+        let name = redb::TableHandle::name(&handle).to_string();
+        let def: redb::TableDefinition<&[u8], &[u8]> = redb::TableDefinition::new(&name);
+        let n = redb::ReadableTableMetadata::len(&txn.open_table(def).unwrap()).unwrap();
+        counts.insert(name, json!(n));
+    }
+    Value::Object(counts)
+}
+
 fn ci_zip() -> Vec<u8> {
     let mut zip = b"PK\x05\x06".to_vec();
     zip.extend_from_slice(&[0; 18]);
@@ -3661,6 +3679,10 @@ async fn restored_ci(without_ci_files: bool, finished: bool) -> RestoredCi {
     };
     let (st, manifest) = w.server.post("/admin/backup", &w.owner, request).await;
     assert_eq!(st, 200, "{manifest}");
+    assert_eq!(
+        manifest["tables"],
+        table_counts(&backup.join("branvil.redb"))
+    );
     if !finished {
         // The backup leaves the running job of the live service alone.
         let (st, _) = runner

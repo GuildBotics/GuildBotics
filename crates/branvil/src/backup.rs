@@ -115,8 +115,9 @@ pub async fn http_backup(
 /// interrupted, as when the service stops (their runners' leases end and the
 /// first interruption is queued again as a new job), and every job that had
 /// started has its files pruned, as retention leaves it: the logs read
-/// empty, the artifacts are gone, and no later check reuses them.
-fn prune_ci_files(db: &Path) -> AppResult<()> {
+/// empty, the artifacts are gone, and no later check reuses them. Returns
+/// the copy's table counts as they now are (the queued again add entries).
+fn prune_ci_files(db: &Path) -> AppResult<Vec<(String, u64)>> {
     let copy = Store::open(db, 16 << 20, 1).map_err(AppError::internal)?;
     copy.write_sync(|w| {
         let now = util::now();
@@ -133,7 +134,8 @@ fn prune_ci_files(db: &Path) -> AppResult<()> {
             }
         }
         Ok(())
-    })
+    })?;
+    copy.read_sync(store::table_counts)
 }
 
 /// A full backup's request names only the directory, as before the choice
@@ -249,7 +251,7 @@ pub async fn create(app: &App, to: &Path, without_ci_files: bool) -> AppResult<M
     let deletions = app.file_deletions.write().await;
     // Quiesce ref changes.
     let (repos, guards) = app.quiesce().await?;
-    let tables = app.store.export_to(&target.join(DB_FILE)).await?;
+    let mut tables = app.store.export_to(&target.join(DB_FILE)).await?;
     // Its own Git runner: Smart HTTP children hold the shared permits while
     // their post-receive waits for the locks held here.
     let git = Git::new(
@@ -282,7 +284,7 @@ pub async fn create(app: &App, to: &Path, without_ci_files: bool) -> AppResult<M
     drop(deletions);
     if without_ci_files {
         let db = target.join(DB_FILE);
-        tokio::task::spawn_blocking(move || prune_ci_files(&db))
+        tables = tokio::task::spawn_blocking(move || prune_ci_files(&db))
             .await
             .map_err(AppError::internal)??;
     }
