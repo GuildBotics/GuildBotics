@@ -529,7 +529,10 @@ async fn the_registration_deadline_polls_without_waiting_for_the_regular_interva
     settings(&w, json!({"auto_land": true})).await;
     let mut n = None;
     for (i, content) in ["one\n", "two\n"].iter().enumerate() {
-        let event = std::time::Instant::now();
+        // The service ends the registration by its wall clock, which this
+        // test shares (a runner's may be stepped): it ends no earlier than
+        // five seconds after now.
+        let earliest = chrono::Utc::now() + chrono::Duration::seconds(5);
         let head = w.push_change("feat", "f.txt", content);
         gh.check(&head, 70, "fast", "success", "ok\n");
         gh.workflow_run(&head, 1, "completed", Some("success"));
@@ -547,14 +550,17 @@ async fn the_registration_deadline_polls_without_waiting_for_the_regular_interva
         })
         .await;
         assert!(check_names(&w, number).await.contains(&json!("github")));
-        assert_eq!(hook.received().len(), i);
+        assert_eq!(hook.received().len(), i, "{:?}", hook.received());
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             eventually("the deadline's notice", || async {
-                let received = hook.received().len();
-                if event.elapsed() < std::time::Duration::from_secs(5) {
-                    assert_eq!(received, i, "not before registration ends");
+                let received = hook.received();
+                if received.len() > i {
+                    assert!(
+                        chrono::Utc::now() >= earliest,
+                        "a notice before registration ends at {earliest}: {received:?}"
+                    );
                 }
-                received == i + 1
+                received.len() == i + 1
             })
             .await;
         })
@@ -824,6 +830,62 @@ async fn a_webhook_set_later_is_told_when_automatic_landing_is_enabled() {
     })
     .await;
     assert_eq!(hook.received().len(), 1);
+}
+
+/// A repository landing automatically whose notice about its automatic
+/// publication to octo/demo is being sent: the webhook holds its answer.
+async fn a_notice_being_sent() -> (World, crate::common::github::FakeGitHub, Hook) {
+    let (w, gh) = followed().await;
+    with_aiko_account(&w).await;
+    gh.repository("octo/other", &w.work);
+    settings(&w, json!({"auto_land": true})).await;
+    let hook = Hook::held(&w, &[]).await;
+    w.push_change("feat", "f.txt", "one\n");
+    number(&w.open_pull("feat", json!([])).await);
+    eventually("the notice", || async { hook.received().len() == 1 }).await;
+    (w, gh, hook)
+}
+
+/// The owner's `change` of what the notice was decided under waits until it
+/// is sent: no notice is about settings the owner has since changed.
+async fn waits_for_the_notice(hook: &Hook, change: impl std::future::Future<Output = ()>) {
+    tokio::pin!(change);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(500), &mut change)
+            .await
+            .is_err(),
+        "the change went through while a notice decided before it was being sent"
+    );
+    hook.release();
+    change.await;
+    assert_eq!(hook.received().len(), 1, "{:?}", hook.received());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn changing_the_upstream_waits_for_a_notice_being_sent_about_the_old_one() {
+    let (w, _gh, hook) = a_notice_being_sent().await;
+    let path = format!("{}/upstream", w.repo_path());
+    waits_for_the_notice(&hook, async {
+        let (st, result) = w
+            .server
+            .put(
+                &path,
+                &w.owner,
+                json!({"provider":"github","repository":"octo/other"}),
+            )
+            .await;
+        assert_eq!(st, StatusCode::OK, "{result}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn turning_automatic_landing_off_waits_for_a_notice_being_sent() {
+    let (w, _gh, hook) = a_notice_being_sent().await;
+    waits_for_the_notice(&hook, async {
+        settings(&w, json!({"auto_land": false})).await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -264,7 +264,9 @@ async fn sweep_repo(app: &App, repo: &Repo, webhook_ok: &mut bool) -> AppResult<
 /// Returns false when the send failed. A crash between the webhook's answer
 /// and the write of `notified_at` sends it again: at least once.
 async fn notify(app: &App, repo: &Repo, number: u64) -> AppResult<bool> {
-    // The poller rewrites the record under the same lock.
+    // The setting it decides under stays until the notice is sent, and the
+    // poller rewrites the record under the pull request's lock.
+    let _setting = app.upstream.setting_lock(&repo.id).await;
     let _guard = app.upstream.pull_lock(&repo.id, number).await;
     let id = repo.id.clone();
     let (p, landing, repo) = app
@@ -278,7 +280,12 @@ async fn notify(app: &App, repo: &Repo, number: u64) -> AppResult<bool> {
             ))
         })
         .await?;
-    let Some(landing) = landing.filter(awaits_notice) else {
+    // Read again under the locks: the owner may have published it by hand,
+    // or turned automatic landing off, since the sweep listed it.
+    let Some(landing) = landing
+        .filter(awaits_notice)
+        .filter(|_| repo.auto_land && p.upstream.as_ref().is_some_and(|x| x.auto))
+    else {
         return Ok(true);
     };
     // A statement written since the sweep's reconcile takes it out of the

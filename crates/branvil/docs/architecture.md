@@ -508,7 +508,13 @@ For automatically published PRs in automatic repositories, `owner_merge_host`
 sends a webhook notice once per head. Checks must have settled and the
 registration window must have ended. Author statements block the notice.
 Successful delivery stores `notified_at`; failed delivery is retried. Delivery
-is at least once across a crash between sending and recording success.
+is at least once across a crash between sending and recording success. The
+notice is decided on what it reads under the repository's setting lock and the
+pull request's lock (`Upstream::setting_lock`, then `pull_lock`), and only for
+an automatic publication of a repository that still lands automatically. A
+change of the repository's upstream or settings waits for a notice being
+decided and sent, so no notice is decided under settings the owner has since
+changed.
 
 ## Backups
 

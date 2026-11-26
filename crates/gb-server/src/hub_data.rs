@@ -17,7 +17,8 @@ const CODE_HOST: &str = "code-host";
 /// Writes a backup of the Hub's records into `to`, a new or empty directory:
 /// the running server writes the code host's, and the records are copied.
 /// The manifest, written last, marks the backup complete.
-pub async fn backup(to: &Path) -> anyhow::Result<()> {
+/// `without_ci_files` leaves out the code host's CI logs and artifacts.
+pub async fn backup(to: &Path, without_ci_files: bool) -> anyhow::Result<()> {
     let to = std::path::absolute(to)?;
     fs::create_dir_all(&to)?;
     anyhow::ensure!(
@@ -25,7 +26,7 @@ pub async fn backup(to: &Path) -> anyhow::Result<()> {
         "backup destination must be empty"
     );
     let (url, token) = crate::client::local_owner().await?;
-    branvil::request_backup(&url, &token, &to.join(CODE_HOST)).await?;
+    branvil::request_backup(&url, &token, &to.join(CODE_HOST), without_ci_files).await?;
     records_backup(&roots()?, &to)
 }
 

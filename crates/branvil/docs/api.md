@@ -1551,10 +1551,12 @@ the rest of the file, and take effect immediately. The Hub uses the shared image
 
 ### Backups
 
-- `POST /api/v1/admin/backup` `{"to": "/absolute/new/dir"}` → the backup's manifest (see
-  `docs/backup-restore.md`). The directory is on the service's machine, must not exist or be
-  empty (`409 conflict` otherwise), and must be outside the data directory (`400 invalid`).
-  `guildbotics server hub-data backup --to <dir>` calls it for the code host's part.
+- `POST /api/v1/admin/backup` `{"to": "/absolute/new/dir"}` → the
+  backup's manifest (see `docs/backup-restore.md`). The directory is on the service's machine,
+  must not exist or be empty (`409 conflict` otherwise), and must be outside the data directory
+  (`400 invalid`). `without_ci_files` (optional, default `false`) leaves out CI logs and
+  artifacts. `guildbotics server hub-data backup --to <dir> [--without-ci-files]` calls it for
+  the code host's part.
 
 ### Diagnostics
 

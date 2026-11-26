@@ -238,11 +238,15 @@ pub async fn update(
     if let Some(l) = &patch.labels {
         check_labels(l)?;
     }
-    // HEAD follows the default branch: under the lock, to its end.
+    // HEAD follows the default branch: under the lock, to its end. A webhook
+    // notice decided under the settings is sent first
+    // (`Upstream::setting_lock`, taken before the repository's lock).
     let (id, old_branch) = (repo.id.clone(), repo.default_branch.clone());
     let updated = app
-        .locked(&repo.id, move |app| async move {
-            let updated = update_record(&app, id, patch).await?;
+        .finish(move |app| async move {
+            let _setting = app.upstream.setting_lock(&id).await;
+            let _repo = app.lock_repo(&id).await;
+            let updated = update_record(&app, id.clone(), patch).await?;
             if updated.default_branch != old_branch {
                 let dir = app.git.repo_dir(&updated.path);
                 app.git.set_head(&dir, &updated.default_branch).await?;
