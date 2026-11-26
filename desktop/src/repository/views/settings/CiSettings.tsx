@@ -9,7 +9,9 @@ import {
   Stack,
   Switch,
   Text,
+  TextInput,
 } from "@mantine/core";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FolderGit2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import * as api from "../../api/endpoints";
@@ -25,7 +27,8 @@ import {
 import { Header } from "../../../ui/Header";
 import { useT, type MessageKey } from "../../i18n";
 import { resourceShortfallText } from "../../i18n/resourceShortfall";
-import { useCiChange, useCiSettings, useRunnerLabel } from "../../query/hooks";
+import { useCiChange, useCiSettings, useMembers, useRunnerLabel } from "../../query/hooks";
+import { keys } from "../../query/keys";
 import { Link } from "../../router/Router";
 import { href, workspacePath } from "../../router/routes";
 import { IMAGE_SECTION_ID } from "../../../setup/EnvironmentImages";
@@ -62,12 +65,7 @@ export function CiSettings({ workspace }: { workspace: string | null }) {
         <ErrorMessage error={ci.error} />
       ) : (
         <Stack gap="md">
-          <Runner
-            settings={ci.data}
-            workspace={workspace}
-            selected={runner?.name ?? ""}
-            onSelect={setSelected}
-          />
+          <Runner settings={ci.data} selected={runner?.name ?? ""} onSelect={setSelected} />
           <ResourceQueue runners={runners} />
           <Section title={t("ci.settings.executor")}>
             <dl>
@@ -86,6 +84,7 @@ export function CiSettings({ workspace }: { workspace: string | null }) {
               {t("ci.settings.manageImages")}
             </Anchor>
           </Section>
+          {runner && <RunnerName key={runner.name} name={runner.name} />}
           {runner && <Limits key={runner.name} runner={runner} />}
           <Section title={t("ci.settings.network")} description={t("ci.settings.networkHelp")}>
             {repositories.length === 0 ? (
@@ -164,12 +163,10 @@ function Section({
 
 function Runner({
   settings,
-  workspace,
   selected,
   onSelect,
 }: {
   settings: Settings;
-  workspace: string | null;
   selected: string;
   onSelect: (name: string) => void;
 }) {
@@ -214,12 +211,6 @@ function Runner({
             </Stack>
           </Radio.Group>
         )}
-        <Text size="sm" c="dimmed">
-          {t("ci.settings.displayNameHelp")}{" "}
-          <Anchor component={Link} to={href.settings("members", workspace ?? undefined)}>
-            {t("settings.members")}
-          </Anchor>
-        </Text>
         <Text size="sm">
           <Anchor href={t("ci.settings.forwardingUrl")} target="_blank" rel="noreferrer">
             {t("ci.settings.forwarding")}
@@ -325,6 +316,66 @@ const LIMIT_FIELDS: { key: keyof CiLimits; label: MessageKey; min: number; max: 
   { key: "memory_reserve_percent", label: "ci.settings.memoryReserve", min: 0, max: 100 },
   { key: "cpu_multiplier_percent", label: "ci.settings.cpuMultiplier", min: 0, max: 6400 },
 ];
+
+/** The selected runner's display name, which the checks, jobs, and this page show in place of its name. */
+function RunnerName({ name }: { name: string }) {
+  const t = useT();
+  const members = useMembers();
+  const saved = members.data?.items.find((m) => m.name === name)?.display_name;
+  return (
+    <Section
+      title={t("ci.settings.displayName")}
+      description={t("ci.settings.displayNameHelp", { name })}
+    >
+      <Text size="sm" fw={600} mb="sm">
+        {name}
+      </Text>
+      {members.isPending ? (
+        <Loading />
+      ) : members.isError ? (
+        <ErrorMessage error={members.error} />
+      ) : (
+        // A display name saved elsewhere (another tab) replaces the form's.
+        <RunnerNameForm key={saved} name={name} saved={saved ?? name} />
+      )}
+    </Section>
+  );
+}
+
+function RunnerNameForm({ name, saved }: { name: string; saved: string }) {
+  const t = useT();
+  const client = useQueryClient();
+  const [value, setValue] = useState(saved);
+  const save = useMutation({
+    mutationFn: () => api.members.update(name, { display_name: value.trim() }),
+    onSuccess: (member) => setValue(member.display_name),
+    onSettled: () => void client.invalidateQueries({ queryKey: keys.members() }),
+  });
+  return (
+    <form
+      aria-label={t("ci.settings.displayName")}
+      onSubmit={(e) => {
+        e.preventDefault();
+        save.mutate();
+      }}
+    >
+      <Stack gap="sm">
+        <Group align="flex-end" gap="sm">
+          <TextInput
+            label={t("ci.settings.displayName")}
+            value={value}
+            onChange={(e) => setValue(e.currentTarget.value)}
+            style={{ flex: 1 }}
+          />
+          <Button type="submit" disabled={save.isPending}>
+            {t("common.save")}
+          </Button>
+        </Group>
+        {save.isError && <ErrorMessage error={save.error} />}
+      </Stack>
+    </form>
+  );
+}
 
 function Limits({ runner }: { runner: CiRunner }) {
   const t = useT();

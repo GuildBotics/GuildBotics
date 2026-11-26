@@ -10,6 +10,7 @@ const SHELL = {
   "GET /api/v1/session": json(200, SESSION),
   "GET /api/v1/workspaces": page([{ name: "acme", lanes: [] }]),
   "GET /api/v1/admin/diagnostics": json(200, {}),
+  "GET /api/v1/members": page([]),
 };
 
 const DIGEST = `sha256:${"4".repeat(64)}`;
@@ -237,9 +238,12 @@ describe("CI settings", () => {
     ).toHaveAttribute("href", "/workspaces/acme/setup?section=environment#agent-environment-image");
     expect(screen.queryByRole("region", { name: "Images" })).not.toBeInTheDocument();
 
-    // The only Save button is the job resources', inside their card.
+    // The Save buttons are the selected runner's display name's and job resources', each inside its card.
     const limits = screen.getByRole("region", { name: "Job resources" });
+    const naming = screen.getByRole("region", { name: "Display name" });
+    expect(await within(naming).findByRole("button", { name: "Save" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Save" })).toEqual([
+      within(naming).getByRole("button", { name: "Save" }),
       within(limits).getByRole("button", { name: "Save" }),
     ]);
     for (const other of ["Runner", "Executor", "Network"])
@@ -566,7 +570,7 @@ describe("CI settings", () => {
     );
   });
 
-  it("names runners by the display names the owner gave them and says where to set one", async () => {
+  it("names runners by their display names and renames the selected one on this page", async () => {
     const resource_wait = {
       attempt_id: "att_waiting",
       repo: "acme/demo",
@@ -589,17 +593,22 @@ describe("CI settings", () => {
       accounts: [],
       reviewers: [],
     });
-    fakeApi({
+    const others = [
+      member(REMOTE_RUNNER.name, "Gaming PC"),
+      member(NEW_RUNNER.name, NEW_RUNNER.name),
+    ];
+    const fake = fakeApi({
       ...SHELL,
       "GET /api/v1/admin/ci": json(200, { ...CI, runner }),
       "GET /api/v1/admin/diagnostics": json(200, { runner }),
       // NEW_RUNNER has no display name of its own: its name is its display name.
-      "GET /api/v1/members": page([
-        member(HUB_RUNNER.name, "Mac mini"),
-        member(REMOTE_RUNNER.name, "Gaming PC"),
-        member(NEW_RUNNER.name, NEW_RUNNER.name),
-      ]),
+      "GET /api/v1/members": [
+        page([member(HUB_RUNNER.name, "Mac mini"), ...others]),
+        page([member(HUB_RUNNER.name, "Studio"), ...others]),
+      ],
+      [`PATCH /api/v1/members/${HUB_RUNNER.name}`]: json(200, member(HUB_RUNNER.name, "Studio")),
     });
+    const user = userEvent.setup();
     renderApp("/settings/repositories/ci");
     const list = await screen.findByRole("list", { name: "Runners" });
     expect(await within(list).findByRole("radio", { name: "Mac mini (hub-runner)" })).toBeChecked();
@@ -618,9 +627,20 @@ describe("CI settings", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Gaming PC reported version older-build, which differs from the Hub.",
     );
-    expect(
-      within(screen.getByRole("region", { name: "Runner" })).getByRole("link", { name: "Members" }),
-    ).toHaveAttribute("href", "/workspaces/acme/settings/repositories/members");
+
+    // The selected runner is renamed here, by its name; every place shows the new display name.
+    const naming = screen.getByRole("region", { name: "Display name" });
+    expect(naming).toHaveTextContent("Leave it empty to show hub-runner.");
+    const field = within(naming).getByRole("textbox", { name: "Display name" });
+    expect(field).toHaveValue("Mac mini");
+    await user.clear(field);
+    await user.type(field, "  Studio ");
+    await user.click(within(naming).getByRole("button", { name: "Save" }));
+    expect(fake.calls("PATCH", `/api/v1/members/${HUB_RUNNER.name}`)[0]?.body).toEqual({
+      display_name: "Studio",
+    });
+    expect(await within(list).findByRole("radio", { name: "Studio (hub-runner)" })).toBeChecked();
+    expect(within(naming).getByRole("textbox", { name: "Display name" })).toHaveValue("Studio");
   });
 
   it("shows runner reports and saves the selected offline runner's resources without a global warning", async () => {

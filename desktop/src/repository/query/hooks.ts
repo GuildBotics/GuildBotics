@@ -96,8 +96,8 @@ export function useMemberKinds(): (name: string) => MemberKind | undefined {
 }
 
 /**
- * How the screens name a runner: the display name the owner gave it in the
- * members settings, else its name (also while loading, on failure, or for a
+ * How the screens name a runner: the display name the owner gave it (Settings →
+ * CI, or its member settings), else its name (also while loading, on failure, or for a
  * stranger). `withName` adds the name the CLI and the logs use when they differ.
  */
 export function useRunnerLabel(): (name: string, withName?: boolean) => string {

@@ -729,8 +729,9 @@ export const ja: Record<MessageKey, string> = {
     "サービスと一緒にランナーを起動し、動かし続けます。止めると、実行中のジョブは中断されます。",
   "ci.settings.runners": "ランナー一覧",
   "ci.settings.noRunners": "ランナーのメンバーがいません。",
+  "ci.settings.displayName": "表示名",
   "ci.settings.displayNameHelp":
-    "ランナーを見分けやすくするには、メンバーの設定で表示名を付けてください。チェックやジョブにもその名前が出ます。",
+    "チェックやジョブ、この画面でこのランナーを示す名前です。空にすると {{name}} と示します。",
   "ci.settings.connection.online": "接続中",
   "ci.settings.connection.offline": "連絡途絶",
   "ci.settings.connection.never_seen": "Hub の起動のあと連絡なし",
