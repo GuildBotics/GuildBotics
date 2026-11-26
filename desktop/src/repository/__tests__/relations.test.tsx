@@ -724,10 +724,12 @@ describe("relations", () => {
     expect(screen.getAllByRole("article")).toEqual([article("5"), article("7")]);
     const includeClosed = screen.getByRole("checkbox", { name: "Include closed tickets" });
     expect(includeClosed).toBeChecked();
+    expect(includeClosed).toBeDisabled();
 
     await choose(user, "Status", "In progress");
     expect(screen.getAllByRole("article")).toEqual([article("6")]);
     expect(includeClosed).not.toBeChecked();
+    expect(includeClosed).toBeEnabled();
     await choose(user, "Label", "bug");
     expect(screen.getAllByRole("article")).toEqual([article("6")]);
     await choose(user, "Status", "Ready");
