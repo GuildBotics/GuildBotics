@@ -62,6 +62,10 @@ pub struct Upstream {
     pulls: KeyedLocks,
     /// One poll of a repository at a time (the poller and "Check now").
     repos: KeyedLocks,
+    /// A change of a repository's upstream setting waits for a webhook
+    /// notice being decided and sent under the setting it replaces
+    /// (`setting_lock`).
+    settings: KeyedLocks,
 }
 
 impl Upstream {
@@ -73,6 +77,7 @@ impl Upstream {
             following: Mutex::new(HashMap::new()),
             pulls: KeyedLocks::default(),
             repos: KeyedLocks::default(),
+            settings: KeyedLocks::default(),
         }
     }
 
@@ -86,6 +91,14 @@ impl Upstream {
         self.pulls
             .lock(&Key::new().s(repo_id).u(number).bytes())
             .await
+    }
+
+    /// Held by a change of the repository's upstream setting, and by a
+    /// webhook notice from the read it decides on until it is sent, so that
+    /// no notice reaches a webhook about a publication the setting no longer
+    /// points to. Taken before `pull_lock`.
+    pub async fn setting_lock(&self, repo_id: &str) -> KeyedGuard<'_> {
+        self.settings.lock(repo_id.as_bytes()).await
     }
 
     /// The display name of a provider, or the provider itself when unknown.

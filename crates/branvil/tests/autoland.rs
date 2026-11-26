@@ -529,7 +529,10 @@ async fn the_registration_deadline_polls_without_waiting_for_the_regular_interva
     settings(&w, json!({"auto_land": true})).await;
     let mut n = None;
     for (i, content) in ["one\n", "two\n"].iter().enumerate() {
-        let event = std::time::Instant::now();
+        // The service ends the registration by its wall clock, which this
+        // test shares (a runner's may be stepped): it ends no earlier than
+        // five seconds after now.
+        let earliest = chrono::Utc::now() + chrono::Duration::seconds(5);
         let head = w.push_change("feat", "f.txt", content);
         gh.check(&head, 70, "fast", "success", "ok\n");
         gh.workflow_run(&head, 1, "completed", Some("success"));
@@ -547,14 +550,17 @@ async fn the_registration_deadline_polls_without_waiting_for_the_regular_interva
         })
         .await;
         assert!(check_names(&w, number).await.contains(&json!("github")));
-        assert_eq!(hook.received().len(), i);
+        assert_eq!(hook.received().len(), i, "{:?}", hook.received());
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             eventually("the deadline's notice", || async {
-                let received = hook.received().len();
-                if event.elapsed() < std::time::Duration::from_secs(5) {
-                    assert_eq!(received, i, "not before registration ends");
+                let received = hook.received();
+                if received.len() > i {
+                    assert!(
+                        chrono::Utc::now() >= earliest,
+                        "a notice before registration ends at {earliest}: {received:?}"
+                    );
                 }
-                received == i + 1
+                received.len() == i + 1
             })
             .await;
         })
@@ -824,6 +830,36 @@ async fn a_webhook_set_later_is_told_when_automatic_landing_is_enabled() {
     })
     .await;
     assert_eq!(hook.received().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn changing_the_upstream_waits_for_a_notice_being_sent_about_the_old_one() {
+    let (w, gh) = followed().await;
+    with_aiko_account(&w).await;
+    gh.repository("octo/other", &w.work);
+    settings(&w, json!({"auto_land": true})).await;
+    let hook = Hook::held(&w, &[]).await;
+    w.push_change("feat", "f.txt", "one\n");
+    number(&w.open_pull("feat", json!([])).await);
+    // The notice about the publication to octo/demo is being sent.
+    eventually("the notice", || async { hook.received().len() == 1 }).await;
+    let path = format!("{}/upstream", w.repo_path());
+    let change = w.server.put(
+        &path,
+        &w.owner,
+        json!({"provider":"github","repository":"octo/other"}),
+    );
+    tokio::pin!(change);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(500), &mut change)
+            .await
+            .is_err(),
+        "the setting changed while a notice decided under it was being sent"
+    );
+    hook.release();
+    let (st, result) = change.await;
+    assert_eq!(st, StatusCode::OK, "{result}");
+    assert_eq!(hook.received().len(), 1, "{:?}", hook.received());
 }
 
 #[tokio::test(flavor = "multi_thread")]

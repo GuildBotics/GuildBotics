@@ -104,9 +104,10 @@ pub async fn set(
         .await
         .map_err(|why| AppError::conflict_code("no_account", why))?;
     // Following the host's branch, recording the setting, and following
-    // again are one write (`App::finish`).
+    // again are one write (`App::finish`), which outlives a closed request.
     let updated = app
         .finish(move |app| async move {
+            let _setting = app.upstream.setting_lock(&repo.id).await;
             let host = app.upstream.hosts.get(&setting.provider)?;
             let reader = As {
                 member: &reader_member.name,
@@ -155,19 +156,27 @@ pub async fn set(
 pub async fn delete(app: &App, caller: &Caller, path: &str) -> AppResult<RepoView> {
     caller.require_owner()?;
     let repo = repos::visible(app, caller, path).await?;
-    let id = repo.id.clone();
+    // One operation (`App::finish`), so that a closed request cannot let the
+    // write happen after the setting's lock is gone.
     let updated = app
-        .store
-        .write(move |w| {
-            let mut r = repo_by_id(w, &id)?;
-            if r.upstream.take().is_some() {
-                r.revision += 1;
-                w.put(store::REPOS, &Repo::key(&r.id), &r)?;
-            }
-            Ok(r)
+        .finish(move |app| async move {
+            let _setting = app.upstream.setting_lock(&repo.id).await;
+            let id = repo.id.clone();
+            let updated = app
+                .store
+                .write(move |w| {
+                    let mut r = repo_by_id(w, &id)?;
+                    if r.upstream.take().is_some() {
+                        r.revision += 1;
+                        w.put(store::REPOS, &Repo::key(&r.id), &r)?;
+                    }
+                    Ok(r)
+                })
+                .await?;
+            app.upstream.following.lock().unwrap().remove(&repo.id);
+            Ok::<_, AppError>(updated)
         })
         .await?;
-    app.upstream.following.lock().unwrap().remove(&repo.id);
     app.events.publish("repo", &updated.path, "");
     repo_view(app, &updated).await
 }
