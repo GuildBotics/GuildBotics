@@ -44,6 +44,7 @@ export const ja: Record<MessageKey, string> = {
 
   "board.filters": "カードの絞り込み",
   "board.filterAssignee": "担当者",
+  "board.filterStatus": "状態",
   "board.filterLabel": "ラベル",
   "board.filterText": "テキスト",
   "board.any": "すべて",

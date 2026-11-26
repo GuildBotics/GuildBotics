@@ -1,7 +1,7 @@
 import { Checkbox, Select, Text, TextInput } from "@mantine/core";
 import { Search } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
-import type { Card } from "../../api/types";
+import { LANES, type Card } from "../../api/types";
 import type { Person } from "../../components/PeoplePicker";
 import { useT } from "../../i18n";
 import type { CardFilter } from "./ordering";
@@ -12,7 +12,7 @@ const NOBODY = "-";
 
 /**
  * The filters over a workspace's cards (its board, the relations of its
- * tickets): text, assignee, label, repository (when the workspace has more
+ * tickets): text, assignee, lane, label, repository (when the workspace has more
  * than one), and whether closed tickets are shown; `status` follows them.
  */
 export function CardFilters({
@@ -76,6 +76,17 @@ export function CardFilters({
         ]}
       />
       <Select
+        aria-label={t("board.filterStatus")}
+        w={180}
+        value={filter.lane || ANY}
+        onChange={(v) => onFilter({ ...filter, lane: LANES.find((lane) => lane === v) ?? "" })}
+        allowDeselect={false}
+        data={[
+          { value: ANY, label: `${t("board.filterStatus")}: ${t("board.any")}` },
+          ...LANES.map((lane) => ({ value: lane, label: t(`lane.${lane}`) })),
+        ]}
+      />
+      <Select
         aria-label={t("board.filterLabel")}
         w={180}
         value={filter.label || ANY}
@@ -102,6 +113,7 @@ export function CardFilters({
       <Checkbox
         label={t("board.includeClosed")}
         checked={includeClosed}
+        disabled={filter.lane === "done"}
         onChange={(e) => onIncludeClosed(e.currentTarget.checked)}
       />
       <Text size="xs" c="dimmed" aria-live="polite" role="status" className="board-status">
