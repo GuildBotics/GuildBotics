@@ -727,6 +727,8 @@ export const en = {
     "The Hub starts the runner with the service. Switching it off interrupts the running job.",
   "ci.settings.runners": "Runners",
   "ci.settings.noRunners": "No runner members.",
+  "ci.settings.displayNameHelp":
+    "To tell runners apart, give each a display name in its member settings; checks and jobs show it.",
   "ci.settings.connection.online": "Connected",
   "ci.settings.connection.offline": "Contact lost",
   "ci.settings.connection.never_seen": "No contact since the Hub started",

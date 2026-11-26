@@ -566,6 +566,63 @@ describe("CI settings", () => {
     );
   });
 
+  it("names runners by the display names the owner gave them and says where to set one", async () => {
+    const resource_wait = {
+      attempt_id: "att_waiting",
+      repo: "acme/demo",
+      job: "rust-test",
+      cpu_shortfall: 2,
+      memory_shortfall_mib: 0,
+    };
+    const runner = {
+      ...CI.runner,
+      mode: "off",
+      state: "executor_unavailable",
+      detail: "runner build differs",
+      version_mismatch: { name: REMOTE_RUNNER.name, version: REMOTE_RUNNER.version },
+      runners: [{ ...HUB_RUNNER, resource_wait }, REMOTE_RUNNER, NEW_RUNNER],
+    };
+    const member = (name: string, display_name: string) => ({
+      name,
+      display_name,
+      kind: "runner",
+      accounts: [],
+      reviewers: [],
+    });
+    fakeApi({
+      ...SHELL,
+      "GET /api/v1/admin/ci": json(200, { ...CI, runner }),
+      "GET /api/v1/admin/diagnostics": json(200, { runner }),
+      // NEW_RUNNER has no display name of its own: its name is its display name.
+      "GET /api/v1/members": page([
+        member(HUB_RUNNER.name, "Mac mini"),
+        member(REMOTE_RUNNER.name, "Gaming PC"),
+        member(NEW_RUNNER.name, NEW_RUNNER.name),
+      ]),
+    });
+    renderApp("/settings/repositories/ci");
+    const list = await screen.findByRole("list", { name: "Runners" });
+    expect(await within(list).findByRole("radio", { name: "Mac mini (hub-runner)" })).toBeChecked();
+    expect(
+      within(list).getByRole("radio", { name: "Gaming PC (desktop-runner)" }),
+    ).toBeInTheDocument();
+    expect(within(list).getByRole("radio", { name: "new-runner" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "CI jobs waiting for capacity" })).toHaveTextContent(
+      "Mac mini has a vCPU shortfall of 2",
+    );
+    expect(
+      within(screen.getByRole("region", { name: "Job resources" })).getByText(
+        "Mac mini (hub-runner)",
+      ),
+    ).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Gaming PC reported version older-build, which differs from the Hub.",
+    );
+    expect(
+      within(screen.getByRole("region", { name: "Runner" })).getByRole("link", { name: "Members" }),
+    ).toHaveAttribute("href", "/workspaces/acme/settings/repositories/members");
+  });
+
   it("shows runner reports and saves the selected offline runner's resources without a global warning", async () => {
     const offlineMatch = { ...HUB_RUNNER, name: "stopped-runner", connection: "offline" };
     const runner = { ...CI.runner, runners: [HUB_RUNNER, REMOTE_RUNNER, NEW_RUNNER, offlineMatch] };

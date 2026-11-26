@@ -372,3 +372,8 @@ On Linux, use `systemctl --user status guildbotics-runner-7878.service` with the
 forwarded port to check the service. Rejoining revokes that device's previous
 runner token. The runtime is downloaded from the pinned microsandbox release
 and verified with SHA-256 and `msb --version`.
+
+A joined runner becomes a member named `runner-<device ID>`. To tell runners
+apart, give each a display name in Settings → Members. The CI settings, checks,
+and job pages show the display name; job details and the CI settings add the
+name that `--runner` and the logs use in parentheses.

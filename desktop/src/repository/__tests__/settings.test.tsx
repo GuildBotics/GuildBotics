@@ -58,7 +58,7 @@ describe("settings", () => {
           ME,
           { name: "aiko", kind: "agent", accounts: [], reviewers: [] },
           { name: "ken", kind: "agent", accounts: [], reviewers: [] },
-          { name: "runner", kind: "runner", accounts: [], reviewers: [] },
+          { name: "runner", display_name: "runner", kind: "runner", accounts: [], reviewers: [] },
         ]),
         "PATCH /api/v1/repos/acme/demo": (req) => {
           const body = req.body as { responder: string | null; revision: number };

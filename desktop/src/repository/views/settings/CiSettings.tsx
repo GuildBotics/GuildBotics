@@ -25,7 +25,7 @@ import {
 import { Header } from "../../../ui/Header";
 import { useT, type MessageKey } from "../../i18n";
 import { resourceShortfallText } from "../../i18n/resourceShortfall";
-import { useCiChange, useCiSettings } from "../../query/hooks";
+import { useCiChange, useCiSettings, useRunnerLabel } from "../../query/hooks";
 import { Link } from "../../router/Router";
 import { href, workspacePath } from "../../router/routes";
 import { IMAGE_SECTION_ID } from "../../../setup/EnvironmentImages";
@@ -62,7 +62,12 @@ export function CiSettings({ workspace }: { workspace: string | null }) {
         <ErrorMessage error={ci.error} />
       ) : (
         <Stack gap="md">
-          <Runner settings={ci.data} selected={runner?.name ?? ""} onSelect={setSelected} />
+          <Runner
+            settings={ci.data}
+            workspace={workspace}
+            selected={runner?.name ?? ""}
+            onSelect={setSelected}
+          />
           <ResourceQueue runners={runners} />
           <Section title={t("ci.settings.executor")}>
             <dl>
@@ -113,6 +118,7 @@ export function CiSettings({ workspace }: { workspace: string | null }) {
 
 function ResourceQueue({ runners }: { runners: CiRunner[] }) {
   const t = useT();
+  const label = useRunnerLabel();
   const waiting = runners.flatMap((r) =>
     r.resource_wait ? [{ name: r.name, ...r.resource_wait }] : [],
   );
@@ -121,7 +127,7 @@ function ResourceQueue({ runners }: { runners: CiRunner[] }) {
     <Section title={t("ci.settings.resourceQueue")}>
       <Stack gap="xs">
         {waiting.map(({ name, repo, job, attempt_id, ...shortfall }) => {
-          const message = resourceShortfallText(t, name, shortfall);
+          const message = resourceShortfallText(t, label(name), shortfall);
           return (
             <Text size="sm" key={name}>
               <Link to={href.job(repo, attempt_id)}>
@@ -158,14 +164,17 @@ function Section({
 
 function Runner({
   settings,
+  workspace,
   selected,
   onSelect,
 }: {
   settings: Settings;
+  workspace: string | null;
   selected: string;
   onSelect: (name: string) => void;
 }) {
   const t = useT();
+  const label = useRunnerLabel();
   const { runner } = settings;
   const setMode = useCiChange(api.admin.setRunner);
   return (
@@ -177,7 +186,10 @@ function Runner({
           </StateBadge>
           <Text span size="sm">
             {runner.version_mismatch
-              ? t("ci.runnerVersionMismatch", runner.version_mismatch)
+              ? t("ci.runnerVersionMismatch", {
+                  ...runner.version_mismatch,
+                  name: label(runner.version_mismatch.name),
+                })
               : runner.detail}
           </Text>
         </Group>
@@ -202,6 +214,12 @@ function Runner({
             </Stack>
           </Radio.Group>
         )}
+        <Text size="sm" c="dimmed">
+          {t("ci.settings.displayNameHelp")}{" "}
+          <Anchor component={Link} to={href.settings("members", workspace ?? undefined)}>
+            {t("settings.members")}
+          </Anchor>
+        </Text>
         <Text size="sm">
           <Anchor href={t("ci.settings.forwardingUrl")} target="_blank" rel="noreferrer">
             {t("ci.settings.forwarding")}
@@ -216,12 +234,13 @@ function Runner({
 
 function RunnerRow({ runner: r }: { runner: CiRunner }) {
   const t = useT();
+  const label = useRunnerLabel();
   const online = r.connection === "online";
   const reportTone = (ok: boolean): Tone => (online ? (ok ? "success" : "warning") : "neutral");
   return (
     <div role="listitem" className="setting-row">
       <Stack gap={4} className="setting-row-name">
-        <Radio value={r.name} label={r.name} />
+        <Radio value={r.name} label={label(r.name, true)} />
         <Group gap="xs">
           <StateBadge tone={CONNECTION_TONE[r.connection]}>
             {t(`ci.settings.connection.${r.connection}`)}
@@ -309,6 +328,7 @@ const LIMIT_FIELDS: { key: keyof CiLimits; label: MessageKey; min: number; max: 
 
 function Limits({ runner }: { runner: CiRunner }) {
   const t = useT();
+  const label = useRunnerLabel();
   const { limits } = runner;
   const [form, setForm] = useState<LimitsForm>(limits);
   // Saved limits that change (another tab, a restart) replace the form's.
@@ -323,7 +343,7 @@ function Limits({ runner }: { runner: CiRunner }) {
     <Section title={t("ci.settings.limits")} description={t("ci.settings.limitsHelp")}>
       <Group gap="xs" mb="sm">
         <Text size="sm" fw={600}>
-          {runner.name}
+          {label(runner.name, true)}
         </Text>
         <Text size="xs" c="dimmed">
           {t(`ci.settings.limitsSource.${runner.limits_source}`)}

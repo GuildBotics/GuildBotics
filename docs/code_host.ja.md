@@ -353,3 +353,7 @@ Git、libcap-ng、ロックを解除した Secret Service のキーチェーン�
 Linux では転送ポートに合わせて `systemctl --user status guildbotics-runner-7878.service`
 で状態を確認できます。再参加すると同じ端末の以前のランナートークンは失効します。
 runtime は固定版の microsandbox リリースから取得し、SHA-256 と `msb --version` で検証します。
+
+参加したランナーは `runner-<端末の ID>` という名前のメンバーになります。見分けやすくするには、
+設定の「メンバー」でそのランナーの表示名を付けます。CI の設定、チェック、ジョブの画面は表示名で示し、
+ジョブの詳細と CI の設定では `--runner` などに使う名前も括弧で添えます。
