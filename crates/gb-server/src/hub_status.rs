@@ -1,8 +1,11 @@
 //! Device-local Hub maintenance state. No shared record is written.
-use crate::api::{Body, Shared};
+use crate::api::{ApiError, Body, Shared};
+use axum::http::{HeaderMap, StatusCode};
 use axum::{Json, extract::State};
+use gb_base::hub_update::{self, Status};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -96,6 +99,68 @@ pub(crate) async fn read(State(api): State<Shared>) -> Json<Value> {
     Json(snapshot(&api).await)
 }
 
+/// The server and updater run from this fixed path even when builds are stored elsewhere.
+pub(crate) fn update_directory() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let builds = executable.parent()?;
+    let directory = builds.parent()?;
+    let name = directory.file_name()?.to_str()?;
+    (executable.file_name()? == "current"
+        && builds.file_name()? == "builds"
+        && (name == "Hub" || name.starts_with("Hub-"))
+        && directory
+            .parent()?
+            .ends_with("Library/Application Support/GuildBotics"))
+    .then(|| directory.to_owned())
+}
+
+fn update_status(directory: &Path) -> Option<Value> {
+    let status = hub_update::status(directory).ok()??;
+    let mut value = serde_json::to_value(&status).expect("Hub update status serializes");
+    if let Status::Manual(manual) = status {
+        value["confirmed"] = json!(manual.confirmed(directory).unwrap_or(false));
+    }
+    Some(value)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct Confirmation {
+    sha: String,
+}
+
+pub(crate) async fn confirm(
+    State(api): State<Shared>,
+    headers: HeaderMap,
+    Body(body): Body<Confirmation>,
+) -> Result<Json<Value>, ApiError> {
+    if api.shutdown.stopping() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "server_stopping",
+            &headers,
+        ));
+    }
+    let stale = || ApiError::new(StatusCode::CONFLICT, "hub_update_changed", &headers);
+    let failed = |error| {
+        tracing::warn!(%error, "Hub update confirmation");
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "hub_update_confirmation_failed",
+            &headers,
+        )
+    };
+    let directory = api.hub_update_dir.as_deref().ok_or_else(stale)?;
+    let Some(Status::Manual(manual)) = hub_update::status(directory).map_err(failed)? else {
+        return Err(stale());
+    };
+    if manual.sha != body.sha {
+        return Err(stale());
+    }
+    manual.confirm(directory).map_err(failed)?;
+    announce(&api);
+    Ok(Json(json!({})))
+}
+
 fn build_metadata(source: &std::path::Path) -> Option<Value> {
     std::fs::read(source.join("hub-build.json"))
         .ok()
@@ -152,8 +217,8 @@ async fn snapshot_with_build(api: &Shared, metadata: Option<Value>) -> Value {
         }
     }
     let operation = phase.map(|p|json!({"kind":p.kind,"phase":p.phase,"since":p.since,"commit":p.commit,"waiting":{"runs":api.selected().service.execution.generation().snapshot().len(),"ci_jobs":0}}));
-    let mut result =
-        json!({"current":current,"target":target,"operation":operation,"releases":releases});
+    let update = api.hub_update_dir.as_deref().and_then(update_status);
+    let mut result = json!({"current":current,"target":target,"operation":operation,"releases":releases,"update":update});
     if result["operation"].is_object()
         && let Some(host) = api.branvil.get()
     {
@@ -274,6 +339,118 @@ mod tests {
         drain(&api, None);
         assert_eq!(snapshot(&api).await["operation"]["kind"], "stop");
         assert!(snapshot(&api).await["target"].is_null());
+    }
+
+    #[tokio::test]
+    async fn owner_browser_confirms_only_the_displayed_update() {
+        use crate::auth::CSRF_HEADER;
+        use axum::http::{Request, header};
+        use gb_base::hub_update::{ManualStep, ManualUpdate};
+        use tower::ServiceExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let mut api = crate::api::Api::for_test(root.path(), Default::default());
+        api.hub_update_dir = Some(root.path().into());
+        let entry = api.auth.entry_link("/");
+        let (cookie, csrf) = api
+            .auth
+            .start_session(entry.url.split_once('#').unwrap().1)
+            .unwrap()
+            .unwrap();
+        let cookie = format!("{}={cookie}", api.auth.cookie);
+        let bearer = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
+        let app = crate::api::router(std::sync::Arc::new(api));
+        let manual = ManualUpdate {
+            sha: "a".repeat(40),
+            release: "release/2".into(),
+            steps: [1, 2]
+                .map(|version| ManualStep {
+                    version,
+                    ticket: format!("https://hub.example/tickets/{version}"),
+                })
+                .into(),
+        };
+        let state_path = root.path().join(hub_update::STATE_FILE);
+        std::fs::write(
+            &state_path,
+            json!({"status": Status::Manual(manual.clone())}).to_string(),
+        )
+        .unwrap();
+
+        let call = async |path: &str, body: Value, headers: &[(&str, &str)]| {
+            let read = body.is_null();
+            let mut request = Request::builder()
+                .method(if read { "GET" } else { "POST" })
+                .uri(format!("/-/guildbotics/api/hub-status{path}"))
+                .header("host", "127.0.0.1:8765")
+                .header("content-type", "application/json");
+            for (name, value) in headers {
+                request = request.header(*name, *value);
+            }
+            let response = app
+                .clone()
+                .oneshot(
+                    request
+                        .body(axum::body::Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap())
+        };
+        let confirmation = json!({"sha":manual.sha});
+        let headers = [("cookie", cookie.as_str()), (CSRF_HEADER, csrf.as_str())];
+        let (_, before) = call("", Value::Null, &headers).await;
+        assert_eq!(before["update"]["steps"], json!(manual.steps));
+        assert_eq!(before["update"]["confirmed"], false);
+        assert_eq!(
+            call(
+                "/confirm",
+                confirmation.clone(),
+                &[(
+                    header::AUTHORIZATION.as_str(),
+                    &format!("Bearer {}", bearer.trim())
+                )]
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call("/confirm", confirmation.clone(), &headers[..1])
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            call("/confirm", json!({"sha":"b".repeat(40)}), &headers)
+                .await
+                .0,
+            StatusCode::CONFLICT
+        );
+        assert!(!manual.confirmed(root.path()).unwrap());
+        assert_eq!(
+            call("/confirm", confirmation, &headers).await.0,
+            StatusCode::OK
+        );
+        assert!(manual.confirmed(root.path()).unwrap());
+        let (_, after) = call("", Value::Null, &headers).await;
+        assert_eq!(after["update"]["confirmed"], true);
+        assert!(after["operation"].is_null());
+
+        let failure = Status::Failed(hub_update::Failure {
+            sha: manual.sha,
+            stage: "update".into(),
+            reason: "could not activate the new build".into(),
+            next: "run recover".into(),
+        });
+        std::fs::write(state_path, json!({"status": failure}).to_string()).unwrap();
+        let (_, failed) = call("", Value::Null, &headers).await;
+        assert_eq!(failed["update"], json!(failure));
     }
 
     #[tokio::test]

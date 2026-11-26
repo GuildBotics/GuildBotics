@@ -1,9 +1,12 @@
-//! The Hub's automatic update loop. It watches origin/main of the Hub
+//! The Hub's automatic update loop. It watches releases on origin/main of the Hub
 //! checkout and runs `scripts/hub-server.sh update` for a commit that is safe
 //! to install. launchd runs it from the signed build (`builds/current`), so
 //! macOS and the owner see GuildBotics rather than an interpreter. It asks
 //! that build for every fact, as an operator would.
 
+use gb_base::hub_update::{
+    FAILURE_KEY, Failure, ManualStep, ManualUpdate, STATE_FILE, STATUS_KEY, Status,
+};
 use serde_json::{Map, Value, json};
 use std::{
     io::{Read, Write},
@@ -60,7 +63,7 @@ pub fn run(checkout: PathBuf, once: bool) -> anyhow::Result<()> {
     let plist = home
         .join("Library/LaunchAgents")
         .join(format!("local.guildbotics{}.plist", suffix(".")));
-    let state_path = state_dir.join("auto-update.json");
+    let state_path = state_dir.join(STATE_FILE);
     let state = match std::fs::read_to_string(&state_path) {
         Ok(text) => serde_json::from_str(&text)?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Map::new(),
@@ -220,7 +223,7 @@ impl Hub {
     }
 
     fn save_state(&self, state: &Map<String, Value>) -> anyhow::Result<()> {
-        let path = self.state_dir.join("auto-update.json");
+        let path = self.state_dir.join(STATE_FILE);
         let pending = self.state_dir.join("auto-update.json.new");
         std::fs::OpenOptions::new()
             .write(true)
@@ -276,6 +279,38 @@ impl Hub {
             .insert(key.clone(), message.clone().into());
         self.persist();
         self.deliver(&key, &message);
+    }
+
+    fn set_status(&mut self, status: Option<Status>) -> anyhow::Result<()> {
+        let entry = status.as_ref().map(serde_json::to_value).transpose()?;
+        let terminal =
+            matches!(&status, Some(Status::Failed(failure)) if failure.stage == "update");
+        let key = if terminal { FAILURE_KEY } else { STATUS_KEY };
+        let mut state = self.state.clone();
+        match entry {
+            Some(entry) => state.insert(key.into(), entry),
+            None => state.remove(key),
+        };
+        if terminal {
+            state.remove(STATUS_KEY);
+        }
+        if state != self.state {
+            self.save_state(&state)?;
+            self.state = state;
+        }
+        Ok(())
+    }
+
+    fn fail(&mut self, sha: &str, stage: &str, reason: &str, next: &str, key: Option<String>) {
+        if let Err(error) = self.set_status(Some(Status::Failed(Failure {
+            sha: sha.into(),
+            stage: stage.into(),
+            reason: reason.into(),
+            next: next.into(),
+        }))) {
+            eprintln!("{error}");
+        }
+        self.notify(sha, stage, reason, next, key);
     }
 
     fn deliver(&mut self, key: &str, message: &str) {
@@ -346,7 +381,11 @@ impl Hub {
         let since = u128::from(episode["since"].as_u64().unwrap_or_default());
         if now_millis().saturating_sub(since) >= u128::from(delay) * 1000 {
             let key = episode["key"].as_str().map(ToOwned::to_owned);
-            self.notify(sha, stage, reason, next, key);
+            if stage == "snapshot" {
+                self.notify(sha, stage, reason, next, key);
+            } else {
+                self.fail(sha, stage, reason, next, key);
+            }
         }
     }
 
@@ -395,6 +434,63 @@ impl Hub {
             .ok_or_else(|| anyhow::anyhow!("Storage schema version missing"))?
             .parse()
             .map_err(Into::into)
+    }
+
+    fn migration_at(&mut self, sha: &str) -> anyhow::Result<Value> {
+        if self
+            .git(&["ls-tree", "--name-only", sha, "--", "hub-update.json"])?
+            .is_empty()
+        {
+            return Ok(json!({}));
+        }
+        Ok(serde_json::from_str(
+            &self.git(&["show", &format!("{sha}:hub-update.json")])?,
+        )?)
+    }
+
+    fn manual_update(
+        &mut self,
+        running: &str,
+        installed: u64,
+        sha: &str,
+        release: String,
+    ) -> anyhow::Result<Option<ManualUpdate>> {
+        let required = crate::hub_cli::migration_version(&self.migration_at(sha)?)?;
+        if required <= installed {
+            return Ok(None);
+        }
+        self.git(&["merge-base", "--is-ancestor", running, sha])?;
+        let commits = self.git(&[
+            "log",
+            "--first-parent",
+            "--reverse",
+            "--format=%H",
+            &format!("{running}..{sha}"),
+            "--",
+            "hub-update.json",
+        ])?;
+        let mut recorded = installed;
+        let mut steps = Vec::new();
+        for commit in commits.lines() {
+            let declaration = self.migration_at(commit)?;
+            let version = crate::hub_cli::migration_version(&declaration)?;
+            if version > recorded {
+                steps.push(ManualStep {
+                    version,
+                    ticket: crate::hub_cli::migration_ticket(&declaration)?.to_owned(),
+                });
+                recorded = version;
+            }
+        }
+        anyhow::ensure!(
+            recorded == required,
+            "Inconsistent manual update version history"
+        );
+        Ok(Some(ManualUpdate {
+            sha: sha.into(),
+            release,
+            steps,
+        }))
     }
 
     fn tick(&mut self) {
@@ -504,6 +600,20 @@ impl Hub {
         Ok(())
     }
 
+    fn report_interrupted(&mut self, sha: &str) {
+        let next = format!(
+            "inspect the Hub log; run {} recover if needed, or update manually",
+            self.hub_server()
+        );
+        self.fail(
+            sha,
+            "update",
+            "Previous automatic attempt ended without an outcome",
+            &next,
+            None,
+        );
+    }
+
     fn inspect(&mut self, sha: &mut String, stage: &mut &'static str) -> anyhow::Result<()> {
         let pending: Vec<(String, String)> = self
             .object("pendingNotices")
@@ -545,8 +655,10 @@ impl Hub {
             return Ok(());
         }
         self.clear_blocker("recovery");
+        *stage = "service";
         self.restore_service()?;
         self.finish_snapshot(sha);
+        *stage = "preflight";
         // A cleanup that could not release the shared operation lock is still active.
         if operation.try_exists()? {
             return Ok(());
@@ -594,15 +706,35 @@ impl Hub {
         let releases = history["releases"]
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("Invalid release history"))?;
-        if releases.is_empty() {
-            self.clear_blocker("migration");
-            return Ok(());
-        }
-        *stage = "migration";
         let running = Path::new(&source)
             .file_name()
             .and_then(|v| v.to_str())
             .ok_or_else(|| anyhow::anyhow!("Invalid running build source"))?;
+        if releases.is_empty() {
+            self.clear_blocker("migration");
+            let result = self.state.get("result").and_then(Value::as_str);
+            let interrupted = self
+                .state
+                .get("attempt")
+                .and_then(Value::as_str)
+                .filter(|commit| *commit != running && result == Some("updating"))
+                .map(str::to_owned);
+            if let Some(commit) = interrupted {
+                self.report_interrupted(&commit);
+            } else {
+                if self
+                    .state
+                    .get(FAILURE_KEY)
+                    .is_some_and(|failure| failure["sha"] == running)
+                {
+                    self.state.remove(FAILURE_KEY);
+                    self.save()?;
+                }
+                self.set_status(None)?;
+            }
+            return Ok(());
+        }
+        *stage = "migration";
         let version = self.schema_version(running)?;
         let mut candidate = None;
         for release in releases {
@@ -615,10 +747,13 @@ impl Hub {
             );
             let target_version = self.schema_version(commit)?;
             if candidate.is_none() && target_version <= version.saturating_add(1) {
-                candidate = Some(commit.to_owned());
+                let name = release["name"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid release name"))?;
+                candidate = Some((commit.to_owned(), name.to_owned()));
             }
         }
-        let Some(candidate) = candidate else {
+        let Some((candidate, release)) = candidate else {
             self.blocker(
                 &head,
                 stage,
@@ -640,23 +775,13 @@ impl Hub {
             && ["failed", "updating"].contains(&result.as_str())
         {
             if result == "updating" {
-                let next = format!(
-                    "inspect the Hub log; run {} recover if needed, or update manually",
-                    self.hub_server()
-                );
-                self.notify(
-                    sha,
-                    "update",
-                    "Previous automatic attempt ended without an outcome",
-                    &next,
-                    None,
-                );
+                self.report_interrupted(sha);
             }
             return Ok(());
         }
         let checkout = quote(&self.checkout.to_string_lossy());
         if !self.git(&["status", "--porcelain"])?.is_empty() {
-            self.notify(
+            self.fail(
                 sha,
                 "checkout",
                 "Checkout has uncommitted changes",
@@ -665,39 +790,36 @@ impl Hub {
             );
             return Ok(());
         }
+        *stage = "migration";
+        let installed = self.cli(&["server", "hub-migration"])?;
+        let installed = crate::hub_cli::migration_version(&installed)?;
+        let manual = self.manual_update(running, installed, sha, release)?;
+        let needs_confirmation = match &manual {
+            Some(manual) => !manual.confirmed(&self.state_dir)?,
+            None => false,
+        };
+        self.clear_blocker(stage);
+        if let Some(manual) = manual.filter(|_| needs_confirmation) {
+            let tickets = manual
+                .steps
+                .iter()
+                .map(|step| step.ticket.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let reason = format!("Manual update required for {} ({tickets})", manual.release);
+            self.set_status(Some(Status::Manual(manual)))?;
+            self.notify(
+                sha,
+                stage,
+                &reason,
+                "complete the work in the tickets, then confirm it on the Hub screen",
+                None,
+            );
+            return Ok(());
+        }
         *stage = "clients";
         self.cli(&["server", "hub-clients", "--checkout", &repo, "--sha", sha])?;
         self.clear_blocker(stage);
-        *stage = "migration";
-        let declared = !self
-            .git(&["ls-tree", "--name-only", sha, "--", "hub-update.json"])?
-            .is_empty();
-        let migration: Value = if declared {
-            serde_json::from_str(&self.git(&["show", &format!("{sha}:hub-update.json")])?)?
-        } else {
-            json!({"manual_update_version": 0})
-        };
-        let installed = self.cli(&["server", "hub-migration"])?;
-        let required = migration["manual_update_version"]
-            .as_u64()
-            .ok_or_else(|| anyhow::anyhow!("Invalid migration declaration"))?;
-        self.clear_blocker(stage);
-        if required
-            > installed["manual_update_version"]
-                .as_u64()
-                .unwrap_or_default()
-        {
-            let reason = format!(
-                "Manual update required: {}",
-                migration["instructions"].as_str().unwrap_or("null")
-            );
-            let next = format!(
-                "follow those instructions, then run {} update",
-                self.hub_server()
-            );
-            self.notify(sha, stage, &reason, &next, None);
-            return Ok(());
-        }
         *stage = "image";
         let environment = self.cli(&["environment", "status", "--format", "json"])?;
         self.clear_blocker(stage);
@@ -709,7 +831,7 @@ impl Hub {
                 "load the declared image with {} environment image load",
                 self.guildbotics()
             );
-            self.notify(
+            self.fail(
                 sha,
                 stage,
                 &format!("Custom base image is not loaded: {image}"),
@@ -743,6 +865,8 @@ impl Hub {
             "snapshotCleanup".into(),
             json!({"sha":sha,"workspace":workspace}),
         );
+        intent.remove(STATUS_KEY);
+        intent.remove(FAILURE_KEY);
         self.save_state(&intent)?;
         self.state = intent;
         *stage = "update";
@@ -765,6 +889,7 @@ impl Hub {
         }
         if let Err(error) = self.git(&["merge", "--ff-only", sha]) {
             let _ = self.run(&current, &["server", "hub-phase", "--clear"], None, None);
+            self.state.insert("result".into(), "failed".into());
             return Err(error);
         }
         match self.run(
@@ -797,11 +922,12 @@ impl Hub {
                     "inspect the Hub log; run {} recover if needed; a newer release is required for automatic retry",
                     self.hub_server()
                 );
-                self.notify(sha, stage, &detail, &next, None);
+                self.fail(sha, stage, &detail, &next, None);
             }
         }
         self.save()?;
         if !interrupted.exists() {
+            *stage = "service";
             self.restore_service()?;
         }
         if self.state.get("result").and_then(Value::as_str) == Some("success") {

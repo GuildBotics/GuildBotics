@@ -14,10 +14,20 @@ export interface HubReleases {
   /** Releases newer than the running version, newest first. */
   pending: { name: string; sha: string; subject: string }[];
 }
+export type HubUpdate =
+  | {
+      kind: "manual";
+      sha: string;
+      release: string;
+      steps: { version: number; ticket: string }[];
+      confirmed: boolean;
+    }
+  | { kind: "failed"; sha: string; stage: string; reason: string; next: string };
 export interface HubStatus {
   current: HubVersion | null;
   target: HubVersion | null;
   releases: HubReleases | null;
+  update?: HubUpdate | null;
   operation: null | {
     kind: "update" | "restart" | "stop";
     phase: "preparing" | "draining";

@@ -1429,7 +1429,7 @@ fn auto_update_defers_unsafe_states_and_reports_actionable_blockers() {
                 hub.git(&["merge", "--ff-only", "origin/main"]);
                 fs::write(
                     hub.repo.join("hub-update.json"),
-                    r#"{"manual_update_version":1,"instructions":"docs/hub-server.md"}"#,
+                    r#"{"manual_update_version":1,"instructions":"https://hub.example/workspaces/team/repos/project/tickets/1"}"#,
                 )
                 .unwrap();
                 hub.commit("manual");
@@ -1445,6 +1445,89 @@ fn auto_update_defers_unsafe_states_and_reports_actionable_blockers() {
         hub.run("auto-once", None, true);
         assert_eq!(hub.lines("notifications").lines().count(), 1);
     }
+}
+
+#[test]
+fn automatic_update_waits_for_confirmation_of_all_manual_steps_in_the_release() {
+    use gb_base::hub_update::{self, Status};
+
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    let running = hub.sha();
+    hub.git(&["merge", "--ff-only", "origin/main"]);
+    let ticket =
+        |version| format!("https://hub.example/workspaces/team/repos/project/tickets/{version}");
+    for version in [1, 2] {
+        fs::write(
+            hub.repo.join("hub-update.json"),
+            serde_json::json!({"manual_update_version":version,"instructions":ticket(version)})
+                .to_string(),
+        )
+        .unwrap();
+        hub.commit(&format!("manual-{version}"));
+    }
+    hub.commit("release-with-manual-work");
+    let release = hub.sha();
+    hub.schema(12);
+    hub.commit("newer-incompatible-release");
+    let newer = hub.sha();
+    hub.git(&["push", "origin", "main"]);
+    hub.git(&["reset", "--hard", &running]);
+    hub.releases(&[&newer, &release]);
+
+    let builds = hub.builds();
+    let directory = builds.parent().unwrap();
+    let pending = || {
+        let Some(Status::Manual(manual)) = hub_update::status(directory).unwrap() else {
+            panic!("manual update should be waiting");
+        };
+        manual
+    };
+    hub.run("auto-once", None, true);
+    let manual = pending();
+    assert_eq!(manual.sha, release);
+    assert_eq!(manual.release, format!("release/{release}"));
+    assert_eq!(
+        manual
+            .steps
+            .iter()
+            .map(|step| step.version)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    assert_eq!(
+        manual
+            .steps
+            .iter()
+            .map(|step| step.ticket.clone())
+            .collect::<Vec<_>>(),
+        [ticket(1), ticket(2)]
+    );
+    in_order(&hub.lines("notifications"), &[&ticket(1), &ticket(2)]);
+    assert_eq!(hub.sha(), running);
+    hub.assert_runs_signed("old");
+
+    // A confirmation from a release with only the first step cannot authorize both.
+    let mut previous = manual.clone();
+    previous.steps.pop();
+    previous.confirm(directory).unwrap();
+    hub.run("auto-once", None, true);
+    assert_eq!(pending(), manual);
+    assert_eq!(hub.sha(), running);
+    assert_eq!(
+        hub.lines("notifications")
+            .matches("Manual update required")
+            .count(),
+        1
+    );
+
+    manual.confirm(directory).unwrap();
+    hub.run("auto-once", None, true);
+    assert_eq!(hub.sha(), release);
+    hub.assert_runs_signed("release-with-manual-work");
+    assert_eq!(hub.auto_state()["result"], "success");
+    assert_eq!(hub_update::status(directory).unwrap(), None);
 }
 
 #[test]
@@ -2072,6 +2155,16 @@ fn auto_failed_update_notification_contains_its_stage_and_recovery_requirement()
     let notice = hub.lines("notifications");
     assert!(notice.contains("activating the new build"));
     assert!(notice.contains("recovery required"));
+    let status = &hub.auto_state()["update_failure"];
+    assert_eq!(status["kind"], "failed");
+    assert_eq!(status["stage"], "update");
+    assert!(
+        status["reason"]
+            .as_str()
+            .unwrap()
+            .contains("activating the new build")
+    );
+    assert!(status["next"].as_str().unwrap().contains("recover"));
 }
 
 #[test]

@@ -22,6 +22,8 @@ en:
   command_results_full: "All retained runs are still running. Try a new run after one finishes."
   command_result_too_large: "The command result exceeds the retrieval limit (32 MiB)."
   command_workspace_changed: "The server's workspace changed before the command started. Run the command again."
+  hub_update_changed: "The Hub update has changed. Review the current instructions and try again."
+  hub_update_confirmation_failed: "Could not record the manual work as complete. Check the Hub server log and try again."
   validation_error: "Request validation failed."
   secret_store_unavailable: "The OS secret store could not be used: %{reason}"
   server_stopping: "The server is stopping. While it waits for the running work to end, no new work starts: runs of commands, assistants, diagnostics and checks, starting the service, environment builds, usage checks, and switching workspaces. Try again once the server has started again."

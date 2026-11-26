@@ -6,6 +6,7 @@
 pub mod files;
 pub mod home;
 pub mod host_path;
+pub mod hub_update;
 pub mod service;
 pub mod shared_writes;
 pub mod shell;
