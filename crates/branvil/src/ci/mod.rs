@@ -361,8 +361,8 @@ impl Ci {
         }
     }
 
-    /// Started checks follow execution time; queued checks follow the same
-    /// current priority, reuse, and admission sequence used by claim.
+    /// Started checks follow execution time; queued checks follow the queue's
+    /// priority, reuse candidates, and admission sequence before runner selection.
     pub async fn order_checks(&self, checks: &mut [Check]) -> AppResult<()> {
         let positions = self
             .inner

@@ -151,13 +151,17 @@ An optional `[release]` section gives the release rule ([Releases](#releases)).
   run for classes 4a/4b, after any automatic retry explanation. Waiting runs
   append the deferred reason to their queue-capacity message.
 
-  Claim order is 1, 2, 3, 4a, 4m, 4b. Within a class, attempts with an available
-  reusable successful result (of the same tree, or of the same contents of
-  paths; "Trust") come first, then registration sequence (`seq`);
-  without a reusable result, sequence decides. Reuse is assessed after taking
-  the run's current cache scope; retries with `allow_reuse = false` execute.
-  For checks of the same repository and commit in the same class and reuse
-  tier, a runner prefers jobs it can start with a [RAM workspace](#ram-workspace).
+  Claim order is 1, 2, 3, 4a, 4m, 4b. Within a class, a runner first takes
+  attempts whose latest reusable successful result (of the same tree, or
+  of the same contents of paths; "Trust") matches its job image digest.
+  Those claims reuse the result immediately without reserving VM resources.
+  An attempt whose candidate has a different image digest joins the ordinary
+  execution tier.
+  Registration sequence (`seq`) orders attempts within each tier.
+  Reuse is assessed after taking the run's current cache scope; retries with
+  `allow_reuse = false` execute. Among ordinary checks of the same repository
+  and commit in the same class, a runner prefers jobs it can start with a
+  [RAM workspace](#ram-workspace).
   It chooses the job that the fewest other online, accepting runners can run
   in RAM, with queue order breaking ties. This count uses their reported
   machine capacity, VM limits, cache inventory, and image support, including
