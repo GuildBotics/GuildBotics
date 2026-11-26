@@ -323,38 +323,53 @@ pub(crate) async fn advance_at(app: &App, repo: &Repo, now: DateTime<Utc>) -> Ap
                     .and_then(|s| DateTime::parse_from_rfc3339(s).ok());
                 // A schedule seen for the first time, or changed, waits for
                 // its next time; each time releases once.
-                let due = state.schedule.as_ref() == Some(schedule)
-                    && last.is_some_and(|last| last < slot);
-                state.schedule = Some(schedule.clone());
-                state.last_slot = Some(util::format_time(slot));
-                due
+                if state.schedule.as_ref() == Some(schedule) {
+                    last.is_some_and(|last| last < slot).then_some(slot)
+                } else {
+                    state.schedule = Some(schedule.clone());
+                    state.last_slot = Some(util::format_time(slot));
+                    None
+                }
             }
             _ => {
                 state.schedule = None;
                 state.last_slot = None;
-                false
+                None
             }
         };
-        if due && let Some(mut main) = Main::read(&app, &repo, state.released.clone()).await? {
-            let mut shas: Vec<String> = main
-                .points(&app, &repo)
-                .await?
-                .into_iter()
-                .rev()
-                .map(|p| p.sha)
-                .collect();
+        if let Some(slot) = due
+            && let Some(mut main) = Main::read(&app, &repo, state.released.clone()).await?
+        {
+            // The release points oldest first, then the newest verified
+            // commit. A point not verified yet holds itself and every later
+            // release: the time is handled once it is.
+            let mut shas = Vec::new();
+            let mut held = false;
+            for point in main.points(&app, &repo).await?.into_iter().rev() {
+                if !main.verified(&point.sha) {
+                    held = true;
+                    break;
+                }
+                shas.push(point.sha);
+            }
             let newest = main.unreleased().iter().find(|sha| main.verified(sha));
-            if let Some(newest) = newest.cloned()
+            if !held
+                && let Some(newest) = newest.cloned()
                 && shas.last() != Some(&newest)
             {
                 shas.push(newest);
             }
+            // A failure leaves the time unhandled: the next sweep releases
+            // the rest, as the releases made are recorded one by one.
             for sha in &shas {
                 let name = main.default_name(&rule, now);
                 main.release(&app, &repo, &mut state, &name, sha).await?;
             }
             if !shas.is_empty() {
                 app.events.publish("release", &repo.path, "");
+            }
+            if !held {
+                state.last_slot = Some(util::format_time(slot));
             }
         }
         if state != old {

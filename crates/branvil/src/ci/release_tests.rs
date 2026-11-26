@@ -455,3 +455,92 @@ async fn a_release_recorded_without_its_tag_is_no_release_and_keeps_its_name() {
         .collect();
     assert_eq!(names, ["release/ghost"]);
 }
+
+#[tokio::test]
+async fn a_release_point_not_verified_yet_holds_the_time_until_it_is() {
+    let rule = format!("{TOKYO_RULE}{JOB}");
+    let f = Fixture::new(&rule).await;
+    f.verified(&format!("{rule}# seen\n")).await;
+    f.advance(tokyo(26, 12, 30)).await;
+    // A point whose verified ref is missing (a stop after its points were
+    // written), and a newer verified commit.
+    let point = f.commit(&format!("{rule}# point\n")).await;
+    let (id, note, at) = (
+        f.repo.id.clone(),
+        Note {
+            job: "schema".into(),
+            attempt_id: "att_1".into(),
+            message: "raised".into(),
+        },
+        point.clone(),
+    );
+    f.app
+        .store
+        .write_sync(move |w| put_points(w, &id, &at, &[note]))
+        .unwrap();
+    let newest = f.verified(&format!("{rule}# newest\n")).await;
+    f.advance(tokyo(27, 12, 0)).await;
+    assert!(f.tags().await.is_empty(), "the point and what follows wait");
+    assert_eq!(f.last_slot().as_deref(), Some("2026-11-26T03:00:00.000Z"));
+    let dir = f.app.git.repo_dir(&f.repo.path);
+    let name = format!("refs/branvil/verified/{point}");
+    f.app
+        .git
+        .update_ref(&dir, &name, &point, ZERO_SHA, "test")
+        .await
+        .unwrap();
+    f.advance(tokyo(27, 12, 1)).await;
+    let made: BTreeMap<_, _> = [
+        ("release/2026-11-27-1".to_string(), point),
+        ("release/2026-11-27-2".to_string(), newest),
+    ]
+    .into();
+    assert_eq!(f.tags().await, made);
+    assert_eq!(f.last_slot().as_deref(), Some("2026-11-27T03:00:00.000Z"));
+}
+
+#[tokio::test]
+async fn a_release_time_that_failed_part_way_resumes_with_the_rest() {
+    let rule = format!("{TOKYO_RULE}{JOB}");
+    let f = Fixture::new(&rule).await;
+    f.verified(&format!("{rule}# seen\n")).await;
+    f.advance(tokyo(26, 12, 30)).await;
+    let point = f.point(&format!("{rule}# point\n")).await;
+    let newest = f.verified(&format!("{rule}# newest\n")).await;
+    // A ref the second tag's name cannot be created beside.
+    let dir = f.app.git.repo_dir(&f.repo.path);
+    let blocker = "refs/tags/release/2026-11-27-2/blocker";
+    f.app
+        .git
+        .update_ref(&dir, blocker, &newest, ZERO_SHA, "test")
+        .await
+        .unwrap();
+    let error = advance_at(&f.app, &f.repo, tokyo(27, 12, 0)).await;
+    assert!(error.is_err());
+    let tags = f.tags().await;
+    assert_eq!(
+        tags["release/2026-11-27-1"], point,
+        "the first release is kept"
+    );
+    assert_eq!(f.last_slot().as_deref(), Some("2026-11-26T03:00:00.000Z"));
+    f.app
+        .git
+        .update_ref(&dir, blocker, ZERO_SHA, &newest, "test")
+        .await
+        .unwrap();
+    f.advance(tokyo(27, 12, 1)).await;
+    let tags = f.tags().await;
+    assert_eq!(
+        tags["release/2026-11-27-2"], newest,
+        "the same time resumes"
+    );
+    let names: Vec<_> = f
+        .view(None, tokyo(27, 12, 1))
+        .await
+        .releases
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert_eq!(names, ["release/2026-11-27-2", "release/2026-11-27-1"]);
+    assert_eq!(f.last_slot().as_deref(), Some("2026-11-27T03:00:00.000Z"));
+}

@@ -482,7 +482,10 @@ time_zone = "Asia/Tokyo"          # optional IANA name; default UTC
   verified commit, when one is newer than the latest release. Each time releases
   once. A schedule seen for the first time, changed (its times or time zone),
   or written again after it was removed waits for its next time. The landing
-  sweep (once a minute and on events) checks the times.
+  sweep (once a minute and on events) checks the times. A time stays unhandled
+  while a release point is not verified yet (it and every later release wait)
+  or when a release fails part way: the next sweep releases the rest, keeping
+  the releases already made.
 - An invalid pipeline at the tip keeps the default prefix, makes no automatic
   release, and refuses requests (`release_pipeline_invalid`).
 
@@ -491,8 +494,8 @@ time_zone = "Asia/Tokyo"          # optional IANA name; default UTC
 A line starting with `::release-point::` in the output of a job of a passing
 default-branch verification makes the verified commit a release point; the
 rest of the line says why (up to 10 lines per job, 200 characters each). The
-runner reads the job's whole output, past the log's limit too, and reports the
-lines with the job's result; they stay with the attempt when its log is pruned
+runner reads the job's whole output, past the log's limit too and to its end
+once the job has exited, and reports the lines with the job's result; they stay with the attempt when its log is pruned
 or a backup leaves the logs out, and a result reused from another execution
 carries that execution's release points.
 No commit newer than an unreleased release point is released before it
