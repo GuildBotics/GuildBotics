@@ -37,6 +37,15 @@
 # After successful verification, remove workspace artifacts, unused dependency
 # units across all Cargo builds in the job, and crates absent from Cargo.lock.
 
+# Releases are tags Branvil makes on verified commits of main; the Hub's
+# automatic update follows them (docs/hub-server.md). At each time below,
+# Branvil releases every commit schema-raise marked as a release point, oldest
+# first, then the newest verified commit, so the Hub upgrades its storage one
+# step at a time (crates/branvil/docs/ci.md, "Releases").
+[release]
+schedule = ["08:00", "12:00", "18:00"]
+time_zone = "Asia/Tokyo"
+
 [[jobs]]
 name = "test"
 required = true
@@ -78,7 +87,8 @@ uv run --no-sync python -m pytest --noconftest -m repo_policy tests/test_retired
 timeout_secs = 300
 cache = { paths = [".ci/uv"], key_files = ["uv.lock"] }
 
-# Read GB_CI_VERIFIED_SHA to keep successive verified builds one schema step apart.
+# Read GB_CI_VERIFIED_SHA to keep successive verified builds one schema step apart,
+# and mark a build that raises the schema as a release point.
 [[jobs]]
 name = "schema-raise"
 post_merge = true
