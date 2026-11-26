@@ -701,6 +701,43 @@ describe("relations", () => {
     expect(screen.queryByRole("article")).not.toBeInTheDocument();
   });
 
+  it("filters by each status between assignee and label and keeps matching descendants visible", async () => {
+    const user = userEvent.setup();
+    const open = [...CARDS, card("6", "in_progress", { labels: ["bug"] })];
+    fakeApi(routes({ open, all: [...open, card("7", "done", { state: "closed" })] }));
+    await shown();
+
+    const filters = screen.getByRole("search");
+    expect(within(filters).getAllByRole("combobox")).toEqual([
+      within(filters).getByRole("combobox", { name: "Assignee" }),
+      within(filters).getByRole("combobox", { name: "Status" }),
+      within(filters).getByRole("combobox", { name: "Label" }),
+    ]);
+    await choose(user, "Status", "New");
+    expect(screen.getAllByRole("article")).toEqual([article("1"), article("4")]);
+    await choose(user, "Status", "Ready");
+    expect(screen.getAllByRole("article")).toEqual([article("1"), article("2"), article("3")]);
+    expect(article("1")).toHaveClass("dim");
+
+    await choose(user, "Status", "Done");
+    await screen.findByRole("article", { name: /^acme\/demo#7 / });
+    expect(screen.getAllByRole("article")).toEqual([article("5"), article("7")]);
+    const includeClosed = screen.getByRole("checkbox", { name: "Include closed tickets" });
+    expect(includeClosed).toBeChecked();
+    expect(includeClosed).toBeDisabled();
+
+    await choose(user, "Status", "In progress");
+    expect(screen.getAllByRole("article")).toEqual([article("6")]);
+    expect(includeClosed).not.toBeChecked();
+    expect(includeClosed).toBeEnabled();
+    await choose(user, "Label", "bug");
+    expect(screen.getAllByRole("article")).toEqual([article("6")]);
+    await choose(user, "Status", "Ready");
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
+    await choose(user, "Status", "Status: Any");
+    expect(screen.getAllByRole("article")).toEqual([article("6")]);
+  });
+
   it("filters by repository when the workspace has more than one", async () => {
     const user = userEvent.setup();
     const repos = ["acme/demo", "acme/other", "beta/x"].map((path) => ({ path, labels: [] }));

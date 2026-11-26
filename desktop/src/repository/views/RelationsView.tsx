@@ -97,11 +97,11 @@ export function RelationsView({ workspace }: { workspace: string }) {
   const t = useT();
   const client = useQueryClient();
   const boardQuery = useBoard(workspace);
+  const [filter, setFilter] = useState<CardFilter>(NO_FILTER);
   const [closedShown, showClosed] = useStored("branvil.relations.includeClosed");
-  const includeClosed = closedShown === "true";
+  const includeClosed = filter.lane === "done" || closedShown === "true";
   const [opened, keepOpened] = useStored(`branvil.relations.open.${workspace}`);
   const open = useMemo(() => openParents(opened), [opened]);
-  const [filter, setFilter] = useState<CardFilter>(NO_FILTER);
   const filtering = hasFilter(filter);
   const [filteredExpansion, setFilteredExpansion] = useState<{
     parents: Map<string, boolean>;

@@ -42,6 +42,7 @@ export const en = {
 
   "board.filters": "Filter cards",
   "board.filterAssignee": "Assignee",
+  "board.filterStatus": "Status",
   "board.filterLabel": "Label",
   "board.filterText": "Text",
   "board.any": "Any",

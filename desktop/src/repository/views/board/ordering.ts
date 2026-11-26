@@ -1,4 +1,4 @@
-import { ticketRef, type Card, type Check, type CheckSet } from "../../api/types";
+import { ticketRef, type Card, type Check, type CheckSet, type Lane } from "../../api/types";
 import type { Tone } from "../../components/common";
 
 export type CiRollup = "passing" | "failing" | "pending" | "not_registered" | "none";
@@ -29,18 +29,26 @@ export function rollup(checks: CheckSet): CiRollup {
 
 export interface CardFilter {
   assignee: string; // "" any, "-" unassigned, otherwise a member name
+  lane: Lane | ""; // "" any
   label: string; // "" any
   repository: string; // "" any, otherwise a repository path
   text: string;
 }
 
-export const NO_FILTER: CardFilter = { assignee: "", label: "", repository: "", text: "" };
+export const NO_FILTER: CardFilter = {
+  assignee: "",
+  lane: "",
+  label: "",
+  repository: "",
+  text: "",
+};
 
 export const hasFilter = (f: CardFilter): boolean =>
-  !!(f.assignee || f.label || f.repository || f.text.trim());
+  !!(f.assignee || f.lane || f.label || f.repository || f.text.trim());
 
 export function matchesFilter(card: Card, f: CardFilter): boolean {
   if (f.assignee && (card.assignee?.name ?? "-") !== f.assignee) return false;
+  if (f.lane && card.lane !== f.lane) return false;
   if (f.label && !card.labels.includes(f.label)) return false;
   if (f.repository && card.repository !== f.repository) return false;
   const text = f.text.trim().toLowerCase();
