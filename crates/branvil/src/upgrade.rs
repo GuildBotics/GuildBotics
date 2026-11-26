@@ -1,13 +1,12 @@
-//! 47 → 48: releases (`ci_releases`, `ci_release_points`) are new tables,
-//! and every CI attempt gets the release points its runner reported (none
-//! before this version).
+//! 48 → 49: repositories have `review_rounds`, the heads a member reviews
+//! before its automatic re-review stops (3, the limit every repository had).
 //! Every upgrade also binds the GuildBotics workspaces' execution roots.
 use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::config::Layout;
 use crate::store::{self, Rd, Store, Upgraded, Upgrading, Wtx};
 
-pub const FROM: u64 = 47;
+pub const FROM: u64 = 48;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
@@ -27,23 +26,14 @@ pub(crate) fn upgrade_with_roots(
     };
     db.finish(|w| {
         execution_roots(w, roots)?;
-        let attempts = no_release_points(w)?;
-        Ok(format!(
-            "added the release tables; {attempts} CI attempt(s) have no release points"
-        ))
+        for key in w.prefix_keys(store::REPOS, &[])? {
+            let mut repo: serde_json::Value = w.get(store::REPOS, &key)?.unwrap();
+            repo["review_rounds"] = 3.into();
+            w.put(store::REPOS, &key, &repo)?;
+        }
+        Ok("added review_rounds=3 to repositories".into())
     })
     .map(Some)
-}
-
-/// Gives every CI attempt an empty `release_points`.
-fn no_release_points(w: &Wtx) -> crate::error::AppResult<usize> {
-    let attempts = w.prefix_raw(store::CI_ATTEMPTS, &[], None, usize::MAX)?;
-    for (key, raw) in &attempts {
-        let mut attempt: serde_json::Value = store::decode(raw)?;
-        attempt["release_points"] = serde_json::json!([]);
-        w.put_raw(store::CI_ATTEMPTS, key, &store::encode(&attempt)?)?;
-    }
-    Ok(attempts.len())
 }
 
 fn execution_roots(w: &Wtx, roots: BTreeMap<String, PathBuf>) -> crate::error::AppResult<()> {
@@ -94,40 +84,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upgrade_adds_the_release_tables_and_release_points_and_binds_execution_roots() {
-        use crate::model::Workspace;
+    fn upgrade_gives_every_repository_three_review_rounds_and_binds_execution_roots() {
+        use crate::model::{Repo, Workspace};
         let temporary = tempfile::tempdir().unwrap();
         let layout = Layout::new(temporary.path());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
         let workspace = db
             .write_sync(|w| {
                 let workspace = crate::domain::repos::insert_workspace(w, "acme".into(), None)?;
-                // An attempt as version 47 stored it, without release points.
-                let job = "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n";
-                crate::ci::queue::register(
-                    w,
-                    crate::ci::queue::Registration {
-                        order: Vec::new(),
-                        selection: None,
-                        repo: "repo".into(),
-                        repo_path: "acme/demo".into(),
-                        sha: "a".repeat(40),
-                        tree: None,
-                        branch: "main".into(),
-                        protected: false,
-                        pipeline: crate::ci::queue::PipelineState::Jobs {
-                            jobs: crate::ci::pipeline::parse(job).unwrap(),
-                        },
-                        network: false,
-                        inputs: BTreeMap::new(),
-                    },
-                    10,
-                    "2026-11-26T00:00:00.000Z",
-                )?;
-                for (key, raw) in w.prefix_raw(store::CI_ATTEMPTS, &[], None, usize::MAX)? {
-                    let mut attempt: serde_json::Value = store::decode(&raw)?;
-                    attempt.as_object_mut().unwrap().remove("release_points");
-                    w.put_raw(store::CI_ATTEMPTS, &key, &store::encode(&attempt)?)?;
+                for (id, path) in [("repo_1", "acme/one"), ("repo_2", "acme/two")] {
+                    w.put(
+                        store::REPOS,
+                        &Repo::key(id),
+                        &serde_json::json!({"id":id,"path":path,"workspace":workspace.id,
+                            "default_branch":"main","protected_branches":[],"required_approvals":1,
+                            "auto_land":false,"hold_while_failing":false,"ci_network":false,
+                            "responder":null,"labels":[],"upstream":null,"revision":1,"created_at":"0"}),
+                    )?;
                 }
                 w.put(
                     store::META,
@@ -143,32 +116,18 @@ mod tests {
         let done = upgrade_with_roots(&layout, [("acme".into(), root.clone())].into())
             .unwrap()
             .unwrap();
-        assert_eq!(
-            done.summary,
-            "added the release tables; 1 CI attempt(s) have no release points"
-        );
+        assert_eq!(done.summary, "added review_rounds=3 to repositories");
         assert!(done.copy.is_file());
-        let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
-        let (record, releases, attempts) = db
-            .read_sync(|r| {
-                Ok((
-                    r.get::<Workspace>(store::WORKSPACES, &Workspace::key(&workspace))?,
-                    r.prefix_keys(store::CI_RELEASES, &[])?,
-                    r.prefix_all::<crate::ci::queue::Attempt>(store::CI_ATTEMPTS, &[])?,
-                ))
-            })
-            .unwrap();
-        assert_eq!(attempts.len(), 1);
-        assert!(attempts[0].release_points.is_empty());
-        assert_eq!(record.unwrap().execution_root, Some(root));
-        assert!(releases.is_empty());
-        assert!(
-            db.read_sync(crate::model::index_problems)
-                .unwrap()
-                .is_empty()
-        );
-        drop(db);
         assert!(upgrade(&layout).unwrap().is_none());
+        let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
+        let repos: Vec<Repo> = db.read_sync(|r| r.prefix_all(store::REPOS, &[])).unwrap();
+        assert_eq!(repos.len(), 2);
+        assert!(repos.iter().all(|r| r.review_rounds == 3));
+        let record: Workspace = db
+            .read_sync(|r| r.get(store::WORKSPACES, &Workspace::key(&workspace)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.execution_root, Some(root));
     }
 
     #[test]

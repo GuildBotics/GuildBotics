@@ -25,6 +25,10 @@ pub struct Task {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mention_at: Option<DateTime<Utc>>,
     pub resumes: Option<AwaitedRun>,
+    /// A pull request's automatic re-review limit, as its repository set it
+    /// when the patrol read it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_rounds: Option<u32>,
 }
 impl Default for Task {
     fn default() -> Self {
@@ -44,6 +48,7 @@ impl Default for Task {
             created_at: None,
             mention_at: None,
             resumes: None,
+            review_rounds: None,
         }
     }
 }

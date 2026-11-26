@@ -110,10 +110,13 @@ pub fn review_rounds<'a>(pr: &'a PatrolPullRequest, me: &str) -> BTreeSet<&'a st
         .unwrap_or("");
     reviewed_heads(pr, me, restart)
 }
+/// `limit` is the heads `me` reviews before automatic re-review stops (the
+/// repository's `review_rounds`).
 pub fn pull_request_work(
     pr: &PatrolPullRequest,
     me: &str,
     now: DateTime<Utc>,
+    limit: u32,
 ) -> Option<&'static str> {
     if !pr.open || pr.is_draft {
         return None;
@@ -163,7 +166,7 @@ pub fn pull_request_work(
     Some(
         if !pr.repair
             && !reviewed.contains(pr.head_oid.as_str())
-            && review_rounds(pr, me).len() >= 3
+            && review_rounds(pr, me).len() >= limit as usize
         {
             "pull_request_review_limit"
         } else {
@@ -171,6 +174,7 @@ pub fn pull_request_work(
         },
     )
 }
+/// `limit` is the repository's `review_rounds` (`pull_request_work`).
 pub async fn patrol(
     code: &super::CodeAgent,
     pr: &PatrolPullRequest,
@@ -178,6 +182,7 @@ pub async fn patrol(
     provider: &str,
     person_id: &str,
     now: DateTime<Utc>,
+    limit: u32,
 ) -> Option<Task> {
     let awaited = pr
         .comments
@@ -192,7 +197,7 @@ pub async fn patrol(
                 && !pr.is_draft
                 && !pr.head_oid.is_empty()
         });
-    let mut work = pull_request_work(pr, me, now);
+    let mut work = pull_request_work(pr, me, now, limit);
     if work.is_none() {
         let status = awaited?;
         let p = status.payload();
@@ -232,6 +237,7 @@ pub async fn patrol(
         trigger_reason: work.map(str::to_owned),
         created_at: gb_base::service::parse_timestamp(&pr.created_at),
         resumes,
+        review_rounds: Some(limit),
         ..Default::default()
     })
 }

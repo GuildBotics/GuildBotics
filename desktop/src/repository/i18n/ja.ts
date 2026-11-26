@@ -250,6 +250,9 @@ export const ja: Record<MessageKey, string> = {
     "確認が失敗している間は、その既定ブランチまたは集約ブランチへの手動・自動マージを修復 PR に限ります。",
   "settings.holdWhileFailingHelpUpstream":
     "修復チケットにつながっていない PR は、main の確認が通るまで {{host}} に出しません。すでに {{host}} に出ている PR の {{host}} でのマージは、ここからは止められません。その PR は保留中と表示します。確認が失敗している集約ブランチへのマージも、その修復 PR に限ります。",
+  "settings.reviewRounds": "自動再レビューの上限",
+  "settings.reviewRoundsHelp":
+    "メンバーが 1 つの PR でこの数の head をレビューしたあとは、新しい push で再レビューを始めず、PR を Draft にします。Ready for review に戻すと数え直します。明示的なレビュー依頼は上限の対象外です。1〜20 で指定します。",
   "landing.blocker.held": "保留中（main の失敗）",
   "landing.held":
     "保留中：main の確認が失敗しています（修復 #{{number}}、担当 {{name}}）。main の確認が通ると、保留が解けます。",

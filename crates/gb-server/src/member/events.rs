@@ -76,7 +76,7 @@ pub fn review_limit(
     error_type: &str,
     comment_error_type: &str,
 ) -> Value {
-    json!({"type":event_type,"attributes":{"target.kind":if task.pull_request_url.is_some(){"pull_request"}else{"ticket"},"target.provider":task.provider,"target.label":task.label,"target.title":task.title,"target.url":task.pull_request_url.as_ref().or(task.url.as_ref())},"payload":{"run_id":run_id,"reason":"review_limit","action":if event_type=="pull_request.review_limit"{"draft"}else{""},"count":3,
+    json!({"type":event_type,"attributes":{"target.kind":if task.pull_request_url.is_some(){"pull_request"}else{"ticket"},"target.provider":task.provider,"target.label":task.label,"target.title":task.title,"target.url":task.pull_request_url.as_ref().or(task.url.as_ref())},"payload":{"run_id":run_id,"reason":"review_limit","action":if event_type=="pull_request.review_limit"{"draft"}else{""},"count":task.review_rounds,
         "pull_request":{"url":task.pull_request_url,"label":task.label,"title":task.title},"comment_url":comment_url,"error":error_type,"comment_error":comment_error_type}})
 }
 pub fn dispatch(

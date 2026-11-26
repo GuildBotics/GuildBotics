@@ -82,7 +82,7 @@ README); "provider unit tests on the double" are GuildBotics'
 | `check_push(repo)` | `check_path(workspace, repo)` | — | — | — | — | — | contract | done |
 | `commit_url` | → `{base}/{repo}/-/commits/{sha}` | — | — | — | — | — | provider unit | done: provider unit tests on the double |
 | `repository_from_remote` | `{base}/git/{repo}.git` (also without `.git`) of the same scheme/host/port → repo; else `None` | — | — | — | — | — | contract | done |
-| `pull_request_candidates` | GitHub patrol semantics (feedback / review requested / new head / unanswered; status holds; review limit 3 → draft + `review_limit` status) | patrol entries | draft flag + status comment at the limit | `pulls_by_member(member, pull)` | each PR judged on one activity snapshot | `GET /pulls?involves=me`, `PATCH pulls/{n}` (`draft`), `POST comments` | provider unit + contract | done: provider unit tests on the double |
+| `pull_request_candidates` | GitHub patrol semantics (feedback / review requested / new head / unanswered; status holds; review limit: the PR's repository's `review_rounds` → draft + `review_limit` status) | patrol entries | draft flag + status comment at the limit | `pulls_by_member(member, pull)` | each PR judged on one activity snapshot | `GET /pulls?involves=me`, `PATCH pulls/{n}` (`draft`), `POST comments` | provider unit + contract | done: provider unit tests on the double |
 | `refresh_pull_request` | same test for one PR | PR + activity | as above | — | — | `GET pulls/{n}`, `GET pulls/{n}/activity` | provider unit | done: provider unit tests on the double |
 
 ## TicketService

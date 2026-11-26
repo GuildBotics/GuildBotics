@@ -191,6 +191,8 @@ type RepoForm = {
   required_approvals: string | number;
   auto_land: boolean;
   hold_while_failing: boolean;
+  /** `""` while the field is empty, which cannot be saved. */
+  review_rounds: string | number;
   ci_network: boolean;
   responder: string | null;
   labels: string[];
@@ -203,6 +205,7 @@ const seed = (r: Repository): RepoForm => ({
   required_approvals: r.required_approvals,
   auto_land: r.auto_land,
   hold_while_failing: r.hold_while_failing,
+  review_rounds: r.review_rounds,
   ci_network: r.ci_network,
   responder: r.responder.chosen ? r.responder.member : null,
   labels: r.labels,
@@ -221,6 +224,7 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
         ...form,
         default_branch: form.default_branch.trim(),
         required_approvals: Number(form.required_approvals),
+        review_rounds: Number(form.review_rounds),
       }),
     onSuccess: (r) => setForm(seed(r)),
     onSettled: () => {
@@ -250,7 +254,7 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
       <Group>
         <Button
           onClick={() => save.mutate()}
-          disabled={save.isPending || form.required_approvals === ""}
+          disabled={save.isPending || form.required_approvals === "" || form.review_rounds === ""}
         >
           {t("common.save")}
         </Button>
@@ -349,6 +353,16 @@ function RepoEditor({ repo, tab }: { repo: Repository; tab: "basic" | "ci" }) {
               }
               checked={form.hold_while_failing}
               onChange={(e) => setForm({ ...form, hold_while_failing: e.currentTarget.checked })}
+            />
+            <NumberInput
+              label={t("settings.reviewRounds")}
+              description={t("settings.reviewRoundsHelp")}
+              value={form.review_rounds}
+              onChange={(v) => setForm({ ...form, review_rounds: v })}
+              min={1}
+              max={20}
+              allowNegative={false}
+              allowDecimal={false}
             />
           </Stack>
           {footer}

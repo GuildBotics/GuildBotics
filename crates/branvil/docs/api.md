@@ -275,6 +275,7 @@ A workspace holds repositories (`<workspace>/<name>`) and has one board.
   "required_approvals": 1,
   "auto_land": false,
   "hold_while_failing": false,
+  "review_rounds": 3,
   "ci_network": false,
   "responder": {"member": "aiko", "chosen": false, "automatic": "aiko"},
   "labels": ["bug", "feature"],
@@ -287,12 +288,15 @@ A workspace holds repositories (`<workspace>/<name>`) and has one board.
 many approvals a merge or a publish needs (`0` needs none; a new repository
 needs 1; see "Pull requests"). `auto_land` says the repository lands its pull
 requests by itself (`false` for a new repository; see "Landing
-automatically"). `upstream` is the repository on
+automatically"). `review_rounds` is how many heads of a pull request a
+member reviews before its automatic re-review stops and the pull request
+becomes a draft (1–20; 3 for a new repository; the CI tab of the repository's
+settings). `upstream` is the repository on
 a code host it follows and publishes to, or `null` (see "Upstream").
 
 - `GET /api/v1/repos` → items (every repository), by path.
 - `POST /api/v1/repos` (owner) `{"path","default_branch"?,"labels"?}` (default `main`, no labels) → repository. `path` is `<workspace>/<name>` of an existing workspace (`404 not_found` otherwise). An empty bare repository is created.
-- `PATCH /api/v1/repos/{repo}` (owner) `{"revision", "default_branch"?, "required_approvals"?, "auto_land"?, "hold_while_failing"?, "protected_branches"?, "ci_network"?, "responder"?, "labels"?}` → `409 conflict` when `revision` is stale. Removing a label leaves it on the tickets that carry it. `ci_network` is the network access of CI jobs (`docs/ci.md`; the CI tab of the repository's settings). With an upstream, the default branch follows the upstream's and cannot be changed (`409 conflict`).
+- `PATCH /api/v1/repos/{repo}` (owner) `{"revision", "default_branch"?, "required_approvals"?, "auto_land"?, "hold_while_failing"?, "review_rounds"?, "protected_branches"?, "ci_network"?, "responder"?, "labels"?}` → `409 conflict` when `revision` is stale; `400 invalid` for `review_rounds` outside 1–20. Removing a label leaves it on the tickets that carry it. `ci_network` is the network access of CI jobs (`docs/ci.md`; the CI tab of the repository's settings). With an upstream, the default branch follows the upstream's and cannot be changed (`409 conflict`).
 
 ### `GET /api/v1/repos/{repo}/branches/{branch}`
 

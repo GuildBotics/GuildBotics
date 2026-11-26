@@ -1527,6 +1527,52 @@ async fn review_limit_conversion_failures_notify_but_unavailability_defers_and_r
     }
 }
 #[tokio::test]
+async fn review_limit_notice_and_activity_count_the_repository_rounds() {
+    let f = Fixture::new().await;
+    let owner = &f.embedded.owner;
+    let revision = owner.repos_get("acme/repo").await.unwrap().revision;
+    owner
+        .repos_update(
+            "acme/repo",
+            branvil::test_support::input(json!({"revision":revision,"review_rounds":7})),
+        )
+        .await
+        .unwrap();
+    let mut pull = f.pull().await;
+    assert_eq!(pull.review_rounds, Some(7));
+    pull.trigger_reason = Some(REVIEW_LIMIT.into());
+    f.selector("routine").hand_over(&pull).await;
+    let activity = f.runner.activity.lock().unwrap().clone();
+    assert_eq!(activity.len(), 1);
+    assert_eq!(activity[0]["payload"]["count"], 7);
+    let stored = f.stored_pull(pull_number(&pull)).await;
+    assert_eq!(stored["draft"], true);
+    let notice = stored["comments"].as_array().unwrap().last().unwrap();
+    assert_eq!(notice["meta"]["reason"], "review_limit");
+    let body = notice["body"].as_str().unwrap();
+    assert!(
+        body.contains("automatic re-review limit of 7 reviewed heads"),
+        "{body}"
+    );
+    // The count is the repository's limit, which can be below the heads a
+    // member already reviewed once the owner lowers it: both notices name the
+    // limit, never a number of reviews.
+    for key in [
+        "integrations.pull_request_patrol.review_limit_reached",
+        "integrations.pull_request_patrol.review_limit_draft_failed",
+    ] {
+        for (language, says) in [("en", "limit of 2 reviewed heads"), ("ja", "上限の 2 回")] {
+            let text = crate::i18n::t(language, key, &[("count", "2")]);
+            assert!(text.contains(says), "{key} {language}: {text}");
+            assert!(
+                !text.contains("I have reviewed"),
+                "{key} {language}: {text}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn review_limit_failed_pr_notice_still_records_and_notifies_with_the_pr_address() {
     let f = Fixture::new().await;
     let mut pull = f.pull().await;

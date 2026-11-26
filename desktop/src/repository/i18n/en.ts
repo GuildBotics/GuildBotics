@@ -250,6 +250,9 @@ export const en = {
     "During a verification failure, only repair PRs can merge into the affected default or collection branch.",
   "settings.holdWhileFailingHelpUpstream":
     "PRs without a repair ticket stay unpublished to {{host}} until main verification passes. Merges on {{host}} of PRs already published to {{host}} cannot be stopped from here. Those PRs are shown as held. Local merges into failing collection branches are also held except for their repair PRs.",
+  "settings.reviewRounds": "Automatic re-review limit",
+  "settings.reviewRoundsHelp":
+    "After a member has reviewed this many heads of a pull request, a new push no longer starts its re-review: the pull request becomes a draft, and marking it Ready for review starts the count over. Explicit review requests are not limited. 1–20.",
   "landing.blocker.held": "Held (main failing)",
   "landing.held":
     "Held: main verification is failing (repair #{{number}}, assigned to {{name}}). The hold lifts when main verification passes.",

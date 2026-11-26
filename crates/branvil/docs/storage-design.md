@@ -121,7 +121,7 @@ check did not change stored records or raise the version.
 | `members` | `(fold(name))` | member, kind (`owner`, `agent`, `runner`), accounts on upstream hosts (provider, login; the token is a file), reviewers of the pull requests it opens | owner API, `init`, automatic runner | auth, kind checks, upstream |
 | `tokens` | `(token id)` | member, label, SHA-256 of the secret, last use | token API | auth (by id, constant-time hash compare) |
 | `workspaces` | `(workspace id)` | name, execution root (optional) | workspace API, execution registration, upgrade | repository creation, cards, closed |
-| `repos` | `(repo id)` | path, workspace id, default branch, protected branches, required approvals, `auto_land`, `hold_while_failing` (boolean, defaults to false on creation and upgrade), `ci_network`, `responder` (explicit agent name or null for automatic), labels, upstream (provider, repository), revision | repo API | everything under a repository |
+| `repos` | `(repo id)` | path, workspace id, default branch, protected branches, required approvals, `auto_land`, `hold_while_failing` (boolean, defaults to false on creation and upgrade), `review_rounds` (1–20, 3 on creation and upgrade), `ci_network`, `responder` (explicit agent name or null for automatic), labels, upstream (provider, repository), revision | repo API | everything under a repository |
 | `tickets` | `(repo id, n)` | ticket incl. its workspace id, its one assignee with `assigned_at` (or none), labels, whether it is interactive, upstream issue (or none), lane/rank on the workspace's board, its parent (or none) and the tickets it is blocked by, as (repo id, n), state, revision | ticket API, merge | `read(tickets)`, candidates |
 | `ticket_moves` | `(repo id, n)` of a ticket moved to another repository | the `(repo id, n)` it moved to | ticket move | ticket lookups by number or URL, which follow each move (numbers are never reused, so the chain ends) |
 | `comments` | `("ticket", repo id, n, seq)` / `("pull", repo id, n, seq)` | comment with its reactions | comment and reaction API, landing conflicts and failed host checks | comments, cards, activity |
@@ -293,6 +293,8 @@ fields and `ix_ci_unnotified` / `ix_ci_recovered`. Existing repair tickets get
 `notice: null`; the new `ix_repair_unnotified` starts empty.
 
 The 34 → 35 upgrade adds `hold_while_failing: false` to every repository.
+
+The 48 → 49 upgrade adds `review_rounds: 3` to every repository.
 
 The 35 → 36 upgrade revokes the tokens GuildBotics kept: those labelled
 `guildbotics` and those labelled `app:<client>`.

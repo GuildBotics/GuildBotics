@@ -1208,6 +1208,7 @@ describe("pull request review", () => {
     required_approvals: 0,
     auto_land: false,
     hold_while_failing: false,
+    review_rounds: 3,
     labels: [],
     upstream: {
       provider: "github",
