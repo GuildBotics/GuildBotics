@@ -366,13 +366,21 @@ mod tests {
         let running = hub.commit("acme/demo", "main", None, "a.txt", "running");
         let between = hub.commit("acme/demo", "main", Some(&running), "a.txt", "between");
         let newer = hub.commit("acme/demo", "main", Some(&between), "a.txt", "newer");
-        for (tag, sha) in [("release/1", &running), ("release/2", &newer)] {
-            hub.git(
-                "acme/demo",
-                &["update-ref", &format!("refs/tags/{tag}"), sha],
-            );
+        // Releases as the owner makes them on the Releases page.
+        for (name, sha) in [("1", &running), ("2", &newer)] {
             let verified = format!("refs/branvil/verified/{sha}");
             hub.git("acme/demo", &["update-ref", &verified, sha]);
+            let made = reqwest::Client::new()
+                .post(format!(
+                    "{}/api/v1/repos/acme%2Fdemo/releases",
+                    hub.data().base_url()
+                ))
+                .bearer_auth(&hub.owner_token)
+                .json(&json!({"sha": sha, "name": name}))
+                .send()
+                .await
+                .unwrap();
+            assert!(made.status().is_success(), "{}", made.text().await.unwrap());
         }
         let api = crate::api::Api::new(
             crate::api::Selected {

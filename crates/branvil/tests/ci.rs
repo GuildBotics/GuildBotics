@@ -583,12 +583,19 @@ async fn previous_schema_upgrade_preserves_records() {
             .1
             .contains("guildbotics server hub-data upgrade")
     );
+    let mut attempts = records(&db, "ci_attempts");
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
     assert!(output.contains("from schema version 47 to 48"), "{output}");
+    // Every attempt gains empty release points, and nothing else.
+    for attempt in &mut attempts {
+        attempt["release_points"] = json!([]);
+    }
+    assert!(!attempts.is_empty());
+    assert_eq!(records(&db, "ci_attempts"), attempts);
     let upgraded = tables(&db);
     let unchanged = |mut snapshot: Tables| {
-        snapshot.retain(|name, _| name != "meta");
+        snapshot.retain(|name, _| name != "meta" && name != "ci_attempts");
         snapshot
     };
     let after = unchanged(upgraded.clone());

@@ -910,6 +910,8 @@ struct FinishInput {
     peak_memory_mib: Option<u64>,
     reused_from: Option<String>,
     cache_key: Option<String>,
+    #[serde(default)]
+    release_points: Vec<String>,
 }
 
 async fn finish(
@@ -931,7 +933,7 @@ async fn finish(
             let attempt = app
                 .store
                 .write(move |w| {
-                    queue::finish(
+                    let a = queue::finish(
                         w,
                         &id,
                         &input.lease,
@@ -944,7 +946,12 @@ async fn finish(
                             cache_key: input.cache_key,
                         },
                         &now,
-                    )
+                    )?;
+                    if input.release_points.is_empty() {
+                        Ok(a)
+                    } else {
+                        queue::record_release_points(w, &a, input.release_points)
+                    }
                 })
                 .await?;
             app.ci.attempt_ended();

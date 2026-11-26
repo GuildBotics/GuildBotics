@@ -67,3 +67,57 @@ async fn only_the_owner_releases_and_release_tags_are_never_pushed() {
         &["push", "-q", "origin", "HEAD:refs/tags/v1"],
     );
 }
+
+#[tokio::test]
+async fn a_release_point_a_runner_reports_holds_back_newer_commits() {
+    use crate::ci::{Runner, eventually, pipeline};
+    let w = World::new().await;
+    let path = "acme/points";
+    let created = w
+        .server
+        .post(
+            "/repos",
+            &w.owner,
+            json!({"path": path, "default_branch": "main", "labels": []}),
+        )
+        .await;
+    assert_eq!(created.0, 201, "{}", created.1);
+    let work = w.dir.path().join("points");
+    std::fs::create_dir(&work).unwrap();
+    git_ok(&work, &["init", "-q", "-b", "main"]);
+    std::fs::write(work.join(".guildbotics-ci.toml"), pipeline(&["schema"])).unwrap();
+    git_ok(&work, &["add", ".guildbotics-ci.toml"]);
+    git_ok(&work, &["commit", "-qm", "raise"]);
+    let raised = git_ok(&work, &["rev-parse", "HEAD"]).trim().to_owned();
+    let runner = Runner::new(&w, "points-runner").await;
+    git_as_ok(
+        &work,
+        "alice",
+        &w.owner_git,
+        &["push", "-q", &w.server.remote(path), "main"],
+    );
+    let c = runner.next_claim().await;
+    let (status, finished) = runner
+        .post(
+            &c,
+            "finish",
+            json!({"lease": c["lease"], "conclusion": "success",
+                "image_digest": crate::ci::DIGEST,
+                "release_points": ["storage format 47 → 48"]}),
+        )
+        .await;
+    assert_eq!(status, 200, "{finished}");
+    let releases = format!("/repos/{}/releases", encode(path));
+    eventually("the verified release point", || async {
+        w.server.ok(&releases, &w.owner).await["points"]
+            == json!([{"sha": raised, "notes": [{"job": "schema",
+                "attempt_id": c["attempt_id"], "message": "storage format 47 → 48"}]}])
+    })
+    .await;
+    let (status, made) = w
+        .server
+        .post(&releases, &w.owner, json!({"sha": raised}))
+        .await;
+    assert_eq!(status, 200, "{made}");
+    assert_eq!(made["points"], json!([]));
+}

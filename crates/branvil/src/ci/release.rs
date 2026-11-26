@@ -1,10 +1,11 @@
 //! Releases: tags with the pipeline's release prefix on verified commits of
 //! the default branch, made on request or at the pipeline's release times
-//! (`docs/ci.md`, "Releases"). A verified commit whose verification jobs
-//! printed a release point is released before any newer commit.
+//! (`docs/ci.md`, "Releases"). Branvil records each release it makes; only
+//! those are releases. A verified commit whose verification jobs printed a
+//! release point is released before any newer commit.
 //! Git reads happen outside short store writes; the repository lock
 //! serializes both.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -20,17 +21,20 @@ use crate::util;
 
 /// The longest name a release request gives after the prefix.
 const MAX_NAME: usize = 64;
-/// What a line of a verification job's output starts with to make its
-/// commit a release point; the rest of the line says why.
-pub const POINT_MARKER: &str = "::release-point::";
-/// The most release points a commit records, and the longest message kept.
-const MAX_NOTES: usize = 10;
-const MAX_MESSAGE: usize = 200;
-
-/// A repository's release schedule: the latest release time handled (RFC 3339).
+/// A repository's releases and the release time its schedule handled.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 struct State {
+    /// The latest release time handled (RFC 3339), under `schedule`.
     last_slot: Option<String>,
+    /// The release times and time zone `last_slot` was handled under; none
+    /// without a schedule.
+    schedule: Option<String>,
+    /// The releases made: tag name (after `refs/tags/`) → commit.
+    released: BTreeMap<String, String>,
+}
+
+fn get(r: &impl Rd, repo: &str) -> AppResult<State> {
+    Ok(r.get(store::CI_RELEASES, &key(repo))?.unwrap_or_default())
 }
 
 /// One release point a verification job printed.
@@ -54,33 +58,6 @@ fn key(repo: &str) -> Vec<u8> {
 
 fn point_key(repo: &str, sha: &str) -> Vec<u8> {
     Key::new().s(repo).s(sha).bytes()
-}
-
-/// The release points in the logs of a verified commit's jobs: for each job,
-/// its name, the attempt to link to and the attempt whose log has the output.
-pub(super) async fn read_points(
-    ci: &super::Ci,
-    jobs: &[(String, String, String)],
-) -> AppResult<Vec<Note>> {
-    let mut notes = Vec::new();
-    for (job, attempt_id, log) in jobs {
-        let bytes = match tokio::fs::read(ci.log_path(log)).await {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(AppError::internal(e)),
-        };
-        let text = String::from_utf8_lossy(&bytes);
-        for message in text.lines().filter_map(|l| l.strip_prefix(POINT_MARKER)) {
-            if notes.len() < MAX_NOTES {
-                notes.push(Note {
-                    job: job.clone(),
-                    attempt_id: attempt_id.clone(),
-                    message: message.trim().chars().take(MAX_MESSAGE).collect(),
-                });
-            }
-        }
-    }
-    Ok(notes)
 }
 
 /// Decodes every release record, for the data check.
@@ -130,16 +107,22 @@ pub fn slots(
     )
 }
 
-/// The default branch as releases see it.
+/// The default branch and the releases made on it, as releases see them.
 struct Main {
     tip: String,
     /// Its first-parent history, newest first.
     first_parent: Vec<String>,
     refs: BTreeMap<String, String>,
+    /// The releases made (`State::released`).
+    released: BTreeMap<String, String>,
 }
 
 impl Main {
-    async fn read(app: &App, repo: &Repo) -> AppResult<Option<Self>> {
+    async fn read(
+        app: &App,
+        repo: &Repo,
+        released: BTreeMap<String, String>,
+    ) -> AppResult<Option<Self>> {
         let dir = app.git.repo_dir(&repo.path);
         let refs = app.git.all_refs(&dir).await?;
         let Some(tip) = refs
@@ -156,20 +139,18 @@ impl Main {
             tip,
             first_parent: history.lines().map(str::to_owned).collect(),
             refs,
+            released,
         }))
     }
 
-    /// The released commits of the first-parent history with their release
-    /// tag names, newest first. A tag under the prefix on a commit that was
-    /// not verified (one pushed before the prefix took effect) is no release.
-    fn released(&self, prefix: &str) -> Vec<(&str, Vec<String>)> {
+    /// The released commits of the first-parent history with the names of
+    /// the releases made on them, newest first. Any other tag, under the
+    /// prefix or not, is no release.
+    fn releases(&self) -> Vec<(&str, Vec<String>)> {
         let mut tags: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-        for (refname, sha) in &self.refs {
-            if let Some(name) = refname.strip_prefix("refs/tags/")
-                && name.starts_with(prefix)
-                && self.verified(sha)
-            {
-                tags.entry(sha.as_str()).or_default().push(name.to_owned());
+        for (name, sha) in &self.released {
+            if self.refs.get(&format!("refs/tags/{name}")) == Some(sha) {
+                tags.entry(sha.as_str()).or_default().push(name.clone());
             }
         }
         self.first_parent
@@ -179,11 +160,8 @@ impl Main {
     }
 
     /// The first-parent commits newer than the latest release, newest first.
-    fn unreleased(&self, prefix: &str) -> &[String] {
-        let latest = self
-            .released(prefix)
-            .first()
-            .map(|(sha, _)| (*sha).to_owned());
+    fn unreleased(&self) -> &[String] {
+        let latest = self.releases().first().map(|(sha, _)| (*sha).to_owned());
         let end = latest
             .and_then(|sha| self.first_parent.iter().position(|c| *c == sha))
             .unwrap_or(self.first_parent.len());
@@ -215,8 +193,8 @@ impl Main {
     }
 
     /// The unreleased commits that are release points, newest first.
-    async fn points(&self, app: &App, repo: &Repo, prefix: &str) -> AppResult<Vec<Point>> {
-        let (id, shas) = (repo.id.clone(), self.unreleased(prefix).to_vec());
+    async fn points(&self, app: &App, repo: &Repo) -> AppResult<Vec<Point>> {
+        let (id, shas) = (repo.id.clone(), self.unreleased().to_vec());
         app.store
             .read(move |r| {
                 let mut points = Vec::new();
@@ -230,23 +208,45 @@ impl Main {
             .await
     }
 
-    async fn tag(&mut self, app: &App, repo: &Repo, name: &str, sha: &str) -> AppResult<()> {
+    /// Records the release, then makes its tag. A record without its tag (a
+    /// stop between the two) is no release, and keeps pushes off the name.
+    async fn release(
+        &mut self,
+        app: &App,
+        repo: &Repo,
+        state: &mut State,
+        name: &str,
+        sha: &str,
+    ) -> AppResult<()> {
         let refname = format!("refs/tags/{name}");
+        let exists =
+            || AppError::conflict_code("release_tag_exists", format!("The tag {name} exists."));
+        if self.refs.contains_key(&refname) {
+            return Err(exists());
+        }
+        state.released.insert(name.to_owned(), sha.to_owned());
+        put(app, repo, state).await?;
         let dir = app.git.repo_dir(&repo.path);
-        if self.refs.contains_key(&refname)
-            || !app
-                .git
-                .update_ref(&dir, &refname, sha, ZERO_SHA, "release")
-                .await?
+        if !app
+            .git
+            .update_ref(&dir, &refname, sha, ZERO_SHA, "release")
+            .await?
         {
-            return Err(AppError::conflict_code(
-                "release_tag_exists",
-                format!("The tag {name} exists."),
-            ));
+            state.released.remove(name);
+            put(app, repo, state).await?;
+            return Err(exists());
         }
         self.refs.insert(refname, sha.to_owned());
+        self.released = state.released.clone();
         Ok(())
     }
+}
+
+async fn put(app: &App, repo: &Repo, state: &State) -> AppResult<()> {
+    let (id, state) = (repo.id.clone(), state.clone());
+    app.store
+        .write(move |w| w.put(store::CI_RELEASES, &key(&id), &state))
+        .await
 }
 
 /// The release rule of the default branch's tip, and why it is the default
@@ -259,16 +259,34 @@ async fn rule_at(app: &App, repo: &Repo, tip: &str) -> AppResult<(ReleaseRule, O
     })
 }
 
-/// The tag prefix pushes may not touch: the default branch's, or the
-/// default one when it cannot be read.
-pub async fn protected_prefix(app: &App, repo: &Repo, refs: &BTreeMap<String, String>) -> String {
-    let Some(tip) = refs.get(&format!("refs/heads/{}", repo.default_branch)) else {
-        return pipeline::DEFAULT_TAG_PREFIX.into();
+/// The tags pushes may not touch: those under the default branch's prefix
+/// (the default one when it cannot be read) and every release made.
+pub struct Reserved {
+    pub prefix: String,
+    pub released: BTreeSet<String>,
+}
+
+impl Reserved {
+    pub fn covers(&self, tag: &str) -> bool {
+        tag.starts_with(&self.prefix) || self.released.contains(tag)
+    }
+}
+
+pub async fn reserved(
+    app: &App,
+    repo: &Repo,
+    refs: &BTreeMap<String, String>,
+) -> AppResult<Reserved> {
+    let prefix = match refs.get(&format!("refs/heads/{}", repo.default_branch)) {
+        Some(tip) => rule_at(app, repo, tip).await?.0.tag_prefix,
+        None => pipeline::DEFAULT_TAG_PREFIX.into(),
     };
-    rule_at(app, repo, tip).await.map_or_else(
-        |_| pipeline::DEFAULT_TAG_PREFIX.into(),
-        |(rule, _)| rule.tag_prefix,
-    )
+    let id = repo.id.clone();
+    let state = app.store.read(move |r| get(r, &id)).await?;
+    Ok(Reserved {
+        prefix,
+        released: state.released.into_keys().collect(),
+    })
 }
 
 /// Releases at the release time that came: each unreleased release point,
@@ -290,37 +308,42 @@ pub(crate) async fn advance_at(app: &App, repo: &Repo, now: DateTime<Utc>) -> Ap
             return Ok(());
         };
         let (rule, problem) = rule_at(&app, &repo, tip).await?;
-        let (None, (Some(slot), _)) = (problem, slots(&rule, now)) else {
-            return Ok(());
-        };
         let id = repo.id.clone();
-        let state: State = app
-            .store
-            .read(move |r| Ok(r.get(store::CI_RELEASES, &key(&id))?.unwrap_or_default()))
-            .await?;
-        let last = state
-            .last_slot
-            .as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok());
-        if last.is_some_and(|last| last >= slot) {
-            return Ok(());
-        }
-        // A schedule seen for the first time waits for its next time.
-        if last.is_some()
-            && let Some(mut main) = Main::read(&app, &repo).await?
-        {
-            let prefix = &rule.tag_prefix;
+        let old = app.store.read(move |r| get(r, &id)).await?;
+        let mut state = old.clone();
+        let times: Vec<String> = rule.schedule.iter().map(ToString::to_string).collect();
+        let schedule = (problem.is_none() && !times.is_empty())
+            .then(|| format!("{} {}", times.join(","), rule.time_zone.name()));
+        let slot = slots(&rule, now).0;
+        let due = match (&schedule, slot) {
+            (Some(schedule), Some(slot)) => {
+                let last = state
+                    .last_slot
+                    .as_deref()
+                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok());
+                // A schedule seen for the first time, or changed, waits for
+                // its next time; each time releases once.
+                let due = state.schedule.as_ref() == Some(schedule)
+                    && last.is_some_and(|last| last < slot);
+                state.schedule = Some(schedule.clone());
+                state.last_slot = Some(util::format_time(slot));
+                due
+            }
+            _ => {
+                state.schedule = None;
+                state.last_slot = None;
+                false
+            }
+        };
+        if due && let Some(mut main) = Main::read(&app, &repo, state.released.clone()).await? {
             let mut shas: Vec<String> = main
-                .points(&app, &repo, prefix)
+                .points(&app, &repo)
                 .await?
                 .into_iter()
                 .rev()
                 .map(|p| p.sha)
                 .collect();
-            let newest = main
-                .unreleased(prefix)
-                .iter()
-                .find(|sha| main.verified(sha));
+            let newest = main.unreleased().iter().find(|sha| main.verified(sha));
             if let Some(newest) = newest.cloned()
                 && shas.last() != Some(&newest)
             {
@@ -328,21 +351,16 @@ pub(crate) async fn advance_at(app: &App, repo: &Repo, now: DateTime<Utc>) -> Ap
             }
             for sha in &shas {
                 let name = main.default_name(&rule, now);
-                main.tag(&app, &repo, &name, sha).await?;
+                main.release(&app, &repo, &mut state, &name, sha).await?;
             }
             if !shas.is_empty() {
                 app.events.publish("release", &repo.path, "");
             }
         }
-        let (id, state) = (
-            repo.id.clone(),
-            State {
-                last_slot: Some(util::format_time(slot)),
-            },
-        );
-        app.store
-            .write(move |w| w.put(store::CI_RELEASES, &key(&id), &state))
-            .await
+        if state != old {
+            put(&app, &repo, &state).await?;
+        }
+        Ok(())
     })
     .await
 }
@@ -372,7 +390,9 @@ pub(crate) async fn start(
 ) -> AppResult<View> {
     let id = repo.id.clone();
     app.locked(&id, move |app| async move {
-        let mut main = Main::read(&app, &repo)
+        let id = repo.id.clone();
+        let mut state = app.store.read(move |r| get(r, &id)).await?;
+        let mut main = Main::read(&app, &repo, state.released.clone())
             .await?
             .ok_or_else(|| AppError::not_found("The default branch does not exist."))?;
         let (rule, problem) = rule_at(&app, &repo, &main.tip).await?;
@@ -398,7 +418,7 @@ pub(crate) async fn start(
                 full
             }
         };
-        let unreleased = main.unreleased(&rule.tag_prefix);
+        let unreleased = main.unreleased();
         let Some(at) = unreleased.iter().position(|c| *c == sha) else {
             return Err(AppError::conflict_code(
                 "release_not_newer",
@@ -417,7 +437,7 @@ pub(crate) async fn start(
                 ),
             ));
         }
-        let points = main.points(&app, &repo, &rule.tag_prefix).await?;
+        let points = main.points(&app, &repo).await?;
         if let Some(oldest) = points.last()
             && unreleased.iter().position(|c| *c == oldest.sha) > Some(at)
         {
@@ -429,7 +449,7 @@ pub(crate) async fn start(
                 ),
             ));
         }
-        main.tag(&app, &repo, &name, &sha).await?;
+        main.release(&app, &repo, &mut state, &name, &sha).await?;
         app.events.publish("release", &repo.path, "");
         view_of(&app, &repo, Some(main), None, now).await
     })
@@ -479,7 +499,9 @@ pub async fn view(
     let repo = crate::domain::repos::visible(app, caller, path).await?;
     let id = repo.id.clone();
     app.locked(&id, move |app| async move {
-        let main = Main::read(&app, &repo).await?;
+        let id = repo.id.clone();
+        let released = app.store.read(move |r| get(r, &id)).await?.released;
+        let main = Main::read(&app, &repo, released).await?;
         view_of(&app, &repo, main, since, Utc::now()).await
     })
     .await
@@ -507,7 +529,7 @@ async fn view_of(
         });
     };
     let (rule, problem) = rule_at(app, repo, &main.tip).await?;
-    let mut released = main.released(&rule.tag_prefix);
+    let mut released = main.releases();
     let since_on_main = since.map(|since| {
         let found = main.first_parent.iter().position(|c| *c == since);
         if let Some(end) = found {
@@ -560,7 +582,7 @@ async fn view_of(
         },
         next_name: main.default_name(&rule, now),
         problem,
-        points: main.points(app, repo, &rule.tag_prefix).await?,
+        points: main.points(app, repo).await?,
         releases,
         since_on_main,
     })

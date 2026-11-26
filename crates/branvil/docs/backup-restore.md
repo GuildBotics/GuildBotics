@@ -216,7 +216,9 @@ at the previous version, and `guildbotics server hub-data upgrade --data-dir <it
 it once the cause is fixed).
 
 Version 47 → 48 (`src/upgrade.rs`): releases add two tables
-(`ci_releases`, `ci_release_points`, see [CI](ci.md#releases)); nothing else changes. Every
+(`ci_releases`, `ci_release_points`, see [CI](ci.md#releases)), and every CI
+attempt gets empty `release_points` (the release points its runner reported,
+[Release points](ci.md#release-points)); nothing else changes. Every
 upgrade also binds the GuildBotics workspaces' execution roots.
 
 ### The integrated Hub service

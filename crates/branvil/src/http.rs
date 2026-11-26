@@ -869,8 +869,10 @@ async fn hook_pre_receive(
         Ok(r) => r,
         Err(_) => return hook_answer(false, "Cannot read the repository's refs."),
     };
-    let prefix = crate::ci::release::protected_prefix(&app, &repo, &existing).await;
-    match crate::refs::check_push(&repo, &member, &input.updates, &existing, &prefix) {
+    let Ok(reserved) = crate::ci::release::reserved(&app, &repo, &existing).await else {
+        return hook_answer(false, "Cannot read the repository's releases.");
+    };
+    match crate::refs::check_push(&repo, &member, &input.updates, &existing, &reserved) {
         Ok(()) => hook_answer(true, ""),
         Err(message) => hook_answer(false, message),
     }

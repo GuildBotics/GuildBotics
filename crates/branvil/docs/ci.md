@@ -459,8 +459,10 @@ Local merges use the local merge policy; artifact jobs run for the new SHA.
 ## Releases
 
 A release is a tag on a verified commit of the default branch. Branvil makes
-it, on the owner's request or at the pipeline's release times; nobody pushes
-it. The pipeline at the tip of the default branch gives the rule:
+it, on the owner's request or at the pipeline's release times, and records it;
+nobody pushes it. Only the recorded tags are releases: the history, the latest
+release, and the Hub's updates follow them, and a release made under an earlier
+prefix stays one. The pipeline at the tip of the default branch gives the rule:
 
 ```toml
 [release]                         # optional
@@ -469,8 +471,8 @@ schedule = ["12:00", "*:30"]      # optional; HH:MM every day, *:MM every hour, 
 time_zone = "Asia/Tokyo"          # optional IANA name; default UTC
 ```
 
-- Tags under the prefix are refused on push for every member, the owner
-  included. Other tags keep their rules.
+- Tags under the prefix, and every release made, are refused on push for
+  every member, the owner included. Other tags keep their rules.
 - The owner releases, from the repository's Releases page, a verified commit of
   the first-parent history newer than the latest release. Its name is the
   prefix and either a name the owner gives or `<YYYY-MM-DD>-<n>`, dated in the
@@ -478,16 +480,21 @@ time_zone = "Asia/Tokyo"          # optional IANA name; default UTC
 - Without `schedule`, releases are made only on request. At each release time,
   Branvil releases every unreleased release point, oldest first, then the newest
   verified commit, when one is newer than the latest release. Each time releases
-  once; a schedule seen for the first time waits for its next time. The landing
+  once. A schedule seen for the first time, changed (its times or time zone),
+  or written again after it was removed waits for its next time. The landing
   sweep (once a minute and on events) checks the times.
 - An invalid pipeline at the tip keeps the default prefix, makes no automatic
   release, and refuses requests (`release_pipeline_invalid`).
 
 ### Release points
 
-A line starting with `::release-point::` in the log of a job of a passing
+A line starting with `::release-point::` in the output of a job of a passing
 default-branch verification makes the verified commit a release point; the
-rest of the line says why (up to 10 lines per commit, 200 characters each).
+rest of the line says why (up to 10 lines per job, 200 characters each). The
+runner reads the job's whole output, past the log's limit too, and reports the
+lines with the job's result; they stay with the attempt when its log is pruned
+or a backup leaves the logs out, and a result reused from another execution
+carries that execution's release points.
 No commit newer than an unreleased release point is released before it
 (`release_point_first`): the Releases page marks the commit ⚠️ with the
 messages and links to the job.

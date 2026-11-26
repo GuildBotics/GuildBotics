@@ -241,14 +241,15 @@ pub struct Update {
 }
 
 /// Decides whether a push may update the given refs. `Err` carries the
-/// message shown to the pusher. Tags starting with `release_prefix` are
-/// releases, made only by the release feature (`ci::release`).
+/// message shown to the pusher. The tags `releases` covers (those under the
+/// release prefix and every release made) change only by the release feature
+/// (`ci::release`).
 pub fn check_push(
     repo: &Repo,
     member: &Member,
     updates: &[Update],
     existing: &BTreeMap<String, String>,
-    release_prefix: &str,
+    releases: &crate::ci::release::Reserved,
 ) -> Result<(), String> {
     if member.kind == MemberKind::Runner {
         return Err(format!("{} cannot push to {}.", member.name, repo.path));
@@ -279,7 +280,7 @@ pub fn check_push(
                 }
             }
         } else if let Some(tag) = u.refname.strip_prefix("refs/tags/") {
-            if tag.starts_with(release_prefix) {
+            if releases.covers(tag) {
                 return Err(format!(
                     "{} is a release tag: releases are made on the repository's Releases page, not pushed.",
                     u.refname
@@ -359,7 +360,7 @@ mod tests {
                 &w,
                 &[update("refs/heads/feature", ZERO_SHA, B)],
                 &existing,
-                "release/"
+                &reserved("release/", &[])
             )
             .is_ok()
         );
@@ -369,7 +370,7 @@ mod tests {
                 &w,
                 &[update("refs/heads/main", A, B)],
                 &existing,
-                "release/"
+                &reserved("release/", &[])
             )
             .is_err()
         );
@@ -379,7 +380,7 @@ mod tests {
                 &m,
                 &[update("refs/heads/main", A, B)],
                 &existing,
-                "release/"
+                &reserved("release/", &[])
             )
             .is_err()
         );
@@ -389,7 +390,7 @@ mod tests {
                 &m,
                 &[update("refs/heads/main", A, ZERO_SHA)],
                 &existing,
-                "release/"
+                &reserved("release/", &[])
             )
             .is_err()
         );
@@ -399,7 +400,7 @@ mod tests {
                 &w,
                 &[update("refs/heads/release", ZERO_SHA, B)],
                 &existing,
-                "release/"
+                &reserved("release/", &[])
             )
             .is_err()
         );
@@ -409,7 +410,7 @@ mod tests {
                 &m,
                 &[update("refs/heads/release", ZERO_SHA, B)],
                 &existing,
-                "release/"
+                &reserved("release/", &[])
             )
             .is_ok()
         );
@@ -419,7 +420,7 @@ mod tests {
                 &member(MemberKind::Runner),
                 &[update("refs/heads/f", ZERO_SHA, B)],
                 &existing,
-                "release/"
+                &reserved("release/", &[])
             )
             .is_err()
         );
@@ -429,7 +430,7 @@ mod tests {
                 &w,
                 &[update("refs/branvil/x", ZERO_SHA, B)],
                 &existing,
-                "release/"
+                &reserved("release/", &[])
             )
             .is_err()
         );
@@ -439,7 +440,7 @@ mod tests {
                 &w,
                 &[update("refs/tags/v1", ZERO_SHA, B)],
                 &existing,
-                "release/"
+                &reserved("release/", &[])
             )
             .is_ok()
         );
@@ -449,7 +450,7 @@ mod tests {
                 &w,
                 &[update("refs/tags/v1", A, B)],
                 &existing,
-                "release/"
+                &reserved("release/", &[])
             )
             .is_err()
         );
@@ -459,9 +460,56 @@ mod tests {
                 &m,
                 &[update("refs/tags/v1", A, B)],
                 &existing,
-                "release/"
+                &reserved("release/", &[])
             )
             .is_ok()
+        );
+    }
+
+    fn reserved(prefix: &str, released: &[&str]) -> crate::ci::release::Reserved {
+        crate::ci::release::Reserved {
+            prefix: prefix.into(),
+            released: released.iter().map(|t| t.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_release_made_under_an_earlier_prefix_stays_unpushable() {
+        let mut existing = BTreeMap::new();
+        existing.insert("refs/tags/release/1".to_string(), A.to_string());
+        existing.insert("refs/tags/release/by-hand".to_string(), A.to_string());
+        let reserved = reserved("v-", &["release/1"]);
+        for kind in [MemberKind::Agent, MemberKind::Owner] {
+            let who = member(kind);
+            for u in [
+                update("refs/tags/release/1", A, B),
+                update("refs/tags/release/1", A, ZERO_SHA),
+            ] {
+                let error = check_push(&repo(), &who, &[u], &existing, &reserved).unwrap_err();
+                assert!(error.contains("is a release tag"), "{error}");
+            }
+        }
+        // A tag that is no release keeps the rules of every tag.
+        let moved = [update("refs/tags/release/by-hand", A, B)];
+        assert!(
+            check_push(
+                &repo(),
+                &member(MemberKind::Owner),
+                &moved,
+                &existing,
+                &reserved
+            )
+            .is_ok()
+        );
+        assert!(
+            check_push(
+                &repo(),
+                &member(MemberKind::Agent),
+                &moved,
+                &existing,
+                &reserved
+            )
+            .is_err()
         );
     }
 
@@ -476,7 +524,8 @@ mod tests {
                 update("refs/tags/release/1", A, B),
                 update("refs/tags/release/1", A, ZERO_SHA),
             ] {
-                let error = check_push(&repo(), &who, &[u], &existing, "release/").unwrap_err();
+                let error = check_push(&repo(), &who, &[u], &existing, &reserved("release/", &[]))
+                    .unwrap_err();
                 assert!(error.contains("is a release tag"), "{error}");
             }
             // Another prefix's tags keep the rules of every tag.
@@ -486,7 +535,7 @@ mod tests {
                     &who,
                     &[update("refs/tags/release/2", ZERO_SHA, B)],
                     &existing,
-                    "v-"
+                    &reserved("v-", &[])
                 )
                 .is_ok()
             );
@@ -496,7 +545,7 @@ mod tests {
                     &who,
                     &[update("refs/tags/v-1", ZERO_SHA, B)],
                     &existing,
-                    "v-"
+                    &reserved("v-", &[])
                 )
                 .is_err()
             );
@@ -506,7 +555,7 @@ mod tests {
                     &who,
                     &[update("refs/tags/releases", ZERO_SHA, B)],
                     &existing,
-                    "release/"
+                    &reserved("release/", &[])
                 )
                 .is_ok()
             );

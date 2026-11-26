@@ -1,5 +1,5 @@
 //! Durable, serial verification of the default branch.
-use super::{Ci, queue};
+use super::{Ci, queue, release};
 use crate::error::AppResult;
 use crate::model::Repo;
 use crate::store::{self, Key, Rd};
@@ -276,24 +276,33 @@ impl Ci {
                 })
                 .await?;
             if let Some((run, latest)) = snapshot {
-                // Each job's name, the attempt to link to and the attempt
-                // whose log has its output.
-                let logs: Vec<_> = latest
+                // The release points of the executions whose results count.
+                let points: Vec<_> = latest
                     .iter()
-                    .map(|(a, source)| {
-                        (a.job.name.clone(), a.id.clone(), source.attempt.id.clone())
+                    .flat_map(|(a, source)| {
+                        source
+                            .attempt
+                            .release_points
+                            .iter()
+                            .map(|message| release::Note {
+                                job: a.job.name.clone(),
+                                attempt_id: a.id.clone(),
+                                message: message.clone(),
+                            })
                     })
                     .collect();
                 let checks = self.run_checks(&run, latest)?.checks;
                 if checks.iter().all(|c| c.status == "completed") {
                     let now = crate::util::now();
                     let passed = checks.iter().all(|c| c.succeeded());
-                    let points = if passed {
-                        super::release::read_points(self, &logs).await?
-                    } else {
-                        Vec::new()
-                    };
                     if passed {
+                        // Before the commit counts as verified: a stop between
+                        // the two must not let a release pass a release point.
+                        let (id, sha) = (repo.id.clone(), v.sha.clone());
+                        self.inner
+                            .store
+                            .write(move |w| release::put_points(w, &id, &sha, &points))
+                            .await?;
                         let name = format!("refs/branvil/verified/{}", v.sha);
                         let refs = self.inner.git.all_refs(&dir).await?;
                         if refs.get(&name) != Some(&v.sha) {
@@ -343,7 +352,6 @@ impl Ci {
                             w.put(store::CI_VERIFICATIONS, &Key::new().s(&id).bytes(), &done)?;
                             let mut closed = Vec::new();
                             if done.state == "passed" {
-                                super::release::put_points(w, &id, &done.sha, &points)?;
                                 closed =
                                     crate::repair::passed_for(w, &id, None, &branch, &done.sha)?;
                                 super::narrow::abandon(w, &id, &now)?;

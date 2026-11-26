@@ -764,22 +764,28 @@ async fn narrowing_history_retries_without_losing_failure_evidence() {
 }
 
 #[tokio::test]
-async fn a_passing_verification_records_the_release_points_its_jobs_print() {
+async fn a_passing_verification_records_the_release_points_its_jobs_reported() {
     let f = Fixture::new(&["lint", "test"]).await;
     f.advance().await;
     let mut marked = String::new();
     for _ in 0..2 {
         let c = f.claim();
-        let log = if c.attempt.job.name == "test" {
-            marked = c.attempt.id.clone();
-            "build\n::release-point:: storage format 47 → 48 \n  ::release-point::indented\n"
-        } else {
-            "lint\n"
-        };
-        f.ci.append_log(&c.attempt.id, log.as_bytes())
-            .await
-            .unwrap();
+        let id = c.attempt.id.clone();
+        let test = c.attempt.job.name == "test";
         f.finish(c, "success");
+        // As the finish of the runner API keeps them; no log is read, so a
+        // log pruned or left out of a backup keeps them too.
+        if test {
+            marked = id.clone();
+            f.ci.inner
+                .store
+                .write_sync(|w| {
+                    let a = queue::get_attempt(w, &id)?.unwrap();
+                    let points = vec![" storage format 47 → 48 ".into(), "x".repeat(300)];
+                    queue::record_release_points(w, &a, points)
+                })
+                .unwrap();
+        }
     }
     f.advance().await;
     assert_eq!(f.record().state, "passed");
@@ -790,12 +796,13 @@ async fn a_passing_verification_records_the_release_points_its_jobs_print() {
             .read_sync(|r| r.get(store::CI_RELEASE_POINTS, &key))
             .unwrap()
             .unwrap();
+    let note = |message: String| release::Note {
+        job: "test".into(),
+        attempt_id: marked.clone(),
+        message,
+    };
     assert_eq!(
         notes,
-        [release::Note {
-            job: "test".into(),
-            attempt_id: marked,
-            message: "storage format 47 → 48".into(),
-        }]
+        [note("storage format 47 → 48".into()), note("x".repeat(200))]
     );
 }

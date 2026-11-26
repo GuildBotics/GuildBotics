@@ -824,11 +824,16 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
 pub const PREVIOUS_SCHEMA_VERSION: u64 = 47;
 
 /// Recreates the immediately preceding schema in a stopped database.
+/// Makes the database look written by the previous schema version: its
+/// version, and CI attempts without the release points it did not keep.
 pub fn as_previous_schema(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
             *v = json!(PREVIOUS_SCHEMA_VERSION);
         }
+    });
+    edit_records(db, "ci_attempts", |v| {
+        v.as_object_mut().unwrap().remove("release_points");
     });
 }
 

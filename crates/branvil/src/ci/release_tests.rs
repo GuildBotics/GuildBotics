@@ -115,7 +115,9 @@ impl Fixture {
     }
 
     async fn view(&self, since: Option<String>, now: DateTime<Utc>) -> View {
-        let main = Main::read(&self.app, &self.repo).await.unwrap();
+        let id = self.repo.id.clone();
+        let released = self.app.store.read_sync(|r| get(r, &id)).unwrap().released;
+        let main = Main::read(&self.app, &self.repo, released).await.unwrap();
         view_of(&self.app, &self.repo, main, since, now)
             .await
             .unwrap()
@@ -230,15 +232,23 @@ async fn an_owner_releases_a_newer_verified_commit_under_the_default_or_given_na
         .await
         .unwrap();
     assert_eq!(view.next_name, "release/2026-11-26-18446744073709551615");
-    // A tag under the prefix on a commit that was not verified (pushed
-    // before the prefix took effect) is no release.
-    let pushed = f.commit(&format!("{JOB}# 5\n")).await;
+    // A tag under the prefix that no release made (pushed before the prefix
+    // took effect) is no release, on a verified commit or not.
     let dir = f.app.git.repo_dir(&f.repo.path);
-    f.app
-        .git
-        .update_ref(&dir, "refs/tags/release/pushed", &pushed, ZERO_SHA, "test")
-        .await
-        .unwrap();
+    for (n, sha) in [
+        f.commit(&format!("{JOB}# 5\n")).await,
+        f.verified(&format!("{JOB}# 6\n")).await,
+    ]
+    .iter()
+    .enumerate()
+    {
+        let name = format!("refs/tags/release/pushed-{n}");
+        f.app
+            .git
+            .update_ref(&dir, &name, sha, ZERO_SHA, "test")
+            .await
+            .unwrap();
+    }
     let names: Vec<_> = f
         .view(None, now)
         .await
@@ -348,4 +358,100 @@ async fn the_view_names_the_releases_after_a_commit_and_the_next_time() {
     let invalid = f.verified("[release]\nschedule=['noon']\n# v\n").await;
     let error = f.start(&invalid, None, now).await.unwrap_err();
     assert_eq!(error.code, "release_pipeline_invalid");
+}
+
+#[tokio::test]
+async fn releases_made_under_an_earlier_prefix_stay_releases() {
+    let f = Fixture::new(JOB).await;
+    let first = f.verified(&format!("{JOB}# 1\n")).await;
+    let now = tokyo(26, 9, 0);
+    f.start(&first, None, now).await.unwrap();
+    let renamed = f
+        .verified(&format!("[release]\ntag_prefix='v-'\n{JOB}"))
+        .await;
+    // A tag the new prefix matches that no release made is no release.
+    let dir = f.app.git.repo_dir(&f.repo.path);
+    f.app
+        .git
+        .update_ref(&dir, "refs/tags/v-by-hand", &renamed, ZERO_SHA, "test")
+        .await
+        .unwrap();
+    let view = f.view(None, now).await;
+    let names: Vec<_> = view.releases.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["release/2026-11-26-1"]);
+    assert_eq!(view.next_name, "v-2026-11-26-1");
+    // The earlier release stays the latest: the newer commit is releasable.
+    f.start(&renamed, None, now).await.unwrap();
+    let names: Vec<_> = f
+        .view(None, now)
+        .await
+        .releases
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert_eq!(names, ["v-2026-11-26-1", "release/2026-11-26-1"]);
+}
+
+#[tokio::test]
+async fn a_changed_or_restored_schedule_waits_for_its_next_time() {
+    let noon = format!("{TOKYO_RULE}{JOB}");
+    let f = Fixture::new(&noon).await;
+    f.verified(&format!("{noon}# 1\n")).await;
+    f.advance(tokyo(26, 12, 30)).await;
+    assert_eq!(f.last_slot().as_deref(), Some("2026-11-26T03:00:00.000Z"));
+    // Moving the time to 10:00 at 11:00: today's 10:00 is newer than the
+    // noon handled yesterday, but the changed schedule waits.
+    let ten = format!("[release]\nschedule=['10:00']\ntime_zone='Asia/Tokyo'\n{JOB}");
+    f.verified(&ten).await;
+    f.advance(tokyo(27, 11, 0)).await;
+    assert!(f.tags().await.is_empty());
+    f.advance(tokyo(28, 10, 0)).await;
+    assert_eq!(f.tags().await.len(), 1, "the next time releases");
+    // Without a schedule nothing is handled; restored, it waits again.
+    f.verified(JOB).await;
+    f.advance(tokyo(28, 11, 0)).await;
+    assert_eq!(f.last_slot(), None);
+    f.verified(&format!("{ten}# back\n")).await;
+    f.advance(tokyo(29, 11, 0)).await;
+    assert_eq!(f.tags().await.len(), 1);
+    f.advance(tokyo(30, 10, 0)).await;
+    assert_eq!(f.tags().await.len(), 2);
+}
+
+#[tokio::test]
+async fn a_release_recorded_without_its_tag_is_no_release_and_keeps_its_name() {
+    let f = Fixture::new(JOB).await;
+    let sha = f.verified(&format!("{JOB}# 1\n")).await;
+    // A stop between recording a release and making its tag.
+    let (id, ghost) = (
+        f.repo.id.clone(),
+        State {
+            released: [("release/ghost".to_string(), sha.clone())].into(),
+            ..State::default()
+        },
+    );
+    f.app
+        .store
+        .write_sync(|w| w.put(store::CI_RELEASES, &key(&id), &ghost))
+        .unwrap();
+    let now = tokyo(26, 9, 0);
+    assert!(f.view(None, now).await.releases.is_empty());
+    let dir = f.app.git.repo_dir(&f.repo.path);
+    let refs = f.app.git.all_refs(&dir).await.unwrap();
+    assert!(
+        reserved(&f.app, &f.repo, &refs)
+            .await
+            .unwrap()
+            .covers("release/ghost")
+    );
+    // The commit stays releasable, and the release is recorded with its tag.
+    f.start(&sha, Some("ghost"), now).await.unwrap();
+    let names: Vec<_> = f
+        .view(None, now)
+        .await
+        .releases
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert_eq!(names, ["release/ghost"]);
 }

@@ -1,5 +1,6 @@
-//! 47 → 48: releases (`ci_releases`, `ci_release_points`) are new tables;
-//! nothing else changes.
+//! 47 → 48: releases (`ci_releases`, `ci_release_points`) are new tables,
+//! and every CI attempt gets the release points its runner reported (none
+//! before this version).
 //! Every upgrade also binds the GuildBotics workspaces' execution roots.
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -26,9 +27,23 @@ pub(crate) fn upgrade_with_roots(
     };
     db.finish(|w| {
         execution_roots(w, roots)?;
-        Ok("added the release tables".into())
+        let attempts = no_release_points(w)?;
+        Ok(format!(
+            "added the release tables; {attempts} CI attempt(s) have no release points"
+        ))
     })
     .map(Some)
+}
+
+/// Gives every CI attempt an empty `release_points`.
+fn no_release_points(w: &Wtx) -> crate::error::AppResult<usize> {
+    let attempts = w.prefix_raw(store::CI_ATTEMPTS, &[], None, usize::MAX)?;
+    for (key, raw) in &attempts {
+        let mut attempt: serde_json::Value = store::decode(raw)?;
+        attempt["release_points"] = serde_json::json!([]);
+        w.put_raw(store::CI_ATTEMPTS, key, &store::encode(&attempt)?)?;
+    }
+    Ok(attempts.len())
 }
 
 fn execution_roots(w: &Wtx, roots: BTreeMap<String, PathBuf>) -> crate::error::AppResult<()> {
@@ -79,7 +94,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upgrade_adds_the_release_tables_and_binds_execution_roots() {
+    fn upgrade_adds_the_release_tables_and_release_points_and_binds_execution_roots() {
         use crate::model::Workspace;
         let temporary = tempfile::tempdir().unwrap();
         let layout = Layout::new(temporary.path());
@@ -87,6 +102,33 @@ mod tests {
         let workspace = db
             .write_sync(|w| {
                 let workspace = crate::domain::repos::insert_workspace(w, "acme".into(), None)?;
+                // An attempt as version 47 stored it, without release points.
+                let job = "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n";
+                crate::ci::queue::register(
+                    w,
+                    crate::ci::queue::Registration {
+                        order: Vec::new(),
+                        selection: None,
+                        repo: "repo".into(),
+                        repo_path: "acme/demo".into(),
+                        sha: "a".repeat(40),
+                        tree: None,
+                        branch: "main".into(),
+                        protected: false,
+                        pipeline: crate::ci::queue::PipelineState::Jobs {
+                            jobs: crate::ci::pipeline::parse(job).unwrap(),
+                        },
+                        network: false,
+                        inputs: BTreeMap::new(),
+                    },
+                    10,
+                    "2026-11-26T00:00:00.000Z",
+                )?;
+                for (key, raw) in w.prefix_raw(store::CI_ATTEMPTS, &[], None, usize::MAX)? {
+                    let mut attempt: serde_json::Value = store::decode(&raw)?;
+                    attempt.as_object_mut().unwrap().remove("release_points");
+                    w.put_raw(store::CI_ATTEMPTS, &key, &store::encode(&attempt)?)?;
+                }
                 w.put(
                     store::META,
                     &store::Key::new().s("schema_version").bytes(),
@@ -101,17 +143,23 @@ mod tests {
         let done = upgrade_with_roots(&layout, [("acme".into(), root.clone())].into())
             .unwrap()
             .unwrap();
-        assert_eq!(done.summary, "added the release tables");
+        assert_eq!(
+            done.summary,
+            "added the release tables; 1 CI attempt(s) have no release points"
+        );
         assert!(done.copy.is_file());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
-        let (record, releases) = db
+        let (record, releases, attempts) = db
             .read_sync(|r| {
                 Ok((
                     r.get::<Workspace>(store::WORKSPACES, &Workspace::key(&workspace))?,
                     r.prefix_keys(store::CI_RELEASES, &[])?,
+                    r.prefix_all::<crate::ci::queue::Attempt>(store::CI_ATTEMPTS, &[])?,
                 ))
             })
             .unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert!(attempts[0].release_points.is_empty());
         assert_eq!(record.unwrap().execution_root, Some(root));
         assert!(releases.is_empty());
         assert!(

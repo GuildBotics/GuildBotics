@@ -1253,8 +1253,10 @@ attempts are not interrupted by changes in class.
 - `PUT /attempts/{id}/artifacts/{name}` zip bytes → `{"name","bytes"}`. The name
   must be one the job declares; `400 invalid` for anything not starting like a
   zip archive, `413 too_large` above `ci.artifact_max_mib`.
-- `POST /attempts/{id}/finish` `{"lease","conclusion","details"?,"image_digest"?,"peak_memory_mib"?,"reused_from"?,"cache_key"?}`
-  → the attempt. `image_digest` is the configuration digest of the image the
+- `POST /attempts/{id}/finish` `{"lease","conclusion","details"?,"image_digest"?,"peak_memory_mib"?,"reused_from"?,"cache_key"?,"release_points"?}`
+  → the attempt. `release_points` are the messages of the job's output lines
+  that start with `::release-point::` ([Release points](ci.md#release-points)),
+  at most 10 of 200 characters kept. `image_digest` is the configuration digest of the image the
   job ran on (`sha256:<64 hex>`, `400 invalid` otherwise), recorded on the
   attempt. An actual execution of a cached job reports its computed
   `cache_key` (64 hex characters); other jobs leave it `null`. A reused success
@@ -1706,7 +1708,8 @@ or a session. It returns the release rule of the default branch's tip
 `problem`, the reason when its pipeline is invalid), `next_name` (the default
 name of a release made now), `points` (the unreleased release points, newest
 first: `[{"sha","notes":[{"job","attempt_id","message"}]}]`), and `releases`
-(`[{"name","sha","title","authored_at"}]`, newest first). With `since`, a full
+(`[{"name","sha","title","authored_at"}]`, newest first: the releases Branvil
+made, under any prefix). With `since`, a full
 SHA, `releases` holds only the releases newer than that commit and
 `since_on_main` says whether it is in the first-parent history (otherwise
 `null`).
