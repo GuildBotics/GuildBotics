@@ -1021,11 +1021,11 @@ job ran. The Hub uses the SDK's VM metrics. An external runner samples the
 
 A reused attempt instead logs `reused result of <attempt> (<commit>, the same
 tree), image <digest>` (`the same contents of paths` for the paths basis) and `job ended: success (reused)`. It has no `source fetched`, `sandbox started`, or
-`commands ran for` line. `reuse declined` identifies the source and reason
-(such as a digest mismatch)
-before normal execution; `reuse unavailable: no reuse offered` means the
-service supplied no source, including for manual retries and upgraded old
-attempts.
+`commands ran for` line. `reuse unavailable: no reuse offered` means the
+service supplied no source, including when the candidate's digest differs
+from the runner's inventory at claim time, for manual retries, and for
+upgraded old attempts. If the digest changes after a reuse-only claim, the
+runner logs `reuse deferred` and returns the attempt to the queue.
 
 At start it removes every sandbox labelled with its own name and every volume
 named `bv-tmp-<its name>-<attempt id>`, `bv-work-<its name>-<attempt id>`,
