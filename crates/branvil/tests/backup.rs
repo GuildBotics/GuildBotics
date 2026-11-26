@@ -157,6 +157,18 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         .await;
     assert_eq!(st, StatusCode::CREATED, "{v}");
     let kept = v["token"].as_str().unwrap().to_string();
+    // A release of main, a record the previous schema version already kept.
+    let main = git_as_ok(
+        &w.work,
+        "aiko",
+        &w.aiko,
+        &["ls-remote", "origin", "refs/heads/main"],
+    );
+    let main = main.split_whitespace().next().unwrap().to_owned();
+    let releases = format!("{}/releases", w.repo_path());
+    let (st, made) = s.post(&releases, &w.owner, json!({"sha": main})).await;
+    assert_eq!(st, StatusCode::OK, "{made}");
+    let release = made["releases"][0].clone();
 
     // Only the owner backs up; the target must be new and absolute.
     let out_dir = tempfile::tempdir().unwrap();
@@ -416,6 +428,10 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     let members = r.ok("/members?limit=100", &owner).await;
     assert!(members.to_string().contains("alice-gh"), "{members}");
     assert_eq!(r.ok(&w.repo_path(), &owner).await["auto_land"], false);
+    // The release recorded before the upgrade is kept, and the repository
+    // has the review rounds the upgrade gave it.
+    assert_eq!(r.ok(&releases, &owner).await["releases"], json!([release]));
+    assert_eq!(r.ok(&w.repo_path(), &owner).await["review_rounds"], 3);
     let (st, v) = r
         .post(
             &format!("/repos/{}/upstream/refresh", encode(REPO)),
