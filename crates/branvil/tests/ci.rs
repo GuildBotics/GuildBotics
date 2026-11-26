@@ -585,10 +585,10 @@ async fn previous_schema_upgrade_preserves_records() {
     );
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 46 to 47"), "{output}");
+    assert!(output.contains("from schema version 47 to 48"), "{output}");
     let upgraded = tables(&db);
     let unchanged = |mut snapshot: Tables| {
-        snapshot.retain(|name, _| !matches!(name.as_str(), "meta" | "members" | "tokens"));
+        snapshot.retain(|name, _| name != "meta");
         snapshot
     };
     let after = unchanged(upgraded.clone());

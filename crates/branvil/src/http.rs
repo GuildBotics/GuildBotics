@@ -702,6 +702,35 @@ async fn verification_commits(State(app): State<Shared>, c: Caller, P(repo): P<S
     Ok(ok(repos::verification_commits(&app, &c, &repo, page).await?))
 }
 
+async fn releases_get(State(app): State<Shared>, c: Caller, P(repo): P<String>, q: Q) -> R {
+    Ok(ok(crate::ci::release::view(
+        &app,
+        &c,
+        &repo,
+        q.get("since"),
+    )
+    .await?))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseInput {
+    sha: String,
+    name: Option<String>,
+}
+
+async fn releases_post(
+    State(app): State<Shared>,
+    c: Caller,
+    P(repo): P<String>,
+    J(input): J<ReleaseInput>,
+) -> R {
+    Ok(ok(crate::ci::release::request(
+        &app, &c, &repo, input.sha, input.name,
+    )
+    .await?))
+}
+
 async fn pull_commits(State(app): State<Shared>, c: Caller, P((repo, n)): RepoNum, q: Q) -> R {
     let page = q.page(&app, &c, &format!("commits\n{}\n{n}", util::fold(&repo)))?;
     Ok(ok(pulls::commits(&app, &c, &repo, number(&n)?, page).await?))
@@ -840,7 +869,8 @@ async fn hook_pre_receive(
         Ok(r) => r,
         Err(_) => return hook_answer(false, "Cannot read the repository's refs."),
     };
-    match crate::refs::check_push(&repo, &member, &input.updates, &existing) {
+    let prefix = crate::ci::release::protected_prefix(&app, &repo, &existing).await;
+    match crate::refs::check_push(&repo, &member, &input.updates, &existing, &prefix) {
         Ok(()) => hook_answer(true, ""),
         Err(message) => hook_answer(false, message),
     }
@@ -1029,6 +1059,7 @@ loopback_auth::classified_routes!(pub fn api_routes() -> Router<Shared>, API_ROU
     ("/repos/{repo}/markdown", (post, markdown_render, MemberSession)),
     ("/repos/{repo}/verification", (get, verification, MemberSession)),
     ("/repos/{repo}/verification/commits", (get, verification_commits, MemberSession)),
+    ("/repos/{repo}/releases", (get, releases_get, MemberSession), (post, releases_post, OwnerSession)),
     ("/repos/{repo}/branches/{branch}", (get, branch_get, MemberSession)),
     ("/repos/{repo}/commits/{sha}", (get, commit_get, MemberSession)),
     ("/repos/{repo}/commits/{sha}/checks", (get, commit_checks, MemberSession)),

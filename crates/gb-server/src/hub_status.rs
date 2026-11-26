@@ -128,36 +128,63 @@ async fn snapshot_with_build(api: &Shared, metadata: Option<Value>) -> Value {
             .as_str()
             .map(str::to_owned)
     });
-    if let (Some(provider), Some(remote)) = (
-        provider,
-        metadata.as_ref().and_then(|v| v["remote"].as_str()),
-    ) {
+    // The Hub's own repository on the embedded code host, when it is one.
+    let hosted = provider
+        .filter(|provider| provider.eq_ignore_ascii_case("branvil"))
+        .zip(metadata.as_ref().and_then(|v| v["remote"].as_str()))
+        .and_then(|(_, remote)| {
+            let data = api.branvil.get()?;
+            Some((
+                data,
+                branvil::agent::CodeAgent::repository_for_remote(data, remote)?,
+            ))
+        });
+    let mut releases = Value::Null;
+    if let Some((data, repository)) = &hosted {
         for version in [&mut current, &mut target].into_iter().flatten() {
             let sha = version["sha"].as_str().unwrap_or_default().to_owned();
-            version["url"] = json!(
-                api.branvil
-                    .get()
-                    .filter(|_| provider.eq_ignore_ascii_case("branvil"))
-                    .and_then(|data| {
-                        let repository =
-                            branvil::agent::CodeAgent::repository_for_remote(data, remote)?;
-                        Some(branvil::agent::CodeAgent::commit_url_for(
-                            data,
-                            &repository,
-                            &sha,
-                        ))
-                    })
-            );
+            version["url"] = json!(branvil::agent::CodeAgent::commit_url_for(
+                data, repository, &sha
+            ));
+        }
+        if let Some(sha) = current.as_ref().and_then(|v| v["sha"].as_str()) {
+            releases = release_status(data, repository, sha).await;
         }
     }
     let operation = phase.map(|p|json!({"kind":p.kind,"phase":p.phase,"since":p.since,"commit":p.commit,"waiting":{"runs":api.selected().service.execution.generation().snapshot().len(),"ci_jobs":0}}));
-    let mut result = json!({"current":current,"target":target,"operation":operation});
+    let mut result =
+        json!({"current":current,"target":target,"operation":operation,"releases":releases});
     if result["operation"].is_object()
         && let Some(host) = api.branvil.get()
     {
         result["operation"]["waiting"]["ci_jobs"] = json!(host.running_ci_jobs().await);
     }
     result
+}
+
+/// The release the Hub runs and the releases it has not applied yet; null
+/// when the code host cannot tell.
+async fn release_status(data: &branvil::api::DataApi, repository: &str, sha: &str) -> Value {
+    let owner = data.owner();
+    let (Ok(all), Ok(newer)) = (
+        owner.releases(repository, None).await,
+        owner.releases(repository, Some(sha.to_owned())).await,
+    ) else {
+        return Value::Null;
+    };
+    let running = all.releases.iter().find(|r| r.sha == sha).map(|r| &r.name);
+    // A build off the first-parent history has no releases after it.
+    let pending: Vec<_> = newer
+        .releases
+        .iter()
+        .filter(|_| newer.since_on_main == Some(true))
+        .map(|r| json!({"name":r.name,"sha":r.sha,"subject":r.title}))
+        .collect();
+    json!({
+        "url": branvil::agent::CodeAgent::releases_url_for(data, repository),
+        "running": running,
+        "pending": pending,
+    })
 }
 
 #[cfg(test)]
@@ -320,5 +347,75 @@ mod tests {
         assert!(unknown["target"]["url"].is_null());
         assert!(snapshot_with_build(&api, None).await["current"].is_null());
         running.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_hub_names_its_release_and_the_newer_ones_it_has_not_applied() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let config = workspace.join(".guildbotics/config/team");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join("project.yml"),
+            r#"{"services":{"code_hosting_service":{"name":"branvil"}}}"#,
+        )
+        .unwrap();
+        let hub = branvil::test_support::Fixture::new("owner").await;
+        hub.workspace("acme").await;
+        hub.repository("acme/demo").await;
+        let running = hub.commit("acme/demo", "main", None, "a.txt", "running");
+        let between = hub.commit("acme/demo", "main", Some(&running), "a.txt", "between");
+        let newer = hub.commit("acme/demo", "main", Some(&between), "a.txt", "newer");
+        for (tag, sha) in [("release/1", &running), ("release/2", &newer)] {
+            hub.git(
+                "acme/demo",
+                &["update-ref", &format!("refs/tags/{tag}"), sha],
+            );
+            let verified = format!("refs/branvil/verified/{sha}");
+            hub.git("acme/demo", &["update-ref", &verified, sha]);
+        }
+        let api = crate::api::Api::new(
+            crate::api::Selected {
+                workspace: Some(workspace),
+                ..Default::default()
+            },
+            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
+            crate::auth::ServerAuth::open(root.path(), 7878).unwrap(),
+            "fixture".into(),
+            root.path().join("data"),
+        );
+        assert!(api.branvil.set(hub.data()).is_ok());
+        let api = std::sync::Arc::new(api);
+        let base = hub.data().base_url().to_owned();
+        let remote = format!("{base}/git/acme/demo.git");
+        let value = snapshot_with_build(
+            &api,
+            Some(json!({"sha":running,"subject":"running","remote":remote})),
+        )
+        .await;
+        assert_eq!(
+            value["releases"],
+            json!({
+                "url": format!("{base}/workspaces/acme/repos/demo/releases"),
+                "running": "release/1",
+                "pending": [{"name": "release/2", "sha": newer, "subject": "main"}],
+            })
+        );
+        let unreleased = snapshot_with_build(
+            &api,
+            Some(json!({"sha":between,"subject":"between","remote":remote})),
+        )
+        .await;
+        assert!(unreleased["releases"]["running"].is_null());
+        assert_eq!(unreleased["releases"]["pending"][0]["name"], "release/2");
+        // A build off main's first-parent history has nothing pending.
+        let off = hub.commit("acme/demo", "side", Some(&running), "a.txt", "side");
+        let off_main = snapshot_with_build(
+            &api,
+            Some(json!({"sha":off,"subject":"side","remote":remote})),
+        )
+        .await;
+        assert_eq!(off_main["releases"]["pending"], json!([]));
+        hub.stop().await;
     }
 }

@@ -30,6 +30,17 @@ describe("routes", () => {
       workspace: "acme",
     });
     expect(parseRoute("/workspaces/acme/pulls")).toEqual({ name: "pulls", workspace: "acme" });
+    // A workspace's releases show its first repository until one is chosen.
+    expect(parseRoute("/workspaces/acme/releases")).toEqual({
+      name: "releases",
+      workspace: "acme",
+      repo: null,
+    });
+    expect(parseRoute("/workspaces/acme/repos/demo/releases")).toEqual({
+      name: "releases",
+      workspace: "acme",
+      repo: "acme/demo",
+    });
   });
 
   it("parses app routes", () => {
@@ -73,6 +84,16 @@ describe("routes", () => {
     expect(parseRoute(href.ticket("a/b", "7"))).toEqual({ name: "ticket", repo: "a/b", key: "7" });
     expect(parseRoute(href.workspace("a"))).toEqual({ name: "workspace", workspace: "a" });
     expect(parseRoute(href.pulls("a"))).toEqual({ name: "pulls", workspace: "a" });
+    expect(parseRoute(href.releases("a"))).toEqual({
+      name: "releases",
+      workspace: "a",
+      repo: null,
+    });
+    expect(parseRoute(href.releases("a", "a/b"))).toEqual({
+      name: "releases",
+      workspace: "a",
+      repo: "a/b",
+    });
   });
 
   it("keeps foreign URLs out of the app", () => {

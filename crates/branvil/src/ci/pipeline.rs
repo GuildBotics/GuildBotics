@@ -40,6 +40,101 @@ pub async fn read(git: &Git, dir: &Path, sha: &str) -> AppResult<PipelineState> 
     })
 }
 
+/// The release rule of commit `sha`'s pipeline. A commit without a pipeline
+/// has the default rule; `Err` is the message of an invalid pipeline.
+pub async fn read_release(
+    git: &Git,
+    dir: &Path,
+    sha: &str,
+) -> AppResult<Result<ReleaseRule, String>> {
+    Ok(match read_file(git, dir, sha).await? {
+        File::Absent => Ok(ReleaseRule::default()),
+        File::Invalid(message) => Err(message),
+        File::Parsed(file) => Ok(file.release),
+    })
+}
+
+/// When and under which tag names the default branch is released.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReleaseRule {
+    /// What the name of every release tag starts with (after `refs/tags/`).
+    pub tag_prefix: String,
+    /// The automatic release times; empty releases only on request.
+    pub schedule: Vec<ReleaseTime>,
+    pub time_zone: chrono_tz::Tz,
+}
+
+impl Default for ReleaseRule {
+    fn default() -> Self {
+        Self {
+            tag_prefix: DEFAULT_TAG_PREFIX.into(),
+            schedule: Vec::new(),
+            time_zone: chrono_tz::UTC,
+        }
+    }
+}
+
+/// The tag prefix of a pipeline without one.
+pub const DEFAULT_TAG_PREFIX: &str = "release/";
+const MAX_SCHEDULE: usize = 24;
+
+/// One automatic release time, in the rule's time zone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReleaseTime {
+    /// `HH:MM`, every day.
+    Daily { hour: u32, minute: u32 },
+    /// `*:MM`, every hour.
+    Hourly { minute: u32 },
+}
+
+impl ReleaseTime {
+    fn parse(text: &str) -> Option<Self> {
+        let (hour, minute) = text.split_once(':')?;
+        let number = |s: &str, max: u32| {
+            (s.len() == 2 && s.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| s.parse::<u32>().ok())
+                .flatten()
+                .filter(|n| *n <= max)
+        };
+        let minute = number(minute, 59)?;
+        if hour == "*" {
+            return Some(Self::Hourly { minute });
+        }
+        Some(Self::Daily {
+            hour: number(hour, 23)?,
+            minute,
+        })
+    }
+}
+
+impl std::fmt::Display for ReleaseTime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Daily { hour, minute } => write!(f, "{hour:02}:{minute:02}"),
+            Self::Hourly { minute } => write!(f, "*:{minute:02}"),
+        }
+    }
+}
+
+/// A tag prefix: tag name characters, ending with `/`, `-` or `.` so that
+/// the name after it stays apart.
+pub fn valid_tag_prefix(prefix: &str) -> bool {
+    (1..=32).contains(&prefix.len()) && prefix.ends_with(['/', '-', '.']) && valid_tag_text(prefix)
+}
+
+/// Characters a release tag's name may use, without empty or dot-led
+/// components, `..`, or a `.lock` component.
+pub fn valid_tag_text(name: &str) -> bool {
+    name.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"-_./".contains(&b))
+        && !name.contains("..")
+        && name.split('/').enumerate().all(|(i, part)| {
+            (!part.is_empty() || i == name.matches('/').count())
+                && !part.starts_with(['.', '-'])
+                && !part.ends_with(".lock")
+        })
+}
+
 /// What the pipeline of commit `sha` requires of the pull requests into its
 /// branch, under the same rules as `read`.
 pub async fn read_required(git: &Git, dir: &Path, sha: &str) -> AppResult<RequiredJobs> {
@@ -129,10 +224,56 @@ struct FileSchema {
     version: u32,
     #[serde(default)]
     jobs: Vec<JobSchema>,
+    release: Option<ReleaseSchema>,
 }
 
 fn one() -> u32 {
     1
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseSchema {
+    tag_prefix: Option<String>,
+    #[serde(default)]
+    schedule: Vec<String>,
+    time_zone: Option<String>,
+}
+
+fn validate_release(r: ReleaseSchema) -> Result<ReleaseRule, String> {
+    let tag_prefix = r.tag_prefix.unwrap_or_else(|| DEFAULT_TAG_PREFIX.into());
+    if !valid_tag_prefix(&tag_prefix) {
+        return Err(format!(
+            "[release] tag_prefix '{tag_prefix}' is not a tag name prefix ([A-Za-z0-9_./-], at most 32, ending with '/', '-' or '.')."
+        ));
+    }
+    if r.schedule.len() > MAX_SCHEDULE {
+        return Err(format!(
+            "[release] schedule takes at most {MAX_SCHEDULE} times."
+        ));
+    }
+    let mut schedule = Vec::new();
+    for text in &r.schedule {
+        let time = ReleaseTime::parse(text).ok_or_else(|| {
+            format!(
+                "[release] schedule: '{text}' is not a time (HH:MM every day, *:MM every hour)."
+            )
+        })?;
+        if !schedule.contains(&time) {
+            schedule.push(time);
+        }
+    }
+    let time_zone = match r.time_zone {
+        None => chrono_tz::UTC,
+        Some(name) => name
+            .parse()
+            .map_err(|_| format!("[release] time_zone '{name}' is not an IANA time zone name."))?,
+    };
+    Ok(ReleaseRule {
+        tag_prefix,
+        schedule,
+        time_zone,
+    })
 }
 
 #[derive(Deserialize)]
@@ -173,6 +314,7 @@ struct ParsedFile {
     jobs: Vec<JobDef>,
     required: Vec<String>,
     post_merge: BTreeMap<String, bool>,
+    release: ReleaseRule,
 }
 
 /// Parses and validates a pipeline. `Err` is the message shown on the
@@ -195,6 +337,11 @@ fn parse_file(text: &str) -> Result<ParsedFile, String> {
         ));
     }
     let (mut jobs, mut required, mut post_merge) = (Vec::new(), Vec::new(), BTreeMap::new());
+    let release = file
+        .release
+        .map(validate_release)
+        .transpose()?
+        .unwrap_or_default();
     for j in file.jobs {
         let (is_required, is_post_merge) = (j.required, j.post_merge);
         let job = validate_job(j)?;
@@ -214,6 +361,7 @@ fn parse_file(text: &str) -> Result<ParsedFile, String> {
         jobs,
         required,
         post_merge,
+        release,
     })
 }
 
@@ -569,6 +717,78 @@ mod tests {
         );
         let file = parse_file(&format!("{job}required=true\npost_merge=false\n")).unwrap();
         assert_eq!(file.required, ["test"]);
+    }
+
+    #[test]
+    fn the_release_section_has_defaults_and_validates_every_value() {
+        let job = "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n";
+        assert_eq!(parse_file(job).unwrap().release, ReleaseRule::default());
+        let file = parse_file(&format!(
+            "[release]\ntag_prefix='v-'\nschedule=['12:00','*:05','12:00','00:00','23:59']\ntime_zone='Asia/Tokyo'\n{job}"
+        ))
+        .unwrap();
+        assert_eq!(file.release.tag_prefix, "v-");
+        assert_eq!(file.release.time_zone, chrono_tz::Asia::Tokyo);
+        assert_eq!(
+            file.release.schedule,
+            [
+                ReleaseTime::Daily {
+                    hour: 12,
+                    minute: 0
+                },
+                ReleaseTime::Hourly { minute: 5 },
+                ReleaseTime::Daily { hour: 0, minute: 0 },
+                ReleaseTime::Daily {
+                    hour: 23,
+                    minute: 59
+                },
+            ]
+        );
+        let rule = parse_file(&format!("[release]\n{job}")).unwrap().release;
+        assert_eq!(rule, ReleaseRule::default());
+        for (section, why) in [
+            ("tag_prefix='release'", "tag_prefix"),
+            ("tag_prefix='rel..ease/'", "tag_prefix"),
+            ("tag_prefix='/x/'", "tag_prefix"),
+            ("tag_prefix='a b/'", "tag_prefix"),
+            ("tag_prefix='x.lock/'", "tag_prefix"),
+            ("tag_prefix=''", "tag_prefix"),
+            ("schedule=['24:00']", "'24:00'"),
+            ("schedule=['12:60']", "'12:60'"),
+            ("schedule=['9:00']", "'9:00'"),
+            ("schedule=['*:5']", "'*:5'"),
+            ("schedule=['noon']", "'noon'"),
+            ("time_zone='Mars/Base'", "time_zone"),
+            ("every='day'", "every"),
+        ] {
+            let error = parse(&format!("[release]\n{section}\n{job}")).unwrap_err();
+            assert!(error.contains(why), "{section}: {error}");
+        }
+        let many = vec!["*:00"; MAX_SCHEDULE + 1];
+        assert!(parse(&format!("[release]\nschedule={many:?}\n{job}")).is_err());
+    }
+
+    #[test]
+    fn release_tag_names_keep_to_safe_tag_characters() {
+        for prefix in ["release/", "v-", "r.", "team/release/"] {
+            assert!(valid_tag_prefix(prefix), "{prefix}");
+        }
+        for prefix in ["release", "-x/", "a//", ".x/", "a/.b/", "x.lock/", "a~/"] {
+            assert!(!valid_tag_prefix(prefix), "{prefix}");
+        }
+        assert!(!valid_tag_prefix(&format!("{}/", "a".repeat(32))));
+        for name in ["release/2026-11-26-1", "release/x_y.z"] {
+            assert!(valid_tag_text(name), "{name}");
+        }
+        for name in [
+            "release/a b",
+            "release/a..b",
+            "release/.x",
+            "release/-x",
+            "release/a:b",
+        ] {
+            assert!(!valid_tag_text(name), "{name}");
+        }
     }
 
     #[test]

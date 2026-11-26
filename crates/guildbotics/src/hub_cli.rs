@@ -11,7 +11,7 @@ fn error(language: &str, reason: impl std::fmt::Display) -> anyhow::Error {
     ))
 }
 
-pub async fn verified(
+pub async fn releases(
     repo: Option<String>,
     checkout: Option<PathBuf>,
     since: String,
@@ -32,7 +32,7 @@ pub async fn verified(
         .map_err(|e| error(language, e))?;
     let result = async {
         let (base, token) = gb_server::client::local_owner().await?;
-        branvil::hub::verified(&base, &token, repo.as_deref(), origin.as_deref(), &since).await
+        branvil::hub::releases(&base, &token, repo.as_deref(), origin.as_deref(), &since).await
     }
     .await
     .map_err(|e| error(language, e))?;

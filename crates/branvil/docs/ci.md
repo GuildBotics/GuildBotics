@@ -93,6 +93,8 @@ artifacts = [{ name = "report", paths = ["out/report/", "coverage.xml"] }]   # u
 cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # optional
 ```
 
+An optional `[release]` section gives the release rule ([Releases](#releases)).
+
 - Commands run in order in `/work`; the first one that fails ends the job
   with its exit code. The job's environment has only CI metadata (besides
   the image's own variables and `HOME`): `CI=true`,
@@ -453,6 +455,48 @@ Ordinary PRs require only the required checks of their base.
 Head jobs skipped by paths or reusing success by paths are not executed before
 landing. Main verification runs them after merge and verifies the combination.
 Local merges use the local merge policy; artifact jobs run for the new SHA.
+
+## Releases
+
+A release is a tag on a verified commit of the default branch. Branvil makes
+it, on the owner's request or at the pipeline's release times; nobody pushes
+it. The pipeline at the tip of the default branch gives the rule:
+
+```toml
+[release]                         # optional
+tag_prefix = "release/"           # optional; [A-Za-z0-9_./-], at most 32, ends with /, - or .
+schedule = ["12:00", "*:30"]      # optional; HH:MM every day, *:MM every hour, up to 24
+time_zone = "Asia/Tokyo"          # optional IANA name; default UTC
+```
+
+- Tags under the prefix are refused on push for every member, the owner
+  included. Other tags keep their rules.
+- The owner releases, from the repository's Releases page, a verified commit of
+  the first-parent history newer than the latest release. Its name is the
+  prefix and either a name the owner gives or `<YYYY-MM-DD>-<n>`, dated in the
+  rule's time zone and numbered after the day's existing tags.
+- Without `schedule`, releases are made only on request. At each release time,
+  Branvil releases every unreleased release point, oldest first, then the newest
+  verified commit, when one is newer than the latest release. Each time releases
+  once; a schedule seen for the first time waits for its next time. The landing
+  sweep (once a minute and on events) checks the times.
+- An invalid pipeline at the tip keeps the default prefix, makes no automatic
+  release, and refuses requests (`release_pipeline_invalid`).
+
+### Release points
+
+A line starting with `::release-point::` in the log of a job of a passing
+default-branch verification makes the verified commit a release point; the
+rest of the line says why (up to 10 lines per commit, 200 characters each).
+No commit newer than an unreleased release point is released before it
+(`release_point_first`): the Releases page marks the commit ⚠️ with the
+messages and links to the job.
+
+A verification batches the merges since the last verified commit, so a job
+finds what a commit introduces by comparing it with `GB_CI_VERIFIED_SHA`
+(`verified_sha = true`), not with its parent. GuildBotics' `schema-raise`
+prints a release point when a commit raises Branvil's storage format: the Hub
+upgrades one step at a time, so each step is released by itself.
 
 ## Runs, attempts, and states
 

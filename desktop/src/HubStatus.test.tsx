@@ -18,6 +18,7 @@ const status: HubStatus = {
     url: "https://example.com/commit/1234567890",
   },
   target: { sha: "abcdef0123", subject: "Next title", url: null },
+  releases: null,
   operation: { kind: "update", phase: "preparing", since: "one", waiting: { runs: 3, ci_jobs: 2 } },
 };
 describe("Hub maintenance banner", () => {
@@ -82,6 +83,38 @@ it.each([true, false])(
     client.clear();
   },
 );
+
+it.each([
+  [
+    ["release/2026-11-27-1", "release/2026-11-28-1"],
+    /Releases not applied yet: release\/2026-11-28-1, release\/2026-11-27-1\./,
+  ],
+  [[], /No release is waiting to be applied\./],
+] as const)("names the running and pending releases: %s", async (pending, text) => {
+  await i18n.changeLanguage("en");
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  vi.mocked(request).mockResolvedValue({
+    ...status,
+    releases: {
+      url: "https://example.com/releases",
+      running: "release/2026-11-26-1",
+      pending: [...pending].reverse().map((name) => ({ name, sha: "a".repeat(40), subject: "s" })),
+    },
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <TestMantineProvider>
+        <HubVersion />
+      </TestMantineProvider>
+    </QueryClientProvider>,
+  );
+  expect(await screen.findByText(text)).toBeTruthy();
+  expect(screen.getByText(/· release\/2026-11-26-1/)).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Releases" }).getAttribute("href")).toBe(
+    "https://example.com/releases",
+  );
+  client.clear();
+});
 
 it.each(["en", "ja"])("delimits version subjects inside the banner in %s", (language) => {
   render(

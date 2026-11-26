@@ -70,6 +70,15 @@ export function errorText(error: unknown, t: Translate): string {
     ) {
       return t(`ci.error.${code}`);
     }
+    if (
+      code === "release_point_first" ||
+      code === "release_not_newer" ||
+      code === "release_not_verified" ||
+      code === "release_tag_exists" ||
+      code === "release_pipeline_invalid"
+    ) {
+      return t(`release.error.${code}`);
+    }
   }
   const message = error instanceof Error ? error.message : String(error);
   return isApiError(error, undefined, 403) ? `${t("common.forbidden")} ${message}` : message;

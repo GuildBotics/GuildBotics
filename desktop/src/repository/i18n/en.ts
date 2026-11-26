@@ -12,6 +12,38 @@ export const en = {
   "verification.ahead": "{{count}} commit(s) since the last verified commit",
   "verification.noVerified": "No verified commit yet",
   "verification.more": "Load more commits",
+  "release.title": "Releases",
+  "release.noRepositories": "The workspace {{workspace}} has no repositories yet.",
+  "release.rule": "Automatic releases",
+  "release.schedule":
+    "Released {{times}} ({{zone}}) when the default branch has a newer verified commit. Commits marked ⚠️ are released first, oldest first.",
+  "release.daily": "every day at {{time}}",
+  "release.hourly": "every hour at minute {{minute}}",
+  "release.and": ", ",
+  "release.nextAt": "Next automatic release",
+  "release.manualOnly":
+    "Releases are made only from this page. Write release times in the [release] section of .guildbotics-ci.toml to release automatically.",
+  "release.problem":
+    "The release rule cannot be read, so no automatic release is made: {{problem}}",
+  "release.prefix": "Release tags start with {{prefix}}; they cannot be pushed.",
+  "release.candidates": "Verified commits",
+  "release.release": "Release",
+  "release.point": "A commit that must be released by itself",
+  "release.pointsHelp":
+    "A commit marked ⚠️ must be released by itself. Until it is, no newer commit can be released.",
+  "release.history": "Releases so far",
+  "release.none": "Nothing has been released yet.",
+  "release.confirmTitle": "Release this commit",
+  "release.name": "Tag name",
+  "release.nameHelp": "Keep the suggested name, or change the part after the prefix.",
+  "release.error.release_point_first": "Release the older commit marked ⚠️ first.",
+  "release.error.release_not_newer":
+    "Only a commit of the default branch newer than the latest release can be released.",
+  "release.error.release_not_verified":
+    "This commit has not passed the verification of the default branch.",
+  "release.error.release_tag_exists": "A tag with this name exists. Choose another name.",
+  "release.error.release_pipeline_invalid":
+    "The default branch's .guildbotics-ci.toml is invalid, so the release rule is unknown.",
   "pull.conflicts": "Conflicting files: {{files}}",
   "markdown.ticket": "Ticket",
   "markdown.pull": "Pull request",
@@ -476,6 +508,7 @@ export const en = {
   "commit.authoredAt": "Authored",
   "commit.parents": "Parents",
 
+  "nav.releases": "Releases",
   "nav.pulls": "Pull requests",
   "nav.relations": "Task flow",
   "relations.title": "Task flow",

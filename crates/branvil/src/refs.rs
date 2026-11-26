@@ -241,12 +241,14 @@ pub struct Update {
 }
 
 /// Decides whether a push may update the given refs. `Err` carries the
-/// message shown to the pusher.
+/// message shown to the pusher. Tags starting with `release_prefix` are
+/// releases, made only by the release feature (`ci::release`).
 pub fn check_push(
     repo: &Repo,
     member: &Member,
     updates: &[Update],
     existing: &BTreeMap<String, String>,
+    release_prefix: &str,
 ) -> Result<(), String> {
     if member.kind == MemberKind::Runner {
         return Err(format!("{} cannot push to {}.", member.name, repo.path));
@@ -276,7 +278,13 @@ pub fn check_push(
                     ));
                 }
             }
-        } else if u.refname.starts_with("refs/tags/") {
+        } else if let Some(tag) = u.refname.strip_prefix("refs/tags/") {
+            if tag.starts_with(release_prefix) {
+                return Err(format!(
+                    "{} is a release tag: releases are made on the repository's Releases page, not pushed.",
+                    u.refname
+                ));
+            }
             if !(creating || owner) {
                 return Err(format!(
                     "{} exists; only the owner moves or deletes a tag.",
@@ -350,18 +358,38 @@ mod tests {
                 &repo(),
                 &w,
                 &[update("refs/heads/feature", ZERO_SHA, B)],
-                &existing
+                &existing,
+                "release/"
             )
             .is_ok()
         );
-        assert!(check_push(&repo(), &w, &[update("refs/heads/main", A, B)], &existing).is_err());
-        assert!(check_push(&repo(), &m, &[update("refs/heads/main", A, B)], &existing).is_err());
+        assert!(
+            check_push(
+                &repo(),
+                &w,
+                &[update("refs/heads/main", A, B)],
+                &existing,
+                "release/"
+            )
+            .is_err()
+        );
+        assert!(
+            check_push(
+                &repo(),
+                &m,
+                &[update("refs/heads/main", A, B)],
+                &existing,
+                "release/"
+            )
+            .is_err()
+        );
         assert!(
             check_push(
                 &repo(),
                 &m,
                 &[update("refs/heads/main", A, ZERO_SHA)],
-                &existing
+                &existing,
+                "release/"
             )
             .is_err()
         );
@@ -370,7 +398,8 @@ mod tests {
                 &repo(),
                 &w,
                 &[update("refs/heads/release", ZERO_SHA, B)],
-                &existing
+                &existing,
+                "release/"
             )
             .is_err()
         );
@@ -379,7 +408,8 @@ mod tests {
                 &repo(),
                 &m,
                 &[update("refs/heads/release", ZERO_SHA, B)],
-                &existing
+                &existing,
+                "release/"
             )
             .is_ok()
         );
@@ -388,7 +418,8 @@ mod tests {
                 &repo(),
                 &member(MemberKind::Runner),
                 &[update("refs/heads/f", ZERO_SHA, B)],
-                &existing
+                &existing,
+                "release/"
             )
             .is_err()
         );
@@ -397,7 +428,8 @@ mod tests {
                 &repo(),
                 &w,
                 &[update("refs/branvil/x", ZERO_SHA, B)],
-                &existing
+                &existing,
+                "release/"
             )
             .is_err()
         );
@@ -406,11 +438,78 @@ mod tests {
                 &repo(),
                 &w,
                 &[update("refs/tags/v1", ZERO_SHA, B)],
-                &existing
+                &existing,
+                "release/"
             )
             .is_ok()
         );
-        assert!(check_push(&repo(), &w, &[update("refs/tags/v1", A, B)], &existing).is_err());
-        assert!(check_push(&repo(), &m, &[update("refs/tags/v1", A, B)], &existing).is_ok());
+        assert!(
+            check_push(
+                &repo(),
+                &w,
+                &[update("refs/tags/v1", A, B)],
+                &existing,
+                "release/"
+            )
+            .is_err()
+        );
+        assert!(
+            check_push(
+                &repo(),
+                &m,
+                &[update("refs/tags/v1", A, B)],
+                &existing,
+                "release/"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn release_tags_are_never_pushed_even_by_the_owner() {
+        let mut existing = BTreeMap::new();
+        existing.insert("refs/tags/release/1".to_string(), A.to_string());
+        for kind in [MemberKind::Agent, MemberKind::Owner] {
+            let who = member(kind);
+            for u in [
+                update("refs/tags/release/2", ZERO_SHA, B),
+                update("refs/tags/release/1", A, B),
+                update("refs/tags/release/1", A, ZERO_SHA),
+            ] {
+                let error = check_push(&repo(), &who, &[u], &existing, "release/").unwrap_err();
+                assert!(error.contains("is a release tag"), "{error}");
+            }
+            // Another prefix's tags keep the rules of every tag.
+            assert!(
+                check_push(
+                    &repo(),
+                    &who,
+                    &[update("refs/tags/release/2", ZERO_SHA, B)],
+                    &existing,
+                    "v-"
+                )
+                .is_ok()
+            );
+            assert!(
+                check_push(
+                    &repo(),
+                    &who,
+                    &[update("refs/tags/v-1", ZERO_SHA, B)],
+                    &existing,
+                    "v-"
+                )
+                .is_err()
+            );
+            assert!(
+                check_push(
+                    &repo(),
+                    &who,
+                    &[update("refs/tags/releases", ZERO_SHA, B)],
+                    &existing,
+                    "release/"
+                )
+                .is_ok()
+            );
+        }
     }
 }

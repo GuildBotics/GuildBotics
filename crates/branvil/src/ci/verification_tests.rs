@@ -762,3 +762,40 @@ async fn narrowing_history_retries_without_losing_failure_evidence() {
     assert_eq!(after.pending.as_ref().unwrap().0, 0);
     assert_eq!(f.record().state, "failed");
 }
+
+#[tokio::test]
+async fn a_passing_verification_records_the_release_points_its_jobs_print() {
+    let f = Fixture::new(&["lint", "test"]).await;
+    f.advance().await;
+    let mut marked = String::new();
+    for _ in 0..2 {
+        let c = f.claim();
+        let log = if c.attempt.job.name == "test" {
+            marked = c.attempt.id.clone();
+            "build\n::release-point:: storage format 47 → 48 \n  ::release-point::indented\n"
+        } else {
+            "lint\n"
+        };
+        f.ci.append_log(&c.attempt.id, log.as_bytes())
+            .await
+            .unwrap();
+        f.finish(c, "success");
+    }
+    f.advance().await;
+    assert_eq!(f.record().state, "passed");
+    let key = Key::new().s(&f.repo.id).s(&f.sha).bytes();
+    let notes: Vec<release::Note> =
+        f.ci.inner
+            .store
+            .read_sync(|r| r.get(store::CI_RELEASE_POINTS, &key))
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        notes,
+        [release::Note {
+            job: "test".into(),
+            attempt_id: marked,
+            message: "storage format 47 → 48".into(),
+        }]
+    );
+}

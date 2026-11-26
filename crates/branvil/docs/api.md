@@ -3,7 +3,7 @@
 This is the internal contract between the service and its clients in this
 repository: the browser GUI, the CI runner (`guildbotics runner`), the Git
 hooks, and the Hub's update commands (`guildbotics server hub-data backup`,
-`hub-verified`, `hub-clients`). GuildBotics' members call the operations
+`hub-releases`, `hub-clients`). GuildBotics' members call the operations
 in process through `api::DataApi`, without a token: `DataApi::owner()` acts as
 the owner and `DataApi::agent(name, display_name)` as the agent `name`,
 created with that display name when missing. When the service changes an
@@ -1697,6 +1697,29 @@ a human operation. Creation and closure publish a ticket event. Updates to defau
 verification also publish a `verification` event.
 
 Board cards accept `repair=true` to select repair tickets independently of assignee (with the usual state and lane filters).
+
+### Releases
+
+`GET /api/v1/repos/{repo}/releases?since={sha}` accepts an owner or member token
+or a session. It returns the release rule of the default branch's tip
+(`tag_prefix`, `schedule` as `HH:MM` and `*:MM`, `time_zone`, `next_at`, and
+`problem`, the reason when its pipeline is invalid), `next_name` (the default
+name of a release made now), `points` (the unreleased release points, newest
+first: `[{"sha","notes":[{"job","attempt_id","message"}]}]`), and `releases`
+(`[{"name","sha","title","authored_at"}]`, newest first). With `since`, a full
+SHA, `releases` holds only the releases newer than that commit and
+`since_on_main` says whether it is in the first-parent history (otherwise
+`null`).
+
+`POST /api/v1/repos/{repo}/releases` (owner only) `{"sha","name"?}` tags `sha`
+under the prefix and returns the same view. `name` is the part after the
+prefix (at most 64 characters); without it the default name is used. `400
+invalid` for a SHA that is not full or a name that is not a tag name; `409`
+`release_not_newer` (not newer than the latest release on the first-parent
+history), `release_not_verified`, `release_point_first` (an older release point
+is unreleased), `release_tag_exists`, or `release_pipeline_invalid`. A release
+publishes a `release` change event with the repository `path`; clients refetch
+the releases and the verification history.
 
 ### Repair hint comments
 
