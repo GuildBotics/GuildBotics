@@ -166,9 +166,9 @@ enum ServerCommand {
     /// Git hook entry point (run by Git inside a push; not for direct use)
     #[command(hide = true)]
     GitHook { name: String },
-    /// Read verified commits on the local Hub; credentials are read only from disk
+    /// Read the releases of the local Hub's main; credentials are read only from disk
     #[command(hide = true)]
-    HubVerified {
+    HubReleases {
         #[arg(
             long,
             conflicts_with = "checkout",
@@ -352,12 +352,12 @@ fn main() -> ExitCode {
         #[cfg(feature = "hub")]
         Command::Server {
             command:
-                ServerCommand::HubVerified {
+                ServerCommand::HubReleases {
                     repo,
                     checkout,
                     since,
                 },
-        } => outcome(block(hub_cli::verified(repo, checkout, since)).map(|()| 0)),
+        } => outcome(block(hub_cli::releases(repo, checkout, since)).map(|()| 0)),
         #[cfg(feature = "hub")]
         Command::Server {
             command: ServerCommand::HubNotify,

@@ -1166,6 +1166,21 @@ impl JobLog<'_> {
         }
     }
 
+    /// Reads what is left in `file` once the job ended with `outcome`. An
+    /// exit's result counts, and its release points can be anywhere in the
+    /// output (`ci::queue::ReleasePoints`): all of it is read. A stopped job's
+    /// result does not count; its backlog, which a fast writer can make large,
+    /// is read like a running job's.
+    async fn read_after(&mut self, file: &mut tokio::fs::File, outcome: &Outcome) {
+        if !matches!(outcome, Outcome::Exited(_)) {
+            return self.read_from(file).await;
+        }
+        let mut buf = vec![0u8; 64 << 10];
+        while let Ok(n @ 1..) = file.read(&mut buf).await {
+            self.feed(&buf[..n]).await;
+        }
+    }
+
     async fn feed(&mut self, bytes: &[u8]) {
         if self.started.is_some() {
             let _ = self.log.send(bytes.to_vec()).await;
@@ -2072,7 +2087,7 @@ impl Microsandbox {
             }
             None => match child.wait().await {
                 Ok(status) => {
-                    // Everything the job wrote is in the file once it ended.
+                    // Its start marker is in the file once it ended.
                     job_log.read_from(&mut output).await;
                     if job_log.started.is_some() {
                         Outcome::Exited(status.code().unwrap_or(-1))
@@ -2086,8 +2101,8 @@ impl Microsandbox {
                 Err(e) => Outcome::StartupFailure(format!("waiting for msb failed: {e}")),
             },
         };
-        // What the job wrote up to the moment it was stopped.
-        job_log.read_from(&mut output).await;
+        // What the job wrote up to its end or the moment it was stopped.
+        job_log.read_after(&mut output, &outcome).await;
         job_log.flush().await;
         if unflushed {
             let note = "[guildbotics] flushing the job at its timeout failed: returned files may be incomplete\n";
@@ -2243,6 +2258,45 @@ fn tail(bytes: &[u8], n: usize) -> String {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[tokio::test]
+    async fn an_exited_job_s_output_is_read_to_its_last_release_point() {
+        use super::Outcome;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out");
+        let mut output = super::MARKER.to_vec();
+        output.extend(std::iter::repeat_n(b'x', 3 << 20));
+        output.extend(b"\n::release-point::after a long output\n");
+        std::fs::write(&path, &output).unwrap();
+        // The release points read after the job's end, as `run_job` reads it.
+        let read = |outcome: Outcome| {
+            let path = path.clone();
+            async move {
+                let (log, mut sent) = tokio::sync::mpsc::channel(256);
+                let mut job_log = super::JobLog {
+                    started_at: std::time::Instant::now(),
+                    started: None,
+                    pending: Vec::new(),
+                    log: &log,
+                };
+                let mut file = tokio::fs::File::open(&path).await.unwrap();
+                // While it runs, a read takes at most 1 MiB.
+                job_log.read_from(&mut file).await;
+                job_log.read_after(&mut file, &outcome).await;
+                drop(job_log);
+                drop(log);
+                let mut points = crate::ci::queue::ReleasePoints::default();
+                while let Some(bytes) = sent.recv().await {
+                    points.read(&bytes);
+                }
+                points.finish()
+            }
+        };
+        assert_eq!(read(Outcome::Exited(0)).await, ["after a long output"]);
+        // A stopped job's backlog is not read to its end.
+        assert!(read(Outcome::Cancelled).await.is_empty());
+        assert!(read(Outcome::TimedOut).await.is_empty());
+    }
+
     #[test]
     fn the_embedding_host_supplies_its_runtime_explicitly() {
         use super::{HOST_RUNTIME, set_runtime_binary};

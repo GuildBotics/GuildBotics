@@ -44,8 +44,9 @@ fn validate_repository(repo: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Read exactly the local Hub, bypassing proxies and redirects.
-pub async fn verified(
+/// The releases of the repository's default branch after `since`, newest
+/// first, read from exactly the local Hub.
+pub async fn releases(
     base: &str,
     token: &str,
     repo: Option<&str>,
@@ -59,8 +60,40 @@ pub async fn verified(
         }
         None => repository(origin.context("checkout origin is missing")?, base)?,
     };
-    let (verified, since_mark) = verification_history(base, token, &repo, since).await?;
-    Ok(json!({"since_on_main": since_mark.is_some(), "verified": verified}))
+    anyhow::ensure!(crate::util::is_sha(since), "invalid commit SHA");
+    let view = get(base, token, &repo, &format!("/releases?since={since}")).await?;
+    let mut releases = Vec::new();
+    for item in view["releases"].as_array().context("releases missing")? {
+        let sha = item["sha"].as_str().context("commit SHA missing")?;
+        let name = item["name"].as_str().context("release name missing")?;
+        anyhow::ensure!(crate::util::is_sha(sha), "invalid commit SHA");
+        releases.push(json!({"name": name, "sha": sha}));
+    }
+    Ok(json!({"since_on_main": view["since_on_main"] == true, "releases": releases}))
+}
+
+/// A GET of the repository's API on exactly the local Hub, bypassing proxies
+/// and redirects.
+async fn get(base: &str, token: &str, repo: &str, path: &str) -> anyhow::Result<Value> {
+    let repo = crate::util::encode_segment(repo);
+    let http = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    // Never render a response body or a request (both can contain secrets).
+    let response = http
+        .get(format!("{base}/api/v1/repos/{repo}{path}"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| e.without_url())?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "GuildBotics HTTP {}",
+        response.status()
+    );
+    Ok(response.json().await.map_err(|e| e.without_url())?)
 }
 
 /// Client distribution only uses commits that passed main verification.
@@ -85,31 +118,7 @@ async fn verification_history(
     repo: &str,
     since: &str,
 ) -> anyhow::Result<(Vec<String>, Option<bool>)> {
-    anyhow::ensure!(
-        since.len() == 40 && since.bytes().all(|b| b.is_ascii_hexdigit()),
-        "invalid commit SHA"
-    );
-    let repo = crate::util::encode_segment(repo);
-    let http = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(10))
-        .build()?;
-    let get = async |path: String| -> anyhow::Result<Value> {
-        // Never render a response body or a request (both can contain secrets).
-        let response = http
-            .get(format!("{base}/api/v1/repos/{repo}{path}"))
-            .bearer_auth(token)
-            .send()
-            .await
-            .map_err(|e| e.without_url())?;
-        anyhow::ensure!(
-            response.status().is_success(),
-            "GuildBotics HTTP {}",
-            response.status()
-        );
-        Ok(response.json().await.map_err(|e| e.without_url())?)
-    };
+    anyhow::ensure!(crate::util::is_sha(since), "invalid commit SHA");
     let mut verified = Vec::new();
     let mut cursor = None::<String>;
     let mut seen = std::collections::HashSet::new();
@@ -121,7 +130,7 @@ async fn verification_history(
             ),
             None => "/verification/commits".into(),
         };
-        let page = get(path).await?;
+        let page = get(base, token, repo, &path).await?;
         for item in page["items"].as_array().context("items missing")? {
             let sha = item["sha"].as_str().context("commit SHA missing")?;
             anyhow::ensure!(
@@ -210,60 +219,67 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn verified_reads_owner_file_pages_until_since_and_sanitizes_errors() {
+    async fn releases_and_verification_are_read_from_the_hub_without_leaking_errors() {
         use axum::{
             extract::{Query, State},
             http::{HeaderMap, StatusCode},
             routing::get,
         };
+        use std::collections::HashMap;
         use std::sync::atomic::{AtomicUsize, Ordering};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let verified_at = |repo: Option<&'static str>, origin: Option<String>, since: String| {
+        let releases_at = |repo: Option<&'static str>, origin: Option<String>, since: String| {
             let base = base.clone();
-            async move { verified(&base, "fixture-owner", repo, origin.as_deref(), &since).await }
+            async move { releases(&base, "fixture-owner", repo, origin.as_deref(), &since).await }
         };
         let mode = Arc::new(AtomicUsize::new(0));
-        let app = axum::Router::new().route("/api/v1/repos/{repo}/verification/commits", get(
-            |State(mode): State<Arc<AtomicUsize>>, headers: HeaderMap,
-             Query(query): Query<std::collections::HashMap<String, String>>| async move {
-                assert_eq!(headers["authorization"], "Bearer fixture-owner");
-                let mode = mode.load(Ordering::SeqCst);
-                if mode == 2 { return (StatusCode::BAD_REQUEST, axum::Json(json!({"secret":"private response"}))); }
-                if mode == 3 { return (StatusCode::OK, axum::Json(json!({"items":[{"sha":"invalid private response","mark":"verified"}],"next_cursor":null}))); }
-                let page = if query.is_empty() {
-                    json!({"items":[{"sha":"a".repeat(40),"mark":"verified"},{"sha":"b".repeat(40),"mark":null}],"next_cursor":"opaque+/="})
-                } else {
-                    assert_eq!(query["cursor"], "opaque+/=");
-                    json!({"items":[{"sha":"c".repeat(40),"mark":"verified"},{"sha":"d".repeat(40),"mark":"verified"}],"next_cursor":null})
-                };
-                (StatusCode::OK, axum::Json(page))
-            }
-        )).with_state(mode.clone());
+        let app = axum::Router::new()
+            .route("/api/v1/repos/{repo}/releases", get(
+                |State(mode): State<Arc<AtomicUsize>>, headers: HeaderMap,
+                 Query(query): Query<HashMap<String, String>>| async move {
+                    assert_eq!(headers["authorization"], "Bearer fixture-owner");
+                    match mode.load(Ordering::SeqCst) {
+                        2 => return (StatusCode::BAD_REQUEST, axum::Json(json!({"secret":"private response"}))),
+                        3 => return (StatusCode::OK, axum::Json(json!({"releases":[{"name":"r","sha":"invalid private response"}],"since_on_main":true}))),
+                        _ => {}
+                    }
+                    let on_main = query["since"] != "f".repeat(40);
+                    (StatusCode::OK, axum::Json(json!({
+                        "releases": [{"name":"release/2","sha":"a".repeat(40),"title":"x"},{"name":"release/1","sha":"c".repeat(40)}],
+                        "since_on_main": on_main,
+                    })))
+                }
+            ))
+            .route("/api/v1/repos/{repo}/verification/commits", get(
+                |Query(query): Query<HashMap<String, String>>| async move {
+                    axum::Json(if query.is_empty() {
+                        json!({"items":[{"sha":"a".repeat(40),"mark":"verified"},{"sha":"b".repeat(40),"mark":null}],"next_cursor":"opaque+/="})
+                    } else {
+                        assert_eq!(query["cursor"], "opaque+/=");
+                        json!({"items":[{"sha":"c".repeat(40),"mark":"verified"}],"next_cursor":null})
+                    })
+                }
+            ))
+            .with_state(mode.clone());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let expected = json!({"since_on_main":true,"releases":[
+            {"name":"release/2","sha":"a".repeat(40)},{"name":"release/1","sha":"c".repeat(40)}]});
         for (repo, origin) in [
             (Some("team/repo"), None),
             (None, Some(format!("{base}/git/team/repo.git"))),
         ] {
             assert_eq!(
-                verified_at(repo, origin.clone(), "c".repeat(40))
+                releases_at(repo, origin.clone(), "d".repeat(40))
                     .await
                     .unwrap(),
-                json!({"since_on_main":true,"verified":["a".repeat(40)]})
+                expected
             );
         }
-        assert_eq!(
-            verified_at(Some("team/repo"), None, "f".repeat(40))
-                .await
-                .unwrap(),
-            json!({"since_on_main":false,"verified":["a".repeat(40),"c".repeat(40),"d".repeat(40)]})
-        );
-        assert_eq!(
-            verified_at(Some("team/repo"), None, "a".repeat(40))
-                .await
-                .unwrap(),
-            json!({"since_on_main":true,"verified":[]})
-        );
+        let elsewhere = releases_at(Some("team/repo"), None, "f".repeat(40))
+            .await
+            .unwrap();
+        assert_eq!(elsewhere["since_on_main"], false);
         let origin = format!("{base}/git/team/repo.git");
         for (commit, required) in [('a', true), ('b', false), ('c', true), ('f', false)] {
             let sha = commit.to_string().repeat(40);
@@ -276,7 +292,7 @@ mod tests {
         }
         for value in [2, 3] {
             mode.store(value, Ordering::SeqCst);
-            let error = verified_at(Some("team/repo"), None, "c".repeat(40))
+            let error = releases_at(Some("team/repo"), None, "c".repeat(40))
                 .await
                 .unwrap_err()
                 .to_string();
@@ -284,7 +300,7 @@ mod tests {
             assert!(!error.contains("private response"));
         }
         assert!(
-            verified_at(
+            releases_at(
                 None,
                 Some("http://other/git/team/repo.git".into()),
                 "c".repeat(40)
@@ -293,7 +309,7 @@ mod tests {
             .is_err()
         );
         assert!(
-            verified_at(Some("team/repo"), None, "invalid".into())
+            releases_at(Some("team/repo"), None, "invalid".into())
                 .await
                 .is_err()
         );

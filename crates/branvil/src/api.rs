@@ -206,6 +206,16 @@ impl MemberApi {
         let _open = self.api.guard()?;
         crate::upstream::ops::dependency_alert(&self.api.app, &self.caller().await?, repo, id).await
     }
+    /// The release rule, latest request and releases of a repository's
+    /// default branch, only those after `since` when it is given.
+    pub async fn releases(
+        &self,
+        repo: &str,
+        since: Option<String>,
+    ) -> AppResult<crate::ci::release::View> {
+        let _open = self.api.guard()?;
+        crate::ci::release::view(&self.api.app, &self.caller().await?, repo, since).await
+    }
     pub async fn identity(&self) -> AppResult<members::MemberView> {
         let _open = self.api.guard()?;
         Ok(members::member_view(&self.caller().await?.member))

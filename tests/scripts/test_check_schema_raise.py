@@ -82,6 +82,8 @@ def test_schema_steps(repo: Path, number: int, changed: bool, success: bool) -> 
     assert "25" in output and str(number) in output
     if not success:
         assert "still-unverified" in output and "single step" in output
+    point = f"::release-point::Branvil storage format 25 → {number}\n"
+    assert (point in result.stdout) is (success and number == 26)
 
 
 @pytest.mark.parametrize("verified", [None, ""])

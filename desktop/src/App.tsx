@@ -48,6 +48,7 @@ import {
   Settings,
   Sparkles,
   Square,
+  Tag,
   Terminal,
   Ticket,
   TriangleAlert,
@@ -253,6 +254,12 @@ export function App() {
                   active={["repo", "pull", "commit", "job"].includes(route.name)}
                 >
                   <GitPullRequest size={18} /> {repositoryT("nav.pulls")}
+                </GuardedNavLink>
+                <GuardedNavLink
+                  to={href.releases(visibleWorkspace)}
+                  active={route.name === "releases"}
+                >
+                  <Tag size={18} /> {repositoryT("nav.releases")}
                 </GuardedNavLink>
               </>
             )}

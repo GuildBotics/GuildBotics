@@ -12,6 +12,7 @@ import { CommitView } from "./views/CommitView";
 import { JobView } from "./views/JobView";
 import { PullsView } from "./views/PullsView";
 import { PullView } from "./views/PullView";
+import { ReleasesView } from "./views/ReleasesView";
 import { RelationsView } from "./views/RelationsView";
 import { TicketView } from "./views/TicketView";
 import { TicketDrawer } from "./views/ticket/TicketDrawer";
@@ -44,6 +45,8 @@ export function RepositoryPage({
           repo={route.repo}
         />
       );
+    case "releases":
+      return <ReleasesView key={route.workspace} workspace={route.workspace} repo={route.repo} />;
     case "ticket":
       return (
         <TicketView key={`${route.repo}#${route.key}`} repo={route.repo} ticketKey={route.key} />

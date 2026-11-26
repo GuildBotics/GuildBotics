@@ -8,6 +8,7 @@ export type Route =
   | { name: "commit"; repo: string; sha: string }
   | { name: "job"; repo: string; attemptId: string }
   | { name: "repo"; repo: string }
+  | { name: "releases"; workspace: string; repo: string | null }
   | { name: "not_found"; pathname: string };
 
 function decode(segment: string): string | null {
@@ -37,11 +38,13 @@ export function parseRoute(pathname: string): Route {
     return { name: "settings", section: kind ?? null };
   if (segs.length === 3 && page === "task-flow") return { name: "workspace", workspace };
   if (segs.length === 3 && page === "pulls") return { name: "pulls", workspace };
+  if (segs.length === 3 && page === "releases") return { name: "releases", workspace, repo: null };
   if (page !== "repos" || !name) return { name: "not_found", pathname };
   const path = `${workspace}/${name}`;
   if (segs.length === 4) return { name: "repo", repo: path };
   if (segs.length === 5 && kind === "settings")
     return { name: "settings", section: null, repo: path };
+  if (segs.length === 5 && kind === "releases") return { name: "releases", workspace, repo: path };
   if (segs.length !== 6 || !id) return { name: "not_found", pathname };
   switch (kind) {
     // Tickets and pull requests are numbered per repository from 1.
@@ -78,6 +81,9 @@ export const href = {
     "/settings/repositories" +
     (section ? `/${encodeURIComponent(section)}` : ""),
   repoSettings: (repo: string) => `${repositoryPath(repo)}/settings`,
+  /** A workspace's releases page, showing `repo` or its first repository. */
+  releases: (workspace: string, repo?: string) =>
+    repo ? `${repositoryPath(repo)}/releases` : `${workspacePath(workspace)}/releases`,
   workspace: (workspace: string) => `${workspacePath(workspace)}/task-flow`,
   pulls: (workspace: string) => `${workspacePath(workspace)}/pulls`,
   ticket: (repo: string, key: string) => `${repositoryPath(repo)}/tickets/${key}`,
