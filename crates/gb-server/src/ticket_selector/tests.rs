@@ -1551,9 +1551,25 @@ async fn review_limit_notice_and_activity_count_the_repository_rounds() {
     assert_eq!(notice["meta"]["reason"], "review_limit");
     let body = notice["body"].as_str().unwrap();
     assert!(
-        body.contains("reviewed this pull request 7 times"),
+        body.contains("automatic re-review limit of 7 reviewed heads"),
         "{body}"
     );
+    // The count is the repository's limit, which can be below the heads a
+    // member already reviewed once the owner lowers it: both notices name the
+    // limit, never a number of reviews.
+    for key in [
+        "integrations.pull_request_patrol.review_limit_reached",
+        "integrations.pull_request_patrol.review_limit_draft_failed",
+    ] {
+        for (language, says) in [("en", "limit of 2 reviewed heads"), ("ja", "上限の 2 回")] {
+            let text = crate::i18n::t(language, key, &[("count", "2")]);
+            assert!(text.contains(says), "{key} {language}: {text}");
+            assert!(
+                !text.contains("I have reviewed"),
+                "{key} {language}: {text}"
+            );
+        }
+    }
 }
 
 #[tokio::test]

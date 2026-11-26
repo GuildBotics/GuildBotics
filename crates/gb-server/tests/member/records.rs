@@ -183,6 +183,7 @@ fn rate_limit_and_review_limit_payloads_preserve_each_field() {
         title: "Title".into(),
         label: "!1".into(),
         provider: "local".into(),
+        review_rounds: Some(5),
         ..Default::default()
     };
     for event_type in [
@@ -211,6 +212,7 @@ fn rate_limit_and_review_limit_payloads_preserve_each_field() {
         );
         assert_eq!(event["payload"]["error"], "CancelledError");
         assert_eq!(event["payload"]["comment_error"], "ServiceError");
+        assert_eq!(event["payload"]["count"], 5);
         assert_eq!(
             event["payload"]["pull_request"],
             json!({"url":"pr","label":"!1","title":"Title"})
