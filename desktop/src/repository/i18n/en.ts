@@ -690,7 +690,7 @@ export const en = {
   "settings.addBranch": "Add a branch",
   "settings.addLabel": "Add a label",
   "settings.saved": "Saved.",
-  "settings.membersHelp": "The owner, agents, and runners, and their accounts on code hosts.",
+  "settings.membersHelp": "The owner and agents, and their accounts on code hosts.",
   "upstream.readerChoose": "Choose a member…",
   "settings.tabCi": "CI",
   "settings.autoLand": "Land automatically",
@@ -727,6 +727,11 @@ export const en = {
     "The Hub starts the runner with the service. Switching it off interrupts the running job.",
   "ci.settings.runners": "Runners",
   "ci.settings.noRunners": "No runner members.",
+  "ci.settings.tokensHelp":
+    "The selected runner's tokens. `guildbotics runner join` issues one; revoke it here when a machine stops being a runner.",
+  "ci.settings.displayName": "Display name",
+  "ci.settings.displayNameHelp":
+    "The name the checks, jobs, and this page show for this runner. Leave it empty to show {{name}}.",
   "ci.settings.connection.online": "Connected",
   "ci.settings.connection.offline": "Contact lost",
   "ci.settings.connection.never_seen": "No contact since the Hub started",

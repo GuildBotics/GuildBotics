@@ -10,7 +10,7 @@ import { TriangleAlert } from "lucide-react";
 import { useWorkspacePath } from "../../ui/workspaceLinks";
 import { useState } from "react";
 import { useT } from "../i18n";
-import { useDiagnostics } from "../query/hooks";
+import { useDiagnostics, useRunnerLabel } from "../query/hooks";
 import { Link } from "../router/Router";
 import { href } from "../router/routes";
 
@@ -24,6 +24,7 @@ export function AlertBand({ hubOperating }: { hubOperating: boolean }) {
   const t = useT();
   const scope = useWorkspacePath();
   const diagnostics = useDiagnostics();
+  const label = useRunnerLabel();
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
   const d = diagnostics.data;
   const warnings: Warning[] = [];
@@ -36,7 +37,10 @@ export function AlertBand({ hubOperating }: { hubOperating: boolean }) {
         (runner.mode !== "off" || runner.state === "executor_unavailable"));
   if (runner && showRunner) {
     const detail = runner.version_mismatch
-      ? t("ci.runnerVersionMismatch", runner.version_mismatch)
+      ? t("ci.runnerVersionMismatch", {
+          ...runner.version_mismatch,
+          name: label(runner.version_mismatch.name),
+        })
       : runner.detail;
     const text =
       runner.state === "stopping"
