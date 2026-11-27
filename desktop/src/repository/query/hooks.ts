@@ -242,6 +242,12 @@ export const useJob = (repo: string, id: string, enabled = true) =>
     refetchInterval: (query) => (query.state.data?.retry_wait ? 5000 : false),
   });
 
+export const useJobAttempts = (repo: string, id: string) =>
+  useQuery({
+    queryKey: keys.jobAttempts(repo, id),
+    queryFn: () => api.jobs.attempts(repo, id),
+  });
+
 export const useJobLog = (repo: string, id: string, tail: number, enabled = true) =>
   useQuery({
     queryKey: keys.jobLog(repo, id, tail),

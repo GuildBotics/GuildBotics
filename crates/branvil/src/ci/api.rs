@@ -190,6 +190,56 @@ async fn job_get(
     Ok(ok(view(&app, &a).await?))
 }
 
+/// One attempt of a commit's job, as the list of that job's attempts shows it.
+#[derive(Serialize, Debug)]
+pub struct AttemptSummary {
+    pub id: String,
+    pub attempt: u64,
+    pub runner: Option<String>,
+    pub status: String,
+    pub conclusion: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub url: String,
+}
+
+async fn job_attempts(
+    State(app): State<Shared>,
+    c: Caller,
+    Path((repo, id)): Path<(String, String)>,
+) -> R {
+    Ok(ok(data_job_attempts(&app, &c, &repo, &id).await?))
+}
+
+/// Every attempt of the same commit and job as the attempt `id`, by number.
+pub(crate) async fn data_job_attempts(
+    app: &Shared,
+    caller: &Caller,
+    repo: &str,
+    id: &str,
+) -> AppResult<Vec<AttemptSummary>> {
+    let (repo, a) = attempt_of(app, caller, repo, id).await?;
+    let (repo_id, sha) = (a.repo.clone(), a.sha.clone());
+    let attempts = app
+        .store
+        .read(move |r| queue::attempts_of(r, &repo_id, &sha))
+        .await?;
+    Ok(attempts
+        .into_iter()
+        .filter(|b| b.job.name == a.job.name)
+        .map(|b| AttemptSummary {
+            url: util::item_url(&app.base_url, &repo.path, "jobs", &b.id),
+            id: b.id,
+            attempt: b.number,
+            runner: b.runner,
+            status: b.status,
+            conclusion: b.conclusion,
+            started_at: b.started_at,
+            finished_at: b.finished_at,
+        })
+        .collect())
+}
+
 #[derive(Serialize)]
 pub struct TestFailureView {
     #[serde(flatten)]
@@ -1028,6 +1078,7 @@ async fn finish(
 loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
     ("/repos/{repo}/test-failures", (get, test_failures, MemberSession)),
     ("/repos/{repo}/jobs/{id}", (get, job_get, MemberSession)),
+    ("/repos/{repo}/jobs/{id}/attempts", (get, job_attempts, MemberSession)),
     ("/repos/{repo}/jobs/{id}/log", (get, job_log, MemberSession)),
     ("/repos/{repo}/jobs/{id}/retry", (post, job_retry, MemberSession)),
     ("/repos/{repo}/jobs/{id}/cancel", (post, job_cancel, MemberSession)),

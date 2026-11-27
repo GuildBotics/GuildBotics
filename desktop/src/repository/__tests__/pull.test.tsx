@@ -194,7 +194,9 @@ describe.each(["en", "ja"] as const)("merged check evidence (%s)", (language) =>
       ),
     ).toBeInTheDocument();
     expect(follow.getByText(words["ci.status.in_progress"])).toBeInTheDocument();
-    expect(follow.getByText("#2")).toBeInTheDocument();
+    expect(
+      follow.getByText(i18n.getFixedT(language, "repository")("ci.rerunAttempt", { attempt: 2 })),
+    ).toBeInTheDocument();
     expect(follow.queryByText(words["ci.required"])).not.toBeInTheDocument();
   });
 
@@ -277,7 +279,9 @@ it("shows the observed Branvil checks for an upstream revision that was still ru
   expect(await decision.findByText(words["ci.upstreamMergeHeadChecksReason"])).toBeInTheDocument();
   expect(decision.getByText(words["ci.status.in_progress"])).toBeInTheDocument();
   expect(decision.getByText(words["ci.pending"])).toBeInTheDocument();
-  expect(decision.getByText("#2")).toBeInTheDocument();
+  expect(
+    decision.getByText(i18n.getFixedT("en", "repository")("ci.rerunAttempt", { attempt: 2 })),
+  ).toBeInTheDocument();
 });
 
 it("shows unavailable evidence on merges that predate merge check recording", async () => {
@@ -685,6 +689,18 @@ function pullRoutes(extra: Record<string, Parameters<typeof fakeApi>[0][string]>
       details: "exit code 101",
       artifact_names: [],
     }),
+    "GET /api/v1/repos/acme/demo/jobs/att_1/attempts": json(200, [
+      {
+        id: "att_1",
+        attempt: 1,
+        runner: null,
+        status: "completed",
+        conclusion: "failure",
+        started_at: null,
+        finished_at: null,
+        url: "",
+      },
+    ]),
     "GET /api/v1/repos/acme/demo/jobs/att_1/log": json(200, {
       log: "test login ... FAILED",
       log_bytes: 90000,
@@ -1739,6 +1755,165 @@ describe("pull request review", () => {
     await waitFor(() =>
       expect(window.location.pathname).toBe("/workspaces/acme/repos/demo/pulls/3"),
     );
+  });
+
+  it.each(["en", "ja"] as const)(
+    "marks a rerun check and lists its job's attempts, each linked to its own page (%s)",
+    async (language) => {
+      const attempt = (id: string, n: number, conclusion: string, runner: string) => ({
+        id,
+        attempt: n,
+        runner,
+        status: "completed",
+        conclusion,
+        started_at: "2026-10-24T09:50:00Z",
+        finished_at: "2026-10-24T09:53:12Z",
+        url: "",
+      });
+      const job = (id: string, n: number, conclusion: string) => ({
+        id,
+        job: "test",
+        attempt: n,
+        sha: HEAD,
+        status: "completed",
+        conclusion,
+        started_at: null,
+        finished_at: null,
+        details: null,
+        artifact_names: [],
+      });
+      const attempts = json(200, [
+        attempt("att_1", 1, "failure", "linux-runner"),
+        attempt("att_2", 2, "success", "windows-runner"),
+      ]);
+      const fake = fakeApi(
+        pullRoutes({
+          "GET /api/v1/repos/acme/demo/pulls": json(200, { items: [pull()], next_cursor: null }),
+          [`GET ${P}/checks`]: json(200, {
+            ...CHECKS,
+            checks: [
+              {
+                name: "test",
+                status: "completed",
+                conclusion: "success",
+                attempt_id: "att_2",
+                attempt: 2,
+              },
+            ],
+          }),
+          "GET /api/v1/repos/acme/demo/jobs/att_1": json(200, job("att_1", 1, "failure")),
+          "GET /api/v1/repos/acme/demo/jobs/att_2": json(200, job("att_2", 2, "success")),
+          "GET /api/v1/repos/acme/demo/jobs/att_1/attempts": attempts,
+          "GET /api/v1/repos/acme/demo/jobs/att_2/attempts": attempts,
+          "GET /api/v1/repos/acme/demo/jobs/att_2/log": json(200, {
+            log: "second try",
+            log_bytes: 10,
+            truncated: false,
+          }),
+        }),
+      );
+      const words = dictionaries[language];
+      const t = i18n.getFixedT(language, "repository");
+      const user = userEvent.setup();
+      renderApp("/workspaces/acme/repos/demo/pulls/3", language);
+      const row = await screen.findByRole("button", {
+        name: words["ci.open"].replace("{{name}}", "test"),
+      });
+      expect(row).toHaveTextContent(t("ci.rerunAttempt", { attempt: 2 }));
+
+      await user.click(row);
+      const drawer = await screen.findByRole("dialog", { name: /test/ });
+      expect(
+        await within(drawer).findByText(t("ci.attemptOf", { attempt: 2, total: 2 })),
+      ).toBeInTheDocument();
+      expect(fake.calls("GET", "/api/v1/repos/acme/demo/jobs/att_2/attempts")).toHaveLength(1);
+      expect(within(drawer).getByText("#2", { selector: "strong" })).toHaveAttribute(
+        "aria-current",
+        "true",
+      );
+      expect(within(drawer).getByText("windows-runner")).toBeInTheDocument();
+      const previous = within(drawer).getByRole("link", { name: "#1" });
+      expect(previous).toHaveAttribute("href", "/workspaces/acme/repos/demo/jobs/att_1");
+      expect(previous.closest("li")).toHaveTextContent("linux-runner");
+
+      // The previous attempt's own page shows it with its log.
+      await user.click(previous);
+      await waitFor(() =>
+        expect(window.location.pathname).toBe("/workspaces/acme/repos/demo/jobs/att_1"),
+      );
+      const first = await screen.findByRole("dialog", { name: /test/ });
+      expect(
+        await within(first).findByText(t("ci.attemptOf", { attempt: 1, total: 2 })),
+      ).toBeInTheDocument();
+      expect(await within(first).findByText("test login ... FAILED")).toBeInTheDocument();
+      expect(within(first).getByRole("link", { name: "#2" })).toHaveAttribute(
+        "href",
+        "/workspaces/acme/repos/demo/jobs/att_2",
+      );
+    },
+  );
+
+  it("reads a job's attempts once more when checks change while their first answer is on its way", async () => {
+    const attempt = (n: number, status: string, conclusion: string | null) => ({
+      id: `att_${n}`,
+      attempt: n,
+      runner: null,
+      status,
+      conclusion,
+      started_at: null,
+      finished_at: null,
+      url: "",
+    });
+    const first = [attempt(1, "completed", "failure")];
+    let answer!: (value: ReturnType<typeof json>) => void;
+    let calls = 0;
+    fakeApi(
+      pullRoutes({
+        "GET /api/v1/repos/acme/demo/jobs/att_1/attempts": () => {
+          calls += 1;
+          return calls === 1
+            ? new Promise<ReturnType<typeof json>>((resolve) => {
+                answer = resolve;
+              })
+            : json(200, [...first, attempt(2, "queued", null)]);
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    const { client } = renderApp("/workspaces/acme/repos/demo/pulls/3");
+    await user.click(await screen.findByRole("button", { name: "Open check test" }));
+    const drawer = await screen.findByRole("dialog", { name: /test/ });
+    await waitFor(() => expect(answer).toBeTypeOf("function"));
+    // A retry queued elsewhere, and the jobs it starts, are announced before the first answer,
+    // which predates them: they make one more read once that answer has come.
+    act(() => {
+      for (let i = 0; i < 3; i++)
+        applyChange({ kind: "check", path: "acme/demo", id: HEAD }, client);
+    });
+    await act(async () => answer(json(200, first)));
+    expect(await within(drawer).findByRole("link", { name: "#2" })).toHaveAttribute(
+      "href",
+      "/workspaces/acme/repos/demo/jobs/att_2",
+    );
+    expect(within(drawer).getByText("Attempt 1 of 2")).toBeInTheDocument();
+    // No further reads follow, one per change.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(calls).toBe(2);
+  });
+
+  it("shows a job's details when its attempts cannot be read", async () => {
+    fakeApi(
+      pullRoutes({
+        "GET /api/v1/repos/acme/demo/jobs/att_1/attempts": apiError(503, "unavailable", "No list."),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/workspaces/acme/repos/demo/pulls/3");
+    await user.click(await screen.findByRole("button", { name: "Open check test" }));
+    const drawer = await screen.findByRole("dialog", { name: /test/ });
+    expect(await within(drawer).findByText("No list.")).toBeInTheDocument();
+    expect(within(drawer).getByText("exit code 101")).toBeInTheDocument();
+    expect(await within(drawer).findByText("test login ... FAILED")).toBeInTheDocument();
   });
 
   it("opens a job of a commit no open pull request has on the commit's page", async () => {

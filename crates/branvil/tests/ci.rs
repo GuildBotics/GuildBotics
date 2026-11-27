@@ -869,6 +869,83 @@ async fn pr_retry_routes_only_to_selected_runners_and_reports_recovery() {
     assert_eq!(check(&check_view, "test")["runner_recovery"], recovery);
 }
 
+#[tokio::test]
+async fn a_jobs_attempts_list_every_try_of_that_job_on_the_commit() {
+    let w = World::new().await;
+    let first = Runner::new(&w, "runner1").await;
+    let second = Runner::new(&w, "runner2").await;
+    assert!(second.claim().await.is_none());
+    w.push_change(
+        "feature",
+        ".guildbotics-ci.toml",
+        &pipeline(&["test", "lint"]),
+    );
+    w.open_pull("feature", json!([])).await;
+    let mut claims = [first.next_claim().await, first.next_claim().await];
+    claims.sort_by_key(|c| c["job"]["name"] != "test");
+    let [failed, lint] = claims;
+    assert_eq!(first.finish(&failed, "failure").await.0, 200);
+    assert_eq!(first.finish(&lint, "success").await.0, 200);
+    let attempts_url =
+        |id: &Value| format!("{}/jobs/{}/attempts", w.repo_path(), id.as_str().unwrap());
+    let (status, retry) = w
+        .server
+        .post(
+            &format!(
+                "{}/jobs/{}/retry",
+                w.repo_path(),
+                failed["attempt_id"].as_str().unwrap()
+            ),
+            &w.aiko,
+            json!({"runner": "runner2"}),
+        )
+        .await;
+    assert_eq!(status, 200, "{retry}");
+    let queued = w.server.ok(&attempts_url(&retry["id"]), &w.aiko).await;
+    assert_eq!(queued[1]["status"], "queued");
+    assert_eq!(queued[1]["runner"], Value::Null);
+    assert_eq!(queued[1]["started_at"], Value::Null);
+
+    let rerun = second.next_claim().await;
+    assert_eq!(rerun["attempt_id"], retry["id"]);
+    assert_eq!(second.finish(&rerun, "success").await.0, 200);
+    for id in [&failed["attempt_id"], &retry["id"]] {
+        let list = w.server.ok(&attempts_url(id), &w.aiko).await;
+        let list = list.as_array().unwrap();
+        assert_eq!(list.len(), 2, "{list:?}");
+        for (item, (attempt, runner, conclusion)) in list.iter().zip([
+            (&failed, "runner1", "failure"),
+            (&rerun, "runner2", "success"),
+        ]) {
+            let id = attempt["attempt_id"].as_str().unwrap();
+            assert_eq!(item["id"], id);
+            assert_eq!(item["runner"], runner);
+            assert_eq!(item["status"], "completed");
+            assert_eq!(item["conclusion"], conclusion);
+            assert!(item["started_at"].is_string() && item["finished_at"].is_string());
+            assert!(
+                item["url"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with(&format!("/jobs/{id}"))
+            );
+        }
+        assert_eq!(list[0]["attempt"], 1);
+        assert_eq!(list[1]["attempt"], 2);
+    }
+    let lint_only = w
+        .server
+        .ok(&attempts_url(&lint["attempt_id"]), &w.aiko)
+        .await;
+    assert_eq!(lint_only.as_array().unwrap().len(), 1);
+    assert_eq!(lint_only[0]["id"], lint["attempt_id"]);
+    let missing = format!(
+        "{}/jobs/att_01JAMISSINGATTEMPT00000000/attempts",
+        w.repo_path()
+    );
+    assert_eq!(w.server.get(&missing, &w.aiko).await.0, 404);
+}
+
 pub(crate) fn pipeline(jobs: &[&str]) -> String {
     let mut s = String::new();
     for j in jobs {

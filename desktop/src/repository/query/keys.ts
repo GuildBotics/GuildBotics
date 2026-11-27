@@ -28,6 +28,7 @@ export const keys = {
   ) => ["repo", repo, "pull", number, part] as const,
   testFailures: (repo: string, name: string) => ["repo", repo, "test-failures", name] as const,
   job: (repo: string, id: string) => ["repo", repo, "job", id] as const,
+  jobAttempts: (repo: string, id: string) => ["repo", repo, "job", id, "attempts"] as const,
   jobLog: (repo: string, id: string, tail: number) =>
     ["repo", repo, "job", id, "log", tail] as const,
   ticket: (repo: string, key: string) => ["repo", repo, "ticket", key] as const,

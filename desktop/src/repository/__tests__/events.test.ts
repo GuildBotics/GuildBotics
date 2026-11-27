@@ -1,6 +1,6 @@
-import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
-import { predicatesFor } from "../query/events";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import { describe, expect, it, vi } from "vitest";
+import { applyChange, predicatesFor, refresh } from "../query/events";
 import { keys } from "../query/keys";
 
 function stale(client: QueryClient, event: Parameters<typeof predicatesFor>[0]) {
@@ -124,6 +124,56 @@ describe("change events", () => {
     ]);
   });
 
+  it("maps a check change to the attempts of a job of that commit, known by the job they were read for", () => {
+    const jobs = new QueryClient();
+    jobs.setQueryData(keys.job("acme/demo", "att_1"), { sha: "aaa" });
+    jobs.setQueryData(keys.jobAttempts("acme/demo", "att_1"), []);
+    jobs.setQueryData(keys.jobAttempts("acme/demo", "att_2"), []);
+    jobs.setQueryData(keys.jobLog("acme/demo", "att_1", 16384), {});
+    expect(stale(jobs, { kind: "check", path: "acme/demo", id: "aaa" })).toEqual(
+      [k(keys.job("acme/demo", "att_1")), k(keys.jobAttempts("acme/demo", "att_1"))].sort(),
+    );
+    expect(stale(jobs, { kind: "check", path: "acme/demo", id: "bbb" })).toEqual([]);
+  });
+
+  it("matches the queries known by their own answer while that first answer is on its way", () => {
+    const loading = new QueryClient();
+    const pending = (key: readonly unknown[]) =>
+      void loading.prefetchQuery({ queryKey: key, queryFn: () => new Promise(() => {}) });
+    pending(keys.job("acme/demo", "att_1"));
+    pending(keys.jobLog("acme/demo", "att_1", 16384));
+    pending(keys.pull("acme/demo", 3));
+    pending(keys.pullPart("acme/demo", 3, "checks"));
+    pending(keys.pull("acme/other", 4));
+    expect(stale(loading, { kind: "check", path: "acme/demo", id: "aaa" })).toEqual(
+      [
+        k(keys.job("acme/demo", "att_1")),
+        k(keys.pull("acme/demo", 3)),
+        k(keys.pullPart("acme/demo", 3, "checks")),
+      ].sort(),
+    );
+    // A pull request's tickets and landing blockers are not known yet either.
+    expect(stale(loading, { kind: "ticket", path: "acme/tickets", id: "1" })).toEqual(
+      [
+        k(keys.pull("acme/demo", 3)),
+        k(keys.pullPart("acme/demo", 3, "checks")),
+        k(keys.pull("acme/other", 4)),
+      ].sort(),
+    );
+    // Nor which pull requests a board's cards link.
+    pending(keys.cards("acme", "open"));
+    expect(stale(loading, { kind: "pull", path: "acme/demo", id: "3" })).toContain(
+      k(keys.cards("acme", "open")),
+    );
+  });
+
+  it("does not match a query whose fetch failed before it had an answer", async () => {
+    const failed = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    for (const key of [keys.job("acme/demo", "att_1"), keys.pull("acme/demo", 3)])
+      await failed.prefetchQuery({ queryKey: key, queryFn: () => Promise.reject(new Error("x")) });
+    expect(stale(failed, { kind: "check", path: "acme/demo", id: "aaa" })).toEqual([]);
+  });
+
   it("refreshes ticket-linked landing decisions across repositories and ancestors", () => {
     const c = new QueryClient();
     c.setQueryData(keys.pull("acme/demo", 3), {
@@ -198,5 +248,122 @@ describe("change events", () => {
 
   it("refetches everything for an event without a path", () => {
     expect(predicatesFor({ kind: "ticket" }, client)).toBeNull();
+  });
+});
+
+describe("refresh", () => {
+  /** A query whose running fetch answers on `release`; later answers come at once. */
+  function held(client: QueryClient, { shown, data }: { shown: boolean; data?: string }) {
+    let release!: (value: string) => void;
+    let calls = 0;
+    const options = {
+      queryKey: ["held"],
+      queryFn: () => {
+        calls += 1;
+        return calls === 1
+          ? new Promise<string>((resolve) => {
+              release = resolve;
+            })
+          : Promise.resolve(`answer ${calls}`);
+      },
+    };
+    if (data !== undefined) client.setQueryData(["held"], data, { updatedAt: 0 });
+    const stop = shown
+      ? new QueryObserver(client, options).subscribe(() => {})
+      : (void client.prefetchQuery(options), () => {});
+    return { release: (v: string) => release(v), calls: () => calls, stop };
+  }
+
+  it.each([
+    ["first fetch", undefined],
+    ["refetch", "earlier"],
+  ])(
+    "asks a shown query once more after its running %s, which may predate the changes, however many arrived",
+    async (_, data) => {
+      const client = new QueryClient();
+      const query = held(client, { shown: true, data });
+      await vi.waitFor(() => expect(query.calls()).toBe(1));
+      for (let i = 0; i < 3; i++) refresh(client, { queryKey: ["held"] });
+      // The running fetch is not replaced: its request would go on anyway.
+      expect(query.calls()).toBe(1);
+      query.release("before the changes");
+      await vi.waitFor(() => expect(client.getQueryData(["held"])).toBe("answer 2"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(query.calls()).toBe(2);
+      query.stop();
+    },
+  );
+
+  it("keeps an awaited refetch of that query waiting for its answer", async () => {
+    const client = new QueryClient();
+    const query = held(client, { shown: true });
+    await vi.waitFor(() => expect(query.calls()).toBe(1));
+    let done = false;
+    void client.refetchQueries({ queryKey: ["held"] }).then(() => {
+      done = true;
+    });
+    refresh(client, { queryKey: ["held"] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(done).toBe(false);
+    query.release("first");
+    await vi.waitFor(() => expect(done).toBe(true));
+    query.stop();
+  });
+
+  it.each([
+    ["first fetch", undefined],
+    ["refetch", "earlier"],
+  ])(
+    "leaves a hidden query's running %s to finish and keeps it stale after that",
+    async (_, data) => {
+      const client = new QueryClient();
+      const query = held(client, { shown: false, data });
+      await vi.waitFor(() => expect(query.calls()).toBe(1));
+      refresh(client, { queryKey: ["held"] });
+      query.release("answered");
+      await vi.waitFor(() => expect(client.getQueryData(["held"])).toBe("answered"));
+      await vi.waitFor(() => expect(client.getQueryState(["held"])?.isInvalidated).toBe(true));
+      expect(query.calls()).toBe(1);
+    },
+  );
+});
+
+describe("refresh after the fetch it waited for", () => {
+  it("leaves the next read to whoever cancelled that fetch, so an optimistic change stays", async () => {
+    let calls = 0;
+    const client = new QueryClient();
+    client.setQueryData(["settings"], "saved", { updatedAt: 0 });
+    const stop = new QueryObserver(client, {
+      queryKey: ["settings"],
+      queryFn: () => {
+        calls += 1;
+        return new Promise<string>(() => {});
+      },
+    }).subscribe(() => {});
+    await vi.waitFor(() => expect(calls).toBe(1));
+    refresh(client, { queryKey: ["settings"] });
+    // A save cancels the running read and shows its change before it is sent.
+    void client.cancelQueries({ queryKey: ["settings"] });
+    client.setQueryData(["settings"], "changed");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(client.getQueryData(["settings"])).toBe("changed");
+    expect(client.getQueryState(["settings"])?.isInvalidated).toBe(true);
+    expect(calls).toBe(1);
+    stop();
+  });
+
+  it("reads Markdown once for an event that refreshes everything", async () => {
+    let calls = 0;
+    const client = new QueryClient();
+    const stop = new QueryObserver(client, {
+      queryKey: ["markdown", "x"],
+      queryFn: () => Promise.resolve(++calls),
+    }).subscribe(() => {});
+    await vi.waitFor(() => expect(calls).toBe(1));
+    applyChange({ kind: "ticket" }, client);
+    await vi.waitFor(() => expect(calls).toBe(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(calls).toBe(2);
+    stop();
   });
 });
