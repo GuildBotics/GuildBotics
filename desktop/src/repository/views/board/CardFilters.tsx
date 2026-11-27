@@ -1,4 +1,4 @@
-import { Checkbox, Select, Text, TextInput } from "@mantine/core";
+import { Checkbox, MultiSelect, Select, Text, TextInput } from "@mantine/core";
 import { Search } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { LANES, type Card } from "../../api/types";
@@ -12,8 +12,9 @@ const NOBODY = "-";
 
 /**
  * The filters over a workspace's cards (its board, the relations of its
- * tickets): text, assignee, lane, label, repository (when the workspace has more
- * than one), and whether closed tickets are shown; `status` follows them.
+ * tickets): text, assignees, lane, label, repository (when the workspace has
+ * more than one), interactive tickets only, and whether closed tickets are
+ * shown; `status` follows them.
  */
 export function CardFilters({
   cards,
@@ -63,15 +64,19 @@ export function CardFilters({
         value={filter.text}
         onChange={(e) => onFilter({ ...filter, text: e.currentTarget.value })}
       />
-      <Select
+      <MultiSelect
         aria-label={t("board.filterAssignee")}
-        w={190}
-        value={filter.assignee || ANY}
-        onChange={(v) => onFilter({ ...filter, assignee: !v || v === ANY ? "" : v })}
-        allowDeselect={false}
+        w={220}
+        placeholder={
+          filter.assignees.length > 0
+            ? undefined
+            : `${t("board.filterAssignee")}: ${t("board.any")}`
+        }
+        value={filter.assignees}
+        onChange={(assignees) => onFilter({ ...filter, assignees })}
+        clearable
         data={[
-          { value: ANY, label: `${t("board.filterAssignee")}: ${t("board.any")}` },
-          ...assigneeNames.map((n) => ({ value: n, label: n })),
+          ...assigneeNames,
           { group: " ", items: [{ value: NOBODY, label: t("board.unassigned") }] },
         ]}
       />
@@ -110,6 +115,11 @@ export function CardFilters({
           ]}
         />
       )}
+      <Checkbox
+        label={t("board.filterInteractive")}
+        checked={filter.interactive}
+        onChange={(e) => onFilter({ ...filter, interactive: e.currentTarget.checked })}
+      />
       <Checkbox
         label={t("board.includeClosed")}
         checked={includeClosed}

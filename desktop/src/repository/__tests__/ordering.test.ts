@@ -20,6 +20,30 @@ describe("card helpers", () => {
     }
   });
 
+  it("matches any of several assignees, the unassigned too, and interactive tickets by their own setting or an ancestor's", () => {
+    const parent = {
+      url: "u",
+      repository: "acme/demo",
+      key: "1",
+      title: "",
+      state: "open",
+      state_reason: null,
+    } as const;
+    const cards = [
+      card("a", "ready", { assignee: { name: "aiko", assigned_at: "" } }),
+      card("y", "ready", { assignee: { name: "yuki", assigned_at: "" }, interactive: true }),
+      card("n", "ready", { interactive_ancestor: parent }),
+    ];
+    const keys = (filter: typeof NO_FILTER) =>
+      cards.filter((c) => matchesFilter(c, filter)).map((c) => c.key);
+    expect(keys({ ...NO_FILTER, assignees: ["yuki", "aiko"] })).toEqual(["a", "y"]);
+    expect(keys({ ...NO_FILTER, assignees: ["-", "yuki"] })).toEqual(["y", "n"]);
+    expect(keys({ ...NO_FILTER, interactive: true })).toEqual(["y", "n"]);
+    expect(keys({ ...NO_FILTER, assignees: ["aiko"], interactive: true })).toEqual([]);
+    expect(hasFilter({ ...NO_FILTER, assignees: ["-"] })).toBe(true);
+    expect(hasFilter({ ...NO_FILTER, interactive: true })).toBe(true);
+  });
+
   it("never reports success for missing or unfinished checks", () => {
     const base: Checks = {
       conflicts: [],

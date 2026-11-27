@@ -530,6 +530,7 @@ export const ja: Record<MessageKey, string> = {
   "token.revoke": "失効",
   "token.confirmRevoke": "トークン {{label}} を失効させますか？",
 
+  "board.filterInteractive": "対話で進めるチケットだけ",
   "board.includeClosed": "クローズしたチケットも表示",
   "commit.author": "作成者",
   "commit.authoredAt": "作成日時",

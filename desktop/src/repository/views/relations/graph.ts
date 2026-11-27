@@ -90,14 +90,31 @@ export function buildGraph(
   const filter = options.filter;
   const filtering = filter !== undefined && hasFilter(filter);
   const matches = eligible.filter((c) => !filtering || matchesFilter(c, filter));
-  // Only matching tickets and the ancestors leading to them survive the filter.
-  // Ancestors open automatically, so a match cannot be hidden in a folded frame.
-  const ancestors = filtering ? ancestorsOf(matches) : new Set<string>();
+  const matched = new Set(matches.map(ticketRef));
+  // Beside the matches stay, as context, the tickets they wait for and that wait for them (closed
+  // too, as a selected ticket's relations), and the selected ticket's relations, matching or not.
+  const neighbours = new Set(
+    matches.flatMap((c) => [...c.blocked_by, ...c.blocks]).map((r) => ticketRef(r)),
+  );
+  const context = filtering
+    ? cards.filter(
+        (c) =>
+          !matched.has(ticketRef(c)) &&
+          (neighbours.has(ticketRef(c)) || !!options.related?.has(ticketRef(c))),
+      )
+    : [];
+  // Only these and the ancestors leading to them survive the filter. Ancestors
+  // open automatically, so none of them can be hidden in a folded frame.
+  const ancestors = filtering ? ancestorsOf([...matches, ...context]) : new Set<string>();
+  const survivors = new Set([...matched, ...ancestors]);
+  const beside = new Set(context.map(ticketRef));
+  const allowed = new Set(eligible);
+  const shown = cards.filter(
+    (c) => beside.has(ticketRef(c)) || (allowed.has(c) && survivors.has(ticketRef(c))),
+  );
   // Nor can the selected ticket or one related to it: the frames around them open, and so does the
   // selected ticket's own, its children being related to it.
-  const revealed = ancestorsOf(matches.filter((c) => options.related?.has(ticketRef(c))));
-  const matched = new Set(matches.map(ticketRef));
-  const shown = eligible.filter((c) => matched.has(ticketRef(c)) || ancestors.has(ticketRef(c)));
+  const revealed = ancestorsOf(shown.filter((c) => options.related?.has(ticketRef(c))));
   const temporary = filtering || (options.related?.size ?? 0) > 0;
   const isOpen = (ref: string) =>
     (temporary ? options.openOverrides?.get(ref) : undefined) ??

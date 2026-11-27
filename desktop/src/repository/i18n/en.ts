@@ -529,6 +529,7 @@ export const en = {
   "token.revoke": "Revoke",
   "token.confirmRevoke": "Revoke the token {{label}}?",
 
+  "board.filterInteractive": "Interactive tickets only",
   "board.includeClosed": "Include closed tickets",
   "commit.author": "Author",
   "commit.authoredAt": "Authored",
