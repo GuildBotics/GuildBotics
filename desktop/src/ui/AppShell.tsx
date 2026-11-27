@@ -1,7 +1,7 @@
 import { ActionIcon, Tooltip } from "@mantine/core";
 import { useMediaQuery, useWindowEvent } from "@mantine/hooks";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "react-router";
 import { ownsEscape } from "./escape";
 import { useStored } from "./storage";
@@ -43,18 +43,28 @@ export function AppShell({
     setOverlay(false);
   }
   const open = narrow ? overlay : stored !== "collapsed";
-  // On the window before the page's elements, as the ticket drawer listens:
-  // an Escape that an open dropdown or a typed field keeps is not the menu's.
+  const aside = useRef<HTMLElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
+  // The open menu is the topmost layer: the page behind it is inert, and an
+  // Escape pressed in the menu (or with nothing focused) is its own, taken on
+  // the window before the page's listeners and kept from them. A dialog opened
+  // from the menu, an open dropdown, or a typed field keeps its own Escape.
   useWindowEvent(
     "keydown",
     (event) => {
+      const target = event.target as HTMLElement;
       if (
-        overlay &&
-        event.key === "Escape" &&
-        !event.isComposing &&
-        !ownsEscape(event.target as HTMLElement)
+        !overlay ||
+        event.key !== "Escape" ||
+        event.isComposing ||
+        ownsEscape(target) ||
+        (target !== document.body &&
+          (!aside.current?.contains(target) || target.closest('[role="dialog"]')))
       )
-        setOverlay(false);
+        return;
+      event.stopImmediatePropagation();
+      setOverlay(false);
+      toggle.current?.focus();
     },
     { capture: true },
   );
@@ -63,9 +73,10 @@ export function AppShell({
   return (
     <Compact.Provider value={!open}>
       <main className={open && !narrow ? "shell" : "shell compact"}>
-        <aside className={sidebarClass.join(" ")}>
+        <aside ref={aside} className={sidebarClass.join(" ")}>
           <Tooltip label={label} position="right" disabled={open}>
             <ActionIcon
+              ref={toggle}
               className="sidebar-toggle"
               variant="subtle"
               color="gray"
@@ -82,7 +93,9 @@ export function AppShell({
           {sidebar}
         </aside>
         {overlay && <div className="sidebar-backdrop" onClick={() => setOverlay(false)} />}
-        <section className="workspace">{children}</section>
+        <section className="workspace" inert={overlay}>
+          {children}
+        </section>
       </main>
     </Compact.Provider>
   );

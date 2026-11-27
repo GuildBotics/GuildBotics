@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 import { choose, pickFromMenu } from "../test/mantine";
+import { narrowScreen } from "../test/media";
 import { workspaceInitials } from "../components/Sidebar";
 import { card } from "./fixtures";
 
@@ -382,17 +383,8 @@ describe("collapsible sidebar", () => {
     expect(await screen.findByRole("combobox", { name: "ワークスペース" })).toHaveValue("beta");
   });
 
-  it("stays a rail on a narrow screen and opens the menu over the page until the next move", async () => {
-    const media = vi.spyOn(window, "matchMedia").mockImplementation((query: string) => ({
-      matches: query === "(max-width: 900px)" || query === "(prefers-reduced-motion: reduce)",
-      media: query,
-      onchange: null,
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    }));
+  it("stays a rail on a narrow screen and opens the menu over an inert page until the next move", async () => {
+    const restore = narrowScreen();
     try {
       setup();
       window.localStorage.setItem("guildbotics.sidebar", "expanded");
@@ -400,22 +392,41 @@ describe("collapsible sidebar", () => {
       renderApp("/workspaces/acme/task-flow");
       await expectStart("acme");
       const expand = () => screen.getByRole("button", { name: "Expand the menu", expanded: false });
+      const page = () => document.querySelector(".workspace") as HTMLElement;
       expect(screen.queryByRole("combobox", { name: "Workspace" })).not.toBeInTheDocument();
+      expect(page()).not.toHaveAttribute("inert");
 
       await user.click(expand());
       expect(await screen.findByRole("combobox", { name: "Workspace" })).toHaveValue("acme");
+      expect(page()).toHaveAttribute("inert");
       const nav = screen.getByRole("navigation", { name: "Main" });
       await user.click(within(nav).getByRole("link", { name: "Releases" }));
       await waitFor(() => expect(window.location.pathname).toBe("/workspaces/acme/releases"));
       expect(expand()).toBeVisible();
       expect(screen.queryByRole("combobox", { name: "Workspace" })).not.toBeInTheDocument();
+      expect(page()).not.toHaveAttribute("inert");
 
+      // Escape in a dialog opened from the menu closes the dialog only.
       await user.click(expand());
+      await choose(user, "Workspace", "+ New workspace…");
+      const dialog = await screen.findByRole("dialog", { name: "New workspace" });
+      within(dialog).getByRole("button", { name: "Cancel" }).focus();
       await user.keyboard("{Escape}");
-      expect(expand()).toBeVisible();
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(
+        screen.getByRole("button", { name: "Collapse the menu", expanded: true }),
+      ).toBeVisible();
+
+      // Escape in the menu closes it and returns to the button that opens it.
+      within(screen.getByRole("navigation", { name: "Main" }))
+        .getByRole("link", { name: "Task flow" })
+        .focus();
+      await user.keyboard("{Escape}");
+      expect(expand()).toHaveFocus();
+      expect(page()).not.toHaveAttribute("inert");
       expect(window.localStorage.getItem("guildbotics.sidebar")).toBe("expanded");
     } finally {
-      media.mockRestore();
+      restore();
     }
   });
 });

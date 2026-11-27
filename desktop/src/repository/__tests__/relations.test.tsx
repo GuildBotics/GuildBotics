@@ -5,6 +5,7 @@ import type { Card, TicketRef } from "../api/types";
 import { apiError, fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 import { fill } from "../../test/fill";
 import { choose, pickFromMenu } from "../test/mantine";
+import { narrowScreen } from "../test/media";
 import { applyChange } from "../query/events";
 import { card } from "./fixtures";
 
@@ -1705,4 +1706,33 @@ describe("relations: order and new tickets", () => {
       expect(sent).toEqual(writes);
     },
   );
+});
+
+it("keeps the selection when Escape closes the menu opened over the task flow on a narrow screen", async () => {
+  const restore = narrowScreen();
+  try {
+    const user = userEvent.setup();
+    fakeApi(routes());
+    renderApp("/workspaces/acme/task-flow");
+    const selected = () => draggable("5").getAttribute("aria-current") === "true";
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#5 / }));
+    expect(selected()).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Expand the menu" }));
+    within(screen.getByRole("navigation", { name: "Main" }))
+      .getByRole("link", { name: "Releases" })
+      .focus();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: "Expand the menu" })).toHaveFocus();
+    expect(selected()).toBe(true);
+    // The button's tooltip, shown as it takes the focus back, is dismissed next;
+    // then Escape is the task flow's again.
+    expect(screen.getByRole("tooltip", { name: "Expand the menu" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+    expect(selected()).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(selected()).toBe(false);
+  } finally {
+    restore();
+  }
 });
