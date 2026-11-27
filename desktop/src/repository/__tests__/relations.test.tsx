@@ -1005,7 +1005,68 @@ describe("relations: the selected ticket", () => {
     rect.mockRestore();
   });
 
-  it("lets a selected ticket go once it is deleted, and reads no closed tickets for it after", async () => {
+  it("keeps a selection when all tickets fail to be read again, and shows its relations once retried", async () => {
+    const user = userEvent.setup();
+    const made = card("12", "ready", { blocked_by: [ref("4", "closed")] });
+    let lists = { open, all };
+    let failing = false;
+    fakeApi(
+      routes(undefined, {
+        "GET /api/v1/workspaces/acme/board/cards": (req) =>
+          req.search.includes("state=all") && failing
+            ? apiError(400, "invalid", "refused")
+            : json(200, {
+                items: req.search.includes("state=all") ? lists.all : lists.open,
+                next_cursor: null,
+              }),
+      }),
+    );
+    const { client } = renderApp("/workspaces/acme/task-flow");
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#8 / }));
+    await screen.findByRole("article", { name: /^acme\/demo#9 / });
+    await user.click(background());
+    lists = {
+      open: [...open, made],
+      all: [...all.map((c) => (c.key === "4" ? { ...c, blocks: [ref("12")] } : c)), made],
+    };
+    failing = true;
+    act(() => applyChange({ kind: "ticket", path: "acme/demo", id: "12" }, client));
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#12 / }));
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    // Until they are read, the open ones stay shown: #12 with them, still selected.
+    expect(isSelected("12")).toBe(true);
+    failing = false;
+    await user.click(retry);
+    expect(await screen.findByRole("article", { name: /^acme\/demo#4 / })).toHaveClass("closed");
+    expect(isSelected("12")).toBe(true);
+  });
+
+  it("keeps showing a selected ticket closed meanwhile, reading the closed tickets for it", async () => {
+    const user = userEvent.setup();
+    let lists = { open, all };
+    fakeApi(
+      routes(undefined, {
+        "GET /api/v1/workspaces/acme/board/cards": (req) =>
+          json(200, {
+            items: req.search.includes("state=all") ? lists.all : lists.open,
+            next_cursor: null,
+          }),
+      }),
+    );
+    const { client } = renderApp("/workspaces/acme/task-flow");
+    // #5 has no relation: nothing closed is read for it.
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#5 / }));
+    const closed5 = { ...(open[1] as Card), state: "closed" as const, lane: "done" as const };
+    lists = {
+      open: open.filter((c) => c.key !== "5"),
+      all: [...all.filter((c) => c.key !== "5"), closed5],
+    };
+    act(() => applyChange({ kind: "ticket", path: "acme/demo", id: "5" }, client));
+    await waitFor(() => expect(article("5")).toHaveClass("closed"));
+    expect(isSelected("5")).toBe(true);
+  });
+
+  it("reads no closed tickets for a selected ticket once it is deleted", async () => {
     const user = userEvent.setup();
     let deleted = false;
     const without8 = (cards: Card[]) => (deleted ? cards.filter((c) => c.key !== "8") : cards);
@@ -1035,6 +1096,53 @@ describe("relations: the selected ticket", () => {
     );
     expect(allReads(fake)).toHaveLength(reads);
     expect(screen.queryByRole("article", { name: /^acme\/demo#9 / })).not.toBeInTheDocument();
+  });
+
+  it("keeps a ticket made since the closed tickets were last read selected, shown, and reads them again", async () => {
+    const user = userEvent.setup();
+    // #12 is made later, waiting for the closed #4.
+    const made = card("12", "ready", { blocked_by: [ref("4", "closed")] });
+    let lists = { open, all };
+    /** Holds the next read of all tickets until released. */
+    let held: Promise<void> | null = null;
+    let release = () => {};
+    const fake = fakeApi(
+      routes(undefined, {
+        "GET /api/v1/workspaces/acme/board/cards": async (req) => {
+          const items = req.search.includes("state=all") ? lists.all : lists.open;
+          if (req.search.includes("state=all") && held) await held;
+          return json(200, { items, next_cursor: null });
+        },
+      }),
+    );
+    const { client } = renderApp("/workspaces/acme/task-flow");
+    // The closed tickets are read once for #8, then no longer shown.
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#8 / }));
+    await screen.findByRole("article", { name: /^acme\/demo#9 / });
+    await user.click(background());
+    lists = {
+      open: [...open, made],
+      all: [...all.map((c) => (c.key === "4" ? { ...c, blocks: [ref("12")] } : c)), made],
+    };
+    held = new Promise((resolve) => (release = resolve));
+    act(() => applyChange({ kind: "ticket", path: "acme/demo", id: "12" }, client));
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#12 / }));
+    // While all tickets are read again, the open ones are shown as read since: the older list lacking
+    // #12 neither hides nor lets go of it, and its closed relation #4 comes once they are read.
+    await waitFor(() => expect(allReads(fake)).toHaveLength(2));
+    expect(isSelected("12")).toBe(true);
+    expect(screen.queryByRole("article", { name: /^acme\/demo#4 / })).not.toBeInTheDocument();
+    // Closed meanwhile, #12 is in neither the open tickets nor the older list: not taken for deleted.
+    const closed = { ...made, state: "closed" as const, lane: "done" as const };
+    lists = { open, all: [...lists.all.filter((c) => c.key !== "12"), closed] };
+    act(() => applyChange({ kind: "ticket", path: "acme/demo", id: "12" }, client));
+    await waitFor(() =>
+      expect(screen.queryByRole("article", { name: /^acme\/demo#12 / })).not.toBeInTheDocument(),
+    );
+    release();
+    expect(await screen.findByRole("article", { name: /^acme\/demo#12 / })).toHaveClass("closed");
+    expect(isSelected("12")).toBe(true);
+    expect(edge("4", "12")).not.toBeNull();
   });
 
   it("keeps the selection while a ticket is opened in the drawer, and lets it go with Escape or a second click", async () => {

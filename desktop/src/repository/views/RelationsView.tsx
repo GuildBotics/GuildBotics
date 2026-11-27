@@ -139,7 +139,9 @@ export function RelationsView({ workspace }: { workspace: string }) {
   // selected ticket not among the open ones is closed, or has a closed relation.
   const openCards = useCards(workspace, "open");
   const openItems = openCards.data?.items ?? [];
-  const selectedOpen = selected ? openItems.find((c) => ticketRef(c) === selected) : undefined;
+  const lookUp = (items: Card[]) =>
+    selected ? items.find((c) => ticketRef(c) === selected) : undefined;
+  const selectedOpen = lookUp(openItems);
   const needAll =
     includeClosed ||
     openItems.some((c) => c.parent?.state === "closed") ||
@@ -148,13 +150,24 @@ export function RelationsView({ workspace }: { workspace: string }) {
   const allCards = useCards(workspace, "all", needAll);
   // Relations change only once the cards they need are read; until then the
   // open ones are shown, and a failure to read them is shown with a retry.
+  // Tickets read earlier and needed again count only once read again: events
+  // only marked them old, and they may lack what was made or changed since.
+  const [wanted, setWanted] = useState({ needAll, since: 0, reading: false });
+  if (wanted.needAll !== needAll)
+    setWanted({
+      needAll,
+      since: allCards.dataUpdatedAt,
+      reading: needAll && (allCards.fetchStatus !== "idle" || allCards.data === undefined),
+    });
+  const reading = wanted.reading && allCards.dataUpdatedAt === wanted.since;
   const required = needAll ? allCards : openCards;
-  const shown = required.data ?? openCards.data;
-  const complete = required.data !== undefined;
+  const shown = (reading ? undefined : required.data) ?? openCards.data;
+  const complete = !reading && required.data !== undefined;
   const cards = useMemo(() => shown?.items ?? [], [shown]);
-  const selectedCard = selected ? cards.find((c) => ticketRef(c) === selected) : undefined;
-  // A ticket deleted while selected is let go, so its closed tickets are not read on.
-  if (complete && selected && !selectedCard) select(null);
+  const selectedCard = lookUp(cards);
+  // A ticket deleted while selected is let go, so its closed tickets are not
+  // read on: told only by all tickets as read since it was needed.
+  if (selected && !selectedOpen && complete && !selectedCard) select(null);
   const temporary = filtering || selectedCard !== undefined;
   const related = useMemo(
     () =>
