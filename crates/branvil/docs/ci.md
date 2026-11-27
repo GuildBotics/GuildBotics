@@ -727,6 +727,34 @@ waiting for a FIFO, and no more of it than the collecting VM's quota, then
 collects the artifact paths from the work directory; nothing outside it is
 read.
 
+## JUnit failure history
+
+A job can name one JUnit report by adding `junit` to one of its artifact
+definitions. List that file explicitly in the same artifact's `paths`.
+
+```toml
+[[jobs]]
+name = "rust-test"
+image = "guildbotics/agent-environment:dev"
+commands = ["cargo nextest run --profile ci"]
+artifacts = [{ name = "rust-test-results", paths = ["target/nextest/ci/junit.xml", "target/nextest/ci/tmp-usage.json"], junit = "target/nextest/ci/junit.xml" }]
+```
+
+When the runner finishes the attempt, the Hub reads the declared file from
+the uploaded ZIP and records each distinct testcase `name` with a
+`failure` or `error` element. The Hub reads UTF-8 XML up to 8 MiB and
+250,000 nodes and records up to 256 distinct failing names per report.
+Names may be up to 512 bytes with no control characters. Missing or
+unreadable reports leave the attempt's CI conclusion unchanged.
+
+Open **Test failure history** from the repository's pull request list or a
+job's details, then enter the full, case-sensitive testcase name. The
+repository keeps the latest 20 failed attempts per name, including the
+runner, commit, finish time, and attempt link. Entries survive deletion
+of the logs and artifacts. Add the declaration after updating the Hub to a
+version that supports it. Recording starts when a job with the declaration
+finishes.
+
 ## Dependency cache
 
 A cache entry is a raw ext4 disk image containing the job's cached paths.

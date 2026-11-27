@@ -83,7 +83,10 @@ export function PullsView({ workspace, repo }: { workspace: string; repo: string
           </Text>
         }
         action={
-          <TipChecks key={repo ?? ALL_REPOS} workspace={workspace} paths={paths} repo={repo} />
+          <Group gap="sm">
+            {repo && <Link to={href.testFailures(repo)}>{t("ci.testFailures")}</Link>}
+            <TipChecks key={repo ?? ALL_REPOS} workspace={workspace} paths={paths} repo={repo} />
+          </Group>
         }
       />
       <Card p="lg">

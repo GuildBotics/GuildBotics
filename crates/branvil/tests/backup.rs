@@ -334,16 +334,15 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("from schema version 50 to 51"),
-        "{}",
-        text(&out)
-    );
-    assert!(
-        text(&out).contains("added runner claim and deferral evidence to CI attempts"),
+        text(&out).contains(&format!(
+            "from schema version {PREVIOUS_SCHEMA_VERSION} to {}",
+            PREVIOUS_SCHEMA_VERSION + 1
+        )),
         "{}",
         text(&out)
     );
     let restored_data = target.path().join("data");
+    assert!(previous_schema_backup(&restored_data).is_file());
     assert_eq!(
         std::fs::read_to_string(restored_data.join("config.toml")).unwrap(),
         settings

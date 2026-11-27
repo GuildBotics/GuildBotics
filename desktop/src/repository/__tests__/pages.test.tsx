@@ -29,6 +29,84 @@ const SHELL = {
   "GET /api/v1/members": page([]),
 };
 
+it("finds test failures by exact name and links to each recorded attempt", async () => {
+  const path = "/api/v1/repos/acme/demo/test-failures";
+  const name = "suite::case[1] & more";
+  const sha = "d".repeat(40);
+  const attempt = "/workspaces/acme/repos/demo/jobs/att_failed";
+  const api = fakeApi({
+    ...SHELL,
+    "GET /api/v1/repos": page([repo("acme/demo")]),
+    "GET /api/v1/repos/acme/demo/pulls": page([]),
+    [`GET ${path}`]: ({ search }) =>
+      json(
+        200,
+        new URLSearchParams(search).get("name") === name
+          ? [
+              {
+                attempt_id: "att_failed",
+                job: "rust-test",
+                runner: "runner-linux",
+                sha,
+                finished_at: "2026-11-27T13:00:00Z",
+                url: attempt,
+              },
+            ]
+          : [],
+      ),
+  });
+  const user = userEvent.setup();
+  renderApp("/workspaces/acme/repos/demo");
+  await user.click(await screen.findByRole("link", { name: "Test failure history" }));
+  const input = screen.getByRole("textbox", { name: "Exact test name" });
+  expect(input).toHaveAccessibleDescription(/In nextest logs, use the part after the binary name/);
+  expect(api.calls("GET", path)).toHaveLength(0);
+  await user.click(input);
+  await user.paste(name);
+  await user.click(screen.getByRole("button", { name: "Search" }));
+  const results = await screen.findByRole("table", { name });
+  expect(new URLSearchParams(window.location.search).get("name")).toBe(name);
+  expect(within(results).getByRole("link", { name: "rust-test" })).toHaveAttribute("href", attempt);
+  expect(within(results).getByRole("cell", { name: "runner-linux" })).toBeVisible();
+  expect(within(results).getByRole("link", { name: sha.slice(0, 10) })).toHaveAttribute(
+    "href",
+    `/workspaces/acme/repos/demo/commits/${sha}`,
+  );
+  expect(within(results).getByText((_, element) => element?.tagName === "TIME")).toHaveAttribute(
+    "datetime",
+    "2026-11-27T13:00:00Z",
+  );
+  await user.clear(input);
+  await user.type(input, "Suite::case");
+  await user.click(screen.getByRole("button", { name: "Search" }));
+  expect(await screen.findByText("No recorded failures for this test.")).toBeVisible();
+  expect(
+    api.calls("GET", path).map(({ search }) => new URLSearchParams(search).get("name")),
+  ).toEqual([name, "Suite::case"]);
+  expect(new URLSearchParams(window.location.search).get("name")).toBe("Suite::case");
+  act(() => window.history.back());
+  expect(await screen.findByRole("table", { name })).toBeVisible();
+  expect(input).toHaveValue(name);
+});
+
+it("opens a shared test failure search and displays the Japanese input hint", async () => {
+  const path = "/api/v1/repos/acme/demo/test-failures";
+  const name = "suite::日本語 + &";
+  const params = new URLSearchParams({ name });
+  const api = fakeApi({ ...SHELL, [`GET ${path}`]: json(200, []) });
+
+  renderApp(`/workspaces/acme/repos/demo/test-failures?${params}`, "ja");
+  const input = await screen.findByRole("textbox", { name: "テスト名（完全一致）" });
+  expect(input).toHaveValue(name);
+  expect(input).toHaveAccessibleDescription(
+    /nextest のログでは、バイナリ名に続くテスト名を使います/,
+  );
+  expect(await screen.findByText("このテストの失敗は記録されていません。")).toBeVisible();
+  expect(
+    api.calls("GET", path).map(({ search }) => new URLSearchParams(search).get("name")),
+  ).toEqual([name]);
+});
+
 it.each([
   ["en", "paths"],
   ["ja", "paths"],
@@ -675,14 +753,14 @@ describe("pages", () => {
               host_cpu_peak_bps: null,
             },
             commands: {
-              disk_write_bytes: 123,
-              cpu_time_ms: 456,
+              disk_write_bytes: 4_294_967_296,
+              cpu_time_ms: 1_234_567,
               host_cpu_average_bps: 1525,
               host_cpu_peak_bps: 3210,
             },
             save: {
               disk_write_bytes: 789,
-              cpu_time_ms: null,
+              cpu_time_ms: 456,
               host_cpu_average_bps: null,
               host_cpu_peak_bps: null,
             },
@@ -728,11 +806,19 @@ describe("pages", () => {
       expect(passed.getByText(/3000 MiB/)).toBeInTheDocument();
       expect(passed.getByText(/6100 MiB/)).toBeInTheDocument();
       const command = within(passed.getByRole("row", { name: /Commands|コマンド/ }));
-      expect(command.getByText("123")).toBeInTheDocument();
-      expect(command.getByText("456")).toBeInTheDocument();
+      expect(command.getByText("4.0 GiB")).toHaveAttribute(
+        "title",
+        language === "ja" ? "4,294,967,296 バイト" : "4,294,967,296 bytes",
+      );
+      expect(command.getByTitle("1,234,567 ms")).toHaveTextContent(
+        language === "ja" ? "20分34秒" : "20m 34s",
+      );
+      const save = within(passed.getByRole("row", { name: /Save|保存/ }));
+      expect(save.getByText("789 B")).toBeInTheDocument();
+      expect(save.getByText("456 ms")).toBeInTheDocument();
       expect(command.getByText("15.25% / 32.1%")).toBeInTheDocument();
       const restore = within(passed.getByRole("row", { name: /Restore|復元/ }));
-      expect(restore.getByText("0")).toBeInTheDocument();
+      expect(restore.getByText("0 B")).toBeInTheDocument();
       expect(restore.getAllByText("—")).toHaveLength(2);
       expect(
         passed.getByText(

@@ -14,6 +14,7 @@ import { PullsView } from "./views/PullsView";
 import { PullView } from "./views/PullView";
 import { ReleasesView } from "./views/ReleasesView";
 import { RelationsView } from "./views/RelationsView";
+import { TestFailuresView } from "./views/TestFailuresView";
 import { TicketView } from "./views/TicketView";
 import { TicketDrawer } from "./views/ticket/TicketDrawer";
 import type { CurrentWorkspace } from "./workspace";
@@ -57,6 +58,8 @@ export function RepositoryPage({
       );
     case "commit":
       return <CommitView repo={route.repo} sha={route.sha} />;
+    case "test_failures":
+      return <TestFailuresView key={route.repo} repo={route.repo} />;
     case "job":
       return (
         <JobView

@@ -336,9 +336,34 @@ pub(super) fn process(pid: u32) -> Process {
     }
     Process {
         write_bytes: Some(info.ri_diskio_byteswritten),
-        cpu_ms: Some(info.ri_user_time.saturating_add(info.ri_system_time) / 1_000_000),
+        cpu_ms: mach_timebase().and_then(|(numer, denom)| {
+            mach_cpu_ms(info.ri_user_time, info.ri_system_time, numer, denom)
+        }),
         rss_kib: Some(info.ri_resident_size.div_ceil(1024)),
     }
+}
+
+#[cfg(target_os = "macos")]
+#[allow(
+    deprecated,
+    reason = "libc exposes the macOS timebase ABI used by proc_pid_rusage"
+)]
+fn mach_timebase() -> Option<(u32, u32)> {
+    static TIMEBASE: std::sync::OnceLock<Option<(u32, u32)>> = std::sync::OnceLock::new();
+    *TIMEBASE.get_or_init(|| {
+        let mut info = libc::mach_timebase_info_data_t { numer: 0, denom: 0 };
+        // Mach fills the timebase for this host.
+        (unsafe { libc::mach_timebase_info(&mut info) } == libc::KERN_SUCCESS && info.numer > 0)
+            .then_some((info.numer, info.denom))
+    })
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn mach_cpu_ms(user: u64, system: u64, numer: u32, denom: u32) -> Option<u64> {
+    // proc_pid_rusage returns Mach absolute ticks for both CPU counters.
+    let ticks = u128::from(user) + u128::from(system);
+    let ns = (ticks * u128::from(numer)).checked_div(u128::from(denom))?;
+    u64::try_from(ns / 1_000_000).ok()
 }
 
 #[cfg(target_os = "macos")]
@@ -434,6 +459,13 @@ fn host_cpu() -> Option<(u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn macos_process_cpu_time_uses_the_host_timebase() {
+        assert_eq!(mach_cpu_ms(180_000_000, 60_000_000, 125, 3), Some(10_000));
+        assert_eq!(mach_cpu_ms(700_000, 500_000, 1, 1), Some(1));
+        assert_eq!(mach_cpu_ms(1, 0, 125, 0), None);
+    }
 
     #[test]
     fn splits_ram_cache_writes_from_cumulative_command_counters() {

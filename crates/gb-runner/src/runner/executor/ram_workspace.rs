@@ -628,6 +628,7 @@ with patch("time.monotonic", side_effect=[0, 60]), patch("__main__.run") as moun
                     vec![pipeline::ArtifactDef {
                         name: "test".into(),
                         paths: vec!["demo/".into()],
+                        junit: None,
                     }]
                 },
                 cache: Some(pipeline::CacheDef {

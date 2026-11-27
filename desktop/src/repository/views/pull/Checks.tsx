@@ -18,6 +18,8 @@ import {
 import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { ChevronRight, CircleCheck, CircleDashed, CircleX, ExternalLink } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { formatBinarySize } from "../../../ui/binarySize";
 import * as api from "../../api/endpoints";
 import type {
   Check,
@@ -755,7 +757,10 @@ function RunnerClaimDetails({ job }: { job: Job }) {
 }
 
 function JobResources({ job }: { job: Job }) {
+  const { i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? i18n.language;
   const t = useT();
+  const duration = useDuration();
   const { resources, peak_memory_mib: host } = job;
   const guest = resources?.guest_peak_memory_mib;
   if (!resources && host == null) return null;
@@ -787,8 +792,20 @@ function JobResources({ job }: { job: Job }) {
                   return (
                     <Table.Tr key={phase}>
                       <Table.Th scope="row">{t(`ci.resourcePhase.${phase}`)}</Table.Th>
-                      <Table.Td>{bytes == null ? "—" : bytes.toLocaleString()}</Table.Td>
-                      <Table.Td>{time == null ? "—" : time.toLocaleString()}</Table.Td>
+                      <Table.Td
+                        title={
+                          bytes == null
+                            ? undefined
+                            : t("ci.resourceBytesExact", { bytes: bytes.toLocaleString(locale) })
+                        }
+                      >
+                        {bytes == null ? "—" : formatBinarySize(bytes, locale)}
+                      </Table.Td>
+                      <Table.Td
+                        title={time == null ? undefined : `${time.toLocaleString(locale)} ms`}
+                      >
+                        {time == null ? "—" : time < 1000 ? `${time} ms` : duration(time / 1000)}
+                      </Table.Td>
                       <Table.Td>
                         {average == null || peak == null
                           ? "—"
@@ -917,6 +934,7 @@ function JobDetails({
         </dd>
       </dl>
       {(retry.isError || cancel.isError) && <ErrorMessage error={retry.error ?? cancel.error} />}
+      <Link to={href.testFailures(repo)}>{t("ci.testFailures")}</Link>
       <LogViewer
         repo={repo}
         attemptId={attemptId}

@@ -38,6 +38,7 @@ libc = "0.2"
 loopback-auth = { path = "../loopback-auth" }
 percent-encoding = "2.3.2"
 redb = "4.4.0"
+roxmltree = "0.21"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.154"
@@ -54,6 +55,7 @@ tar = "0.4.46"
 crc32fast = "1.5.0"
 pulldown-cmark = { version = "0.13.4", default-features = false }
 toml_edit = "0.25.17"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 
 [dev-dependencies]

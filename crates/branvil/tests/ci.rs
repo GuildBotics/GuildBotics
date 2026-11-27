@@ -15,6 +15,73 @@ pub(crate) const DIGEST: &str =
     "sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8";
 
 #[tokio::test]
+async fn records_test_failures_when_a_runner_finishes_its_attempt() {
+    use std::io::Write;
+
+    let w = World::new().await;
+    let runner = Runner::new(&w, "junit-runner").await;
+    let mut ci = pipeline(&["test"]);
+    ci.push_str("artifacts=[{name='results', paths=['out/junit.xml'], junit='out/junit.xml'}]\n");
+    let head = land(
+        &w,
+        "test-failure-history",
+        &[(".guildbotics-ci.toml", &ci)],
+        None,
+    )
+    .await;
+    let attempt = runner.claim_head(&head).await;
+    assert_eq!(
+        attempt["job"]["artifacts"],
+        json!([{"name":"results","paths":["out/junit.xml"]}]),
+        "older runners receive the same artifact contract"
+    );
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    zip.start_file("other.xml", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"<testsuite><testcase name='ignored'><failure/></testcase></testsuite>")
+        .unwrap();
+    zip.start_file("out/junit.xml", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(
+        b"<testsuite><testcase name='suite::case[1] &amp; more'><failure/></testcase></testsuite>",
+    )
+    .unwrap();
+    let archive = zip.finish().unwrap().into_inner();
+    let (status, _) = runner
+        .raw(reqwest::Method::PUT, &attempt, "artifacts/results", archive)
+        .await;
+    assert_eq!(status, 200);
+    let lookup = format!(
+        "{}/test-failures?name=suite%3A%3Acase%5B1%5D+%26+more",
+        w.repo_path()
+    );
+    assert_eq!(w.server.ok(&lookup, &w.ken).await, json!([]));
+    let (status, finished) = runner.finish(&attempt, "failure").await;
+    assert_eq!(status, 200, "{finished}");
+    let id = attempt["attempt_id"].as_str().unwrap();
+    let expected = json!([{
+        "attempt_id": id,
+        "job": "test",
+        "runner": "junit-runner",
+        "sha": head,
+        "finished_at": finished["finished_at"],
+        "url": format!("{}/workspaces/acme/repos/demo/jobs/{id}", w.server.url),
+    }]);
+    std::fs::remove_file(
+        w.server
+            .data
+            .join("ci/artifacts")
+            .join(id)
+            .join("results.zip"),
+    )
+    .unwrap();
+    assert_eq!(w.server.ok(&lookup, &w.ken).await, expected);
+    let ignored = format!("{}/test-failures?name=ignored", w.repo_path());
+    assert_eq!(w.server.ok(&ignored, &w.ken).await, json!([]));
+    assert_eq!(w.server.get(&lookup, &runner.token).await.0, 403);
+}
+
+#[tokio::test]
 async fn ci_job_lists_live_in_the_pipeline_not_in_the_repository_settings() {
     let w = World::new().await;
     let before = w.server.ok(&w.repo_path(), &w.owner).await;
@@ -577,6 +644,7 @@ async fn previous_schema_upgrade_preserves_records() {
     as_previous_schema(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
+    assert!(before.contains_key("ci_test_failures"));
     assert_eq!(before["ix_ci_memory"], indexed_memory);
     assert!(
         admin("check")
@@ -586,7 +654,13 @@ async fn previous_schema_upgrade_preserves_records() {
     let mut attempts = records(&db, "ci_attempts");
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 50 to 51"), "{output}");
+    assert!(
+        output.contains(&format!(
+            "from schema version {PREVIOUS_SCHEMA_VERSION} to {}",
+            PREVIOUS_SCHEMA_VERSION + 1
+        )),
+        "{output}"
+    );
     // Old attempts gain an empty resource field without fabricating a report.
     for a in &mut attempts {
         a["resources"] = Value::Null;
@@ -594,8 +668,10 @@ async fn previous_schema_upgrade_preserves_records() {
     assert!(!attempts.is_empty());
     assert_eq!(records(&db, "ci_attempts"), attempts);
     let upgraded = tables(&db);
+    assert!(upgraded["ix_ci_memory"].is_empty());
     let unchanged = |mut snapshot: Tables| {
-        snapshot.retain(|name, _| name != "meta" && name != "ci_attempts");
+        snapshot
+            .retain(|name, _| !matches!(name.as_str(), "meta" | "ci_attempts" | "ix_ci_memory"));
         snapshot
     };
     let after = unchanged(upgraded.clone());

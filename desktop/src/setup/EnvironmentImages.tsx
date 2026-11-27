@@ -35,14 +35,9 @@ import {
 import { useT, type MessageKey } from "../repository/i18n";
 import { useCiChange, useCiSettings } from "../repository/query/hooks";
 import { useFragmentTarget } from "../repository/router/Router";
+import { formatBinarySize } from "../ui/binarySize";
 import { Header } from "../ui/Header";
 import { EnvironmentCommand } from "./EnvironmentCommand";
-
-/** An image's size as people read it (the cache holds images of hundreds of MiB to GiB). */
-function size(bytes: number): string {
-  const gib = bytes / 2 ** 30;
-  return gib >= 1 ? `${gib.toFixed(1)} GiB` : `${Math.max(1, Math.round(bytes / 2 ** 20))} MiB`;
-}
 
 /** A digest cut in the middle: `sha256:` and its first 8 hex digits, then the last 9 characters. */
 function shorten(digest: string): string {
@@ -211,7 +206,7 @@ function Cached({
           {added && <StateBadge tone="success">{repoT("ci.settings.added")}</StateBadge>}
         </Group>
         <Text size="xs" c="dimmed">
-          {size(c.size_bytes)} · <Time value={c.created_at} date />
+          {formatBinarySize(Math.max(c.size_bytes, 2 ** 20))} · <Time value={c.created_at} date />
           {users && ` · ${repoT("ci.settings.usedBy", { repositories: users })}`}
         </Text>
         <Text size="xs" c="dimmed" className="mono" title={c.digest} truncate>

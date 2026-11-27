@@ -1,4 +1,4 @@
-//! 50 → 51: CI attempts record resources and estimate memory from guest samples.
+//! 51 → 52: CI attempts record resources and estimate memory from guest samples.
 //! Every upgrade also binds the GuildBotics workspaces' execution roots.
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -6,7 +6,7 @@ use crate::config::Layout;
 use crate::error::AppError;
 use crate::store::{self, Rd, Store, Upgraded, Upgrading, Wtx};
 
-pub const FROM: u64 = 50;
+pub const FROM: u64 = 51;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
@@ -91,11 +91,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upgrade_preserves_host_rss_clears_its_index_and_binds_execution_roots() {
+    fn upgrade_preserves_runner_evidence_and_junit_history_and_clears_host_samples() {
         use crate::model::Workspace;
         let temporary = tempfile::tempdir().unwrap();
         let layout = Layout::new(temporary.path());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
+        let junit_key = store::Key::new().s("acme/demo").s("test::fails").bytes();
+        let junit_history = serde_json::json!([{
+            "attempt_id": "att_1",
+            "job": "test",
+            "sha": "a".repeat(40),
+            "runner": "linux",
+            "finished_at": "2026-11-26T10:00:00Z"
+        }]);
         let workspace = db
             .write_sync(|w| {
                 let workspace = crate::domain::repos::insert_workspace(w, "acme".into(), None)?;
@@ -105,6 +113,7 @@ mod tests {
                     &serde_json::json!({"peak_memory_mib": 8192, "runner_claim": {"memory_samples": 1}}),
                 )?;
                 w.put_raw(store::IX_CI_MEMORY, b"old", &8192_u64.to_be_bytes())?;
+                w.put(store::CI_TEST_FAILURES, &junit_key, &junit_history)?;
                 w.put(
                     store::META,
                     &store::Key::new().s("schema_version").bytes(),
@@ -130,9 +139,14 @@ mod tests {
             .read_sync(|r| r.get(store::CI_ATTEMPTS, b"attempt"))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt["resources"], serde_json::Value::Null);
+        assert_eq!(attempt.get("resources"), Some(&serde_json::Value::Null));
         assert_eq!(attempt["peak_memory_mib"], 8192);
         assert_eq!(attempt["runner_claim"]["memory_samples"], 1);
+        assert_eq!(
+            db.read_sync(|r| r.get(store::CI_TEST_FAILURES, &junit_key))
+                .unwrap(),
+            Some(junit_history)
+        );
         assert!(
             db.read_sync(|r| r.prefix_keys(store::IX_CI_MEMORY, &[]))
                 .unwrap()

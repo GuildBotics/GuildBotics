@@ -2936,6 +2936,7 @@ esac
             artifacts: vec![crate::ci::pipeline::ArtifactDef {
                 name: "report".into(),
                 paths: vec!["out/".into()],
+                junit: None,
             }],
             cache: Some(crate::ci::pipeline::CacheDef {
                 paths: vec!["target".into()],

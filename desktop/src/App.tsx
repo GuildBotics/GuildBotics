@@ -251,7 +251,7 @@ export function App() {
                 </GuardedNavLink>
                 <GuardedNavLink
                   to={href.pulls(visibleWorkspace)}
-                  active={["repo", "pull", "commit", "job"].includes(route.name)}
+                  active={["repo", "pull", "commit", "job", "test_failures"].includes(route.name)}
                 >
                   <GitPullRequest size={18} /> {repositoryT("nav.pulls")}
                 </GuardedNavLink>

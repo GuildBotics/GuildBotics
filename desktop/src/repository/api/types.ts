@@ -528,6 +528,15 @@ export interface Branch {
   sha: string;
 }
 
+export type TestFailure = {
+  attempt_id: string;
+  job: string;
+  runner: string;
+  sha: string;
+  finished_at: string;
+  url: string;
+};
+
 export interface RunnerMachineSnapshot {
   logical_cpus: number;
   total_memory_mib: number;
