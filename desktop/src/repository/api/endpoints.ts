@@ -10,7 +10,6 @@ import {
 import type { RunnerSelection } from "./types";
 import type {
   Releases,
-  Verification,
   VerificationCommit,
   AccountCredential,
   Activity,
@@ -133,7 +132,6 @@ export const repos = {
 
   branch: (repo: string, name: string) => get<Branch>(`/repos/${enc(repo)}/branches/${enc(name)}`),
   commit: (repo: string, sha: string) => get<Commit>(`/repos/${enc(repo)}/commits/${enc(sha)}`),
-  verification: (repo: string) => get<Verification>(`/repos/${enc(repo)}/verification`),
   verificationCommits: (repo: string, cursor?: string | null) =>
     get<Page<VerificationCommit>>(`/repos/${enc(repo)}/verification/commits`, {
       cursor,

@@ -174,7 +174,7 @@ export function RunTime({
 /** A check of the upstream host has an id but no Branvil attempt; its page is on the host. */
 const isHosted = (c: Check) => !!c.attempt_id && c.attempt === undefined;
 
-export function RunnerRecoveryLink({ repo, recovery }: { repo: string; recovery: RunnerRecovery }) {
+function RunnerRecoveryLink({ repo, recovery }: { repo: string; recovery: RunnerRecovery }) {
   const t = useT();
   const label = useRunnerLabel();
   return (

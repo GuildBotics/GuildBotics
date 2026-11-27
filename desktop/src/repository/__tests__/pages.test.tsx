@@ -36,8 +36,6 @@ it("finds test failures by exact name and links to each recorded attempt", async
   const attempt = "/workspaces/acme/repos/demo/jobs/att_failed";
   const api = fakeApi({
     ...SHELL,
-    "GET /api/v1/repos": page([repo("acme/demo")]),
-    "GET /api/v1/repos/acme/demo/pulls": page([]),
     [`GET ${path}`]: ({ search }) =>
       json(
         200,
@@ -56,9 +54,8 @@ it("finds test failures by exact name and links to each recorded attempt", async
       ),
   });
   const user = userEvent.setup();
-  renderApp("/workspaces/acme/repos/demo");
-  await user.click(await screen.findByRole("link", { name: "Test failure history" }));
-  const input = screen.getByRole("textbox", { name: "Exact test name" });
+  renderApp("/workspaces/acme/repos/demo/test-failures");
+  const input = await screen.findByRole("textbox", { name: "Exact test name" });
   expect(input).toHaveAccessibleDescription(/In nextest logs, use the part after the binary name/);
   expect(api.calls("GET", path)).toHaveLength(0);
   await user.click(input);
@@ -895,110 +892,26 @@ describe("pages", () => {
       expect(
         within(drawer).getByRole("button", { name: language === "ja" ? "再実行" : "Retry" }),
       ).toBeDisabled();
+      expect(
+        within(drawer).getByRole("link", {
+          name: language === "ja" ? "テストの失敗履歴" : "Test failure history",
+        }),
+      ).toHaveAttribute("href", "/workspaces/acme/repos/demo/test-failures");
     },
   );
 
-  it("shows the checks of the default branch's tip on a repository's page", async () => {
-    const tip = "f".repeat(40);
+  it("leaves the default branch CI and test failure history out of the list header", async () => {
     const fake = fakeApi({
       ...SHELL,
       "GET /api/v1/repos": page([repo("acme/demo")]),
-      "GET /api/v1/repos/acme/demo": json(200, { ...repo("acme/demo"), default_branch: "trunk" }),
-      "GET /api/v1/repos/acme/demo/verification": json(200, {
-        branch: "trunk",
-        tip,
-        state: "verifying",
-        ahead: 1,
-        latest_verified: null,
-        current: { sha: tip, retry: { number: 0, max: 3 } },
-        failing_since: null,
-      }),
-      "GET /api/v1/repos/acme/demo/verification/commits": page([]),
-      [`GET /api/v1/repos/acme/demo/commits/${tip}/checks`]: json(200, {
-        sha: tip,
-        checks: [
-          {
-            name: "test",
-            status: "in_progress",
-            conclusion: null,
-            attempt_id: "att_2",
-            attempt: 1,
-          },
-        ],
-        checks_expected: true,
-      }),
+      "GET /api/v1/repos/acme/demo": json(200, repo("acme/demo")),
       "GET /api/v1/repos/acme/demo/pulls": page([]),
     });
     renderApp("/workspaces/acme/repos/demo");
-    await userEvent.setup().click(await screen.findByRole("button", { name: /^Checks of trunk/ }));
-    const checks = await screen.findByRole("region", { name: "Checks of trunk" });
-    expect(await within(checks).findByText("pending")).toBeInTheDocument();
-    expect(within(checks).getByText("in progress")).toBeInTheDocument();
-    expect(within(checks).getByTitle(tip).closest("a")).toHaveAttribute(
-      "href",
-      `/workspaces/acme/repos/demo/commits/${tip}`,
-    );
-    expect(within(checks).getByRole("button", { name: "Open check test" })).toBeInTheDocument();
     expect(await screen.findByText("No open pull requests.")).toBeInTheDocument();
-    expect(fake.calls("GET", "/api/v1/repos/acme/demo/verification")).toHaveLength(1);
-  });
-
-  it("says so on a repository's page when its default branch has no commit yet", async () => {
-    fakeApi({
-      ...SHELL,
-      "GET /api/v1/repos": page([repo("acme/demo")]),
-      "GET /api/v1/repos/acme/demo": json(200, repo("acme/demo")),
-      "GET /api/v1/repos/acme/demo/verification": json(200, {
-        branch: "main",
-        tip: null,
-        state: "empty",
-        ahead: null,
-        latest_verified: null,
-        current: null,
-        failing_since: null,
-      }),
-      "GET /api/v1/repos/acme/demo/pulls": page([]),
-    });
-    renderApp("/workspaces/acme/repos/demo");
-    await userEvent.setup().click(await screen.findByRole("button", { name: /^Checks of main/ }));
-    expect(await screen.findByText("main has no commits yet.")).toBeInTheDocument();
-  });
-
-  it("summarizes the default branch checks in the page header, apart from the list, and opens them in a drawer", async () => {
-    const tip = "f".repeat(40);
-    const fake = fakeApi({
-      ...SHELL,
-      "GET /api/v1/repos": page([repo("acme/demo")]),
-      "GET /api/v1/repos/acme/demo": json(200, repo("acme/demo")),
-      "GET /api/v1/repos/acme/demo/verification": json(200, {
-        branch: "main",
-        tip,
-        state: "verified",
-        ahead: 0,
-        latest_verified: { sha: tip, verified_at: "2026-11-15" },
-        current: null,
-        failing_since: null,
-      }),
-      "GET /api/v1/repos/acme/demo/verification/commits": page([]),
-      [`GET /api/v1/repos/acme/demo/commits/${tip}/checks`]: json(200, {
-        sha: tip,
-        checks: [],
-        checks_expected: false,
-      }),
-      "GET /api/v1/repos/acme/demo/pulls": page([]),
-    });
-    renderApp("/workspaces/acme/pulls");
-    const list = await screen.findByRole("table", { name: "Pull requests" });
-    await waitFor(() =>
-      expect(fake.calls("GET", "/api/v1/repos/acme/demo/verification")).toHaveLength(1),
-    );
-    const summary = screen.getByRole("button", { name: /Default branch CI/, expanded: false });
-    expect(summary.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(summary.closest(".mantine-Card-root")).toBeNull();
-    const user = userEvent.setup();
-    await user.click(summary);
-    const sha = await screen.findByTitle(tip);
-    expect(sha.closest("a")).toHaveAttribute("href", `/workspaces/acme/repos/demo/commits/${tip}`);
+    expect(screen.queryByRole("button", { name: /Default branch CI|Checks of/ })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Test failure history" })).toBeNull();
+    expect(fake.calls("GET", "/api/v1/repos/acme/demo/verification")).toHaveLength(0);
   });
 
   it("refreshes review status in the list after a pull event, preserving row navigation", async () => {

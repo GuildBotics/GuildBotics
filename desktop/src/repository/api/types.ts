@@ -733,26 +733,6 @@ export interface ChangeEvent {
   id?: string;
 }
 
-export type VerificationState = "empty" | "verifying" | "failing" | "verified" | "pending";
-export interface Verification {
-  runner_recoveries?: ({ name: string } & RunnerRecovery)[];
-  repair: { number: number; assignee: string | null; url: string } | null;
-  branch: string;
-  tip: string | null;
-  state: VerificationState;
-  ahead: number | null;
-  latest_verified: { sha: string; verified_at: string } | null;
-  current: {
-    sha: string;
-    base: string | null;
-    state: string;
-    started_at: string;
-    finished_at: string | null;
-    retry: { number: number; max: number };
-    failed_jobs: { name: string; attempt_id: string | null; details: string | null }[];
-  } | null;
-  failing_since: string | null;
-}
 /** A release point a verification job of the commit printed. */
 export interface ReleaseNote {
   job: string;

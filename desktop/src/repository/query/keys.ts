@@ -15,7 +15,6 @@ export const keys = {
   repo: (repo: string) => ["repo", repo] as const,
   repoPulls: (repo: string, state: string) => ["repo", repo, "pull-list", state] as const,
   pullList: (paths: string[], state: string) => ["pull-lists", paths, state] as const,
-  verification: (repo: string) => ["repo", repo, "verification"] as const,
   verificationCommits: (repo: string) => ["repo", repo, "verification", "commits"] as const,
   releases: (repo: string) => ["repo", repo, "releases"] as const,
   branch: (repo: string, name: string) => ["repo", repo, "branch", name] as const,

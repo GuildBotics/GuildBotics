@@ -20,7 +20,6 @@ import { href } from "../router/routes";
 import { CI_TONE, rollup } from "./board/ordering";
 import { JourneyBadge } from "./pull/LandingStatus";
 import { PostMergeStatusBadge } from "./pull/PostMergeStatus";
-import { TipChecks } from "./pulls/TipChecks";
 import { ReviewersCell } from "./pulls/ReviewersCell";
 
 type State = "open" | "closed" | "all";
@@ -40,8 +39,7 @@ function CiCell({ pull, load }: { pull: PullRequest; load: boolean }) {
 /**
  * The pull requests of a workspace's repositories; a repository's page
  * shows this list for that repository. Each open pull request says
- * where it is on its way into its base; the default branches' CI opens from
- * the header.
+ * where it is on its way into its base.
  */
 export function PullsView({ workspace, repo }: { workspace: string; repo: string | null }) {
   const navigate = useNavigate();
@@ -81,12 +79,6 @@ export function PullsView({ workspace, repo }: { workspace: string; repo: string
           <Text size="sm" c="dimmed">
             {repo ?? t("pulls.ofWorkspace", { workspace })}
           </Text>
-        }
-        action={
-          <Group gap="sm">
-            {repo && <Link to={href.testFailures(repo)}>{t("ci.testFailures")}</Link>}
-            <TipChecks key={repo ?? ALL_REPOS} workspace={workspace} paths={paths} repo={repo} />
-          </Group>
         }
       />
       <Card p="lg">

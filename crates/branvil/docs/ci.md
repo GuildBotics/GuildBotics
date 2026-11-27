@@ -518,7 +518,7 @@ A **run** is the CI of one commit of one repository; an **attempt** is one try
 of one job (`att_<ULID>`). Checks, probes, and historical attempts share
 the job's sequence of attempt numbers.
 Checks show the latest `check` attempt of each job: a pull request's page
-shows its head's, a commit's page that commit's, and the pull request list's header the default branch tips'
+shows its head's, and a commit's page that commit's
 (`GET …/pulls/{number}/checks`, `GET …/commits/{sha}/checks`).
 
 | Attempt status | Conclusion (when completed) |
@@ -1203,15 +1203,13 @@ webhook が未設定または送信失敗なら残して次の巡回で再送す
 
 ### 確認の状態を見る
 
-PR 一覧の見出しは、既定ブランチの確認の状態を表示する。確認済み、確認中、
-失敗、確認待ち、コミットなしを区別し、複数のリポジトリでは状態ごとの数を出す。
-引き出しでは確認済みから first-parent で進んだ数、現在の確認のコミットとチェック、
-確認済み・確認中・失敗の印を付けたコミットの履歴をページで読める。
-自動の流し直しは「確認中（再試行 k/3）」と表示する。
+リリース画面の候補は、既定ブランチのコミットの履歴に確認済み・確認中・失敗の印を
+付けてページで読む。コミットのチェックと自動の流し直しの試行はコミット画面で見る。
+main の失敗で保留した PR は、PR 画面の landing が修復チケットへのリンクと一緒に示す。
 
 状態の正本は `ci::verify::main_state`。HTTP の `GET …/verification` と
 `GET …/verification/commits` もこれを使う。記録の変更後とチェックの更新時には
-`verification` イベントを送り、画面の状態と履歴を読み直す。
+`verification` イベントを送り、画面の履歴を読み直す。
 
 ## Failed main verification and repair
 
