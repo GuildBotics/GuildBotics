@@ -25,6 +25,7 @@ import type {
   PathSkip,
   PullRequest,
   ReusedFrom,
+  RunnerMachineSnapshot,
   RunnerRecovery,
   RunnerSelection,
 } from "../../api/types";
@@ -692,6 +693,66 @@ function RetryControls({
   );
 }
 
+function RunnerMachine({ machine }: { machine: RunnerMachineSnapshot | null }) {
+  const t = useT();
+  if (!machine) return <div>{t("ci.runnerMachineUnknown")}</div>;
+  return (
+    <div>
+      {t("ci.runnerMachine", {
+        cpus: machine.logical_cpus,
+        available: machine.available_memory_mib,
+        total: machine.total_memory_mib,
+      })}
+      {machine.commit_available_mib != null &&
+        " · " + t("ci.runnerCommitAvailable", { memory: machine.commit_available_mib })}
+    </div>
+  );
+}
+
+function RunnerClaimDetails({ job }: { job: Job }) {
+  const t = useT();
+  const claim = job.runner_claim;
+  if (!claim) return null;
+  const { machine, budget, memory_samples: samples } = claim;
+  const allocation = job.allocation;
+  return (
+    <>
+      <dt>{t("ci.runnerClaim")}</dt>
+      <dd>
+        <RunnerMachine machine={machine} />
+        {allocation ? (
+          <>
+            <div>
+              {t("ci.claimAllocation", {
+                cpus: allocation.cpus,
+                memory: allocation.vm_memory_mib,
+              })}
+            </div>
+            <div>
+              {samples
+                ? t("ci.claimEstimateSamples", { memory: allocation.reserved_memory_mib, samples })
+                : t("ci.claimEstimateFallback", { memory: allocation.reserved_memory_mib })}
+            </div>
+          </>
+        ) : (
+          <div>{t("ci.claimReuse")}</div>
+        )}
+        {budget && (
+          <div>
+            {t("ci.claimBudget", {
+              reserve: budget.memory_reserve_mib,
+              cpus: budget.remaining_cpus,
+              memory: budget.remaining_memory_mib,
+            })}
+            {budget.remaining_commit_mib != null &&
+              " · " + t("ci.claimCommit", { memory: budget.remaining_commit_mib })}
+          </div>
+        )}
+      </dd>
+    </>
+  );
+}
+
 /** One attempt of a Branvil job: status, commit, times, reason, artifacts, retry/cancel, log. */
 function JobDetails({
   repo,
@@ -740,6 +801,7 @@ function JobDetails({
             <dd>{label(j.runner, true)}</dd>
           </>
         )}
+        <RunnerClaimDetails job={j} />
         <dt>{t("ci.started")}</dt>
         <dd>{j.started_at ? <Time value={j.started_at} /> : "—"}</dd>
         <dt>{t("ci.finished")}</dt>
@@ -771,6 +833,7 @@ function JobDetails({
               <Time value={wait.at} />
               {" · "}
               {resourceShortfallText(t, label(name), wait)}
+              <RunnerMachine machine={wait.machine} />
             </dd>
           </div>
         ))}

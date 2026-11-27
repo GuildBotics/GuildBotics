@@ -1,12 +1,12 @@
-//! 48 → 49: repositories have `review_rounds`, the heads a member reviews
-//! before its automatic re-review stops (3, the limit every repository had).
+//! 49 → 50: CI attempts record why a runner claimed or deferred them.
 //! Every upgrade also binds the GuildBotics workspaces' execution roots.
 use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::config::Layout;
+use crate::error::AppError;
 use crate::store::{self, Rd, Store, Upgraded, Upgrading, Wtx};
 
-pub const FROM: u64 = 48;
+pub const FROM: u64 = 49;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
@@ -26,12 +26,20 @@ pub(crate) fn upgrade_with_roots(
     };
     db.finish(|w| {
         execution_roots(w, roots)?;
-        for key in w.prefix_keys(store::REPOS, &[])? {
-            let mut repo: serde_json::Value = w.get(store::REPOS, &key)?.unwrap();
-            repo["review_rounds"] = 3.into();
-            w.put(store::REPOS, &key, &repo)?;
+        for key in w.prefix_keys(store::CI_ATTEMPTS, &[])? {
+            let mut attempt: serde_json::Value = w
+                .get(store::CI_ATTEMPTS, &key)?
+                .ok_or_else(|| AppError::internal("CI attempt disappeared during upgrade"))?;
+            let deferrals = attempt["runner_deferrals"]
+                .as_object_mut()
+                .ok_or_else(|| AppError::internal("invalid CI runner deferrals"))?;
+            for deferral in deferrals.values_mut() {
+                deferral["machine"] = serde_json::Value::Null;
+            }
+            attempt["runner_claim"] = serde_json::Value::Null;
+            w.put(store::CI_ATTEMPTS, &key, &attempt)?;
         }
-        Ok("added review_rounds=3 to repositories".into())
+        Ok("added runner claim and deferral evidence to CI attempts".into())
     })
     .map(Some)
 }
@@ -84,24 +92,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upgrade_gives_every_repository_three_review_rounds_and_binds_execution_roots() {
-        use crate::model::{Repo, Workspace};
+    fn upgrade_adds_missing_runner_evidence_and_binds_execution_roots() {
+        use crate::model::Workspace;
         let temporary = tempfile::tempdir().unwrap();
         let layout = Layout::new(temporary.path());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
         let workspace = db
             .write_sync(|w| {
                 let workspace = crate::domain::repos::insert_workspace(w, "acme".into(), None)?;
-                for (id, path) in [("repo_1", "acme/one"), ("repo_2", "acme/two")] {
-                    w.put(
-                        store::REPOS,
-                        &Repo::key(id),
-                        &serde_json::json!({"id":id,"path":path,"workspace":workspace.id,
-                            "default_branch":"main","protected_branches":[],"required_approvals":1,
-                            "auto_land":false,"hold_while_failing":false,"ci_network":false,
-                            "responder":null,"labels":[],"upstream":null,"revision":1,"created_at":"0"}),
-                    )?;
-                }
+                w.put(
+                    store::CI_ATTEMPTS,
+                    b"attempt",
+                    &serde_json::json!({"runner_deferrals": {
+                        "windows": {"at": "t0", "attempt_id": "att_1", "repo": "acme/demo",
+                            "job": "test", "cpu_shortfall": 0, "memory_shortfall_mib": 0,
+                            "commit_shortfall_mib": 1}
+                    }}),
+                )?;
                 w.put(
                     store::META,
                     &store::Key::new().s("schema_version").bytes(),
@@ -116,13 +123,23 @@ mod tests {
         let done = upgrade_with_roots(&layout, [("acme".into(), root.clone())].into())
             .unwrap()
             .unwrap();
-        assert_eq!(done.summary, "added review_rounds=3 to repositories");
+        assert_eq!(
+            done.summary,
+            "added runner claim and deferral evidence to CI attempts"
+        );
         assert!(done.copy.is_file());
         assert!(upgrade(&layout).unwrap().is_none());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
-        let repos: Vec<Repo> = db.read_sync(|r| r.prefix_all(store::REPOS, &[])).unwrap();
-        assert_eq!(repos.len(), 2);
-        assert!(repos.iter().all(|r| r.review_rounds == 3));
+        let attempt: serde_json::Value = db
+            .read_sync(|r| r.get(store::CI_ATTEMPTS, b"attempt"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt.get("runner_claim"), Some(&serde_json::Value::Null));
+        let deferral: crate::ci::queue::ResourceDeferral =
+            serde_json::from_value(attempt["runner_deferrals"]["windows"].clone()).unwrap();
+        assert_eq!(deferral.at, "t0");
+        assert_eq!(deferral.wait.commit_shortfall_mib, 1);
+        assert_eq!(deferral.machine, None);
         let record: Workspace = db
             .read_sync(|r| r.get(store::WORKSPACES, &Workspace::key(&workspace)))
             .unwrap()

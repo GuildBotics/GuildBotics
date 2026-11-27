@@ -285,6 +285,7 @@ pub struct Attempt {
     /// reported it (none when it did not get that far).
     pub image_digest: Option<String>,
     pub allocation: Option<Allocation>,
+    pub runner_claim: Option<RunnerClaim>,
     pub peak_memory_mib: Option<u64>,
     /// The actual execution whose result this attempt reused, reported at finish.
     pub reused_from: Option<String>,
@@ -330,6 +331,41 @@ pub struct Allocation {
     pub reserved_memory_mib: u64,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MachineSnapshot {
+    pub logical_cpus: u32,
+    pub total_memory_mib: u64,
+    pub available_memory_mib: u64,
+    pub commit_available_mib: Option<u64>,
+}
+
+impl From<&Machine> for MachineSnapshot {
+    fn from(machine: &Machine) -> Self {
+        Self {
+            logical_cpus: machine.logical_cpus,
+            total_memory_mib: machine.total_memory_mib,
+            available_memory_mib: machine.available_memory_mib,
+            commit_available_mib: machine.commit.as_ref().map(|c| c.available_mib),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RunnerClaim {
+    pub machine: Option<MachineSnapshot>,
+    /// Zero when the estimate uses the VM size, absent for a reuse claim.
+    pub memory_samples: Option<usize>,
+    pub budget: Option<ClaimBudget>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClaimBudget {
+    pub memory_reserve_mib: u64,
+    pub remaining_cpus: u64,
+    pub remaining_memory_mib: u64,
+    pub remaining_commit_mib: Option<u64>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ResourceWait {
     pub attempt_id: String,
@@ -343,6 +379,7 @@ pub struct ResourceWait {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ResourceDeferral {
     pub at: String,
+    pub machine: Option<MachineSnapshot>,
     #[serde(flatten)]
     pub wait: ResourceWait,
 }
@@ -832,6 +869,7 @@ fn new_job(
         job: job.clone(),
         image_digest: None,
         allocation: None,
+        runner_claim: None,
         peak_memory_mib: None,
         reused_from: None,
         cache_key: None,
@@ -1627,12 +1665,16 @@ impl Budget {
     }
 }
 
-fn allocation(r: &impl Rd, a: &Attempt, limits: JobLimits) -> AppResult<Allocation> {
-    Ok(Allocation {
-        cpus: limits.max_cpus,
-        vm_memory_mib: limits.max_memory_mib,
-        reserved_memory_mib: estimate_memory(r, a, limits)?,
-    })
+fn allocation(r: &impl Rd, a: &Attempt, limits: JobLimits) -> AppResult<(Allocation, usize)> {
+    let (reserved_memory_mib, samples) = estimate_memory(r, a, limits)?;
+    Ok((
+        Allocation {
+            cpus: limits.max_cpus,
+            vm_memory_mib: limits.max_memory_mib,
+            reserved_memory_mib,
+        },
+        samples,
+    ))
 }
 
 /// Choose a compatible attempt and reserve its capacity in the lease transaction.
@@ -1668,30 +1710,31 @@ pub fn claim_images(
         runners: std::iter::once(&runner).chain(&peers).collect(),
     };
     let (choices, waits) = scan.choices(w, &runner)?;
+    let machine = runner.machine.as_ref().map(MachineSnapshot::from);
     for wait in &waits {
         let a = &ordered[wait.index].0;
-        if (wait.reason.commit_shortfall_mib > 0
-            || a.retry_decision
-                .as_ref()
-                .is_some_and(|retry| retry.selection.runner.is_some()))
-            && a.runner_deferrals
-                .get(&runner.name)
-                .is_none_or(|previous| previous.wait != wait.reason)
+        let deferral = ResourceDeferral {
+            at: now.into(),
+            machine,
+            wait: wait.reason.clone(),
+        };
+        if a.runner_deferrals
+            .get(&runner.name)
+            .is_none_or(|previous| previous.at.as_str() <= now && previous != &deferral)
         {
             // Do not persist the run-derived fields of the scheduling copy.
             let mut stored = get_attempt(w, &a.id)?
                 .ok_or_else(|| AppError::internal("pending attempt is missing"))?;
-            stored.runner_deferrals.insert(
-                runner.name.clone(),
-                ResourceDeferral {
-                    at: now.into(),
-                    wait: wait.reason.clone(),
-                },
-            );
+            stored
+                .runner_deferrals
+                .insert(runner.name.clone(), deferral);
             w.put(store::CI_ATTEMPTS, &Attempt::key(&a.id), &stored)?;
         }
     }
-    let waiting = waits.into_iter().next().map(|wait| wait.reason);
+    let waiting = waits
+        .into_iter()
+        .find(|wait| wait.before_choice)
+        .map(|wait| wait.reason);
     let Some(&first) = choices.first() else {
         return Ok((None, waiting));
     };
@@ -1705,12 +1748,18 @@ pub fn claim_images(
         .as_ref()
         .filter(|_| chosen.allocation.is_none())
         .cloned();
+    let mut a = a.clone();
+    a.runner_claim = Some(RunnerClaim {
+        machine,
+        memory_samples: chosen.memory_samples,
+        budget: chosen.budget,
+    });
     let claim = claim_selected(
         w,
         &runner.name,
         lease_secs,
         now,
-        a.clone(),
+        a,
         reuse,
         chosen.allocation,
     )?;
@@ -1721,11 +1770,14 @@ pub fn claim_images(
 struct ClaimChoice {
     index: usize,
     allocation: Option<Allocation>,
+    memory_samples: Option<usize>,
+    budget: Option<ClaimBudget>,
     ram: bool,
 }
 
 struct ClaimWait {
     index: usize,
+    before_choice: bool,
     reason: ResourceWait,
 }
 
@@ -1803,17 +1855,19 @@ impl ClaimScan<'_> {
                 choices.push(ClaimChoice {
                     index,
                     allocation: None,
+                    memory_samples: None,
+                    budget: None,
                     ram: false,
                 });
                 break;
             }
             let key = (&a.repo, &a.job.name);
-            let allocation = match estimates.get(&key) {
-                Some(&allocation) => allocation,
+            let (allocation, samples) = match estimates.get(&key) {
+                Some(&estimate) => estimate,
                 None => {
-                    let allocation = allocation(r, a, runner.limits)?;
-                    estimates.insert(key, allocation);
-                    allocation
+                    let estimate = allocation(r, a, runner.limits)?;
+                    estimates.insert(key, estimate);
+                    estimate
                 }
             };
             let (short, commit_shortfall_mib) = budget.shortfall(allocation, reserve);
@@ -1821,13 +1875,31 @@ impl ClaimScan<'_> {
                 choices.push(ClaimChoice {
                     index,
                     allocation: Some(allocation),
+                    memory_samples: Some(samples),
+                    budget: budget.physical.zip(runner.machine.as_ref()).map(
+                        |((_, free), machine)| {
+                            let remaining = free.minus(reserve).minus(allocation.into());
+                            ClaimBudget {
+                                memory_reserve_mib: runner
+                                    .limits
+                                    .memory_reserve_mib(machine.total_memory_mib),
+                                remaining_cpus: remaining.cpus,
+                                remaining_memory_mib: remaining.memory,
+                                remaining_commit_mib: budget
+                                    .commit
+                                    .map(|free| free.saturating_sub(allocation.vm_memory_mib)),
+                            }
+                        },
+                    ),
                     ram: a.purpose == Purpose::Check
                         && runner.ram_allows(a, ram_memory.as_ref())
                         && !runner.ram_unsupported_images.contains(&image.digest),
                 });
-            } else if choices.is_empty() {
+            } else {
+                let before_choice = choices.is_empty();
                 waiting.push(ClaimWait {
                     index,
+                    before_choice,
                     reason: ResourceWait {
                         attempt_id: a.id.clone(),
                         repo: a.repo_path.clone(),
@@ -1838,7 +1910,8 @@ impl ClaimScan<'_> {
                     },
                 });
                 let need = Resources::from(allocation);
-                if reserve == Resources::default()
+                if before_choice
+                    && reserve == Resources::default()
                     && let Some((total, _)) = budget.physical
                     && need.minus(total) == Resources::default()
                 {
@@ -1946,8 +2019,10 @@ fn alternative_can_run(
         if jobs < runner.limits.max_jobs as usize
             && runner.images.iter().any(|i| i.supports(&attempt.job.image))
             && let Some(budget) = runner.budget(active)
-            && budget.shortfall(allocation(r, attempt, runner.limits)?, Resources::default())
-                == (Resources::default(), 0)
+            && budget.shortfall(
+                allocation(r, attempt, runner.limits)?.0,
+                Resources::default(),
+            ) == (Resources::default(), 0)
         {
             return Ok(true);
         }
@@ -1981,7 +2056,7 @@ fn capacity(machine: &Machine, limits: JobLimits, running: &[&Attempt]) -> (Reso
     )
 }
 
-fn estimate_memory(r: &impl Rd, a: &Attempt, limits: JobLimits) -> AppResult<u64> {
+fn estimate_memory(r: &impl Rd, a: &Attempt, limits: JobLimits) -> AppResult<(u64, usize)> {
     let prefix = memory_key(a, limits.max_cpus, limits.max_memory_mib).bytes();
     let mut samples = r
         .prefix_raw(store::IX_CI_MEMORY, &prefix, None, 20)?
@@ -1994,10 +2069,10 @@ fn estimate_memory(r: &impl Rd, a: &Attempt, limits: JobLimits) -> AppResult<u64
         })
         .collect::<AppResult<Vec<_>>>()?;
     if samples.is_empty() {
-        return Ok(limits.max_memory_mib);
+        return Ok((limits.max_memory_mib, 0));
     }
     samples.sort_unstable();
-    Ok(samples[(samples.len() * 9).div_ceil(10) - 1])
+    Ok((samples[(samples.len() * 9).div_ceil(10) - 1], samples.len()))
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -2145,6 +2220,7 @@ pub fn finish(
         a.lease_hash = None;
         a.lease_expires_at = None;
         a.runner = None;
+        a.runner_claim = None;
         a.started_at = None;
         put_attempt(w, Some(&old), &a)?;
         return Ok(a);
@@ -3318,8 +3394,8 @@ mod tests {
                 assert_eq!(wait.unwrap().commit_shortfall_mib, 4096);
 
                 let same = claim(&later(T0, 2), 12288, vec![])?.1.unwrap();
-                let unchanged = get_attempt(w, &same.attempt_id)?.unwrap();
-                assert_eq!(unchanged.runner_deferrals["windows"].at, T0);
+                let latest = get_attempt(w, &same.attempt_id)?.unwrap();
+                assert_eq!(latest.runner_deferrals["windows"].at, later(T0, 2));
                 assert_eq!(same.commit_shortfall_mib, 4096);
 
                 let updated_at = later(T0, 4);
@@ -3440,12 +3516,12 @@ mod tests {
                 max_jobs: 2,
                 ..limits()
             };
-            let take = |runner, machine| {
+            let take = |runner, machine, now| {
                 claim_images(
                     w,
                     runner,
                     60,
-                    T0,
+                    now,
                     std::slice::from_ref(&image),
                     limits,
                     machine,
@@ -3453,7 +3529,7 @@ mod tests {
             };
             for (name, peak) in [("heavy", 6000), ("light", 3000)] {
                 register(w, reg(name, "sample", &[name]), 10, T0)?;
-                let (claimed, _) = take("sampling", None)?;
+                let (claimed, _) = take("sampling", None, T0)?;
                 let claim = claimed.unwrap();
                 finish(
                     w,
@@ -3482,7 +3558,7 @@ mod tests {
                     commit: None,
                 })
             };
-            let (blocked, reason) = take("busy-small", machine(8500, 3500))?;
+            let (blocked, reason) = take("busy-small", machine(8500, 3500), T0)?;
             assert!(
                 blocked.is_none(),
                 "light would take the head's reserved memory"
@@ -3497,26 +3573,55 @@ mod tests {
                 ("heavy", 0, 2500)
             );
 
-            let (temporarily_blocked, _) = take("busy-large", machine(9000, 3500))?;
+            let (temporarily_blocked, _) = take("busy-large", machine(9000, 3500), T0)?;
             assert!(
                 temporarily_blocked.is_none(),
                 "starting light would consume the head's OS memory reserve"
             );
 
-            let (light, _) = take("small-machine", machine(5500, 3500))?;
+            let (still_blocked, _) = take("busy-small", machine(8500, 4000), T1)?;
+            assert!(still_blocked.is_none());
+            let (older_report, _) = take("busy-small", machine(8500, 3500), T0)?;
+            assert!(older_report.is_none());
+            let (light, _) = take("small-machine", machine(5500, 3500), T1)?;
             let light = light.unwrap().attempt;
             assert_eq!(light.job.name, "light");
             assert_eq!(light.allocation.unwrap().reserved_memory_mib, 3000);
-            let (heavy, _) = take("idle", machine(8500, 8500))?;
-            assert_eq!(heavy.unwrap().attempt.job.name, "heavy");
-            let (cold, _) = take("unknown", None)?;
+            let (heavy, _) = take("idle", machine(8500, 8500), T2)?;
+            let heavy = get_attempt(w, &heavy.unwrap().attempt.id)?.unwrap();
+            assert_eq!(heavy.job.name, "heavy");
+            assert_eq!(heavy.allocation.unwrap().reserved_memory_mib, 6000);
             assert_eq!(
-                cold.unwrap()
-                    .attempt
-                    .allocation
-                    .unwrap()
-                    .reserved_memory_mib,
+                heavy.runner_claim,
+                Some(RunnerClaim {
+                    machine: machine(8500, 8500).as_ref().map(MachineSnapshot::from),
+                    memory_samples: Some(1),
+                    budget: Some(ClaimBudget {
+                        memory_reserve_mib: 0,
+                        remaining_cpus: 4,
+                        remaining_memory_mib: 2500,
+                        remaining_commit_mib: None,
+                    }),
+                })
+            );
+            let deferral = &heavy.runner_deferrals["busy-small"];
+            assert_eq!(heavy.runner_deferrals.len(), 3);
+            assert_eq!(deferral.at, T1);
+            assert_eq!(deferral.wait.memory_shortfall_mib, 2000);
+            assert_eq!(deferral.machine.unwrap().available_memory_mib, 4000);
+            let (cold, _) = take("unknown", None, T2)?;
+            let cold = cold.unwrap().attempt;
+            assert_eq!(
+                cold.allocation.unwrap().reserved_memory_mib,
                 limits.max_memory_mib
+            );
+            assert_eq!(
+                cold.runner_claim,
+                Some(RunnerClaim {
+                    machine: None,
+                    memory_samples: Some(0),
+                    budget: None,
+                })
             );
             Ok(())
         })
@@ -3605,6 +3710,14 @@ mod tests {
             .unwrap();
             assert!(borrowed.reuse.is_some());
             assert!(borrowed.attempt.allocation.is_none());
+            assert_eq!(
+                borrowed.attempt.runner_claim,
+                Some(RunnerClaim {
+                    machine: machine.as_ref().map(MachineSnapshot::from),
+                    memory_samples: None,
+                    budget: None,
+                })
+            );
             let pending = finish(
                 w,
                 &borrowed.attempt.id,
@@ -3616,6 +3729,7 @@ mod tests {
             )?;
             assert_eq!(pending.status, "queued");
             assert_eq!(pending.seq, borrowed.attempt.seq);
+            assert!(pending.runner_claim.is_none());
             image.digest = format!("sha256:{}", "3".repeat(64));
             assert!(
                 claim_images(w, "r", 60, T0, &[image], limits(), machine)?
