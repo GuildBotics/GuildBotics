@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling", "hatch-vcs", "setuptools-scm>=9.2"]
 build-backend = "hatchling.build"
 
 [project]
@@ -95,6 +95,13 @@ packages = ["guildbotics"]
 
 [tool.hatch.version]
 source = "vcs"
+
+[tool.hatch.version.raw-options.scm.git]
+# Hub deployment tags are independent of Python package versions.
+describe_command = [
+  "git", "describe", "--dirty", "--tags", "--long", "--abbrev=40",
+  "--match", "*[0-9]*", "--exclude", "release/*",
+]
 
 [tool.hatch.build.hooks.vcs]
 version-file = "guildbotics/_version.py"
