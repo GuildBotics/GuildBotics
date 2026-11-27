@@ -596,6 +596,12 @@ export interface Job {
   reused_from: ReusedFrom | null;
 }
 
+/** One attempt in the list of every attempt of a commit's job. */
+export type JobAttempt = Pick<
+  Job,
+  "id" | "attempt" | "runner" | "status" | "conclusion" | "started_at" | "finished_at"
+> & { url: string };
+
 export interface JobLog {
   log: string;
   log_bytes: number;

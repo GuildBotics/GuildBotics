@@ -124,6 +124,18 @@ describe("change events", () => {
     ]);
   });
 
+  it("maps a check change to the attempts of a job of that commit, known by the job they were read for", () => {
+    const jobs = new QueryClient();
+    jobs.setQueryData(keys.job("acme/demo", "att_1"), { sha: "aaa" });
+    jobs.setQueryData(keys.jobAttempts("acme/demo", "att_1"), []);
+    jobs.setQueryData(keys.jobAttempts("acme/demo", "att_2"), []);
+    jobs.setQueryData(keys.jobLog("acme/demo", "att_1", 16384), {});
+    expect(stale(jobs, { kind: "check", path: "acme/demo", id: "aaa" })).toEqual(
+      [k(keys.job("acme/demo", "att_1")), k(keys.jobAttempts("acme/demo", "att_1"))].sort(),
+    );
+    expect(stale(jobs, { kind: "check", path: "acme/demo", id: "bbb" })).toEqual([]);
+  });
+
   it("refreshes ticket-linked landing decisions across repositories and ancestors", () => {
     const c = new QueryClient();
     c.setQueryData(keys.pull("acme/demo", 3), {

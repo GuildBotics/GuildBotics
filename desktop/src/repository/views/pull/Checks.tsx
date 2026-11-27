@@ -35,7 +35,14 @@ import type {
 import { ErrorMessage, Loading, Sha, StateBadge, Time, type Tone } from "../../components/common";
 import { useT } from "../../i18n";
 import { resourceShortfallText } from "../../i18n/resourceShortfall";
-import { useChecks, useCommitChecks, useJob, useJobLog, useRunnerLabel } from "../../query/hooks";
+import {
+  useChecks,
+  useCommitChecks,
+  useJob,
+  useJobAttempts,
+  useJobLog,
+  useRunnerLabel,
+} from "../../query/hooks";
 import { keys } from "../../query/keys";
 import { Link, useFragmentTarget } from "../../router/Router";
 import { href, POST_MERGE_FRAGMENT } from "../../router/routes";
@@ -475,7 +482,9 @@ function CheckRow({
       {required && <StateBadge tone="neutral">{t("ci.required")}</StateBadge>}
       {check.attempt !== undefined && (
         <Text span size="sm" c="dimmed">
-          #{check.attempt}
+          {check.attempt > 1
+            ? t("ci.rerunAttempt", { attempt: check.attempt })
+            : `#${check.attempt}`}
         </Text>
       )}
       {runner && (
@@ -594,6 +603,57 @@ export function LogViewer({
         </>
       )}
     </Stack>
+  );
+}
+
+/** Which attempt of its job on the commit this is, with a link to each other attempt. */
+function JobAttempts({ repo, job }: { repo: string; job: Job }) {
+  const t = useT();
+  const label = useRunnerLabel();
+  const attempts = useJobAttempts(repo, job.id);
+  if (attempts.isPending) return null;
+  return (
+    <>
+      <dt>{t("ci.attempts")}</dt>
+      <dd>
+        {attempts.isError ? (
+          <ErrorMessage error={attempts.error} />
+        ) : (
+          <>
+            <div>
+              {t("ci.attemptOf", {
+                attempt: job.attempt,
+                total: Math.max(job.attempt, ...attempts.data.map((a) => a.attempt)),
+              })}
+            </div>
+            {attempts.data.length > 1 && (
+              <Stack component="ul" gap={4} m={0} p={0} style={{ listStyle: "none" }}>
+                {attempts.data.map((a) => (
+                  <Group component="li" key={a.id} gap="xs">
+                    {a.id === job.id ? (
+                      <strong aria-current="true">#{a.attempt}</strong>
+                    ) : (
+                      <Link to={href.job(repo, a.id)}>#{a.attempt}</Link>
+                    )}
+                    <CheckStatusBadge status={a.status} conclusion={a.conclusion} />
+                    {a.runner && (
+                      <Text span size="sm" c="dimmed">
+                        {label(a.runner)}
+                      </Text>
+                    )}
+                    {a.started_at && (
+                      <Text span size="sm" c="dimmed">
+                        <Time value={a.started_at} />
+                      </Text>
+                    )}
+                  </Group>
+                ))}
+              </Stack>
+            )}
+          </>
+        )}
+      </dd>
+    </>
   );
 }
 
@@ -865,6 +925,7 @@ function JobDetails({
         <dd>
           <Sha repo={repo} value={j.sha} />
         </dd>
+        <JobAttempts repo={repo} job={j} />
         {j.runner && (
           <>
             <dt>{t("ci.runner")}</dt>

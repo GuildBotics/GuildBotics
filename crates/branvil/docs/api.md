@@ -1175,6 +1175,13 @@ The endpoint uses the same repository access as CI attempts.
   append only `Deferred: <reason>.` to the waiting message. Other classes
   and non-queued attempts keep their existing details.
   `404 not_found` for an id of another repository.
+- `GET /api/v1/repos/{repo}/jobs/{attempt_id}/attempts` → an array of
+  `{"id","attempt","runner","status","conclusion","started_at","finished_at","url"}`:
+  every attempt of the same commit and job as `attempt_id`, including that
+  one, by `attempt` ascending. Retries, automatic retries and the narrowing's
+  probes of that commit share the job's numbering, so all of them are listed.
+  `runner`, `started_at` and `finished_at` are `null` until a runner claims,
+  and concludes, the attempt. `404 not_found` as for the attempt itself.
 - `GET /api/v1/repos/{repo}/jobs/{attempt_id}/log?tail_bytes={n}` →
   `{"log": "...", "log_bytes": 12345, "truncated": true, "pruned": false}`; `log`
   is the last `tail_bytes` bytes (default 65536, at most 4194304; decoded as

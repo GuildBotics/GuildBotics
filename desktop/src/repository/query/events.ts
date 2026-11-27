@@ -120,6 +120,12 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
           const k = keyOf(q);
           const sha = (q.state.data as { sha?: string } | undefined)?.sha;
           if (k[2] === "test-failures") return true;
+          // A job's attempts are known by the sha of the job they were read for.
+          if (k[2] === "job" && k[4] === "attempts")
+            return (
+              id === "" ||
+              client.getQueryData<{ sha: string }>(["repo", k[1], "job", k[3]])?.sha === id
+            );
           if (k[2] === "job") return id === "" || sha === id;
           // Before its first answer, a commit's checks are known by the sha in the key.
           if (k[2] === "commit" && k[4] === "checks") return id === "" || (sha ?? k[3]) === id;
