@@ -1351,6 +1351,7 @@ impl Ci {
                 runner_id = %name,
                 previous_version = ?previous.report.version,
                 version = ?report.version,
+                version_matches = report.matches_hub_version(),
                 "CI: runner version changed"
             );
         }
@@ -1875,12 +1876,12 @@ mod tests {
             std::fs::read_to_string(log_path).unwrap(),
             format!(
                 r#"CI: runner connected runner="Linux CI" runner_id=runner-1 version="older\nbuild" version_matches=false
-CI: runner version changed runner="Linux CI" runner_id=runner-1 previous_version="older\nbuild" version={version:?}
+CI: runner version changed runner="Linux CI" runner_id=runner-1 previous_version="older\nbuild" version={version:?} version_matches=true
 CI: runner disconnected runner="Linux CI" runner_id=runner-1 last_seen_at=2026-01-01T00:00:00.000Z
 CI: runner connected runner="Linux CI" runner_id=runner-1 version={version:?} version_matches=true
 CI: runner disconnected runner="Linux CI" runner_id=runner-1 last_seen_at=2026-01-01T00:03:00.000Z
 CI: runner connected runner="runner-1" runner_id=runner-1 version="older\nbuild" version_matches=false
-CI: runner version changed runner="runner-1" runner_id=runner-1 previous_version={version:?} version="older\nbuild"
+CI: runner version changed runner="runner-1" runner_id=runner-1 previous_version={version:?} version="older\nbuild" version_matches=false
 CI: runner connected runner="runner-1" runner_id=runner-1 version="older\nbuild" version_matches=false
 "#
             ),
