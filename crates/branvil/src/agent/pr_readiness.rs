@@ -113,8 +113,28 @@ pub fn fit_log_tails(result: &mut Readiness) -> Result<(), ServiceError> {
             std::mem::take(&mut l.log)
         })
         .collect();
+    let mut metadata = page_bytes(result)?;
+    if metadata > MAX_PAGE_BYTES {
+        let logs = result.failed_logs.as_mut().expect("logs exist");
+        let mut sizes = Vec::new();
+        for (index, log) in logs.iter().enumerate() {
+            if log.evidence.is_some() {
+                sizes.push((json_bytes(&json!(log))?, index));
+            }
+        }
+        sizes.sort_unstable_by(|a, b| b.cmp(a));
+        for (size, index) in sizes {
+            let log = &mut logs[index];
+            log.evidence = None;
+            log.evidence_truncated = true;
+            metadata -= size - json_bytes(&json!(log))?;
+            if metadata <= MAX_PAGE_BYTES {
+                break;
+            }
+        }
+    }
     let budget = MAX_PAGE_BYTES
-        .checked_sub(page_bytes(result)?)
+        .checked_sub(metadata)
         .ok_or(ServiceError::ResponseTooLarge)?
         / tails.len();
     for (log, tail) in result

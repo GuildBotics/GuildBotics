@@ -320,6 +320,9 @@ pub struct Attempt {
     /// Ended because a newer commit replaced its commit on every branch.
     pub superseded: bool,
     pub artifacts: Vec<ArtifactMeta>,
+    /// Exact failing names from the declared JUnit report, when it was read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_tests: Option<BTreeSet<String>>,
     /// Logs and artifacts were deleted by retention.
     pub files_pruned: bool,
     /// The run's input digest of the job when it was claimed; none for a
@@ -899,6 +902,7 @@ fn new_job(
         after_interrupt: false,
         superseded: false,
         artifacts: Vec::new(),
+        failed_tests: None,
         files_pruned: false,
         inputs: None,
     })
@@ -2174,19 +2178,24 @@ pub fn heartbeat(w: &Wtx, id: &str, lease: &str, lease_secs: u64, now: &str) -> 
     Ok(a)
 }
 
-/// Keeps the release points a finished attempt's runner reported.
-pub(super) fn record_release_points(
+/// Keeps artifact and log-derived results after the files expire.
+pub(super) fn record_report_results(
     w: &Wtx,
-    a: &Attempt,
+    a: Attempt,
     points: Vec<String>,
+    failed_tests: Option<BTreeSet<String>>,
 ) -> AppResult<Attempt> {
+    if points.is_empty() && failed_tests.is_none() {
+        return Ok(a);
+    }
     let mut next = a.clone();
+    next.failed_tests = failed_tests;
     next.release_points = points
         .iter()
         .take(gb_runner::ci::queue::MAX_RELEASE_POINTS)
         .map(|p| gb_runner::ci::queue::release_point_message(p))
         .collect();
-    put_attempt(w, Some(a), &next)?;
+    put_attempt(w, Some(&a), &next)?;
     Ok(next)
 }
 

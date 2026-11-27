@@ -244,6 +244,16 @@ impl MemberApi {
         let _open = self.api.guard()?;
         crate::ci::api::data_job_log(&self.api.app, &self.caller().await?, repo, id, tail).await
     }
+    pub(crate) async fn job_failure_evidence(
+        &self,
+        repo: &str,
+        id: &str,
+    ) -> AppResult<Option<crate::ci::diagnostics::JobEvidence>> {
+        let _open = self.api.guard()?;
+        let app = &self.api.app;
+        let repo = crate::domain::repos::visible(app, &self.caller().await?, repo).await?;
+        crate::ci::diagnostics::load(app, &repo.id, id).await
+    }
     /// Every attempt of the same commit and job as the attempt `id`.
     pub async fn job_attempts(
         &self,

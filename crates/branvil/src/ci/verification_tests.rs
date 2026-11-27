@@ -782,7 +782,7 @@ async fn a_passing_verification_records_the_release_points_its_jobs_reported() {
                 .write_sync(|w| {
                     let a = queue::get_attempt(w, &id)?.unwrap();
                     let points = vec![" storage format 47 → 48 ".into(), "x".repeat(300)];
-                    queue::record_release_points(w, &a, points)
+                    queue::record_report_results(w, a, points, None)
                 })
                 .unwrap();
         }

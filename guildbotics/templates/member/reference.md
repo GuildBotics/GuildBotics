@@ -95,6 +95,16 @@
 - On completion, leave an externally visible trace at the place that corresponds to the work's entry point: a comment or status update on the originating ticket or PR for ticket-driven work, the review thread or PR conversation for PR review work, the chat thread for chat-driven work, the destination the command names for command-driven work. Avoid duplicate posts and posts explicitly marked as unnecessary.
 - Before finishing, maintain memory according to the rules below.
 
+#### Diagnosing CI failures / CI の失敗の切り分け
+
+1. Read `repository/pr_checks failed_logs=true` or the failed job sections of the repair ticket. Record the commit, the failed attempt and runner, the claim-time allocation and resource budget, and the measured resources. Use the linked attempts and the exact JUnit name to compare outcomes and open the test failure history. Treat missing measurements as unknown.
+2. Call a test flaky only when another attempt at the same commit actually ran and passed that exact test, and you can show either the resource conditions during the failure or an assumption the test makes about timing. Verify the pass in the other attempt's report or log. A job-level success and a reused result alone are insufficient evidence.
+3. Use retries to collect evidence. Identify the assumption that broke and make the test deterministic. Preserve the timeout and test coverage, as required by AGENTS.md. Propose changes to runner CPU or memory allocations with the recorded evidence for the owner to decide.
+
+1. `repository/pr_checks failed_logs=true` または修復チケットの失敗ジョブ欄を読み、コミット、失敗した試行とランナー、割り当て時の資源と空き、実行中の計測値を確認する。試行へのリンクと JUnit の正確なテスト名で結果を照合し、テストの失敗履歴を開く。計測値がない項目は不明として扱う。
+2. 同じコミットの別試行が同じテストを実行して成功し、かつ、失敗時の資源の状態か、テストが置く時間の前提のいずれかを示せる場合に「フレーキー」と判断する。成功は別試行のレポートやログで確認する。ジョブ全体の成功や結果の再利用だけでは根拠が足りない。
+3. 再実行は証拠収集に使う。崩れた前提を特定し、テストを決定的にする。AGENTS.md のとおり、時間の上限とテスト範囲を保つ。ランナーの CPU・メモリの割り当ての変更は証拠を添えて提案し、オーナーが判断する。
+
 #### Preparing a collecting draft PR
 
 1. When collection into a specific parent ticket's branch in the same repository has been agreed, a ticket workflow with write access may set up the collecting draft. Inspect the parent ticket and its linked PRs. Reuse an open draft from `ticket/<parent-key>` to the repository's default branch.

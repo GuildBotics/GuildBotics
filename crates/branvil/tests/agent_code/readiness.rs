@@ -1,5 +1,32 @@
 //! Provider-boundary readiness cases from the frozen Branvil code service.
 use super::*;
+use std::io::{Cursor, Write};
+
+const JUNIT_ARTIFACT: &str = r#"artifacts = [{ name = "report", paths = ["junit.xml"], junit = "junit.xml" }]
+"#;
+const TEST_NAME: &str = "suite::case[1] & more";
+const TEST_QUERY: &str = "test-failures?name=suite%3A%3Acase%5B1%5D%20%26%20more";
+
+async fn upload_junit_failure(runner: &Runner, attempt: &Value) {
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    zip.start_file("junit.xml", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    write!(
+        zip,
+        "<testsuite><testcase name='{}'><failure/></testcase></testsuite>",
+        TEST_NAME.replace('&', "&amp;")
+    )
+    .unwrap();
+    let (status, _) = runner
+        .raw(
+            reqwest::Method::PUT,
+            attempt,
+            "artifacts/report",
+            zip.finish().unwrap().into_inner(),
+        )
+        .await;
+    assert_eq!(status, 200);
+}
 
 async fn fixture(
     root: &Path,
@@ -16,7 +43,7 @@ async fn fixture(
         .unwrap();
     let git = Git::new(&root.join(name));
     git.commit("", "README.md", "base\n");
-    let pipeline = jobs.iter().map(|job| format!("[[jobs]]\nname = \"{job}\"\nrequired = true\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\nartifacts = [{{name = \"report\", paths = [\"report.txt\"]}}]\n")).collect::<String>();
+    let pipeline = jobs.iter().map(|job| format!("[[jobs]]\nname = \"{job}\"\nrequired = true\nimage = \"docker.io/library/alpine:3.22\"\ncommands = [\"true\"]\n{JUNIT_ARTIFACT}")).collect::<String>();
     let main = git.commit("", ".guildbotics-ci.toml", &pipeline);
     let remote = code.clone_url(&repo).await.unwrap();
     git.push(&remote, &main, "main", "owner", owner_token);
@@ -64,11 +91,23 @@ pub(super) async fn primary_failure_logs_and_cancelled_fallback(
         } else {
             &["test", "lint", "build"]
         };
-        let (_, _, head, pull) = fixture(root, owner, code, owner_token, name, jobs).await;
+        let (_, repo, head, pull) = fixture(root, owner, code, owner_token, name, jobs).await;
         let mut expected_id = String::new();
-        for _ in jobs {
+        let mut earlier_url = None;
+        for _ in 0..jobs.len() + usize::from(!only_cancelled) {
             let attempt = runner.claim_head(&head).await;
             let job = attempt["job"]["name"].as_str().unwrap();
+            if job == "test" && earlier_url.is_none() {
+                assert_eq!(runner.finish(&attempt, "success").await.0, 200);
+                let url = format!(
+                    "{base}/workspaces/acme/repos/{}/jobs/{}",
+                    repo.split_once('/').unwrap().1,
+                    attempt["attempt_id"].as_str().unwrap()
+                );
+                code.retry_job(&url, Default::default()).await.unwrap();
+                earlier_url = Some(url);
+                continue;
+            }
             let conclusion = match job {
                 "test" => "failure",
                 "lint" => "cancelled",
@@ -92,20 +131,21 @@ pub(super) async fn primary_failure_logs_and_cancelled_fallback(
                     .is_success()
             );
             if job == "test" {
-                assert!(
-                    runner
-                        .raw(
-                            reqwest::Method::PUT,
-                            &attempt,
-                            "artifacts/report",
-                            b"PK\x03\x04report".to_vec()
-                        )
-                        .await
-                        .0
-                        .is_success()
-                );
+                upload_junit_failure(&runner, &attempt).await;
+                let phase = json!({"cpu_time_ms": 250, "host_cpu_peak_bps": 9500});
+                let (status, result) = runner
+                    .post(
+                        &attempt, "finish", json!({
+                            "lease": attempt["lease"], "conclusion": "failure",
+                            "resources": {"restore": {}, "commands": phase, "save": {}, "guest_peak_memory_mib": 32}
+                        }),
+                    )
+                    .await;
+                assert_eq!(status, 200, "{result}");
+                expected_id = attempt["attempt_id"].as_str().unwrap().into();
+                continue;
             }
-            if job == "test" || only_cancelled {
+            if only_cancelled {
                 expected_id = attempt["attempt_id"].as_str().unwrap().into();
             }
             assert_eq!(runner.finish(&attempt, conclusion).await.0, 200);
@@ -143,6 +183,33 @@ pub(super) async fn primary_failure_logs_and_cancelled_fallback(
         assert!(!log.truncated);
         assert_eq!(log.log_bytes, log.log.len() as i64);
         assert_eq!(log.tail_limit_bytes, MAX_LOG_TAIL_BYTES as i64);
+        let data = serde_json::to_value(log).unwrap();
+        let evidence = &data["evidence"];
+        assert_eq!(evidence["sha"], head);
+        assert!(evidence["runner"].is_string());
+        assert_eq!(
+            evidence["failed_test_count"],
+            if only_cancelled {
+                Value::Null
+            } else {
+                json!(1)
+            }
+        );
+        if let Some(earlier_url) = earlier_url {
+            assert_eq!(evidence["attempt"], 2);
+            assert!(evidence["runner_claim"].is_object());
+            assert!(evidence["allocation"]["cpus"].is_number());
+            assert_eq!(evidence["resources"]["commands"]["host_cpu_peak_bps"], 9500);
+            assert_eq!(evidence["resources"]["guest_peak_memory_mib"], 32);
+            assert_eq!(evidence["other_attempts"][0]["conclusion"], "success");
+            assert_eq!(evidence["other_attempts"][0]["url"], earlier_url);
+            assert!(evidence["other_attempts"][0]["reused_from"].is_null());
+            let history = &evidence["test_failures"][0];
+            assert_eq!(history["name"], TEST_NAME);
+            assert!(history["url"].as_str().unwrap().ends_with(TEST_QUERY));
+            assert_eq!(history["failures"][0]["attempt_id"], expected_id);
+            assert_eq!(history["failures"][0]["runner"], evidence["runner"]);
+        }
     }
 }
 
@@ -348,7 +415,14 @@ pub(super) async fn retry_main_verification(
         .await
         .unwrap();
     let git = Git::new(&root.join("retry-main"));
-    let head = git.commit("", ".guildbotics-ci.toml", PIPELINE);
+    let head = git.commit(
+        "",
+        ".guildbotics-ci.toml",
+        &format!(
+            "{}{JUNIT_ARTIFACT}",
+            PIPELINE.split("artifacts =").next().unwrap()
+        ),
+    );
     git.push(
         &code.clone_url(&repo).await.unwrap(),
         &head,
@@ -374,6 +448,7 @@ pub(super) async fn retry_main_verification(
             ["current"]["retry"]["number"]
             .as_u64()
             .unwrap();
+        upload_junit_failure(selected, &attempt).await;
         assert_eq!(selected.finish(&attempt, "failure").await.0, 200);
         let failed = tokio::time::timeout(std::time::Duration::from_secs(15), async {
             loop {
@@ -441,6 +516,14 @@ pub(super) async fn retry_main_verification(
     .await
     .expect("failed verification did not create its repair ticket");
     assert!(repair.repair);
+    assert!(
+        repair
+            .body
+            .contains("Other attempts of this job at the same commit")
+    );
+    assert!(repair.body.contains("runner_claim"));
+    assert!(repair.body.contains(TEST_QUERY), "{}", repair.body);
+    assert!(repair.body.contains("retry-runner"));
     assert_eq!(repair.assignee.as_ref().unwrap().name, "aiko");
     let tasks = tickets.candidates().await.unwrap();
     let task = tasks

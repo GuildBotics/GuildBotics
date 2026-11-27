@@ -17,6 +17,7 @@ pub mod admin;
 pub mod api;
 pub(crate) mod collection;
 pub mod config;
+pub(crate) mod diagnostics;
 pub mod files;
 pub mod images;
 mod junit;

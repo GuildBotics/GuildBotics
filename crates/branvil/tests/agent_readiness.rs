@@ -129,6 +129,27 @@ fn empty_and_short_logs_and_oversized_metadata() {
 }
 
 #[test]
+fn oversized_evidence_preserves_the_failure_logs_and_marks_what_was_omitted() {
+    let mut input = log_input("tail");
+    let evidence = json!({
+        "sha": "head", "attempt": 2, "runner_deferral_count": 0, "runner_deferrals": {},
+        "other_attempt_count": 0, "other_attempts": [], "test_failures": [],
+    });
+    input["failed_logs"][0]["evidence"] = evidence.clone();
+    input["failed_logs"][1]["evidence"] = evidence.clone();
+    input["failed_logs"][0]["evidence"]["runner"] = json!("🦀".repeat(MAX_PAGE_BYTES / 8));
+
+    let result = run(&input).unwrap();
+    assert!(page_bytes(&result).unwrap() <= MAX_PAGE_BYTES);
+    let logs = serde_json::to_value(result.failed_logs.unwrap()).unwrap();
+    assert_eq!(logs[0]["evidence_truncated"], true);
+    assert!(logs[0].get("evidence").is_none());
+    assert_eq!(logs[1]["evidence"]["sha"], "head");
+    assert_eq!(logs[0]["log"], "tail");
+    assert_eq!(logs[1]["log"], "tail");
+}
+
+#[test]
 fn download_budgets() {
     assert_eq!(
         effective_tail_bytes(MAX_PAGE_BYTES, 2),

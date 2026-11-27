@@ -33,6 +33,31 @@ def capability_reference_text() -> str:
     return REFERENCE_PATH.read_text(encoding="utf-8").strip()
 
 
+def test_member_ci_diagnosis_requires_specific_evidence_and_a_deterministic_repair():
+    heading = "Diagnosing CI failures / CI の失敗の切り分け"
+    diagnosis = capability_reference_text().split(f"#### {heading}\n", 1)[1]
+    diagnosis = diagnosis.split("\n#### ", 1)[0]
+    for phrase in (
+        "`repository/pr_checks failed_logs=true`",
+        "another attempt at the same commit actually ran and passed that exact test",
+        "either the resource conditions during the failure or an assumption",
+        "make the test deterministic",
+        "Preserve the timeout and test coverage",
+        "for the owner to decide",
+        "同じコミットの別試行が同じテストを実行して成功",
+        "テストを決定的にする",
+        "オーナーが判断する",
+    ):
+        assert phrase in diagnosis
+
+    for language in ("en", "ja"):
+        guide = Path(f"docs/custom_command_guide.{language}.md").read_text(
+            encoding="utf-8"
+        )
+        assert "reference.md#diagnosing-ci-failures--ci-の失敗の切り分け" in guide
+        assert "`failed_logs[].evidence`" in guide
+
+
 FUNCTIONS_DIR = Path("guildbotics/templates/commands/functions")
 
 

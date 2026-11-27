@@ -770,6 +770,11 @@ impl CodeAgent {
                         log,
                         tail_limit_bytes: bytes as i64,
                         truncated: v["truncated"] == true,
+                        evidence: m
+                            .job_failure_evidence(&repo, id)
+                            .await
+                            .map_err(|e| error(e, "job_failure_evidence"))?,
+                        evidence_truncated: false,
                     });
                 }
             }

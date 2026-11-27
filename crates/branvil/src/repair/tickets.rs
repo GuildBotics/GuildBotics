@@ -1,6 +1,6 @@
 //! Durable failure handoff; Git and log reads never run in write transactions.
 use crate::app::App;
-use crate::ci::{queue, verify};
+use crate::ci::{diagnostics, queue, verify};
 use crate::domain::tickets;
 use crate::error::AppResult;
 use crate::model::{self, Assignee, MemberKind, Pull, Repair, Repo, Target, Ticket};
@@ -147,6 +147,128 @@ pub(super) fn text(s: &str) -> String {
         .replace(['\r', '\n'], " ")
 }
 
+async fn failed_job(
+    app: &App,
+    repo: &Repo,
+    root: &str,
+    sha: &str,
+    failure: &verify::FailedJob,
+) -> AppResult<String> {
+    let Some(id) = &failure.attempt_id else {
+        return Ok(format!(
+            "\n### {}\n\n[Commit]({root}/commits/{sha}): {}\n",
+            text(&failure.name),
+            text(failure.details.as_deref().unwrap_or("failure")),
+        ));
+    };
+    let evidence = diagnostics::load(app, &repo.id, id).await?;
+    let conclusion = evidence.as_ref().and_then(|e| e.conclusion.as_deref());
+    let mut body = format!(
+        "\n### {}\n\n[Job]({root}/jobs/{id}): {}\n",
+        text(&failure.name),
+        text(
+            failure
+                .details
+                .as_deref()
+                .or(conclusion)
+                .unwrap_or("failure")
+        )
+    );
+    if let Some(evidence) = evidence {
+        write_evidence(&mut body, &evidence);
+    }
+    let (log, _) = app.ci.log_tail(id, 8192).await?;
+    if !log.is_empty() {
+        let fence = "`".repeat(
+            log.split(|c| c != '`')
+                .map(str::len)
+                .max()
+                .unwrap_or(0)
+                .max(2)
+                + 1,
+        );
+        body.push_str(&format!(
+            "\n{fence}\n{}\n{fence}\n",
+            log.replace('@', "&#64;")
+        ));
+    }
+    Ok(body)
+}
+
+fn write_evidence(body: &mut String, evidence: &diagnostics::JobEvidence) {
+    use std::fmt::Write as _;
+
+    let runner = serde_json::json!({
+        "sha": evidence.sha,
+        "attempt": evidence.attempt,
+        "runner": evidence.runner,
+        "allocation": evidence.allocation,
+        "runner_claim": evidence.runner_claim,
+        "retry_decision": evidence.retry_decision,
+        "runner_deferral_count": evidence.runner_deferral_count,
+        "runner_deferrals": evidence.runner_deferrals,
+        "resources": evidence.resources,
+        "peak_memory_mib": evidence.peak_memory_mib,
+    });
+    // Single-line JSON cannot close the fence. Escaping mentions keeps runner data inert.
+    let runner = runner.to_string().replace('@', r"\u0040");
+    let _ = write!(body, "\nRunner and resources\n\n```json\n{runner}\n```\n");
+    let _ = writeln!(
+        body,
+        "\nOther attempts of this job at the same commit ({}/{})",
+        evidence.other_attempts.len(),
+        evidence.other_attempt_count,
+    );
+    for attempt in &evidence.other_attempts {
+        let reuse = if attempt.reused_from.is_some() {
+            " (reused result)"
+        } else {
+            ""
+        };
+        let _ = writeln!(
+            body,
+            "- [#{}]({}): {}, {}{reuse}",
+            attempt.attempt,
+            attempt.url,
+            text(attempt.conclusion.as_deref().unwrap_or(&attempt.status)),
+            text(attempt.runner.as_deref().unwrap_or("no runner")),
+        );
+    }
+    let Some(count) = evidence.failed_test_count else {
+        body.push_str("\nNo readable JUnit report recorded for this attempt.\n");
+        return;
+    };
+    let _ = writeln!(
+        body,
+        "\nTest failure history ({}/{count} names from JUnit)",
+        evidence.test_failures.len()
+    );
+    for history in &evidence.test_failures {
+        let name = text(&history.name)
+            .replace('[', "&#91;")
+            .replace(']', "&#93;")
+            .replace('<', "&lt;")
+            .replace('\\', "&#92;");
+        let _ = writeln!(
+            body,
+            "- [{name}]({}) ({}/{} retained failures)",
+            history.url,
+            history.failures.len(),
+            history.failure_count
+        );
+        for failure in &history.failures {
+            let _ = writeln!(
+                body,
+                "  - {} at {} on {} ({})",
+                text(&failure.job),
+                short(&failure.sha),
+                text(&failure.runner),
+                text(&failure.finished_at)
+            );
+        }
+    }
+}
+
 async fn evidence(
     app: &App,
     repo: &Repo,
@@ -217,55 +339,7 @@ async fn evidence(
         commit_link(&pending.sha)
     );
     for f in &pending.failures {
-        let attempt_id = f.attempt_id.clone();
-        let conclusion = app
-            .store
-            .read(move |r| {
-                Ok(attempt_id
-                    .as_deref()
-                    .map(|id| queue::get_attempt(r, id))
-                    .transpose()?
-                    .flatten()
-                    .and_then(|a| a.conclusion))
-            })
-            .await?;
-        let (label, link, log) = if let Some(id) = &f.attempt_id {
-            (
-                "Job",
-                format!("{root}/jobs/{id}"),
-                app.ci.log_tail(id, 8192).await?.0,
-            )
-        } else {
-            (
-                "Commit",
-                format!("{root}/commits/{}", pending.sha),
-                String::new(),
-            )
-        };
-        body.push_str(&format!(
-            "\n### {}\n\n[{label}]({link}): {}\n",
-            text(&f.name),
-            text(
-                f.details
-                    .as_deref()
-                    .or(conclusion.as_deref())
-                    .unwrap_or("failure")
-            )
-        ));
-        if !log.is_empty() {
-            let fence = "`".repeat(
-                log.split(|c| c != '`')
-                    .map(str::len)
-                    .max()
-                    .unwrap_or(0)
-                    .max(2)
-                    + 1,
-            );
-            body.push_str(&format!(
-                "\n{fence}\n{}\n{fence}\n",
-                log.replace('@', "&#64;")
-            ));
-        }
+        body.push_str(&failed_job(app, repo, &root, &pending.sha, f).await?);
     }
     body.push_str("\n## Range\n\n");
     body.push_str(&verified.as_ref().map_or_else(
@@ -602,6 +676,7 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
     };
     let mut lines = Vec::new();
     let mut merged = Vec::new();
+    let mut failure_details = String::new();
     if let Some(t) = &old {
         let repair = t.repair.as_ref().unwrap();
         let (t2, id) = (t.clone(), repo.id.clone());
@@ -631,6 +706,7 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
             }
         }
         for f in &p.failures {
+            let previous_lines = lines.len();
             let root = format!(
                 "{}{}",
                 app.base_url,
@@ -656,6 +732,9 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
                     "Still failing after its failed jobs were retried"
                 };
                 lines.push(format!("- {description}: {job} — {link}"));
+            }
+            if lines.len() != previous_lines && f.attempt_id.is_some() {
+                failure_details.push_str(&failed_job(app, &repo, &root, &p.sha, f).await?);
             }
         }
     }
@@ -713,7 +792,7 @@ async fn sweep_pending(app: &App, p: Pending) -> AppResult<()> {
                         },
                         "branvil",
                         format!(
-                            "Verification of {} failed again at {}.\n\n{}",
+                            "Verification of {} failed again at {}.\n\n{}\n{failure_details}",
                             text(p.branch.as_deref().unwrap_or(&repo.default_branch)),
                             short(&p.sha),
                             lines.join("\n")
