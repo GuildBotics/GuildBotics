@@ -86,6 +86,20 @@ function routes(l: Landing | null, extra: Parameters<typeof fakeApi>[0] = {}) {
 
 describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
   const words = dictionaries[lang];
+  const conditionsBadge = () =>
+    screen.getByText(words["landing.badge.conditions"]).closest(".mantine-Badge-root");
+  /** The badge of unmet requirements, after checking that every one is named under it. */
+  const unmet = (...codes: string[]) => {
+    const names = codes.map((code) => words[`landing.blocker.${code}` as keyof typeof words]);
+    const list = document.querySelector(".unmet-requirements");
+    expect(list?.textContent).toBe(names.join(words["landing.badge.and"]));
+    // Each name carries its separator mark, so a line breaks after the mark, never before it.
+    const mark = words["landing.badge.and"].trimEnd();
+    expect([...list!.querySelectorAll(".unmet-requirement")].map((e) => e.textContent)).toEqual(
+      names.map((name, i) => (i < names.length - 1 ? `${name}${mark}` : name)),
+    );
+    return conditionsBadge();
+  };
   function component(
     next: LandingNext,
     blockers: Landing["blockers"] = [],
@@ -167,15 +181,13 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
           ? "保留中：main の確認が失敗しています（修復 #42、担当なし）。main の確認が通ると、保留が解けます。"
           : "Held: main verification is failing (repair #42, unassigned). The hold lifts when main verification passes.";
       expect(screen.getByText(notice)).toBeInTheDocument();
-      expect(
-        screen.getAllByText(words["landing.blocker.held"])[1]!.closest(".mantine-Badge-root"),
-      ).toHaveAttribute("title", detail);
+      expect(conditionsBadge()).toHaveAttribute("title", detail);
       expect(screen.queryByText(blockers[0]!.message)).not.toBeInTheDocument();
       const caution = words["landing.heldPublished"].replace("{{host}}", "GitHub");
       expect(screen.queryByText(caution) !== null).toBe(published);
-      expect(
-        screen.getAllByText(words["landing.blocker.held"])[1]!.closest(".mantine-Badge-root"),
-      ).toHaveStyle({ "--badge-color": "var(--color-warning-text)" });
+      expect(conditionsBadge()).toHaveStyle({
+        "--badge-color": "var(--color-warning-text)",
+      });
     },
   );
   it("marks a failed local automatic merge at the merge step", () => {
@@ -268,9 +280,7 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
     for (const b of blockers) expect(journey.container.textContent).not.toContain(b.message);
     journey.unmount();
     component("conditions", blockers);
-    expect(
-      screen.getByText(`${words["landing.blocker.head_checks"]} +9`).closest(".mantine-Badge-root"),
-    ).toHaveAttribute("title", expected.join(" / "));
+    expect(unmet(...blockers.map((b) => b.code))).toHaveAttribute("title", expected.join(" / "));
   });
   it.each([true, false])(
     "shows server-unmet successes and skips as checking (journey=%s)",
@@ -310,9 +320,7 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
           ).not.toBeInTheDocument();
         }
       } else {
-        expect(
-          screen.getByText(words["landing.blocker.head_checks"]).closest(".mantine-Badge-root"),
-        ).toHaveAttribute("title", expected.join(" / "));
+        expect(unmet("head_checks")).toHaveAttribute("title", expected.join(" / "));
       }
     },
   );
@@ -351,7 +359,7 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
     component("conditions", [
       { code, message: "Server detail", count: 0, required: 1, jobs: [], files: [] },
     ]);
-    const badge = screen.getByText(words[`landing.blocker.${code}`]).closest(".mantine-Badge-root");
+    const badge = unmet(code);
     expect(badge?.getAttribute("title")).not.toContain("Server detail");
     expect(badge?.getAttribute("title")).not.toContain("landing.");
     expect(badge).toHaveStyle({
@@ -360,19 +368,21 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
         : "var(--color-text-subtle)",
     });
   });
-  it("summarizes blockers while keeping every detail in the title", () => {
+  it("names every unmet condition under the badge and keeps every detail in both titles", () => {
     component("conditions", [
       { code: "approvals", count: 0, required: 1, message: "Needs approval", jobs: [], files: [] },
       { code: "conflict", message: "Resolve conflict", jobs: [], files: [] },
     ]);
-    const badge = screen
-      .getByText(`${words["landing.blocker.approvals"]} +1`)
-      .closest(".mantine-Badge-root");
-    expect(badge).toHaveAttribute(
-      "title",
-      `${lang === "ja" ? "承認：0 / 1" : "Approvals: 0 / 1"} / ${words["landing.detail.conflict"].replace("{{files}}", "")}`,
-    );
+    const badge = unmet("approvals", "conflict");
+    const title = `${lang === "ja" ? "承認：0 / 1" : "Approvals: 0 / 1"} / ${words["landing.detail.conflict"].replace("{{files}}", "")}`;
+    expect(badge).toHaveAttribute("title", title);
+    expect(document.querySelector(".unmet-requirements")).toHaveAttribute("title", title);
     expect(badge).toHaveStyle({ "--badge-color": "var(--color-danger-text)" });
+  });
+  it("shows the same short state while requirements are not known yet", () => {
+    component("conditions");
+    expect(conditionsBadge()).toBeInTheDocument();
+    expect(document.querySelector(".unmet-requirements")).toBeNull();
   });
   it.each(["owner_merge_host", "conditions", "owner_fix_auto"] as const)(
     "restores journey icons for %s",

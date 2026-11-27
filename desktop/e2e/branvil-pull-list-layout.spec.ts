@@ -13,6 +13,23 @@ const STATES = [
   { checks: [], checks_expected: false },
 ];
 const COUNTS = [0, 1, 4, 12, 4];
+// Rows whose requirements are unmet name every one of them, which must not widen the status column.
+// Together they name every blocker, including names longer than the list's width.
+const BLOCKERS = [
+  ["draft", "conflict", "head_checks", "approvals"],
+  ["head_checks", "approvals"],
+  ["held", "base_checks_failed", "publish_requirements", "required_removal", "host_failed", "already_in_base"],
+  ["unanswered", "checking"],
+];
+const landing = (number: number, codes: string[] | undefined) =>
+  codes && {
+    repo: "repo_fixture", number, head_sha: SHA, base_sha: SHA, conflicts: [], required_jobs: [],
+    told: [], notified_at: null, error: null, next: "conditions", host_url: null, next_detail: null,
+    blockers: codes.map((code) => ({
+      code, message: code, jobs: code === "head_checks" ? ["test"] : [], files: [],
+      ...(code === "approvals" ? { count: 0, required: 1 } : {}),
+    })),
+  };
 const pulls = STATES.map((_, i) => ({
   number: 100000 + i, label: `!${100000 + i}`, repository: "acme/demo",
   url: `http://localhost/workspaces/acme/repos/demo/pulls/${100000 + i}`,
@@ -23,7 +40,7 @@ const pulls = STATES.map((_, i) => ({
     member: `review-bot-${n}`, requested: n % 4 === 3,
     verdict: ["approve", "request_changes", "comment", null][n % 4], outdated: n % 3 === 2,
   })), approvals: 0, tickets: [], labels: [], changed_files: 0,
-  created_at: AT, updated_at: AT, revision: 1, upstream: null,
+  created_at: AT, updated_at: AT, revision: 1, upstream: null, landing: landing(100000 + i, BLOCKERS[i]),
 }));
 const repo = { path: "acme/demo", default_branch: "main", required_checks: [], protected_branches: [], required_approvals: 0, autoland: "off", upstream: null };
 const pageOf = (items: unknown[]) => ({ items, next_cursor: null });
@@ -31,7 +48,7 @@ const pageOf = (items: unknown[]) => ({ items, next_cursor: null });
 for (const locale of ["en-US", "ja-JP"]) {
   test.describe(locale, () => {
     test.use({ locale });
-    for (const width of [800, 1280, 1600]) {
+    for (const width of [800, 1024, 1280, 1600]) {
       test(`keeps every status and review mark readable at ${width}px`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 1000 });
         await page.route("**/api/v1/**", async (route) => {
@@ -68,6 +85,28 @@ for (const locale of ["en-US", "ja-JP"]) {
             cells.forEach((cell, i) => {
               if (Math.abs(cell.getBoundingClientRect().x - header[i]) > 1) issues.push(`column ${i} is misaligned`);
             });
+            // Unmet requirements wrap within a bounded width instead of widening the status column.
+            for (const list of cells[3].querySelectorAll<HTMLElement>(".unmet-requirements")) {
+              const em = parseFloat(getComputedStyle(list).fontSize);
+              if (list.getBoundingClientRect().width > 12 * em + 1) issues.push(`wide requirements: ${list.textContent}`);
+              // Separator marks stay inside the names, so no line starts with one.
+              for (const node of list.childNodes) {
+                if (node.nodeType === Node.TEXT_NODE && node.textContent?.trim()) issues.push(`loose separator: ${node.textContent}`);
+              }
+              if (list.scrollWidth > list.clientWidth + 1) issues.push(`clipped requirements: ${list.textContent}`);
+              const frame = list.getBoundingClientRect();
+              for (const name of list.querySelectorAll<HTMLElement>(".unmet-requirement")) {
+                const box = name.getBoundingClientRect();
+                if (box.left < frame.left - 1 || box.right > frame.right + 1 || name.scrollWidth > name.clientWidth + 1) issues.push(`clipped requirement: ${name.textContent}`);
+                // A name that fits the list's 12em with its separator stays on one line.
+                name.style.whiteSpace = "nowrap";
+                name.style.maxWidth = "none";
+                const line = name.getBoundingClientRect();
+                name.style.whiteSpace = "";
+                name.style.maxWidth = "";
+                if (line.width <= 12 * em && box.height > line.height + 1) issues.push(`broken requirement: ${name.textContent}`);
+              }
+            }
             for (const cell of [cells[3], cells[4]]) {
               for (const label of cell.querySelectorAll<HTMLElement>(".mantine-Badge-label")) {
                 if (label.scrollWidth > label.clientWidth + 1) issues.push(`clipped badge: ${label.textContent}`);
@@ -84,9 +123,11 @@ for (const locale of ["en-US", "ja-JP"]) {
             }
           }
           if (document.documentElement.scrollWidth > innerWidth + 1) issues.push("page overflows horizontally");
+          if (innerWidth >= 1600 && element.scrollWidth > element.clientWidth + 1) issues.push("list scrolls horizontally");
           return issues;
         });
         expect(issues).toEqual([]);
+        await expect(table.locator(".unmet-requirements")).toHaveCount(BLOCKERS.length);
         for (const [i, count] of COUNTS.entries()) {
           await expect(table.locator("a[role=row]").nth(i).locator(".review-mark-anchor")).toHaveCount(count);
         }

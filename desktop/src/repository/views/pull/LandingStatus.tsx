@@ -1,4 +1,5 @@
 import { href } from "../../router/routes";
+import { Fragment } from "react";
 import { Anchor, Badge, Card, Group, Stack, Text } from "@mantine/core";
 import { Check, Cloud, GitBranch, GitMerge, ListChecks, X } from "lucide-react";
 import type { PullRequest, Repository } from "../../api/types";
@@ -222,12 +223,12 @@ export function JourneyBadge({
   const l = pull.landing;
   const details = useBlockerDetails(pull, load);
   const { at, mark } = whereabouts(pull, repo, false);
+  const unmet = l?.next === "conditions" ? l.blockers : [];
   const text =
     !l || l.next === "conditions"
-      ? l?.blockers.length
-        ? `${t(blockerName(l.blockers[0]!.code))}${l.blockers.length > 1 ? ` +${l.blockers.length - 1}` : ""}`
-        : t("landing.missing")
+      ? t("landing.badge.conditions")
       : t(`landing.badge.${l.next}`, { host: repo.upstream?.host ?? "", base: pull.base });
+  const title = details.flat().join(" / ");
   const color =
     l?.next === "conditions" && l.blockers[0]?.code === "held"
       ? "warning"
@@ -240,16 +241,30 @@ export function JourneyBadge({
           : l && ["owner_merge_host", "owner_merge"].includes(l.next)
             ? "warning"
             : "neutral";
-  return (
-    <Badge
-      color={color}
-      variant="light"
-      size="sm"
-      title={details.flat().join(" / ")}
-      data-stop={at}
-      data-state={mark}
-    >
+  const badge = (
+    <Badge color={color} variant="light" size="sm" title={title} data-stop={at} data-state={mark}>
       {pull.base === repo.default_branch ? text : `${pull.base} · ${text}`}
     </Badge>
+  );
+  if (!unmet.length) return badge;
+  // The unmet requirements wrap under the state between names instead of widening the list's column.
+  // Each name keeps its separator mark so a line never starts with it; only spacing stays outside.
+  const and = t("landing.badge.and");
+  const separator = and.trimEnd();
+  return (
+    <Stack component="span" gap={2} align="flex-start">
+      {badge}
+      <Text span size="xs" c="dimmed" className="unmet-requirements" title={title}>
+        {unmet.map((b, i) => (
+          <Fragment key={b.code}>
+            {i > 0 && and.slice(separator.length)}
+            <span className="unmet-requirement">
+              {t(blockerName(b.code))}
+              {i < unmet.length - 1 && separator}
+            </span>
+          </Fragment>
+        ))}
+      </Text>
+    </Stack>
   );
 }

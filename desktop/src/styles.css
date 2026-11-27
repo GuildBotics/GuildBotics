@@ -3826,6 +3826,17 @@ pre {
     grid-template-columns: subgrid;
   }
 
+  .unmet-requirements {
+    max-width: 12em;
+    white-space: normal;
+  }
+
+  /* A name moves to the next line whole; only a name longer than the list wraps inside itself. */
+  .unmet-requirement {
+    display: inline-block;
+    max-width: 100%;
+  }
+
   .pull-list > .empty-row {
     grid-column: 1 / -1;
   }
