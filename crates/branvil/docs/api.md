@@ -1106,7 +1106,7 @@ is not the full sha of a commit of the repository.
 ### CI attempts
 
 - `GET /api/v1/repos/{repo}/jobs/{attempt_id}` →
-  `{"id","retry_supported","url","repository","job","attempt","runner","allocation","peak_memory_mib","sha","image_digest","reused_from","status","conclusion","path_skip","details","cancel_requested","created_at","started_at","finished_at","artifact_names","log_bytes"}`.
+  `{"id","retry_supported","url","repository","job","attempt","runner","allocation","runner_claim","runner_deferrals","peak_memory_mib","sha","image_digest","reused_from","status","conclusion","path_skip","details","cancel_requested","created_at","started_at","finished_at","artifact_names","log_bytes"}`.
   `path_skip` has the same shape as on checks and is `null` for an attempt
   that was not skipped by the service's path selection.
   `runner` is the member name of the runner that claimed this attempt, or
@@ -1114,6 +1114,18 @@ is not the full sha of a commit of the repository.
   `allocation` records `cpus`, `vm_memory_mib`, and `reserved_memory_mib` at
   claim. `peak_memory_mib` is the measured host memory at finish. Both
   resource fields may be `null`.
+  `runner_claim` records the claim's `machine`, `memory_samples`, and `budget`.
+  A machine snapshot has `logical_cpus`, `total_memory_mib`,
+  `available_memory_mib`, and `commit_available_mib` (where reported).
+  The memory estimate is `allocation.reserved_memory_mib`. It uses the 90th
+  percentile of up to 20 samples for that repository, job and VM size, or the
+  VM memory size if `memory_samples` is zero. The budget has
+  `memory_reserve_mib` for the host, `remaining_cpus`, `remaining_memory_mib`,
+  and `remaining_commit_mib` (where reported), after accounting for active
+  allocations, any queue reservation, and this allocation. `machine` and
+  `budget` are null if no machine report was available. For reuse claims,
+  `memory_samples` and `budget` are null. `runner_claim` is null for attempts
+  without a recorded claim.
   `image_digest` is the configuration digest (`sha256:…`) of the image the
   job ran on, as its runner reported it; `null` when the job did not get that
   far. `retry_supported` is true for check attempts.
@@ -1129,12 +1141,18 @@ is not the full sha of a commit of the repository.
   Retries include `retry_decision` with the source attempt, `requested_by`
   (null for automation), `selection`, `failed_runner`, and the automatic
   fallback time `prefer_other_until` when applicable. For queued retries,
-  `retry_wait` reports the runner wait reason. For pinned attempts and attempts
-  held by insufficient commit headroom, `runner_deferrals` keeps the last
-  recorded shortfalls for each runner. The entry and its `at` timestamp change
-  only when the recorded shortfalls change. A successful retry on a
-  different runner exposes `runner_recovery` with `failed_attempt`,
-  `failed_runner`, and `successful_runner` on both job and check views.
+  `retry_wait` reports the runner wait reason. `runner_deferrals` maps each
+  runner that polled and was found short on resources for this attempt to its
+  last recorded `at` timestamp, `machine` snapshot, and shortfalls
+  (`cpu_shortfall`, `memory_shortfall_mib`, `commit_shortfall_mib`).
+  The first deferral is recorded immediately. A later poll updates the entry
+  only if the shortfalls differ from the recorded values and at least 60
+  seconds have elapsed since `at`. The timestamp and machine snapshot are
+  from the same poll as the recorded shortfalls. Live resource waits use
+  the current poll's values. A deferral before the schema upgrade has a null
+  `machine`. A successful retry on a different runner exposes `runner_recovery`
+  with `failed_attempt`, `failed_runner`, and `successful_runner` on both job
+  and check views.
   Default-branch verification exposes these as `runner_recoveries` with
   each job's `name` for the current and most recently verified commits.
   Queued attempts in classes 4a/4b append `Deferred: <reason>.` and when they

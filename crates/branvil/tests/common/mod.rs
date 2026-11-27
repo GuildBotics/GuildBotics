@@ -821,18 +821,21 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
     txn.commit().unwrap();
 }
 
-pub const PREVIOUS_SCHEMA_VERSION: u64 = 48;
+pub const PREVIOUS_SCHEMA_VERSION: u64 = 49;
 
 /// Makes the database look written by the previous schema version: its
-/// version, and repositories without the review rounds it did not keep.
+/// version, and attempts without the runner evidence it did not keep.
 pub fn as_previous_schema(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
             *v = json!(PREVIOUS_SCHEMA_VERSION);
         }
     });
-    edit_records(db, "repos", |v| {
-        v.as_object_mut().unwrap().remove("review_rounds");
+    edit_records(db, "ci_attempts", |v| {
+        v.as_object_mut().unwrap().remove("runner_claim");
+        for deferral in v["runner_deferrals"].as_object_mut().unwrap().values_mut() {
+            deferral.as_object_mut().unwrap().remove("machine");
+        }
     });
 }
 

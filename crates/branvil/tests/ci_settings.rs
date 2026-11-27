@@ -350,6 +350,54 @@ async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
     assert_eq!(w.server.ok("/runner/health", &idle).await["max_jobs"], 3);
 }
 
+#[tokio::test]
+async fn job_details_keep_the_claim_and_the_other_runners_shortfall() {
+    let w = World::new().await;
+    let small = w.server.member(&w.owner, "small", "runner").await;
+    let large = w.server.member(&w.owner, "large", "runner").await;
+    land_pipeline(&w).await;
+    let mut report = json!({
+        "executor": "fixture", "executor_state": "ready", "version": gb_base::BUILD_VERSION,
+        "max_jobs": 1, "running_jobs": 0, "accept": true, "architecture": "amd64",
+        "images": [{"reference": IMAGE, "architecture": "amd64", "digest": format!("sha256:{}", "a".repeat(64))}],
+        "machine": {"logical_cpus": 8, "total_memory_mib": 10000, "available_memory_mib": 3000}
+    });
+    assert_eq!(
+        w.server
+            .post("/runner/claim", &small, report.clone())
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    report["machine"]["available_memory_mib"] = json!(8000);
+    let (status, claim) = w.server.post("/runner/claim", &large, report).await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    let id = claim["attempt_id"].as_str().unwrap();
+    let job = w
+        .server
+        .ok(&format!("{}/jobs/{id}", w.repo_path()), &w.aiko)
+        .await;
+    assert_eq!(job["runner"], "large");
+    assert_eq!(
+        job["runner_claim"],
+        json!({
+            "machine": {"logical_cpus": 8, "total_memory_mib": 10000, "available_memory_mib": 8000,
+                "commit_available_mib": null},
+            "memory_samples": 0,
+            "budget": {"memory_reserve_mib": 1000, "remaining_cpus": 4, "remaining_memory_mib": 2904,
+                "remaining_commit_mib": null}
+        })
+    );
+    let deferrals = job["runner_deferrals"].as_object().unwrap();
+    assert_eq!(deferrals.len(), 1);
+    let wait = &deferrals["small"];
+    assert_eq!(wait["attempt_id"], id);
+    assert_eq!(wait["cpu_shortfall"], 0);
+    assert_eq!(wait["memory_shortfall_mib"], 2096);
+    assert_eq!(wait["machine"]["available_memory_mib"], 3000);
+    assert!(wait["at"].is_string());
+}
+
 /// Waits until the supervised runner has contacted the service.
 async fn runner_connected(w: &World) {
     for _ in 0..300 {
