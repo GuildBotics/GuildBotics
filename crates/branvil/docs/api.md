@@ -173,6 +173,7 @@ repository, and upstream events, including changes in another repository.
 | 409 | `children_open` | A ticket is closed as completed while one of its children is open. |
 | 409 | `blocked` | A ticket is moved into `in_progress` while one of its blockers is open. |
 | 409 | `delete_has_children`, `delete_blocks_tickets`, `delete_linked_pull`, `delete_upstream_issue` | Ticket deletion is refused because it has children, is named as a blocker, links a PR, or links an upstream issue, respectively. Closed children, dependents, and PRs count too. |
+| 409 | `runner_online`, `runner_holds_attempts` | Runner deletion is refused because the runner reported within `ci.runner_absent_secs` or holds attempts ("CI settings"). Nothing was written. |
 | 409 | `no_account` | The member whose account the upstream host needs has none there, or its credential is not on this machine ("Upstream"). |
 | 409 | `upstream_refused` | The upstream host refused what Branvil sent or asked for (the message says why). |
 | 409 | `idempotency_conflict` | See conventions. |
@@ -342,6 +343,7 @@ A failure is never an empty list:
 | HTTP | `code` | When |
 | --- | --- | --- |
 | 422 | `unsupported` | The repository has no upstream. |
+| 409 | `runner_online`, `runner_holds_attempts` | Runner deletion is refused because the runner reported within `ci.runner_absent_secs` or holds attempts ("CI settings"). Nothing was written. |
 | 409 | `no_account` | The reader has no account on the host, or its credential is not on this machine. |
 | 404 | `not_found` | No alert of that `id`, or the host answered "not found" for the repository: the reader's account cannot see it, or the host keeps no alerts of it. |
 | 409 | `upstream_refused` | The host refused the reader's request (its token, its permissions, or the request itself). |
@@ -1536,6 +1538,16 @@ the rest of the file, and take effect immediately. The Hub uses the shared image
   `[ci.runner_limits.<name>]` for the named runner member, including members
   that have never reported. An unknown name or a member of another kind returns
   `404`. Each runner without an override uses the Hub defaults.
+- `DELETE /api/v1/admin/ci/runners/{name}` (owner) → the settings. Deletes a
+  stopped runner member in one operation: every token of it is revoked (it
+  gets `401` from then on), its record and its row in `runner.runners` go,
+  and `[ci.runner_limits.<name>]` is removed from `config.toml`, keeping the
+  rest of the file. An unknown name or a member of another kind returns `404`.
+  A runner that reported within `ci.runner_absent_secs` is `409 runner_online`,
+  and one that holds attempts `409 runner_holds_attempts`; nothing is deleted.
+  Attempts and checks keep the runner's name in `runner`. A runner that joins
+  again under the same name (`guildbotics runner join` from the same device)
+  is a new member with the Hub defaults.
 - `POST /api/v1/admin/ci/images/pull` (owner) `{"reference"}` → `202` with the
   settings, `operation` running; `400 invalid` for a reference that is not
   `[registry/]name[:tag]` (pipelines name an image by its tag, so a digest

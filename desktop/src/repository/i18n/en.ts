@@ -369,6 +369,10 @@ export const en = {
     "Runner selection requires a current, unprotected pull request head.",
   "ci.error.retry_runner_ineligible": "Select a runner with the job's image and the Hub version.",
   "ci.error.retry_runner_excluded": "The selected runner is also excluded.",
+  "ci.error.runner_online":
+    "This runner is running (it reported recently). Stop it on its machine before deleting it.",
+  "ci.error.runner_holds_attempts":
+    "This runner still holds attempts. Stop it and let them finish or be queued again before deleting it.",
   "ci.retryRunner": "Select runner",
   "ci.excludeRunners": "Exclude runners",
   "ci.runnerDeferral": "Runner resource deferral",
@@ -727,8 +731,12 @@ export const en = {
     "The Hub starts the runner with the service. Switching it off interrupts the running job.",
   "ci.settings.runners": "Runners",
   "ci.settings.noRunners": "No runner members.",
+  "ci.settings.deleteRunner": "Delete",
+  "ci.settings.deleteRunnerLabel": "Delete runner {{name}}",
+  "ci.settings.confirmDeleteRunner":
+    "Delete the runner {{name}}? All its tokens are revoked, and it leaves the list and the job resource settings. Past jobs keep its name.",
   "ci.settings.tokensHelp":
-    "The selected runner's tokens. `guildbotics runner join` issues one; revoke it here when a machine stops being a runner.",
+    "The selected runner's tokens. `guildbotics runner join` issues one. When the machine is no longer used, delete the runner from the list above, which revokes its tokens too.",
   "ci.settings.displayName": "Display name",
   "ci.settings.displayNameHelp":
     "The name the checks, jobs, and this page show for this runner. Leave it empty to show {{name}}.",

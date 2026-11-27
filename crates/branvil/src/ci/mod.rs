@@ -237,6 +237,11 @@ struct Inner {
     attempts_ended: tokio::sync::Notify,
     /// Serializes log appends (one file per attempt, small writes).
     log_lock: tokio::sync::Mutex<()>,
+    /// Serializes a runner's own job resources in `config.toml` with the
+    /// runner's deletion, from the member check to the file: resources
+    /// saved for a runner being deleted are never left for one that joins
+    /// again under its name.
+    runner_settings: tokio::sync::Mutex<()>,
 }
 
 impl Ci {
@@ -267,6 +272,7 @@ impl Ci {
                 sweep_changed: tokio::sync::Notify::new(),
                 attempts_ended: tokio::sync::Notify::new(),
                 log_lock: tokio::sync::Mutex::new(()),
+                runner_settings: tokio::sync::Mutex::new(()),
             }),
         }
     }
@@ -1229,6 +1235,79 @@ impl Ci {
         }
     }
 
+    /// Saves the job resources of the runner member `name`. A caller runs it
+    /// to its end (`App::finish`), as `delete_runner`.
+    pub async fn set_runner_limits(&self, name: &str, limits: config::JobLimits) -> AppResult<()> {
+        let _held = self.inner.runner_settings.lock().await;
+        let owned = name.to_string();
+        let member = self
+            .inner
+            .store
+            .read(move |r| runner_member(r, &owned))
+            .await?;
+        self.settings().set_limits(Some(&member.name), limits).await
+    }
+
+    /// Deletes the runner member `name` that has stopped: its tokens, its
+    /// record (and so its row in the runner list), and its own job
+    /// resources in `config.toml`. Attempts and checks keep the name they
+    /// recorded. A runner that reported within `runner_absent_secs` or holds
+    /// an attempt is refused, so no running attempt loses its runner; a
+    /// claim checks the member in its write (`api::claim`), so none is given
+    /// out after the deletion either. A caller runs it to its end
+    /// (`App::finish`): stopped between the file and the record, it would
+    /// leave the runner without its resources.
+    pub async fn delete_runner(&self, name: &str) -> AppResult<()> {
+        let _held = self.inner.runner_settings.lock().await;
+        let (ci, owned) = (self.clone(), name.to_string());
+        self.inner
+            .store
+            .read(move |r| ci.deletable_runner(r, &owned))
+            .await?;
+        let (ci, owned) = (self.clone(), name.to_string());
+        let delete = self.inner.store.write(move |w| {
+            ci.deletable_runner(w, &owned)?;
+            crate::auth::revoke_all(w, &owned, None)?;
+            w.del(store::MEMBERS, &Member::key(&owned))?;
+            w.del(store::AVATARS, &Member::key(&owned))?;
+            Ok(())
+        });
+        self.settings().remove_limits(name, delete).await?;
+        self.inner.runners.lock().unwrap().remove(&util::fold(name));
+        Ok(())
+    }
+
+    fn deletable_runner(&self, r: &impl Rd, name: &str) -> AppResult<()> {
+        runner_member(r, name)?;
+        let absent = Duration::from_secs(self.inner.config.runner_absent_secs);
+        let key = util::fold(name);
+        if self
+            .inner
+            .runners
+            .lock()
+            .unwrap()
+            .get(&key)
+            .is_some_and(|seen| seen.online(absent))
+        {
+            return Err(AppError::conflict_code(
+                "runner_online",
+                format!(
+                    "{name} reported in the last {} s; stop it on its machine first.",
+                    absent.as_secs()
+                ),
+            ));
+        }
+        if queue::running_by_runner(r)?.contains_key(&key) {
+            return Err(AppError::conflict_code(
+                "runner_holds_attempts",
+                format!(
+                    "{name} holds attempts; stop it and let them finish or be queued again first."
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn reported_runners(&self, r: &impl Rd) -> AppResult<Vec<RunnerSeen>> {
         let reports = self.inner.runners.lock().unwrap().clone();
         let mut runners = Vec::new();
@@ -1743,6 +1822,12 @@ fn run_checks<S>(
 #[cfg(test)]
 mod verification_tests;
 
+fn runner_member(r: &impl Rd, name: &str) -> AppResult<Member> {
+    r.get::<Member>(store::MEMBERS, &Member::key(name))?
+        .filter(|m| m.kind == MemberKind::Runner)
+        .ok_or_else(|| AppError::not_found("Runner member not found."))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1765,7 +1850,7 @@ mod tests {
             "http://127.0.0.1:7878".into(),
             layout,
             config,
-            std::path::PathBuf::from("/nonexistent/config.toml"),
+            dir.path().join("config.toml"),
         );
         let repo = Repo {
             id: "repo_1".into(),
@@ -1799,6 +1884,69 @@ mod tests {
             ram_workspace: None,
             artifacts: vec![],
             cache: None,
+        }
+    }
+
+    /// A runner's own job resources and its deletion take turns from the
+    /// member check to the file: saved before the deletion they go with it,
+    /// and after it they are refused, so a runner that joins again under the
+    /// name starts from the Hub defaults.
+    #[tokio::test]
+    async fn a_runners_resources_and_its_deletion_take_turns() {
+        use crate::domain::members::{NewMember, insert_member};
+        let (dir, ci, _) = setup();
+        let limits = config::JobLimits {
+            max_cpus: 8,
+            ..ci.settings().limits()
+        };
+        for save_first in [true, false] {
+            ci.inner
+                .store
+                .write(|w| {
+                    insert_member(
+                        w,
+                        &NewMember {
+                            name: "old".into(),
+                            kind: MemberKind::Runner,
+                            display_name: None,
+                        },
+                    )
+                })
+                .await
+                .unwrap();
+            let save = {
+                let ci = ci.clone();
+                move || tokio::spawn(async move { ci.set_runner_limits("old", limits).await })
+            };
+            let delete = {
+                let ci = ci.clone();
+                move || tokio::spawn(async move { ci.delete_runner("old").await })
+            };
+            // Each waits for its turn in the order it asked for it.
+            let held = ci.inner.runner_settings.lock().await;
+            let (saved, deleted) = if save_first {
+                let saved = save();
+                tokio::task::yield_now().await;
+                (saved, delete())
+            } else {
+                let deleted = delete();
+                tokio::task::yield_now().await;
+                (save(), deleted)
+            };
+            tokio::task::yield_now().await;
+            drop(held);
+            let (saved, deleted) = (saved.await.unwrap(), deleted.await.unwrap());
+            deleted.unwrap();
+            match saved {
+                Ok(()) => assert!(save_first),
+                Err(e) => assert_eq!((save_first, e.code), (false, "not_found")),
+            }
+            assert!(matches!(
+                ci.settings().runner_limits("old").1,
+                settings::LimitsSource::Default
+            ));
+            let text = std::fs::read_to_string(dir.path().join("config.toml")).unwrap_or_default();
+            assert!(!text.contains("old"), "{save_first}: {text}");
         }
     }
 

@@ -655,8 +655,10 @@ describe("CI settings", () => {
     const tokens = screen.getByRole("region", { name: "Tokens" });
     expect(await within(tokens).findByText("runner-join")).toBeInTheDocument();
     await user.click(within(list).getByRole("radio", { name: "Gaming PC (desktop-runner)" }));
-    expect(await within(tokens).findByText("No tokens.")).toBeInTheDocument();
-    expect(within(tokens).queryByText("runner-join")).not.toBeInTheDocument();
+    // The selected runner's panels are replaced together.
+    const replaced = screen.getByRole("region", { name: "Tokens" });
+    expect(await within(replaced).findByText("No tokens.")).toBeInTheDocument();
+    expect(within(replaced).queryByText("runner-join")).not.toBeInTheDocument();
   });
 
   it("keeps the runner first shown selected when another joins at the top of the polled list", async () => {
@@ -763,6 +765,80 @@ describe("CI settings", () => {
     expect(fake.calls("PUT", path)[0]?.body).toEqual(saved.limits);
     await user.click(within(list).getByRole("radio", { name: "new-runner" }));
     expect(within(limits()).getByRole("textbox", { name: "CPUs" })).toHaveValue("4");
+  });
+
+  it("deletes a stopped runner after a confirmation and says why a running one stays", async () => {
+    const runner = { ...CI.runner, runners: [HUB_RUNNER, REMOTE_RUNNER, NEW_RUNNER] };
+    const path = (name: string) => `/api/v1/admin/ci/runners/${name}`;
+    const fake = fakeApi({
+      ...SHELL,
+      "GET /api/v1/admin/ci": json(200, { ...CI, runner }),
+      "GET /api/v1/admin/diagnostics": json(200, { runner }),
+      // Named as the list names it: by its display name, with its member name.
+      "GET /api/v1/members": page([
+        {
+          name: REMOTE_RUNNER.name,
+          display_name: "Gaming PC",
+          kind: "runner",
+          accounts: [],
+          reviewers: [],
+        },
+      ]),
+      [`GET /api/v1/members/${HUB_RUNNER.name}/tokens`]: page([]),
+      [`GET /api/v1/members/${REMOTE_RUNNER.name}/tokens`]: page([]),
+      [`DELETE ${path("hub-runner")}`]: apiError(409, "runner_online", "hub-runner reported."),
+      [`DELETE ${path("new-runner")}`]: apiError(
+        409,
+        "runner_holds_attempts",
+        "new-runner holds attempts.",
+      ),
+      [`DELETE ${path("desktop-runner")}`]: json(200, {
+        ...CI,
+        runner: { ...runner, runners: [HUB_RUNNER, NEW_RUNNER] },
+      }),
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValue(true);
+    const user = userEvent.setup();
+    renderApp("/settings/repositories/ci");
+    const list = await screen.findByRole("list", { name: "Runners" });
+    const remove = (name: string) =>
+      user.click(within(list).getByRole("button", { name: `Delete runner ${name}` }));
+
+    await remove("Gaming PC (desktop-runner)");
+    expect(confirm).toHaveBeenLastCalledWith(
+      "Delete the runner Gaming PC (desktop-runner)? All its tokens are revoked, and it leaves the list and the job resource settings. Past jobs keep its name.",
+    );
+    expect(fake.calls("DELETE", path("desktop-runner"))).toHaveLength(0);
+
+    await remove("hub-runner");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This runner is running (it reported recently). Stop it on its machine before deleting it.",
+    );
+    await remove("new-runner");
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "This runner still holds attempts. Stop it and let them finish or be queued again before deleting it.",
+      ),
+    );
+    expect(within(list).getAllByRole("radio")).toHaveLength(3);
+
+    // The selected runner: its panels go with it, and the next runner's
+    // take their place.
+    await user.click(within(list).getByRole("radio", { name: "Gaming PC (desktop-runner)" }));
+    expect(screen.getByRole("textbox", { name: "Display name" })).toHaveValue("Gaming PC");
+    await remove("Gaming PC (desktop-runner)");
+    await waitFor(() =>
+      expect(
+        within(list).queryByRole("radio", { name: "Gaming PC (desktop-runner)" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(fake.calls("DELETE", path("desktop-runner"))).toHaveLength(1);
+    for (const panel of ["Display name", "Tokens", "Job resources"]) {
+      expect(screen.getAllByRole("region", { name: panel })).toHaveLength(1);
+    }
+    expect(screen.getByRole("textbox", { name: "Display name" })).toHaveValue("hub-runner");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    confirm.mockRestore();
   });
 
   it("follows a runner switched on until it reports", async () => {

@@ -13,7 +13,7 @@ import {
 } from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FolderGit2 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import * as api from "../../api/endpoints";
 import type { CiLimits, CiRunner, CiSettings as Settings } from "../../api/types";
 import {
@@ -88,14 +88,18 @@ export function CiSettings({ workspace }: { workspace: string | null }) {
               {t("ci.settings.manageImages")}
             </Anchor>
           </Section>
-          {runner && <RunnerName key={runner.name} name={runner.name} />}
           {runner && (
-            <Section title={t("token.title")} description={t("ci.settings.tokensHelp")}>
-              <RunnerHeading name={runner.name} />
-              <Tokens key={runner.name} name={runner.name} />
-            </Section>
+            // One key for the selected runner's panels: they are replaced
+            // together when another runner is selected or this one is deleted.
+            <Fragment key={runner.name}>
+              <RunnerName name={runner.name} />
+              <Section title={t("token.title")} description={t("ci.settings.tokensHelp")}>
+                <RunnerHeading name={runner.name} />
+                <Tokens name={runner.name} />
+              </Section>
+              <Limits runner={runner} />
+            </Fragment>
           )}
-          {runner && <Limits key={runner.name} runner={runner} />}
           <Section title={t("ci.settings.network")} description={t("ci.settings.networkHelp")}>
             {repositories.length === 0 ? (
               <Text size="sm" c="dimmed">
@@ -184,6 +188,7 @@ function Runner({
   const label = useRunnerLabel();
   const { runner } = settings;
   const setMode = useCiChange(api.admin.setRunner);
+  const remove = useCiChange(api.admin.deleteRunner);
   return (
     <Section title={t("ci.settings.runner")}>
       <Stack gap="md">
@@ -216,11 +221,24 @@ function Runner({
           <Radio.Group aria-label={t("ci.settings.runners")} value={selected} onChange={onSelect}>
             <Stack gap={6} role="list" aria-label={t("ci.settings.runners")}>
               {runner.runners.map((r) => (
-                <RunnerRow key={r.name} runner={r} />
+                <RunnerRow
+                  key={r.name}
+                  runner={r}
+                  deleting={remove.isPending}
+                  onDelete={() => {
+                    if (
+                      window.confirm(
+                        t("ci.settings.confirmDeleteRunner", { name: label(r.name, true) }),
+                      )
+                    )
+                      remove.mutate(r.name);
+                  }}
+                />
               ))}
             </Stack>
           </Radio.Group>
         )}
+        {remove.isError && <ErrorMessage error={remove.error} />}
         <Text size="sm">
           <Anchor href={t("ci.settings.forwardingUrl")} target="_blank" rel="noreferrer">
             {t("ci.settings.forwarding")}
@@ -233,7 +251,15 @@ function Runner({
   );
 }
 
-function RunnerRow({ runner: r }: { runner: CiRunner }) {
+function RunnerRow({
+  runner: r,
+  deleting,
+  onDelete,
+}: {
+  runner: CiRunner;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
   const t = useT();
   const label = useRunnerLabel();
   const online = r.connection === "online";
@@ -310,6 +336,16 @@ function RunnerRow({ runner: r }: { runner: CiRunner }) {
           </Stack>
         )}
       </Stack>
+      <Button
+        size="xs"
+        variant="light"
+        color="danger"
+        aria-label={t("ci.settings.deleteRunnerLabel", { name: label(r.name, true) })}
+        disabled={deleting}
+        onClick={onDelete}
+      >
+        {t("ci.settings.deleteRunner")}
+      </Button>
     </div>
   );
 }

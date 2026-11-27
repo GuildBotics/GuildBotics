@@ -18,7 +18,8 @@ use crate::app::Shared;
 use crate::auth::Caller;
 use crate::error::{AppError, AppResult};
 use crate::http::{P as Path, Q};
-use crate::model::{MemberKind, Repo};
+use crate::model::{Member, MemberKind, Repo};
+use crate::store::{self, Rd};
 use crate::util;
 
 pub use gb_runner::ci::api::LEASE_HEADER;
@@ -542,14 +543,16 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     );
     let at = util::format_time(now);
     // Checked in the write: `Ci::stop` counts the running jobs in a write
-    // too, so a claim it does not see gives out nothing.
+    // too, so a claim it does not see gives out nothing; nor does one after
+    // `Ci::delete_runner` deleted the runner, which looks for held attempts
+    // in its write.
     let ci = app.ci.clone();
     let (claimed, waiting, cache_write) = app
         .finish(move |app| async move {
             let selection = app
                 .store
                 .write(move |w| {
-                    if ci.stopping() {
+                    if ci.stopping() || !w.exists(store::MEMBERS, &Member::key(&runner))? {
                         return Ok((None, None, false));
                     }
                     let (claimed, waiting) = queue::claim_images(

@@ -839,6 +839,18 @@ next claim and leaves running jobs with their original resources. Each machine
 continues to set its own `work_dir`; job resource values in a remote runner's
 local file are no longer used.
 
+A runner that is no longer used (a retired or replaced machine) can be
+deleted from the runner list under Settings → CI after a confirmation. The
+deletion revokes all of its tokens, removes its member record and its row,
+and removes its `[ci.runner_limits.<name>]` from `config.toml` while
+preserving the rest of the file. Only runner members can be deleted. The Hub
+refuses to delete a runner that reported within `ci.runner_absent_secs` or
+holds an attempt and says why: stop it on its machine first and let its
+attempts finish or be queued again, so that no running attempt loses its
+runner. Past attempts and checks keep the runner's name. The same device can
+join again with `guildbotics runner join`, which creates `runner-<device id>`
+anew with the Hub defaults.
+
 At each claim the runner reports its logical CPUs, physical memory, and memory
 the OS can make available now. An unknown sample leaves resource selection
 unrestricted and is shown in Settings → CI. An actual execution records the
