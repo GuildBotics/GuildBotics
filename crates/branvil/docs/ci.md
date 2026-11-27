@@ -151,13 +151,17 @@ An optional `[release]` section gives the release rule ([Releases](#releases)).
   run for classes 4a/4b, after any automatic retry explanation. Waiting runs
   append the deferred reason to their queue-capacity message.
 
-  Claim order is 1, 2, 3, 4a, 4m, 4b. Within a class, attempts with an available
-  reusable successful result (of the same tree, or of the same contents of
-  paths; "Trust") come first, then registration sequence (`seq`);
-  without a reusable result, sequence decides. Reuse is assessed after taking
-  the run's current cache scope; retries with `allow_reuse = false` execute.
-  For checks of the same repository and commit in the same class and reuse
-  tier, a runner prefers jobs it can start with a [RAM workspace](#ram-workspace).
+  Claim order is 1, 2, 3, 4a, 4m, 4b. Within a class, a runner first takes
+  attempts whose latest reusable successful result (of the same tree, or
+  of the same contents of paths; "Trust") matches its job image digest.
+  Those claims reuse the result immediately without reserving VM resources.
+  An attempt whose candidate has a different image digest joins the ordinary
+  execution tier.
+  Registration sequence (`seq`) orders attempts within each tier.
+  Reuse is assessed after taking the run's current cache scope; retries with
+  `allow_reuse = false` execute. Among ordinary checks of the same repository
+  and commit in the same class, a runner prefers jobs it can start with a
+  [RAM workspace](#ram-workspace).
   It chooses the job that the fewest other online, accepting runners can run
   in RAM, with queue order breaking ties. This count uses their reported
   machine capacity, VM limits, cache inventory, and image support, including
@@ -835,6 +839,18 @@ next claim and leaves running jobs with their original resources. Each machine
 continues to set its own `work_dir`; job resource values in a remote runner's
 local file are no longer used.
 
+A runner that is no longer used (a retired or replaced machine) can be
+deleted from the runner list under Settings → CI after a confirmation. The
+deletion revokes all of its tokens, removes its member record and its row,
+and removes its `[ci.runner_limits.<name>]` from `config.toml` while
+preserving the rest of the file. Only runner members can be deleted. The Hub
+refuses to delete a runner that reported within `ci.runner_absent_secs` or
+holds an attempt and says why: stop it on its machine first and let its
+attempts finish or be queued again, so that no running attempt loses its
+runner. Past attempts and checks keep the runner's name. The same device can
+join again with `guildbotics runner join`, which creates `runner-<device id>`
+anew with the Hub defaults.
+
 At each claim the runner reports its logical CPUs, physical memory, and memory
 the OS can make available now. An unknown sample leaves resource selection
 unrestricted and is shown in Settings → CI. An actual execution records the
@@ -1017,11 +1033,11 @@ job ran. The Hub uses the SDK's VM metrics. An external runner samples the
 
 A reused attempt instead logs `reused result of <attempt> (<commit>, the same
 tree), image <digest>` (`the same contents of paths` for the paths basis) and `job ended: success (reused)`. It has no `source fetched`, `sandbox started`, or
-`commands ran for` line. `reuse declined` identifies the source and reason
-(such as a digest mismatch)
-before normal execution; `reuse unavailable: no reuse offered` means the
-service supplied no source, including for manual retries and upgraded old
-attempts.
+`commands ran for` line. `reuse unavailable: no reuse offered` means the
+service supplied no source, including when the candidate's digest differs
+from the runner's inventory at claim time, for manual retries, and for
+upgraded old attempts. If the digest changes after a reuse-only claim, the
+runner logs `reuse deferred` and returns the attempt to the queue.
 
 At start it removes every sandbox labelled with its own name and every volume
 named `bv-tmp-<its name>-<attempt id>`, `bv-work-<its name>-<attempt id>`,

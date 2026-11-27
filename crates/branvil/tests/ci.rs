@@ -1456,7 +1456,7 @@ impl Runner {
             .http
             .post(self.endpoint("/claim"))
             .bearer_auth(&self.token)
-            .json(&json!({"executor": "test", "executor_state": "ready", "version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true, "architecture":"arm64", "images":[{"reference":IMAGE,"architecture":"arm64","digest":format!("sha256:{}","2".repeat(64))}]}))
+            .json(&json!({"executor": "test", "executor_state": "ready", "version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true, "architecture":"arm64", "images":[{"reference":IMAGE,"architecture":"arm64","digest":DIGEST}]}))
             .send()
             .await
             .unwrap();

@@ -329,6 +329,7 @@ fi
             sync_failed: AtomicBool,
             /// The image cache is held (by a pull or a load): checks wait.
             hold_images: AtomicBool,
+            change_image_on_resolve: AtomicBool,
             changed_image: AtomicBool,
             /// What every run got.
             ran: std::sync::Mutex<Vec<Ran>>,
@@ -347,10 +348,19 @@ fi
                     sync_blocked: AtomicBool::new(false),
                     sync_failed: AtomicBool::new(false),
                     hold_images: AtomicBool::new(false),
+                    change_image_on_resolve: AtomicBool::new(false),
                     changed_image: AtomicBool::new(false),
                     ran: Default::default(),
                     waiting: Default::default(),
                     stopped: Default::default(),
+                }
+            }
+
+            fn held_digest(&self, image: &str) -> String {
+                if self.changed_image.load(Ordering::SeqCst) {
+                    digest_of(&format!("updated-{image}"))
+                } else {
+                    digest_of(image)
                 }
             }
         }
@@ -455,7 +465,7 @@ fi
                     images: vec![crate::ci::images::Image {
                         reference: "alpine".into(),
                         architecture: crate::ci::images::architecture().into(),
-                        digest: "sha256:test".into(),
+                        digest: self.held_digest("alpine"),
                     }],
                 })
             }
@@ -477,12 +487,10 @@ fi
                 if self.hold_images.load(Ordering::SeqCst) {
                     std::future::pending::<()>().await;
                 }
-                let digest = if self.changed_image.load(Ordering::SeqCst) {
-                    digest_of(&format!("updated-{image}"))
-                } else {
-                    digest_of(image)
-                };
-                Ok((Some(digest), ImageLock::default()))
+                if self.change_image_on_resolve.swap(false, Ordering::SeqCst) {
+                    self.changed_image.store(true, Ordering::SeqCst);
+                }
+                Ok((Some(self.held_digest(image)), ImageLock::default()))
             }
             async fn run(
                 &self,
@@ -1146,15 +1154,29 @@ esac
             assert_eq!(view["artifact_names"], serde_json::json!([]));
             assert!(view["details"].is_null());
 
-            fake.changed_image.store(true, Ordering::SeqCst);
             let changed_sha = empty_main(&s, "new digest").await;
+            let queued = result_of(&s, &changed_sha).await;
+            fake.change_image_on_resolve.store(true, Ordering::SeqCst);
+            assert!(runner.once(&fake).await.unwrap());
+            let deferred = result_of(&s, &changed_sha).await;
+            assert_eq!(deferred.id, queued.id);
+            assert_eq!(deferred.seq, queued.seq);
+            assert_eq!(deferred.status, "queued");
+            assert_eq!(fake.ran.lock().unwrap().len(), 1);
+            let log = s.app.ci.log_tail(&queued.id, 1 << 20).await.unwrap().0;
+            assert!(
+                log.contains("reuse deferred: image digest differs"),
+                "{log}"
+            );
+
             runner.once(&fake).await.unwrap();
             let changed = result_of(&s, &changed_sha).await;
             assert!(changed.reused_from.is_none());
             assert_eq!(fake.ran.lock().unwrap().len(), 2);
             let log = s.app.ci.log_tail(&changed.id, 1 << 20).await.unwrap().0;
             assert!(
-                log.contains("image digest differs") && log.contains("source fetched"),
+                log.contains("reuse unavailable: no reuse offered")
+                    && log.contains("source fetched"),
                 "{log}"
             );
             let next_sha = empty_main(&s, "reuse new digest").await;

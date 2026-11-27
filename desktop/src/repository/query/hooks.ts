@@ -95,6 +95,26 @@ export function useMemberKinds(): (name: string) => MemberKind | undefined {
   }, [data]);
 }
 
+/**
+ * How the screens name a runner: the display name the owner gave it (Settings →
+ * CI, or its member settings), else its name (also while loading, on failure, or for a
+ * stranger). `withName` adds the name the CLI and the logs use when they differ.
+ */
+export function useRunnerLabel(): (name: string, withName?: boolean) => string {
+  const { data } = useMembers();
+  return useMemo(() => {
+    const labels = new Map(
+      (data?.items ?? [])
+        .filter((m) => m.kind === "runner" && m.display_name.trim())
+        .map((m) => [m.name.toLowerCase(), m.display_name]),
+    );
+    return (name: string, withName = false) => {
+      const label = labels.get(name.toLowerCase()) ?? name;
+      return withName && label !== name ? `${label} (${name})` : label;
+    };
+  }, [data]);
+}
+
 /** A member's picture by name; undefined while loading, for none, or for a stranger. */
 export function useMemberAvatar(name: string): string | undefined {
   const { data } = useMembers();

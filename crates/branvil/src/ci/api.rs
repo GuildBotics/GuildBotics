@@ -18,7 +18,8 @@ use crate::app::Shared;
 use crate::auth::Caller;
 use crate::error::{AppError, AppResult};
 use crate::http::{P as Path, Q};
-use crate::model::{MemberKind, Repo};
+use crate::model::{Member, MemberKind, Repo};
+use crate::store::{self, Rd};
 use crate::util;
 
 pub use gb_runner::ci::api::LEASE_HEADER;
@@ -528,7 +529,9 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     let machine = report.machine.clone();
     let cache_groups = report.cache_groups.clone();
     let ram_unsupported_images = report.ram_unsupported_images.clone();
-    let reported_at = app.ci.report_runner(c.name(), report);
+    let reported_at = app
+        .ci
+        .report_runner(c.name(), &c.member.display_name, report);
     let Some(held) = held else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
@@ -540,14 +543,16 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     );
     let at = util::format_time(now);
     // Checked in the write: `Ci::stop` counts the running jobs in a write
-    // too, so a claim it does not see gives out nothing.
+    // too, so a claim it does not see gives out nothing; nor does one after
+    // `Ci::delete_runner` deleted the runner, which looks for held attempts
+    // in its write.
     let ci = app.ci.clone();
     let (claimed, waiting, cache_write) = app
         .finish(move |app| async move {
             let selection = app
                 .store
                 .write(move |w| {
-                    if ci.stopping() {
+                    if ci.stopping() || !w.exists(store::MEMBERS, &Member::key(&runner))? {
                         return Ok((None, None, false));
                     }
                     let (claimed, waiting) = queue::claim_images(
