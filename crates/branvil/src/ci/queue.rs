@@ -290,6 +290,9 @@ pub struct Attempt {
     pub reused_from: Option<String>,
     /// The computed dependency-cache key of an execution.
     pub cache_key: Option<String>,
+    /// The release points the job's output printed, as its runner reported
+    /// them (`ci::release`).
+    pub release_points: Vec<String>,
     /// Manual and automatic retries (including interruption requeues) must execute.
     pub allow_reuse: bool,
     pub number: u64,
@@ -832,6 +835,7 @@ fn new_job(
         peak_memory_mib: None,
         reused_from: None,
         cache_key: None,
+        release_points: Vec::new(),
         allow_reuse: true,
         number,
         seq: w.next("ci_seq")?,
@@ -1408,8 +1412,8 @@ pub fn result_attempt(r: &impl Rd, a: &Attempt) -> AppResult<Attempt> {
     }
 }
 
-/// The current claim order, without changing any attempt or lease. Claims only
-/// inspect reuse within the best class; displays can request every class.
+/// The queue order before applying a runner's image inventory, without changing
+/// any attempt or lease. Callers can request just the best class or every class.
 pub fn scheduled(r: &impl Rd, first_only: bool) -> AppResult<Vec<(Attempt, Option<Reuse>)>> {
     Ok(scheduled_order(r, first_only)?
         .into_iter()
@@ -1697,13 +1701,17 @@ pub fn claim_images(
         first
     };
     let (a, reuse, _) = &ordered[chosen.index];
+    let reuse = reuse
+        .as_ref()
+        .filter(|_| chosen.allocation.is_none())
+        .cloned();
     let claim = claim_selected(
         w,
         &runner.name,
         lease_secs,
         now,
         a.clone(),
-        reuse.clone(),
+        reuse,
         chosen.allocation,
     )?;
     Ok((Some(claim), waiting))
@@ -1742,13 +1750,32 @@ impl ClaimScan<'_> {
         let mut reserve = Resources::default();
         let mut ram_memory = runner.ram_memory(&budget, reserve);
         let mut estimates = BTreeMap::new();
-        for (index, (a, reuse, class)) in self.ordered.iter().enumerate() {
+        // The queue view ranks any reuse candidate first. Claim order depends
+        // on the runner's image, including when comparing choices for a peer.
+        let mut images = BTreeMap::new();
+        let mut ordered: Vec<_> = self
+            .ordered
+            .iter()
+            .enumerate()
+            .map(|(index, (a, reuse, class))| {
+                let image = *images
+                    .entry(a.job.image.as_str())
+                    .or_insert_with(|| runner.images.iter().find(|i| i.supports(&a.job.image)));
+                let reuse_matches = reuse
+                    .as_ref()
+                    .zip(image)
+                    .is_some_and(|(source, image)| source.image_digest == image.digest);
+                ((*class, !reuse_matches, a.seq), index, image, reuse_matches)
+            })
+            .collect();
+        ordered.sort_by_key(|entry| entry.0);
+        for (_, index, image, reuse_matches) in ordered {
+            let (a, _, class) = &self.ordered[index];
             if let Some(first) = choices.first() {
-                let (head, head_reuse, head_class) = &self.ordered[first.index];
-                // RAM can change the job within this part of the queue,
-                // without moving it across a different group or reuse tier.
+                let (head, _, head_class) = &self.ordered[first.index];
+                // Immediate reuse ends the scan. RAM can only reorder ordinary
+                // checks of this class, repository, and commit.
                 if *class != *head_class
-                    || reuse.is_some() != head_reuse.is_some()
                     || a.purpose != Purpose::Check
                     || head.purpose != Purpose::Check
                     || a.repo != head.repo
@@ -1757,7 +1784,7 @@ impl ClaimScan<'_> {
                     break;
                 }
             }
-            let Some(image) = runner.images.iter().find(|i| i.supports(&a.job.image)) else {
+            let Some(image) = image else {
                 continue;
             };
             if let Some(retry) = &a.retry_decision {
@@ -1772,17 +1799,12 @@ impl ClaimScan<'_> {
                     continue;
                 }
             }
-            if reuse
-                .as_ref()
-                .is_some_and(|source| source.image_digest == image.digest)
-            {
-                if choices.is_empty() {
-                    choices.push(ClaimChoice {
-                        index,
-                        allocation: None,
-                        ram: false,
-                    });
-                }
+            if reuse_matches {
+                choices.push(ClaimChoice {
+                    index,
+                    allocation: None,
+                    ram: false,
+                });
                 break;
             }
             let key = (&a.repo, &a.job.name);
@@ -2067,6 +2089,22 @@ pub fn heartbeat(w: &Wtx, id: &str, lease: &str, lease_secs: u64, now: &str) -> 
     a.lease_expires_at = Some(later(now, lease_secs));
     put_attempt(w, Some(&old), &a)?;
     Ok(a)
+}
+
+/// Keeps the release points a finished attempt's runner reported.
+pub(super) fn record_release_points(
+    w: &Wtx,
+    a: &Attempt,
+    points: Vec<String>,
+) -> AppResult<Attempt> {
+    let mut next = a.clone();
+    next.release_points = points
+        .iter()
+        .take(gb_runner::ci::queue::MAX_RELEASE_POINTS)
+        .map(|p| gb_runner::ci::queue::release_point_message(p))
+        .collect();
+    put_attempt(w, Some(a), &next)?;
+    Ok(next)
 }
 
 /// Concludes a leased attempt with the runner's result. A cancellation that
@@ -2439,6 +2477,33 @@ fn active(r: &impl Rd) -> AppResult<Vec<Attempt>> {
     Ok(out)
 }
 
+/// The next lease expiry or age at which an attempt can fail for lack of a runner.
+pub(super) fn next_sweep_at(
+    r: &impl Rd,
+    swept_at: &str,
+    absent_secs: u64,
+) -> AppResult<Option<String>> {
+    let lease = active(r)?
+        .into_iter()
+        .filter_map(|a| a.lease_expires_at)
+        .min();
+    let before = earlier(swept_at, absent_secs);
+    let mut queued = None;
+    for (_, id) in r.prefix_raw(store::IX_CI_PENDING, &[], None, usize::MAX)? {
+        let id = String::from_utf8_lossy(&id);
+        if let Some(attempt) = get_attempt(r, &id)?
+            && can_fail_without_runner(&attempt)
+            && attempt.created_at >= before
+        {
+            queued = queued.into_iter().chain(Some(attempt.created_at)).min();
+        }
+    }
+    Ok(lease
+        .into_iter()
+        .chain(queued.map(|at| later(&at, absent_secs)))
+        .min())
+}
+
 pub fn running_by_runner(r: &impl Rd) -> AppResult<BTreeMap<String, usize>> {
     let mut counts = BTreeMap::new();
     for attempt in active(r)? {
@@ -2571,6 +2636,15 @@ pub fn fail_queued(
     fail_unavailable(w, before, now, |_| Some(details.to_owned()))
 }
 
+fn can_fail_without_runner(attempt: &Attempt) -> bool {
+    // Automatic retries can wait for a runner without exhausting the budget.
+    !attempt.wait_for_runner
+        && attempt
+            .retry_decision
+            .as_ref()
+            .is_none_or(|retry| retry.selection.runner.is_none())
+}
+
 pub fn fail_unavailable(
     w: &Wtx,
     before: &str,
@@ -2583,15 +2657,7 @@ pub fn fail_unavailable(
         let Some(old) = get_attempt(w, &id)? else {
             continue;
         };
-        // Automatic retries wait for a runner instead of exhausting their
-        // entire budget while no runner is available.
-        if old.wait_for_runner
-            || old
-                .retry_decision
-                .as_ref()
-                .is_some_and(|retry| retry.selection.runner.is_some())
-            || old.created_at.as_str() >= before
-        {
+        if !can_fail_without_runner(&old) || old.created_at.as_str() >= before {
             continue;
         }
         let Some(details) = reason(&old) else {
@@ -2722,16 +2788,20 @@ mod tests {
         let PipelineState::Jobs { jobs } = &mut registration.pipeline else {
             unreachable!();
         };
-        let ram = jobs.iter_mut().find(|job| job.name == "rust-test").unwrap();
-        ram.tmpfs_mib = Some(2048);
-        ram.ram_workspace = Some(RamWorkspace {
-            paths: vec!["target".into()],
-            max_mib: 4608,
-        });
-        ram.cache = Some(CacheDef {
-            paths: vec!["target".into()],
-            key_files: vec![],
-        });
+        for ram in jobs
+            .iter_mut()
+            .filter(|job| matches!(job.name.as_str(), "rust-test" | "rust-test-branvil"))
+        {
+            ram.tmpfs_mib = Some(2048);
+            ram.ram_workspace = Some(RamWorkspace {
+                paths: vec!["target".into()],
+                max_mib: 4608,
+            });
+            ram.cache = Some(CacheDef {
+                paths: vec!["target".into()],
+                key_files: vec![],
+            });
+        }
         registration
     }
 
@@ -3031,6 +3101,83 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn ram_preference_ignores_reuse_from_another_image() {
+        let (_dir, store) = store();
+        store
+            .write_sync(|w| {
+                let (hub, _) = register_main_with_arm_reuse(w)?;
+                for (name, expected) in [("windows", "rust-test"), ("linux", "rust-test-branvil")] {
+                    let runner = runner(name, 8192);
+                    let (claim, _) =
+                        super::claim_images(w, runner.clone(), 60, T0, || Ok(vec![hub.clone()]))?;
+                    let claim = claim.unwrap();
+                    assert_eq!(claim.attempt.job.name, expected);
+                    assert!(runner.ram_allows(&claim.attempt, runner.machine.as_ref()));
+                    assert!(claim.reuse.is_none());
+                }
+                // Once the RAM jobs are leased, the ordinary jobs follow seq.
+                let (claim, _) =
+                    super::claim_images(w, runner("third-x86", 8192), 60, T0, || Ok(vec![hub]))?;
+                assert_eq!(claim.unwrap().attempt.job.name, "test");
+                let (claim, _) =
+                    super::claim_images(w, runner("fourth-x86", 8192), 60, T0, || Ok(vec![]))?;
+                let claim = claim.unwrap();
+                assert_eq!(claim.attempt.job.name, "rust-clippy");
+                assert!(claim.attempt.allocation.is_some());
+                assert!(claim.reuse.is_none());
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn matching_image_reuses_first_without_allocating_a_vm() {
+        let (_dir, store) = store();
+        store
+            .write_sync(|w| {
+                let (mut hub, source) = register_main_with_arm_reuse(w)?;
+                hub.machine.as_mut().unwrap().available_memory_mib = 0;
+                let (claim, wait) = super::claim_images(w, hub, 60, T0, || Ok(vec![]))?;
+                let claim = claim.unwrap();
+                assert_eq!(claim.attempt.job.name, "rust-clippy");
+                assert_eq!(claim.reuse.unwrap().attempt_id, source);
+                assert!(claim.attempt.allocation.is_none());
+                assert!(wait.is_none());
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn register_main_with_arm_reuse(w: &Wtx) -> AppResult<(ClaimRunner, String)> {
+        let mut hub = runner("hub", 6144);
+        hub.images[0].architecture = "arm64".into();
+        hub.images[0].digest = format!("sha256:{}", "3".repeat(64));
+        register(w, reg("source", "feature", &["rust-clippy"]), 10, T0)?;
+        let (source, _) = super::claim_images(w, hub.clone(), 60, T0, || Ok(vec![]))?;
+        let source = source.unwrap();
+        finish(
+            w,
+            &source.attempt.id,
+            &source.lease,
+            "success",
+            None,
+            ResultInfo {
+                image_digest: Some(hub.images[0].digest.clone()),
+                ..Default::default()
+            },
+            T0,
+        )?;
+        let mut main = ram_registration(
+            "main-check",
+            "main",
+            &["test", "rust-clippy", "rust-test", "rust-test-branvil"],
+        );
+        main.tree = Some("tree-source".into());
+        register(w, main, 10, T0)?;
+        Ok((hub, source.attempt.id))
     }
 
     #[test]
@@ -3528,6 +3675,7 @@ mod tests {
             required_approvals: 0,
             auto_land: false,
             hold_while_failing: false,
+            review_rounds: 3,
             ci_network: false,
             responder: None,
             labels: vec![],
@@ -4762,6 +4910,30 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn sweep_uses_the_earliest_lease_or_runner_absence_deadline() {
+        let (_dir, store) = store();
+        store
+            .write_sync(|w| {
+                register(w, reg("s1", "feature", &["test", "lint"]), 10, T0)?;
+                claim(w, "runner", 60, T0)?;
+                Ok(())
+            })
+            .unwrap();
+        let deadline = |swept_at, absent| {
+            store
+                .read_sync(|r| next_sweep_at(r, swept_at, absent))
+                .unwrap()
+        };
+        assert_eq!(deadline(T0, 30).as_deref(), Some(T1));
+        assert_eq!(deadline(T0, 90), Some(later(T0, 60)));
+        // An old queued job that survived a sweep is checked again at the
+        // normal interval, without keeping an elapsed deadline armed.
+        assert_eq!(deadline(T2, 30), Some(later(T0, 60)));
+        store.write_sync(|w| expire(w, T2)).unwrap();
+        assert_eq!(deadline(T2, 30), Some(later(T2, 30)));
     }
 
     #[test]

@@ -66,9 +66,20 @@ export function errorText(error: unknown, t: Translate): string {
     if (
       code === "retry_pr_head_required" ||
       code === "retry_runner_ineligible" ||
-      code === "retry_runner_excluded"
+      code === "retry_runner_excluded" ||
+      code === "runner_online" ||
+      code === "runner_holds_attempts"
     ) {
       return t(`ci.error.${code}`);
+    }
+    if (
+      code === "release_point_first" ||
+      code === "release_not_newer" ||
+      code === "release_not_verified" ||
+      code === "release_tag_exists" ||
+      code === "release_pipeline_invalid"
+    ) {
+      return t(`release.error.${code}`);
     }
   }
   const message = error instanceof Error ? error.message : String(error);

@@ -85,6 +85,7 @@ const EXCLUDED: &[&str] = &[
     "hooks/ and git/ (written again at every start)",
     "Git reflogs and repository-local Git configuration (re-applied at every start)",
 ];
+const CI_FILES_EXCLUDED: &str = "CI logs and artifacts (the database copy marks every started job's files as pruned and interrupts the running jobs)";
 
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
@@ -92,6 +93,10 @@ pub struct BackupInput {
     /// Absolute path on the machine the service runs on; must not exist or be
     /// an empty directory.
     pub to: String,
+    /// Leave out CI logs and artifacts, the bulk of a backup, for one taken
+    /// often.
+    #[serde(default)]
+    pub without_ci_files: bool,
 }
 
 /// `POST /api/v1/admin/backup` (owner).
@@ -101,19 +106,62 @@ pub async fn http_backup(
     J(input): J<BackupInput>,
 ) -> AppResult<Response> {
     c.require_owner()?;
-    let manifest = create(&app, Path::new(&input.to)).await?;
+    let manifest = create(&app, Path::new(&input.to), input.without_ci_files).await?;
     Ok(axum::Json(manifest).into_response())
+}
+
+/// Makes the database copy of a backup without CI files hold what a service
+/// restored from it, by any build, can serve: the running jobs are
+/// interrupted, as when the service stops (their runners' leases end and the
+/// first interruption is queued again as a new job), and every job that had
+/// started has its files pruned, as retention leaves it: the logs read
+/// empty, the artifacts are gone, and no later check reuses them. Returns
+/// the copy's table counts as they now are (the queued again add entries).
+fn prune_ci_files(db: &Path) -> AppResult<Vec<(String, u64)>> {
+    let copy = Store::open(db, 16 << 20, 1).map_err(AppError::internal)?;
+    copy.write_sync(|w| {
+        let now = util::now();
+        crate::ci::queue::interrupt_running(
+            w,
+            None,
+            "the backup left out CI files, so the restored service has no log or artifacts of this job",
+            &now,
+        )?;
+        let attempts: Vec<crate::ci::queue::Attempt> = w.prefix_all(store::CI_ATTEMPTS, &[])?;
+        for a in attempts {
+            if a.started_at.is_some() && !a.files_pruned {
+                crate::ci::queue::mark_pruned(w, &a.id)?;
+            }
+        }
+        Ok(())
+    })?;
+    copy.read_sync(store::table_counts)
+}
+
+/// A full backup's request names only the directory, as before the choice
+/// existed, so a server of the previous build still takes it.
+fn request_body(to: &Path, without_ci_files: bool) -> serde_json::Value {
+    if without_ci_files {
+        serde_json::json!({"to": to, "without_ci_files": true})
+    } else {
+        serde_json::json!({"to": to})
+    }
 }
 
 /// Asks the server at `url` for a backup into `to`, as its owner (`token`).
 /// The directory is on the server's machine; a relative path is made
 /// absolute here first.
-pub async fn request(url: &str, token: &str, to: &Path) -> anyhow::Result<()> {
+pub async fn request(
+    url: &str,
+    token: &str,
+    to: &Path,
+    without_ci_files: bool,
+) -> anyhow::Result<()> {
     let to = std::path::absolute(to)?;
     let response = reqwest::Client::new()
         .post(format!("{url}/api/v1/admin/backup"))
         .bearer_auth(token)
-        .json(&serde_json::json!({"to": to}))
+        .json(&request_body(&to, without_ci_files))
         .send()
         .await
         .with_context(|| format!("the server is not reachable at {url}"))?;
@@ -179,7 +227,7 @@ fn empty_or_missing(dir: &Path) -> std::io::Result<bool> {
 }
 
 /// Makes a backup of the running service at `to`.
-pub async fn create(app: &App, to: &Path) -> AppResult<Manifest> {
+pub async fn create(app: &App, to: &Path, without_ci_files: bool) -> AppResult<Manifest> {
     if !to.is_absolute() {
         return Err(AppError::invalid("The backup path must be absolute."));
     }
@@ -203,7 +251,7 @@ pub async fn create(app: &App, to: &Path) -> AppResult<Manifest> {
     let deletions = app.file_deletions.write().await;
     // Quiesce ref changes.
     let (repos, guards) = app.quiesce().await?;
-    let tables = app.store.export_to(&target.join(DB_FILE)).await?;
+    let mut tables = app.store.export_to(&target.join(DB_FILE)).await?;
     // Its own Git runner: Smart HTTP children hold the shared permits while
     // their post-receive waits for the locks held here.
     let git = Git::new(
@@ -221,11 +269,12 @@ pub async fn create(app: &App, to: &Path) -> AppResult<Manifest> {
     // are recorded, and retention and the attachment sweep delete them only
     // while `deletions` is not held, so copying them after the snapshot
     // keeps every reference.
-    for dir in [
-        app.layout.ci_logs(),
-        app.layout.ci_artifacts(),
-        app.layout.attachments(),
-    ] {
+    let mut dirs = Vec::new();
+    if !without_ci_files {
+        dirs.extend([app.layout.ci_logs(), app.layout.ci_artifacts()]);
+    }
+    dirs.push(app.layout.attachments());
+    for dir in dirs {
         let rel = dir
             .strip_prefix(&app.layout.root)
             .map_err(AppError::internal)?
@@ -233,6 +282,12 @@ pub async fn create(app: &App, to: &Path) -> AppResult<Manifest> {
         copy_tree(&dir, &target.join(&rel)).map_err(AppError::internal)?;
     }
     drop(deletions);
+    if without_ci_files {
+        let db = target.join(DB_FILE);
+        tables = tokio::task::spawn_blocking(move || prune_ci_files(&db))
+            .await
+            .map_err(AppError::internal)??;
+    }
     if app.layout.config_file().exists() {
         std::fs::copy(app.layout.config_file(), target.join(CONFIG_FILE))
             .map_err(AppError::internal)?;
@@ -266,7 +321,11 @@ pub async fn create(app: &App, to: &Path) -> AppResult<Manifest> {
         tables: tables.into_iter().collect(),
         repositories: entries,
         files,
-        excluded: EXCLUDED.iter().map(|s| s.to_string()).collect(),
+        excluded: EXCLUDED
+            .iter()
+            .chain(without_ci_files.then_some(&CI_FILES_EXCLUDED))
+            .map(|s| s.to_string())
+            .collect(),
         account_tokens_excluded,
     };
     let text = serde_json::to_string_pretty(&manifest).map_err(AppError::internal)?;
@@ -459,13 +518,8 @@ pub async fn restore(from: &Path, data_dir: &Path) -> anyhow::Result<u8> {
     let layout = Layout::new(data_dir);
     layout.create()?;
     std::fs::copy(inside(from, DB_FILE)?, layout.db()).context("copying the database")?;
-    // A previous version's file keeps its name; the upgrade below copies it.
-    let config = match manifest.schema_version {
-        crate::upgrade::FROM => crate::upgrade::FROM_CONFIG_FILE,
-        _ => CONFIG_FILE,
-    };
-    if from.join(config).exists() {
-        std::fs::copy(from.join(config), layout.root.join(config))?;
+    if from.join(CONFIG_FILE).exists() {
+        std::fs::copy(from.join(CONFIG_FILE), layout.config_file())?;
     }
     for dir in [
         layout.ci_logs(),
@@ -711,9 +765,22 @@ mod tests {
                 }
             })
         };
-        create(&app, &target).await.unwrap();
+        create(&app, &target, false).await.unwrap();
         done.store(true, SeqCst);
         deletion.await.unwrap();
+    }
+
+    #[test]
+    fn only_a_backup_without_ci_files_names_the_choice_in_its_request() {
+        let to = Path::new("/backup");
+        assert_eq!(
+            request_body(to, false),
+            serde_json::json!({"to": "/backup"})
+        );
+        assert_eq!(
+            request_body(to, true),
+            serde_json::json!({"to": "/backup", "without_ci_files": true})
+        );
     }
 
     #[test]

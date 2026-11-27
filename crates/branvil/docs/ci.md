@@ -93,6 +93,8 @@ artifacts = [{ name = "report", paths = ["out/report/", "coverage.xml"] }]   # u
 cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # optional
 ```
 
+An optional `[release]` section gives the release rule ([Releases](#releases)).
+
 - Commands run in order in `/work`; the first one that fails ends the job
   with its exit code. The job's environment has only CI metadata (besides
   the image's own variables and `HOME`): `CI=true`,
@@ -149,13 +151,17 @@ cache = { paths = ["target"], key_files = ["Cargo.lock"] }                    # 
   run for classes 4a/4b, after any automatic retry explanation. Waiting runs
   append the deferred reason to their queue-capacity message.
 
-  Claim order is 1, 2, 3, 4a, 4m, 4b. Within a class, attempts with an available
-  reusable successful result (of the same tree, or of the same contents of
-  paths; "Trust") come first, then registration sequence (`seq`);
-  without a reusable result, sequence decides. Reuse is assessed after taking
-  the run's current cache scope; retries with `allow_reuse = false` execute.
-  For checks of the same repository and commit in the same class and reuse
-  tier, a runner prefers jobs it can start with a [RAM workspace](#ram-workspace).
+  Claim order is 1, 2, 3, 4a, 4m, 4b. Within a class, a runner first takes
+  attempts whose latest reusable successful result (of the same tree, or
+  of the same contents of paths; "Trust") matches its job image digest.
+  Those claims reuse the result immediately without reserving VM resources.
+  An attempt whose candidate has a different image digest joins the ordinary
+  execution tier.
+  Registration sequence (`seq`) orders attempts within each tier.
+  Reuse is assessed after taking the run's current cache scope; retries with
+  `allow_reuse = false` execute. Among ordinary checks of the same repository
+  and commit in the same class, a runner prefers jobs it can start with a
+  [RAM workspace](#ram-workspace).
   It chooses the job that the fewest other online, accepting runners can run
   in RAM, with queue order breaking ties. This count uses their reported
   machine capacity, VM limits, cache inventory, and image support, including
@@ -453,6 +459,58 @@ Ordinary PRs require only the required checks of their base.
 Head jobs skipped by paths or reusing success by paths are not executed before
 landing. Main verification runs them after merge and verifies the combination.
 Local merges use the local merge policy; artifact jobs run for the new SHA.
+
+## Releases
+
+A release is a tag on a verified commit of the default branch. Branvil makes
+it, on the owner's request or at the pipeline's release times, and records it;
+nobody pushes it. Only the recorded tags are releases: the history, the latest
+release, and the Hub's updates follow them, and a release made under an earlier
+prefix stays one. The pipeline at the tip of the default branch gives the rule:
+
+```toml
+[release]                         # optional
+tag_prefix = "release/"           # optional; [A-Za-z0-9_./-], at most 32, ends with /, - or .
+schedule = ["12:00", "*:30"]      # optional; HH:MM every day, *:MM every hour, up to 24
+time_zone = "Asia/Tokyo"          # optional IANA name; default UTC
+```
+
+- Tags under the prefix, and every release made, are refused on push for
+  every member, the owner included. Other tags keep their rules.
+- The owner releases, from the repository's Releases page, a verified commit of
+  the first-parent history newer than the latest release. Its name is the
+  prefix and either a name the owner gives or `<YYYY-MM-DD>-<n>`, dated in the
+  rule's time zone and numbered after the day's existing tags.
+- Without `schedule`, releases are made only on request. At each release time,
+  Branvil releases every unreleased release point, oldest first, then the newest
+  verified commit, when one is newer than the latest release. Each time releases
+  once. A schedule seen for the first time, changed (its times or time zone),
+  or written again after it was removed waits for its next time. The landing
+  sweep (once a minute and on events) checks the times. A time stays unhandled
+  while a release point is not verified yet (it and every later release wait)
+  or when a release fails part way: the next sweep releases the rest, keeping
+  the releases already made.
+- An invalid pipeline at the tip keeps the default prefix, makes no automatic
+  release, and refuses requests (`release_pipeline_invalid`).
+
+### Release points
+
+A line starting with `::release-point::` in the output of a job of a passing
+default-branch verification makes the verified commit a release point; the
+rest of the line says why (up to 10 lines per job, 200 characters each). The
+runner reads the job's whole output, past the log's limit too and to its end
+once the job has exited, and reports the lines with the job's result; they stay with the attempt when its log is pruned
+or a backup leaves the logs out, and a result reused from another execution
+carries that execution's release points.
+No commit newer than an unreleased release point is released before it
+(`release_point_first`): the Releases page marks the commit ⚠️ with the
+messages and links to the job.
+
+A verification batches the merges since the last verified commit, so a job
+finds what a commit introduces by comparing it with `GB_CI_VERIFIED_SHA`
+(`verified_sha = true`), not with its parent. GuildBotics' `schema-raise`
+prints a release point when a commit raises Branvil's storage format: the Hub
+upgrades one step at a time, so each step is released by itself.
 
 ## Runs, attempts, and states
 
@@ -781,6 +839,18 @@ next claim and leaves running jobs with their original resources. Each machine
 continues to set its own `work_dir`; job resource values in a remote runner's
 local file are no longer used.
 
+A runner that is no longer used (a retired or replaced machine) can be
+deleted from the runner list under Settings → CI after a confirmation. The
+deletion revokes all of its tokens, removes its member record and its row,
+and removes its `[ci.runner_limits.<name>]` from `config.toml` while
+preserving the rest of the file. Only runner members can be deleted. The Hub
+refuses to delete a runner that reported within `ci.runner_absent_secs` or
+holds an attempt and says why: stop it on its machine first and let its
+attempts finish or be queued again, so that no running attempt loses its
+runner. Past attempts and checks keep the runner's name. The same device can
+join again with `guildbotics runner join`, which creates `runner-<device id>`
+anew with the Hub defaults.
+
 At each claim the runner reports its logical CPUs, physical memory, and memory
 the OS can make available now. An unknown sample leaves resource selection
 unrestricted and is shown in Settings → CI. An actual execution records the
@@ -963,11 +1033,11 @@ job ran. The Hub uses the SDK's VM metrics. An external runner samples the
 
 A reused attempt instead logs `reused result of <attempt> (<commit>, the same
 tree), image <digest>` (`the same contents of paths` for the paths basis) and `job ended: success (reused)`. It has no `source fetched`, `sandbox started`, or
-`commands ran for` line. `reuse declined` identifies the source and reason
-(such as a digest mismatch)
-before normal execution; `reuse unavailable: no reuse offered` means the
-service supplied no source, including for manual retries and upgraded old
-attempts.
+`commands ran for` line. `reuse unavailable: no reuse offered` means the
+service supplied no source, including when the candidate's digest differs
+from the runner's inventory at claim time, for manual retries, and for
+upgraded old attempts. If the digest changes after a reuse-only claim, the
+runner logs `reuse deferred` and returns the attempt to the queue.
 
 At start it removes every sandbox labelled with its own name and every volume
 named `bv-tmp-<its name>-<attempt id>`, `bv-work-<its name>-<attempt id>`,

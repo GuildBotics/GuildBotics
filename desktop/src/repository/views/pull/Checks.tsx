@@ -31,7 +31,7 @@ import type {
 import { ErrorMessage, Loading, Sha, StateBadge, Time, type Tone } from "../../components/common";
 import { useT } from "../../i18n";
 import { resourceShortfallText } from "../../i18n/resourceShortfall";
-import { useChecks, useCommitChecks, useJob, useJobLog } from "../../query/hooks";
+import { useChecks, useCommitChecks, useJob, useJobLog, useRunnerLabel } from "../../query/hooks";
 import { keys } from "../../query/keys";
 import { Link, useFragmentTarget } from "../../router/Router";
 import { href, POST_MERGE_FRAGMENT } from "../../router/routes";
@@ -172,9 +172,13 @@ const isHosted = (c: Check) => !!c.attempt_id && c.attempt === undefined;
 
 export function RunnerRecoveryLink({ repo, recovery }: { repo: string; recovery: RunnerRecovery }) {
   const t = useT();
+  const label = useRunnerLabel();
   return (
     <Link to={href.job(repo, recovery.failed_attempt)}>
-      {t("ci.runnerRecovery", { from: recovery.failed_runner, to: recovery.successful_runner })}
+      {t("ci.runnerRecovery", {
+        from: label(recovery.failed_runner),
+        to: label(recovery.successful_runner),
+      })}
     </Link>
   );
 }
@@ -450,6 +454,7 @@ function CheckRow({
   onOpen: (check: Check) => void;
 }) {
   const t = useT();
+  const label = useRunnerLabel();
   const failed = check.status === "completed" && !!check.conclusion && FAILED.has(check.conclusion);
   // A failed attempt's reason (`details`) is shown in the row.
   const job = useJob(
@@ -458,7 +463,7 @@ function CheckRow({
     !!check.attempt_id && !isHosted(check) && failed,
   );
   const reason = isHosted(check) ? check.details : (job.data?.details ?? check.details);
-  const runner = check.runner ? `${t("ci.runner")}: ${check.runner}` : undefined;
+  const runner = check.runner ? `${t("ci.runner")}: ${label(check.runner)}` : undefined;
   const content = (
     <>
       <StatusIcon check={check} />
@@ -590,6 +595,7 @@ export function LogViewer({
 
 function RetryDetails({ repo, job }: { repo: string; job: Job }) {
   const t = useT();
+  const label = useRunnerLabel();
   const retry = job.retry_decision;
   if (!retry) return null;
   const { runner, exclude_runners } = retry.selection;
@@ -605,13 +611,13 @@ function RetryDetails({ repo, job }: { repo: string; job: Job }) {
       {runner && (
         <>
           <dt>{t("ci.retryRunner")}</dt>
-          <dd>{runner}</dd>
+          <dd>{label(runner, true)}</dd>
         </>
       )}
       {!!exclude_runners?.length && (
         <>
           <dt>{t("ci.excludeRunners")}</dt>
-          <dd>{exclude_runners.join(", ")}</dd>
+          <dd>{exclude_runners.map((name) => label(name, true)).join(", ")}</dd>
         </>
       )}
       {wait && (
@@ -620,12 +626,12 @@ function RetryDetails({ repo, job }: { repo: string; job: Job }) {
           <dd>
             {wait.reason === "prefer_other"
               ? t("ci.retryWait.prefer_other", {
-                  name: retry.failed_runner ?? "",
+                  name: label(retry.failed_runner ?? ""),
                   until: new Date(wait.until).toLocaleTimeString(),
                 })
               : wait.reason === "resources"
-                ? resourceShortfallText(t, runner ?? "", wait)
-                : t(`ci.retryWait.${wait.reason}`, { name: runner ?? "" })}
+                ? resourceShortfallText(t, label(runner ?? ""), wait)
+                : t(`ci.retryWait.${wait.reason}`, { name: label(runner ?? "") })}
           </dd>
         </>
       )}
@@ -643,11 +649,12 @@ function RetryControls({
   pending: boolean;
 }) {
   const t = useT();
+  const label = useRunnerLabel();
   const [runner, setRunner] = useState<string | null>(null);
   const [excluded, setExcluded] = useState<string[]>([]);
   const options = job.retry_runners ?? [];
   const choices = Array.from(new Set([...options, ...excluded, ...(runner ? [runner] : [])])).map(
-    (name) => ({ value: name, label: name, disabled: !options.includes(name) }),
+    (name) => ({ value: name, label: label(name, true), disabled: !options.includes(name) }),
   );
   return (
     <>
@@ -698,6 +705,7 @@ function JobDetails({
   onAttempt: (id: string) => void;
 }) {
   const t = useT();
+  const label = useRunnerLabel();
   const client = useQueryClient();
   const job = useJob(repo, attemptId);
   const settle = () => {
@@ -729,7 +737,7 @@ function JobDetails({
         {j.runner && (
           <>
             <dt>{t("ci.runner")}</dt>
-            <dd>{j.runner}</dd>
+            <dd>{label(j.runner, true)}</dd>
           </>
         )}
         <dt>{t("ci.started")}</dt>
@@ -762,7 +770,7 @@ function JobDetails({
             <dd>
               <Time value={wait.at} />
               {" · "}
-              {resourceShortfallText(t, name, wait)}
+              {resourceShortfallText(t, label(name), wait)}
             </dd>
           </div>
         ))}

@@ -96,7 +96,11 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
         ),
       ];
     case "verification":
-      return [(q) => isRepo(q, path) && keyOf(q)[2] === "verification"];
+    case "release":
+      // A release changes the commit list's tags; verification its candidates.
+      return [
+        (q) => isRepo(q, path) && ["verification", "releases"].includes(keyOf(q)[2] as string),
+      ];
     case "check":
       return [
         isCheckList,

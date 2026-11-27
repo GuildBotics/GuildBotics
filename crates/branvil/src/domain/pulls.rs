@@ -380,7 +380,7 @@ pub fn open_pulls(r: &impl Rd, repo: &Repo) -> AppResult<Vec<Pull>> {
     Ok(out)
 }
 
-fn write_pull(w: &Wtx, old: Option<&Pull>, new: &Pull) -> AppResult<()> {
+pub(crate) fn write_pull(w: &Wtx, old: Option<&Pull>, new: &Pull) -> AppResult<()> {
     model::put_indexed(
         w,
         store::PULLS,

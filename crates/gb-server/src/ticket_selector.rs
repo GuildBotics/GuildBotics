@@ -18,10 +18,12 @@ struct ReviewSettlement<'a> {
     runner: &'a dyn Runner,
     draft: Option<Value>,
     ended: bool,
+    /// The review rounds the limit counted (`Task::review_rounds`).
+    count: u32,
 }
 impl ReviewSettlement<'_> {
     fn payload(&self, error: &str) -> serde_json::Map<String, Value> {
-        serde_json::from_value(json!({"run_id":self.trace.id(), "pull_request":{"url":self.task.pull_request_url,"label":self.task.label,"title":self.task.title},"count":3,"error":error})).unwrap()
+        serde_json::from_value(json!({"run_id":self.trace.id(), "pull_request":{"url":self.task.pull_request_url,"label":self.task.label,"title":self.task.title},"count":self.count,"error":error})).unwrap()
     }
     fn finish(&mut self, event: &str) {
         self.ended = true;
@@ -501,6 +503,7 @@ impl Selector<'_> {
             runner: self.runner,
             draft: None,
             ended: false,
+            count: task.review_rounds.unwrap_or_default(),
         };
         trace.event("review_limit.started", settlement.payload(""));
         let (reason, key) = match code.convert_pull_request_to_draft(url).await {
@@ -521,13 +524,14 @@ impl Selector<'_> {
                 "integrations.pull_request_patrol.review_limit_reached",
             ),
         };
+        let count = settlement.count;
         if reason == "review_limit" {
             settlement.draft = Some(
-                json!({"run_id":trace.id(),"reason":"review_limit","action":"draft","count":3,
+                json!({"run_id":trace.id(),"reason":"review_limit","action":"draft","count":count,
             "pull_request":{"url":url,"label":task.label,"title":task.title},"error":""}),
             );
         }
-        let body = crate::i18n::t(self.language, key, &[("count", "3")]);
+        let body = crate::i18n::t(self.language, key, &[("count", &count.to_string())]);
         let comment = code
             .comment(
                 url,

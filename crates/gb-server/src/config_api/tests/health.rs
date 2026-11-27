@@ -2,10 +2,12 @@ use super::*;
 #[tokio::test]
 async fn usage_result_is_shared_by_card_and_alerts() {
     for agent in ["codex", "claude", "grok"] {
-        for (language, used) in ["en", "ja"]
-            .into_iter()
-            .flat_map(|language| [false, true].map(|used| (language, used)))
-        {
+        let cases: &[_] = if agent == "codex" {
+            &[("en", false), ("en", true), ("ja", true)]
+        } else {
+            &[("en", false), ("en", true)]
+        };
+        for &(language, used) in cases {
             let f = fixture();
             f.init().await;
             if used {

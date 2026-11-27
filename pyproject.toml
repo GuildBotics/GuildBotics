@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling", "hatch-vcs", "setuptools-scm>=9.2"]
 build-backend = "hatchling.build"
 
 [project]
@@ -59,7 +59,6 @@ dev = [
   "import-linter>=2.5",
 ]
 test = [
-  "GitPython>=3.2.1",
   "grimp>=3.9",
   # 9.1.0 and 9.1.1 drop a directory's conftest fixtures for files collected
   # after it is revisited on the command line (pytest-dev/pytest#14964). Drop
@@ -75,8 +74,13 @@ redis = [
 ]
 
 
+[dependency-groups]
+repo-policy = ["pytest", "pytest-timeout", "PyYAML"]
+
+
 [tool.pytest.ini_options]
 markers = [
+  "repo_policy: tests that scan repository-wide inputs",
   "real_device(opt_in): test using a real device with an explicit opt-in",
   "windows: exercises the Windows OpenSSH forwarding client",
 ]
@@ -91,6 +95,13 @@ packages = ["guildbotics"]
 
 [tool.hatch.version]
 source = "vcs"
+
+[tool.hatch.version.raw-options.scm.git]
+# Hub deployment tags are independent of Python package versions.
+describe_command = [
+  "git", "describe", "--dirty", "--tags", "--long", "--abbrev=40",
+  "--match", "*[0-9]*", "--exclude", "release/*",
+]
 
 [tool.hatch.build.hooks.vcs]
 version-file = "guildbotics/_version.py"

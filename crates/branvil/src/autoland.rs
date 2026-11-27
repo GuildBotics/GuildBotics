@@ -31,16 +31,14 @@ pub struct Autoland {
     problem: Mutex<Option<String>>,
 }
 
-impl Default for Autoland {
-    fn default() -> Self {
+impl Autoland {
+    pub(crate) fn new(webhook_timeout: Duration) -> Self {
         Self {
-            client: crate::webhook::client(),
+            client: crate::webhook::client(webhook_timeout),
             problem: Mutex::new(None),
         }
     }
-}
 
-impl Autoland {
     /// Shares delivery and its diagnostic with CI and landing notices. True
     /// only after delivery; an unset webhook is a successful no-op.
     pub(crate) async fn send(&self, secrets: &crate::vault::Secrets, text: &str) -> bool {
@@ -136,6 +134,9 @@ async fn sweep(app: &App, dirty: &Dirty) {
     for repo in affected() {
         if let Err(e) = crate::ci::collection::advance(app, repo).await {
             tracing::warn!("collection verification of {}: {e}", repo.path);
+        }
+        if let Err(e) = crate::ci::release::advance(app, repo).await {
+            tracing::warn!("releases of {}: {e}", repo.path);
         }
     }
     if let Err(e) = crate::repair::sweep(app).await {
@@ -266,7 +267,9 @@ async fn sweep_repo(app: &App, repo: &Repo, webhook_ok: &mut bool) -> AppResult<
 /// Returns false when the send failed. A crash between the webhook's answer
 /// and the write of `notified_at` sends it again: at least once.
 async fn notify(app: &App, repo: &Repo, number: u64) -> AppResult<bool> {
-    // The poller rewrites the record under the same lock.
+    // The setting it decides under stays until the notice is sent, and the
+    // poller rewrites the record under the pull request's lock.
+    let _setting = app.upstream.setting_lock(&repo.id).await;
     let _guard = app.upstream.pull_lock(&repo.id, number).await;
     let id = repo.id.clone();
     let (p, landing, repo) = app
@@ -280,7 +283,12 @@ async fn notify(app: &App, repo: &Repo, number: u64) -> AppResult<bool> {
             ))
         })
         .await?;
-    let Some(landing) = landing.filter(awaits_notice) else {
+    // Read again under the locks: the owner may have published it by hand,
+    // or turned automatic landing off, since the sweep listed it.
+    let Some(landing) = landing
+        .filter(awaits_notice)
+        .filter(|_| repo.auto_land && p.upstream.as_ref().is_some_and(|x| x.auto))
+    else {
         return Ok(true);
     };
     // A statement written since the sweep's reconcile takes it out of the

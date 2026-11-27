@@ -205,7 +205,7 @@ pub async fn serve(
                 tracing::info!("stopping: no new CI jobs; waiting for the running ones (SIGINT skips the wait)");
                 tokio::select! {
                     _ = &mut interrupt => {},
-                    stopped = ci.stop(announce) => match stopped {
+                    stopped = ci.stop() => match stopped {
                         Ok(n) => cut = n,
                         Err(e) => tracing::warn!("stopping: cannot wait for the running CI jobs: {e}"),
                     },

@@ -867,6 +867,19 @@ describe("pull request review", () => {
       const unfinished = { conclusion: null, attempt: 1 } as const;
       fakeApi(
         pullRoutes({
+          // The owner named one runner; the other keeps its name.
+          "GET /api/v1/members": json(200, {
+            items: [
+              {
+                name: "linux-runner",
+                display_name: "Linux box",
+                kind: "runner",
+                accounts: [],
+                reviewers: [],
+              },
+            ],
+            next_cursor: null,
+          }),
           [`GET ${P}/checks`]: json(200, {
             ...CHECKS,
             checks: [
@@ -928,7 +941,7 @@ describe("pull request review", () => {
       expect(await within(region).findByText(took)).toBeInTheDocument();
       expect(
         within(region).getByRole("button", { name: words["ci.open"].replace("{{name}}", "test") }),
-      ).toHaveTextContent(`${words["ci.runner"]}: linux-runner`);
+      ).toHaveTextContent(`${words["ci.runner"]}: Linux box`);
       expect(
         within(region).getByRole("button", { name: words["ci.open"].replace("{{name}}", "lint") }),
       ).toHaveTextContent(`${words["ci.runner"]}: windows-runner`);
@@ -953,6 +966,7 @@ describe("pull request review", () => {
       const drawer = await screen.findByRole("dialog", { name: /test/ });
       expect(within(drawer).getByText(words["ci.duration"])).toBeInTheDocument();
       expect(within(drawer).getByText(took)).toBeInTheDocument();
+      expect(within(drawer).getByText("Linux box (linux-runner)")).toBeInTheDocument();
     },
   );
 
@@ -1208,6 +1222,7 @@ describe("pull request review", () => {
     required_approvals: 0,
     auto_land: false,
     hold_while_failing: false,
+    review_rounds: 3,
     labels: [],
     upstream: {
       provider: "github",

@@ -14,6 +14,36 @@ export const ja: Record<MessageKey, string> = {
   "verification.ahead": "確認済みから {{count}} 本進んでいる",
   "verification.noVerified": "確認済みのコミットはまだない",
   "verification.more": "続きを読む",
+  "release.title": "リリース",
+  "release.noRepositories": "ワークスペース {{workspace}} にはまだリポジトリがありません。",
+  "release.rule": "自動のリリース",
+  "release.schedule":
+    "{{times}}（{{zone}}）に、新しい確認済みのコミットがあればリリースします。⚠️ のコミットがあれば、先にそれらを古い順にリリースします。",
+  "release.daily": "毎日 {{time}}",
+  "release.hourly": "毎時 {{minute}} 分",
+  "release.and": "、",
+  "release.nextAt": "次の自動のリリース",
+  "release.manualOnly":
+    "リリースはこの画面からだけ行います。.guildbotics-ci.toml の [release] に時刻を書くと、決まった時刻に自動でリリースします。",
+  "release.problem": "リリースのルールを読めないため、自動のリリースは行いません：{{problem}}",
+  "release.prefix": "リリースタグの名前は {{prefix}} で始まります。push では付けられません。",
+  "release.candidates": "確認済みのコミット",
+  "release.release": "リリースする",
+  "release.point": "それだけでリリースが必要なコミット",
+  "release.pointsHelp":
+    "⚠️ のコミットは、それだけでリリースする必要があります。リリースするまで、それより新しいコミットはリリースできません。",
+  "release.history": "これまでのリリース",
+  "release.none": "まだリリースはありません。",
+  "release.confirmTitle": "このコミットをリリースする",
+  "release.name": "タグの名前",
+  "release.nameHelp": "そのままでも、接頭辞のあとの部分を変えてもかまいません。",
+  "release.error.release_point_first": "それより古い ⚠️ のコミットを先にリリースしてください。",
+  "release.error.release_not_newer":
+    "最新のリリースより新しい、既定ブランチのコミットだけをリリースできます。",
+  "release.error.release_not_verified": "このコミットは、既定ブランチの確認を通っていません。",
+  "release.error.release_tag_exists": "この名前のタグはすでにあります。別の名前にしてください。",
+  "release.error.release_pipeline_invalid":
+    "既定ブランチの .guildbotics-ci.toml が不正なため、リリースのルールがわかりません。",
   "pull.conflicts": "衝突したファイル：{{files}}",
   "markdown.ticket": "チケット",
   "markdown.pull": "プルリクエスト",
@@ -44,6 +74,7 @@ export const ja: Record<MessageKey, string> = {
 
   "board.filters": "カードの絞り込み",
   "board.filterAssignee": "担当者",
+  "board.filterStatus": "状態",
   "board.filterLabel": "ラベル",
   "board.filterText": "テキスト",
   "board.any": "すべて",
@@ -219,6 +250,9 @@ export const ja: Record<MessageKey, string> = {
     "確認が失敗している間は、その既定ブランチまたは集約ブランチへの手動・自動マージを修復 PR に限ります。",
   "settings.holdWhileFailingHelpUpstream":
     "修復チケットにつながっていない PR は、main の確認が通るまで {{host}} に出しません。すでに {{host}} に出ている PR の {{host}} でのマージは、ここからは止められません。その PR は保留中と表示します。確認が失敗している集約ブランチへのマージも、その修復 PR に限ります。",
+  "settings.reviewRounds": "自動再レビューの上限",
+  "settings.reviewRoundsHelp":
+    "メンバーが 1 つの PR でこの数の head をレビューしたあとは、新しい push で再レビューを始めず、PR を Draft にします。Ready for review に戻すと数え直します。明示的なレビュー依頼は上限の対象外です。1〜20 で指定します。",
   "landing.blocker.held": "保留中（main の失敗）",
   "landing.held":
     "保留中：main の確認が失敗しています（修復 #{{number}}、担当 {{name}}）。main の確認が通ると、保留が解けます。",
@@ -335,6 +369,10 @@ export const ja: Record<MessageKey, string> = {
   "ci.error.retry_runner_ineligible":
     "ジョブのイメージを持ち、Hub と同じ版のランナーを選んでください。",
   "ci.error.retry_runner_excluded": "指定したランナーが除外にも含まれています。",
+  "ci.error.runner_online":
+    "このランナーは動いています（最近報告がありました）。先にそのマシンでランナーを止めてから削除してください。",
+  "ci.error.runner_holds_attempts":
+    "このランナーは試行を受け取ったままです。先にランナーを止め、試行が終わるか入れ直されてから削除してください。",
   "ci.retryRunner": "ランナーを指定",
   "ci.excludeRunners": "ランナーを除外",
   "ci.runnerDeferral": "資源不足による割り当て見送り",
@@ -479,6 +517,7 @@ export const ja: Record<MessageKey, string> = {
   "commit.authoredAt": "作成日時",
   "commit.parents": "親コミット",
 
+  "nav.releases": "リリース",
   "nav.pulls": "プルリクエスト",
   "nav.relations": "タスクフロー",
   "relations.title": "タスクフロー",
@@ -655,8 +694,7 @@ export const ja: Record<MessageKey, string> = {
   "settings.addBranch": "ブランチ名を追加",
   "settings.addLabel": "ラベルを追加",
   "settings.saved": "保存しました。",
-  "settings.membersHelp":
-    "オーナー、エージェント、ランナーと、コードホストのアカウントを管理します。",
+  "settings.membersHelp": "オーナーとエージェント、コードホストのアカウントを管理します。",
   "upstream.readerChoose": "メンバーを選ぶ…",
   "settings.tabCi": "CI",
   "settings.autoLand": "自動で取り込む",
@@ -694,6 +732,15 @@ export const ja: Record<MessageKey, string> = {
     "サービスと一緒にランナーを起動し、動かし続けます。止めると、実行中のジョブは中断されます。",
   "ci.settings.runners": "ランナー一覧",
   "ci.settings.noRunners": "ランナーのメンバーがいません。",
+  "ci.settings.deleteRunner": "削除",
+  "ci.settings.deleteRunnerLabel": "ランナー {{name}} を削除",
+  "ci.settings.confirmDeleteRunner":
+    "ランナー {{name}} を削除しますか？トークンはすべて失効し、一覧とジョブのリソースの設定から消えます。過去のジョブの記録には名前が残ります。",
+  "ci.settings.tokensHelp":
+    "選んだランナーのトークンです。`guildbotics runner join` が発行します。そのマシンを使わなくなったら、上の一覧からランナーを削除します。トークンも一緒に失効します。",
+  "ci.settings.displayName": "表示名",
+  "ci.settings.displayNameHelp":
+    "チェックやジョブ、この画面でこのランナーを示す名前です。空にすると {{name}} と示します。",
   "ci.settings.connection.online": "接続中",
   "ci.settings.connection.offline": "連絡途絶",
   "ci.settings.connection.never_seen": "Hub の起動のあと連絡なし",

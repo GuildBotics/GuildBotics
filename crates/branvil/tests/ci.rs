@@ -568,13 +568,13 @@ async fn previous_schema_upgrade_preserves_records() {
     assert_eq!(indexed.len(), 1);
     assert_eq!(admin("reindex").0, 0);
     assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
-    let verifications = records(&db, "ci_verifications");
-    let attempts = records(&db, "ci_attempts");
-    let repos = records(&db, "repos");
-    assert!(attempts.iter().any(|a| a["inputs"].is_string()));
+    assert!(
+        records(&db, "ci_attempts")
+            .iter()
+            .any(|a| a["inputs"].is_string())
+    );
     let indexed_memory = tables(&db)["ix_ci_memory"].clone();
     as_previous_schema(&db);
-    let prior_runs = records(&db, "ci_runs");
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
     assert_eq!(before["ix_ci_memory"], indexed_memory);
@@ -583,41 +583,46 @@ async fn previous_schema_upgrade_preserves_records() {
             .1
             .contains("guildbotics server hub-data upgrade")
     );
+    let mut repos = records(&db, "repos");
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 46 to 47"), "{output}");
-    assert_eq!(
-        tables(&db).get("ix_repair_unnotified"),
-        before.get("ix_repair_unnotified")
-    );
+    assert!(output.contains("from schema version 48 to 49"), "{output}");
+    // Every repository gains review rounds 3, and nothing else.
+    for repo in &mut repos {
+        repo["review_rounds"] = json!(3);
+    }
+    assert!(!repos.is_empty());
     assert_eq!(records(&db, "repos"), repos);
-    assert_eq!(repos[0]["responder"], "aiko");
-    assert_eq!(records(&db, "ci_attempts"), attempts);
-    assert_eq!(tables(&db)["ix_ci_memory"], indexed_memory);
-    assert_eq!(records(&db, "ci_runs"), prior_runs);
+    let upgraded = tables(&db);
+    let unchanged = |mut snapshot: Tables| {
+        snapshot.retain(|name, _| name != "meta" && name != "repos");
+        snapshot
+    };
+    let after = unchanged(upgraded.clone());
+    let expected = unchanged(before.clone());
+    assert_eq!(
+        after.keys().collect::<Vec<_>>(),
+        expected.keys().collect::<Vec<_>>()
+    );
+    for (name, rows) in expected {
+        assert!(after[&name] == rows, "upgrade changed table {name}");
+    }
+    assert_eq!(records(&db, "repos")[0]["responder"], "aiko");
     let runs = records(&db, "ci_runs");
-    assert_eq!(records(&db, "ci_verifications"), verifications);
     let run = runs.iter().find(|r| r["sha"] == head).unwrap();
     assert_eq!(run["protected_branches"], json!(["main"]));
-    for run in &runs {
-        assert!(run.get("failure_pending").is_none());
-        assert!(run.get("failure_notified_at").is_none());
-    }
-    for attempt in records(&db, "ci_attempts") {
-        assert!(attempt.get("recovery_notified_at").is_none());
-    }
-    for name in ["ix_ci_unnotified", "ix_ci_recovered"] {
-        assert!(!tables(&db).contains_key(name));
-    }
-    assert_eq!(tables(&db)["ix_ci_inputs"], indexed);
     let backup = previous_schema_backup(&data);
-    assert_eq!(tables(&backup), before);
+    assert!(tables(&backup) == before, "the backup changed");
     let (code, output) = admin("check");
     assert_eq!(code, 0, "{output}");
     assert!(output.contains("indexes: ok"), "{output}");
-    let upgraded = tables(&db);
+    // A successful check clears the upgrade marker in meta.
+    let checked = tables(&db);
     assert_eq!(admin("upgrade").0, 0);
-    assert_eq!(tables(&db), upgraded);
+    assert!(
+        tables(&db) == checked,
+        "a second upgrade changed the database"
+    );
     w.restart(&[]);
     assert_eq!(checks(&w, 1).await["merge_checks"], merge_checks);
 }
@@ -1424,23 +1429,34 @@ pub(crate) struct Runner {
 
 impl Runner {
     pub(crate) async fn new(w: &World, name: &str) -> Runner {
-        Runner {
-            url: w.server.url.clone(),
-            token: w.server.member(&w.owner, name, "runner").await,
-            http: reqwest::Client::new(),
+        Self::at(
+            &w.server.url,
+            &w.server.member(&w.owner, name, "runner").await,
+        )
+    }
+
+    pub(crate) fn at(url: &str, token: &str) -> Self {
+        Self {
+            url: url.into(),
+            token: token.into(),
+            http: reqwest::Client::builder()
+                .no_proxy()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap(),
         }
     }
 
-    fn at(&self, path: &str) -> String {
+    fn endpoint(&self, path: &str) -> String {
         format!("{}/api/v1/runner{path}", self.url)
     }
 
     pub(crate) async fn claim(&self) -> Option<Value> {
         let resp = self
             .http
-            .post(self.at("/claim"))
+            .post(self.endpoint("/claim"))
             .bearer_auth(&self.token)
-            .json(&json!({"executor": "test", "executor_state": "ready", "version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true, "architecture":"arm64", "images":[{"reference":IMAGE,"architecture":"arm64","digest":format!("sha256:{}","2".repeat(64))}]}))
+            .json(&json!({"executor": "test", "executor_state": "ready", "version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true, "architecture":"arm64", "images":[{"reference":IMAGE,"architecture":"arm64","digest":DIGEST}]}))
             .send()
             .await
             .unwrap();
@@ -1469,7 +1485,7 @@ impl Runner {
     pub(crate) async fn post(&self, c: &Value, what: &str, body: Value) -> (StatusCode, Value) {
         let resp = self
             .http
-            .post(self.at(&format!(
+            .post(self.endpoint(&format!(
                 "/attempts/{}/{what}",
                 c["attempt_id"].as_str().unwrap()
             )))
@@ -1496,7 +1512,7 @@ impl Runner {
         .await
     }
 
-    async fn raw(
+    pub(crate) async fn raw(
         &self,
         method: reqwest::Method,
         c: &Value,
@@ -1507,7 +1523,7 @@ impl Runner {
             .http
             .request(
                 method,
-                self.at(&format!(
+                self.endpoint(&format!(
                     "/attempts/{}/{path}",
                     c["attempt_id"].as_str().unwrap()
                 )),
@@ -1519,6 +1535,18 @@ impl Runner {
             .await
             .unwrap();
         (resp.status(), resp.bytes().await.unwrap().to_vec())
+    }
+
+    /// Finishes other queued work while waiting for this head.
+    pub(crate) async fn claim_head(&self, head: &str) -> Value {
+        for _ in 0..100 {
+            let attempt = self.next_claim().await;
+            if attempt["sha"] == head {
+                return attempt;
+            }
+            assert_eq!(self.finish(&attempt, "success").await.0, StatusCode::OK);
+        }
+        panic!("fixture head was never claimed");
     }
 
     /// Claims every queued attempt and finishes it with `conclusion`.
@@ -1590,24 +1618,24 @@ fn check<'a>(v: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no check {name} in {v}"))
 }
 
-/// Polls `f` until it returns true (the service sweeps every 5 s).
+/// Polls `f` every 20 ms for up to 30 seconds.
 pub(crate) async fn eventually<F, Fut>(what: &str, mut f: F)
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
-    for _ in 0..60 {
-        if f().await {
-            return;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !f().await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
-    panic!("timed out waiting for {what}");
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
 }
 
-/// Sets `[ci]` values in the service's configuration (restart to apply).
-fn set_ci_config(w: &World, values: &[(&str, toml::Value)]) {
-    let path = w.server.data.join("config.toml");
+/// Sets `[ci]` values in the service configuration.
+fn set_ci_config(data: &std::path::Path, values: &[(&str, toml::Value)]) {
+    let path = data.join("config.toml");
     let mut doc: toml::Table = std::fs::read_to_string(&path).unwrap().parse().unwrap();
     let ci = doc
         .entry("ci")
@@ -3106,9 +3134,8 @@ async fn a_commit_shows_its_checks_with_or_without_a_pull_request() {
 
 #[tokio::test]
 async fn no_runner_means_startup_failure_not_waiting_forever() {
-    let mut w = World::new().await;
-    set_ci_config(&w, &[("runner_absent_secs", 2.into())]);
-    w.restart(&[]);
+    let w =
+        World::with_config(|data| set_ci_config(data, &[("runner_absent_secs", 2.into())])).await;
     land(
         &w,
         "setup",
@@ -3136,12 +3163,13 @@ async fn no_runner_means_startup_failure_not_waiting_forever() {
 
 #[tokio::test]
 async fn an_expired_lease_requeues_once_and_a_restart_handles_orphans() {
-    let mut w = World::new().await;
-    set_ci_config(
-        &w,
-        &[("lease_secs", 2.into()), ("runner_absent_secs", 600.into())],
-    );
-    w.restart(&[]);
+    let mut w = World::with_config(|data| {
+        set_ci_config(
+            data,
+            &[("lease_secs", 2.into()), ("runner_absent_secs", 600.into())],
+        );
+    })
+    .await;
     let runner = Runner::new(&w, "runner1").await;
     land(
         &w,
@@ -3184,12 +3212,16 @@ async fn an_expired_lease_requeues_once_and_a_restart_handles_orphans() {
     assert_eq!(runner.finish(&first, "success").await.0, 409);
     assert_eq!(runner.heartbeat(&first).await.0, 409);
 
-    // Attempt 2 is running when the service stops; its lease runs out while
-    // it is down. The restarted service interrupts it for good.
+    // Stop with attempt 2 active, then wait until its recorded lease expires.
     let second = runner.claim().await.unwrap();
     assert_eq!(second["attempt"], 2);
+    let expires =
+        chrono::DateTime::parse_from_rfc3339(second["expires_at"].as_str().unwrap()).unwrap();
     w.server.stop();
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    eventually("the stopped service's lease expires", || async {
+        chrono::Utc::now() > expires
+    })
+    .await;
     w.restart(&[]);
     let runner = Runner {
         url: w.server.url.clone(),
@@ -3285,9 +3317,8 @@ async fn a_stopping_service_gives_out_no_job_and_waits_for_the_running_ones() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_job_still_running_when_the_stop_wait_ends_is_queued_again_in_its_place() {
-    let mut w = World::new().await;
-    set_ci_config(&w, &[("stop_wait_secs", 1.into())]);
-    w.restart(&[]);
+    let mut w =
+        World::with_config(|data| set_ci_config(data, &[("stop_wait_secs", 1.into())])).await;
     let runner = Runner::new(&w, "runner1").await;
     let running = running_test_and_queued_lint(&w, &runner).await;
     w.server.signal("TERM");
@@ -3352,14 +3383,12 @@ async fn sigint_stops_a_service_that_waits_for_its_running_jobs_at_once() {
 
 #[tokio::test]
 async fn the_automatic_runner_starting_again_queues_the_jobs_its_predecessor_held_in_their_place() {
-    let mut w = World::new().await;
     // Long leases: what follows is not their expiry.
-    set_ci_config(&w, &[("lease_secs", 600.into())]);
-    w.restart(&[]);
+    let mut w = World::with_config(|data| set_ci_config(data, &[("lease_secs", 600.into())])).await;
     // As the automatic runner, which dies with its service.
     let runner = Runner::new(&w, "hub-runner").await;
     let held = running_test_and_queued_lint(&w, &runner).await;
-    set_ci_config(&w, &[("runner", "auto".into())]);
+    set_ci_config(&w.server.data, &[("runner", "auto".into())]);
     // A home of its own: without msb the automatic runner leaves work queued
     // for a ready runner instead of taking incompatible attempts.
     let home = w.dir.path().join("home");
@@ -3571,8 +3600,49 @@ async fn the_owner_alone_may_open_the_network_of_jobs() {
     assert_eq!(v["ci_network"], true);
 }
 
-#[tokio::test]
-async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
+/// A pull request whose required check logged a line and uploaded an
+/// artifact, backed up (`without_ci_files` as asked) after or, unless
+/// `finished`, before the check finished, and restored into a new data
+/// directory that the server now serves at the same address.
+struct RestoredCi {
+    w: World,
+    runner: Runner,
+    claim: Value,
+    head: String,
+    backup: std::path::PathBuf,
+    manifest: Value,
+    before: Value,
+    after: Value,
+    _target: tempfile::TempDir,
+}
+
+const CI_LOG: &[u8] = b"kept in the backup\n";
+
+/// The entry count of every table of the database file `db`, read from a
+/// copy (opening a redb file writes to it).
+fn table_counts(db: &std::path::Path) -> Value {
+    let dir = tempfile::tempdir().unwrap();
+    let copy = dir.path().join("counted.redb");
+    std::fs::copy(db, &copy).unwrap();
+    let database = redb::Database::open(&copy).unwrap();
+    let txn = redb::ReadableDatabase::begin_read(&database).unwrap();
+    let mut counts = serde_json::Map::new();
+    for handle in txn.list_tables().unwrap() {
+        let name = redb::TableHandle::name(&handle).to_string();
+        let def: redb::TableDefinition<&[u8], &[u8]> = redb::TableDefinition::new(&name);
+        let n = redb::ReadableTableMetadata::len(&txn.open_table(def).unwrap()).unwrap();
+        counts.insert(name, json!(n));
+    }
+    Value::Object(counts)
+}
+
+fn ci_zip() -> Vec<u8> {
+    let mut zip = b"PK\x05\x06".to_vec();
+    zip.extend_from_slice(&[0; 18]);
+    zip
+}
+
+async fn restored_ci(without_ci_files: bool, finished: bool) -> RestoredCi {
     let mut w = World::new().await;
     let runner = Runner::new(&w, "runner1").await;
     land(
@@ -3587,38 +3657,51 @@ async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
     let head = w.push_change("feature", "f.txt", "1\n");
     let p = w.open_pull("feature", json!([])).await;
     let n = p["number"].as_u64().unwrap();
-    let c = runner.claim().await.unwrap();
+    let claim = runner.claim().await.unwrap();
     runner
-        .raw(
-            reqwest::Method::POST,
-            &c,
-            "log",
-            b"kept in the backup\n".to_vec(),
-        )
+        .raw(reqwest::Method::POST, &claim, "log", CI_LOG.to_vec())
         .await;
-    let mut zip = b"PK\x05\x06".to_vec();
-    zip.extend_from_slice(&[0; 18]);
     let (st, _) = runner
-        .raw(reqwest::Method::PUT, &c, "artifacts/report", zip.clone())
+        .raw(reqwest::Method::PUT, &claim, "artifacts/report", ci_zip())
         .await;
     assert_eq!(st, 200);
-    assert_eq!(runner.finish(&c, "success").await.0, 200);
-    eventually("the landing gate before backup", || async {
-        checks(&w, n).await["checks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|check| check["name"] == "test" && check["conclusion"] == "success")
-    })
-    .await;
+    if finished {
+        assert_eq!(runner.finish(&claim, "success").await.0, 200);
+        eventually("the landing gate before backup", || async {
+            checks(&w, n).await["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|check| check["name"] == "test" && check["conclusion"] == "success")
+        })
+        .await;
+    }
     let before = checks(&w, n).await;
 
     let backup = w.dir.path().join("backup");
-    let (st, v) = w
-        .server
-        .post("/admin/backup", &w.owner, json!({"to": backup}))
-        .await;
-    assert_eq!(st, 200, "{v}");
+    let request = if without_ci_files {
+        json!({"to": backup, "without_ci_files": true})
+    } else {
+        json!({"to": backup})
+    };
+    let (st, manifest) = w.server.post("/admin/backup", &w.owner, request).await;
+    assert_eq!(st, 200, "{manifest}");
+    assert_eq!(
+        manifest["tables"],
+        table_counts(&backup.join("branvil.redb"))
+    );
+    if !finished {
+        // The backup leaves the running job of the live service alone.
+        let (st, _) = runner
+            .raw(
+                reqwest::Method::POST,
+                &claim,
+                "log",
+                b"after the backup\n".to_vec(),
+            )
+            .await;
+        assert_eq!(st, 200);
+    }
     let target = tempfile::tempdir().unwrap();
     let out = branvil_command()
         .args(["restore", "--from"])
@@ -3636,190 +3719,322 @@ async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
     w.server.stop();
     w.server = Server::start_on(target.path(), &listen, &[]);
     let after = checks(&w, n).await;
-    assert_eq!(after["checks"], before["checks"]);
-    let id = check(&after, "test")["attempt_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let log = w
-        .server
-        .ok(&format!("{}/jobs/{id}/log", w.repo_path()), &w.aiko)
-        .await;
-    assert_eq!(log["log"], "kept in the backup\n");
-    let resp = w
-        .server
-        .http
-        .get(format!(
-            "{}/api/v1{}/commits/{head}/artifacts/report",
-            w.server.url,
-            w.repo_path()
-        ))
-        .bearer_auth(&w.aiko)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    assert_eq!(resp.bytes().await.unwrap().to_vec(), zip);
+    RestoredCi {
+        w,
+        runner,
+        claim,
+        head,
+        backup,
+        manifest,
+        before,
+        after,
+        _target: target,
+    }
+}
+
+impl RestoredCi {
+    /// The log read of the job that ran before the backup.
+    async fn log(&self) -> Value {
+        let id = self.claim["attempt_id"].as_str().unwrap();
+        self.w
+            .server
+            .ok(
+                &format!("{}/jobs/{id}/log", self.w.repo_path()),
+                &self.w.aiko,
+            )
+            .await
+    }
+
+    async fn artifact(&self) -> reqwest::Response {
+        self.w
+            .server
+            .http
+            .get(format!(
+                "{}/api/v1{}/commits/{}/artifacts/report",
+                self.w.server.url,
+                self.w.repo_path(),
+                self.head
+            ))
+            .bearer_auth(&self.w.aiko)
+            .send()
+            .await
+            .unwrap()
+    }
+
+    fn assert_left_out_ci_files(&self) {
+        assert!(!self.backup.join("ci/logs").exists());
+        assert!(!self.backup.join("ci/artifacts").exists());
+        assert!(
+            self.manifest["excluded"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e.as_str().unwrap().starts_with("CI logs and artifacts")),
+            "{}",
+            self.manifest["excluded"]
+        );
+    }
 }
 
 #[tokio::test]
-async fn author_yields_only_deferred_running_checks_and_old_finish_stays_obsolete() {
-    for reason in ["review", "failure", "draft"] {
-        let w = World::new().await;
-        let runner = Runner::new(&w, "yield-runner").await;
-        land(
-            &w,
-            "setup",
-            &[(
-                ".guildbotics-ci.toml",
-                &if reason == "failure" {
-                    required_pipeline(&["test", "lint", "wait"])
-                } else {
-                    pipeline(&["test", "lint", "wait"])
-                },
-            )],
-            None,
-        )
-        .await;
-        runner.drain("success").await;
-        let head = w.push_change("feature", "change.txt", "change");
-        let p = w.open_pull("feature", json!([])).await;
-        let n = p["number"].as_u64().unwrap();
-        let path = format!("{}/pulls/{n}", w.repo_path());
-        let yield_path = format!("{path}/checks/yield");
-        let first = runner.claim().await.unwrap();
-        let running = runner.claim().await.unwrap();
-        assert_eq!(running["sha"], head);
-        // A normal head is untouched, even while its checks are running.
-        assert_eq!(
-            w.server.post(&yield_path, &w.aiko, json!({})).await.1["yielded"],
-            json!([])
-        );
-        for token in [&w.ken, &w.owner] {
-            assert_eq!(w.server.post(&yield_path, token, json!({})).await.0, 403);
-        }
-        if reason == "failure" {
-            assert_eq!(runner.finish(&first, "failure").await.0, 200);
-        } else {
-            assert_eq!(runner.finish(&first, "success").await.0, 200);
-            if reason == "draft" {
-                let current = w.server.ok(&path, &w.aiko).await;
-                assert_eq!(
-                    w.server
-                        .patch(
-                            &path,
-                            &w.aiko,
-                            json!({"revision":current["revision"],"draft":true})
-                        )
-                        .await
-                        .0,
-                    200
-                );
-            } else {
-                let repo = w.server.ok(&w.repo_path(), &w.owner).await;
-                assert_eq!(
-                    w.server
-                        .patch(
-                            &w.repo_path(),
-                            &w.owner,
-                            json!({"revision":repo["revision"],"required_approvals":1})
-                        )
-                        .await
-                        .0,
-                    200
-                );
-                assert_eq!(
-                    w.server
-                        .post(
-                            &format!("{path}/reviews"),
-                            &w.ken,
-                            json!({"verdict":"request_changes","body":"Please fix","commit":head})
-                        )
-                        .await
-                        .0,
-                    201
-                );
-            }
-        }
-        let before = checks(&w, n).await;
-        let queued = before["checks"]
+async fn ci_records_logs_and_artifacts_survive_a_backup_and_restore() {
+    let r = restored_ci(false, true).await;
+    assert!(r.backup.join("ci/logs").is_dir());
+    assert_eq!(r.after["checks"], r.before["checks"]);
+    let log = r.log().await;
+    assert_eq!(log["log"], "kept in the backup\n");
+    assert_eq!(log["pruned"], false);
+    let artifact = r.artifact().await;
+    assert_eq!(artifact.status(), 200);
+    assert_eq!(artifact.bytes().await.unwrap().to_vec(), ci_zip());
+}
+
+#[tokio::test]
+async fn a_backup_without_ci_files_restores_the_results_with_their_files_pruned() {
+    let r = restored_ci(true, true).await;
+    r.assert_left_out_ci_files();
+    // The checks keep their results, as after retention deleted the files.
+    let result = |checks: &Value| {
+        checks["checks"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|c| c["status"] == "queued")
-            .unwrap()
-            .clone();
-        let (st, result) = w.server.post(&yield_path, &w.aiko, json!({})).await;
-        assert_eq!(st, 200, "{result}");
-        assert_eq!(result["head"], head);
-        assert_eq!(result["yielded"].as_array().unwrap().len(), 1);
-        let next = &result["yielded"][0];
-        assert_eq!(next["status"], "queued");
-        assert_eq!(next["attempt"], 2);
-        assert_eq!(next["cancel_requested"], false);
-        let job = running["job"]["name"].as_str().unwrap();
-        let report = checks(&w, n).await;
-        assert_eq!(check(&report, job)["status"], "queued");
-        assert!(check(&report, job)["conclusion"].is_null());
-        assert!(
-            check(&report, job)["details"]
-                .as_str()
-                .unwrap()
-                .contains("Deferred")
-        );
-        assert_eq!(check(&report, queued["name"].as_str().unwrap()), &queued);
-        assert_eq!(
-            w.server.post(&yield_path, &w.aiko, json!({})).await.1["yielded"],
-            json!([])
-        );
-        let old = w
-            .server
-            .ok(
-                &format!(
-                    "{}/jobs/{}",
-                    w.repo_path(),
-                    running["attempt_id"].as_str().unwrap()
-                ),
-                &w.aiko,
-            )
+            .map(|c| {
+                (
+                    c["name"].clone(),
+                    c["status"].clone(),
+                    c["conclusion"].clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(result(&r.after), result(&r.before));
+    assert_eq!(check(&r.after, "test")["artifact_names"], json!([]));
+    let log = r.log().await;
+    assert_eq!(log["log"], "");
+    assert_eq!(log["pruned"], true);
+    assert_ne!(r.artifact().await.status(), 200);
+}
+
+#[tokio::test]
+async fn a_backup_without_ci_files_interrupts_a_running_job_and_queues_it_again() {
+    // The job had uploaded its artifact but not finished at backup time.
+    let r = restored_ci(true, false).await;
+    r.assert_left_out_ci_files();
+    assert_eq!(
+        check(&r.before, "test")["artifact_names"],
+        json!(["report"])
+    );
+    let again = check(&r.after, "test");
+    assert_eq!(again["status"], "queued", "{again}");
+    assert_ne!(again["attempt_id"], r.claim["attempt_id"]);
+    let log = r.log().await;
+    assert_eq!(log["log"], "");
+    assert_eq!(log["pruned"], true);
+    assert_ne!(r.artifact().await.status(), 200);
+    // The runner's lease ended with the backup: nothing it sends lands.
+    let (st, _) = r
+        .runner
+        .raw(reqwest::Method::POST, &r.claim, "log", b"late\n".to_vec())
+        .await;
+    assert_eq!(st, StatusCode::CONFLICT);
+    assert_eq!(
+        r.runner.finish(&r.claim, "success").await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(r.log().await["log"], "");
+    // The job queued again is not pruned: what it writes is its own.
+    let next = r.runner.next_claim().await;
+    assert_eq!(next["attempt_id"], again["attempt_id"]);
+    let (st, _) = r
+        .runner
+        .raw(
+            reqwest::Method::POST,
+            &next,
+            "log",
+            b"after the restore\n".to_vec(),
+        )
+        .await;
+    assert_eq!(st, 200);
+    let id = next["attempt_id"].as_str().unwrap();
+    let log =
+        r.w.server
+            .ok(&format!("{}/jobs/{id}/log", r.w.repo_path()), &r.w.aiko)
             .await;
-        assert_eq!(old["cancel_requested"], true);
-        assert!(
-            old["details"]
-                .as_str()
-                .unwrap()
-                .starts_with("Yielded: aiko")
-        );
-        let (st, finished) = runner.finish(&running, "failure").await;
-        assert_eq!(st, 200, "{finished}");
-        assert_eq!(finished["conclusion"], "cancelled");
-        assert_eq!(check(&checks(&w, n).await, job)["status"], "queued");
-        if reason == "review" {
+    assert_eq!(log["log"], "after the restore\n");
+    assert_eq!(log["pruned"], false);
+}
+
+#[tokio::test]
+async fn author_yields_running_checks_deferred_by_review() {
+    author_yields_only_deferred_running_checks("review").await;
+}
+
+#[tokio::test]
+async fn author_yields_running_checks_deferred_by_failure() {
+    author_yields_only_deferred_running_checks("failure").await;
+}
+
+#[tokio::test]
+async fn author_yields_running_checks_deferred_by_draft() {
+    author_yields_only_deferred_running_checks("draft").await;
+}
+
+async fn author_yields_only_deferred_running_checks(reason: &str) {
+    let w = World::new().await;
+    let runner = Runner::new(&w, "yield-runner").await;
+    land(
+        &w,
+        "setup",
+        &[(
+            ".guildbotics-ci.toml",
+            &if reason == "failure" {
+                required_pipeline(&["test", "lint", "wait"])
+            } else {
+                pipeline(&["test", "lint", "wait"])
+            },
+        )],
+        None,
+    )
+    .await;
+    runner.drain("success").await;
+    let head = w.push_change("feature", "change.txt", "change");
+    let p = w.open_pull("feature", json!([])).await;
+    let n = p["number"].as_u64().unwrap();
+    let path = format!("{}/pulls/{n}", w.repo_path());
+    let yield_path = format!("{path}/checks/yield");
+    let first = runner.claim().await.unwrap();
+    let running = runner.claim().await.unwrap();
+    assert_eq!(running["sha"], head);
+    // A normal head is untouched, even while its checks are running.
+    assert_eq!(
+        w.server.post(&yield_path, &w.aiko, json!({})).await.1["yielded"],
+        json!([])
+    );
+    for token in [&w.ken, &w.owner] {
+        assert_eq!(w.server.post(&yield_path, token, json!({})).await.0, 403);
+    }
+    if reason == "failure" {
+        assert_eq!(runner.finish(&first, "failure").await.0, 200);
+    } else {
+        assert_eq!(runner.finish(&first, "success").await.0, 200);
+        if reason == "draft" {
+            let current = w.server.ok(&path, &w.aiko).await;
+            assert_eq!(
+                w.server
+                    .patch(
+                        &path,
+                        &w.aiko,
+                        json!({"revision":current["revision"],"draft":true})
+                    )
+                    .await
+                    .0,
+                200
+            );
+        } else {
+            let repo = w.server.ok(&w.repo_path(), &w.owner).await;
+            assert_eq!(
+                w.server
+                    .patch(
+                        &w.repo_path(),
+                        &w.owner,
+                        json!({"revision":repo["revision"],"required_approvals":1})
+                    )
+                    .await
+                    .0,
+                200
+            );
             assert_eq!(
                 w.server
                     .post(
-                        &format!("{path}/comments"),
-                        &w.aiko,
-                        json!({"body":"Explained"})
+                        &format!("{path}/reviews"),
+                        &w.ken,
+                        json!({"verdict":"request_changes","body":"Please fix","commit":head})
                     )
                     .await
                     .0,
                 201
             );
-            let replacement = runner.claim().await.unwrap();
-            assert_eq!(replacement["attempt_id"], next["id"]);
-            assert_eq!(runner.finish(&replacement, "success").await.0, 200);
-        } else {
-            w.push_change("feature", "change.txt", "next");
-            let view = w
-                .server
-                .ok(
-                    &format!("{}/jobs/{}", w.repo_path(), next["id"].as_str().unwrap()),
-                    &w.aiko,
-                )
-                .await;
-            assert_eq!(view["conclusion"], "cancelled");
         }
+    }
+    let before = checks(&w, n).await;
+    let queued = before["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["status"] == "queued")
+        .unwrap()
+        .clone();
+    let (st, result) = w.server.post(&yield_path, &w.aiko, json!({})).await;
+    assert_eq!(st, 200, "{result}");
+    assert_eq!(result["head"], head);
+    assert_eq!(result["yielded"].as_array().unwrap().len(), 1);
+    let next = &result["yielded"][0];
+    assert_eq!(next["status"], "queued");
+    assert_eq!(next["attempt"], 2);
+    assert_eq!(next["cancel_requested"], false);
+    let job = running["job"]["name"].as_str().unwrap();
+    let report = checks(&w, n).await;
+    assert_eq!(check(&report, job)["status"], "queued");
+    assert!(check(&report, job)["conclusion"].is_null());
+    assert!(
+        check(&report, job)["details"]
+            .as_str()
+            .unwrap()
+            .contains("Deferred")
+    );
+    assert_eq!(check(&report, queued["name"].as_str().unwrap()), &queued);
+    assert_eq!(
+        w.server.post(&yield_path, &w.aiko, json!({})).await.1["yielded"],
+        json!([])
+    );
+    let old = w
+        .server
+        .ok(
+            &format!(
+                "{}/jobs/{}",
+                w.repo_path(),
+                running["attempt_id"].as_str().unwrap()
+            ),
+            &w.aiko,
+        )
+        .await;
+    assert_eq!(old["cancel_requested"], true);
+    assert!(
+        old["details"]
+            .as_str()
+            .unwrap()
+            .starts_with("Yielded: aiko")
+    );
+    let (st, finished) = runner.finish(&running, "failure").await;
+    assert_eq!(st, 200, "{finished}");
+    assert_eq!(finished["conclusion"], "cancelled");
+    assert_eq!(check(&checks(&w, n).await, job)["status"], "queued");
+    if reason == "review" {
+        assert_eq!(
+            w.server
+                .post(
+                    &format!("{path}/comments"),
+                    &w.aiko,
+                    json!({"body":"Explained"})
+                )
+                .await
+                .0,
+            201
+        );
+        let replacement = runner.claim().await.unwrap();
+        assert_eq!(replacement["attempt_id"], next["id"]);
+        assert_eq!(runner.finish(&replacement, "success").await.0, 200);
+    } else {
+        w.push_change("feature", "change.txt", "next");
+        let view = w
+            .server
+            .ok(
+                &format!("{}/jobs/{}", w.repo_path(), next["id"].as_str().unwrap()),
+                &w.aiko,
+            )
+            .await;
+        assert_eq!(view["conclusion"], "cancelled");
     }
 }
 

@@ -18,7 +18,8 @@ use crate::app::Shared;
 use crate::auth::Caller;
 use crate::error::{AppError, AppResult};
 use crate::http::{P as Path, Q};
-use crate::model::{MemberKind, Repo};
+use crate::model::{Member, MemberKind, Repo};
+use crate::store::{self, Rd};
 use crate::util;
 
 pub use gb_runner::ci::api::LEASE_HEADER;
@@ -528,7 +529,9 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     let machine = report.machine.clone();
     let cache_groups = report.cache_groups.clone();
     let ram_unsupported_images = report.ram_unsupported_images.clone();
-    let reported_at = app.ci.report_runner(c.name(), report);
+    let reported_at = app
+        .ci
+        .report_runner(c.name(), &c.member.display_name, report);
     let Some(held) = held else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
@@ -540,35 +543,49 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     );
     let at = util::format_time(now);
     // Checked in the write: `Ci::stop` counts the running jobs in a write
-    // too, so a claim it does not see gives out nothing.
+    // too, so a claim it does not see gives out nothing; nor does one after
+    // `Ci::delete_runner` deleted the runner, which looks for held attempts
+    // in its write.
     let ci = app.ci.clone();
     let (claimed, waiting, cache_write) = app
-        .store
-        .write(move |w| {
-            if ci.stopping() {
-                return Ok((None, None, false));
+        .finish(move |app| async move {
+            let selection = app
+                .store
+                .write(move |w| {
+                    if ci.stopping() || !w.exists(store::MEMBERS, &Member::key(&runner))? {
+                        return Ok((None, None, false));
+                    }
+                    let (claimed, waiting) = queue::claim_images(
+                        w,
+                        queue::ClaimRunner {
+                            name: runner.clone(),
+                            images,
+                            limits,
+                            machine,
+                            has_free_slot: true,
+                            ram_fresh: reported_at.elapsed() <= super::RAM_REPORT_MAX_AGE,
+                            cache_groups,
+                            ram_unsupported_images,
+                        },
+                        lease_secs,
+                        &at,
+                        || ci.online_alternatives(w, &runner),
+                    )?;
+                    let cache_write = match claimed.as_ref() {
+                        Some(claim) if limits.cache_max_mib > 0 => {
+                            queue::keeps_cache(w, &claim.attempt)?
+                        }
+                        _ => false,
+                    };
+                    Ok((claimed, waiting, cache_write))
+                })
+                .await?;
+            if let (Some(claim), _, _) = &selection {
+                app.ci.sweep_changed();
+                app.events
+                    .publish("check", &claim.attempt.repo_path, claim.attempt.sha.clone());
             }
-            let (claimed, waiting) = queue::claim_images(
-                w,
-                queue::ClaimRunner {
-                    name: runner.clone(),
-                    images,
-                    limits,
-                    machine,
-                    has_free_slot: true,
-                    ram_fresh: reported_at.elapsed() <= super::RAM_REPORT_MAX_AGE,
-                    cache_groups,
-                    ram_unsupported_images,
-                },
-                lease_secs,
-                &at,
-                || ci.online_alternatives(w, &runner),
-            )?;
-            let cache_write = match claimed.as_ref() {
-                Some(claim) if limits.cache_max_mib > 0 => queue::keeps_cache(w, &claim.attempt)?,
-                _ => false,
-            };
-            Ok((claimed, waiting, cache_write))
+            AppResult::Ok(selection)
         })
         .await?;
     app.ci.report_resource_wait(c.name(), reported_at, waiting);
@@ -576,7 +593,6 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
     let a = &cl.attempt;
-    app.events.publish("check", &a.repo_path, a.sha.clone());
     Ok(ok(ClaimView {
         execution: gb_runner::ci::api::ExecutionLimits {
             limits,
@@ -899,6 +915,8 @@ struct FinishInput {
     peak_memory_mib: Option<u64>,
     reused_from: Option<String>,
     cache_key: Option<String>,
+    #[serde(default)]
+    release_points: Vec<String>,
 }
 
 async fn finish(
@@ -916,25 +934,37 @@ async fn finish(
     }
     let now = util::now();
     let a = app
-        .store
-        .write(move |w| {
-            queue::finish(
-                w,
-                &id,
-                &input.lease,
-                &input.conclusion,
-                input.details,
-                queue::ResultInfo {
-                    image_digest: input.image_digest,
-                    peak_memory_mib: input.peak_memory_mib,
-                    reused_from: input.reused_from,
-                    cache_key: input.cache_key,
-                },
-                &now,
-            )
+        .finish(move |app| async move {
+            let attempt = app
+                .store
+                .write(move |w| {
+                    let a = queue::finish(
+                        w,
+                        &id,
+                        &input.lease,
+                        &input.conclusion,
+                        input.details,
+                        queue::ResultInfo {
+                            image_digest: input.image_digest,
+                            peak_memory_mib: input.peak_memory_mib,
+                            reused_from: input.reused_from,
+                            cache_key: input.cache_key,
+                        },
+                        &now,
+                    )?;
+                    if input.release_points.is_empty() {
+                        Ok(a)
+                    } else {
+                        queue::record_release_points(w, &a, input.release_points)
+                    }
+                })
+                .await?;
+            app.ci.attempt_ended();
+            app.events
+                .publish("check", &attempt.repo_path, attempt.sha.clone());
+            AppResult::Ok(attempt)
         })
         .await?;
-    app.events.publish("check", &a.repo_path, a.sha.clone());
     Ok(ok(view(&app, &a).await?))
 }
 
@@ -990,6 +1020,7 @@ mod tests {
                 required_approvals: 0,
                 auto_land: false,
                 hold_while_failing: false,
+                review_rounds: 3,
                 ci_network: false,
                 responder: None,
                 labels: vec![],

@@ -7,7 +7,6 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from guildbotics.commands.errors import CommandError
-from guildbotics.utils import os_language
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
 COMMAND_PATH = (
@@ -27,9 +26,8 @@ def command_module() -> ModuleType:
 
 
 @pytest.fixture
-def linux(monkeypatch, fake_platform) -> None:
+def linux(monkeypatch) -> None:
     """The command as it runs in an agent environment, told ``LANGUAGE``."""
-    fake_platform(os_language, "linux")
     for name in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
         monkeypatch.delenv(name, raising=False)
 

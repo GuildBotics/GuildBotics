@@ -156,6 +156,14 @@ impl ServerAuth {
             }
             return Ok(());
         }
+        self.authenticate_session(method, headers)
+    }
+
+    pub(crate) fn authenticate_session(
+        &self,
+        method: &Method,
+        headers: &HeaderMap,
+    ) -> Result<(), Denied> {
         let csrf = self.session_csrf(headers).ok_or(Denied::Unauthorized)?;
         let safe = [Method::GET, Method::HEAD, Method::OPTIONS].contains(method);
         let sent = headers

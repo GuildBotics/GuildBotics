@@ -152,7 +152,7 @@ describe("workspace navigation", () => {
     },
   );
 
-  it("links to the task flow, pull requests, and settings", async () => {
+  it("links to the task flow, pull requests, releases, and settings", async () => {
     setup();
     renderApp("/workspaces/acme/task-flow");
     const nav = await screen.findByRole("navigation", { name: "Main" });
@@ -160,6 +160,10 @@ describe("workspace navigation", () => {
     expect(flow).toHaveAttribute("href", "/workspaces/acme/task-flow");
     expect(flow).toHaveAttribute("aria-current", "page");
     expect(await screen.findByText("No tickets to show.")).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: "Releases" })).toHaveAttribute(
+      "href",
+      "/workspaces/acme/releases",
+    );
     expect(
       within(nav)
         .getAllByRole("link")
@@ -168,6 +172,7 @@ describe("workspace navigation", () => {
       "Activity",
       "Task flow",
       "Pull requests",
+      "Releases",
       "Service",
       "Edit Command",
       "Diagnostics",

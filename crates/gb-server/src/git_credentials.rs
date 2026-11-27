@@ -103,12 +103,12 @@ mod tests {
         let fixture = branvil::test_support::Fixture::new("owner").await;
         let running = &fixture.running;
         let origin = running.data.base_url().to_owned();
-        let mut api = crate::api::Api::new(
+        let mut api = crate::api::Api::for_test_with(
+            dir.path(),
             crate::api::Selected::default(),
-            crate::input_files::InputFileStore::deferred(&dir.path().join("inputs")),
-            crate::auth::ServerAuth::open(&data, 8765).unwrap(),
-            "fixture".into(),
-            data,
+            &data,
+            8765,
+            "fixture",
         );
         api.identity_root = identity;
         api.keychain = Arc::new(Keys::default());

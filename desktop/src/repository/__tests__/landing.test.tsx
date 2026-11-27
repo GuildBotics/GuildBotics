@@ -23,6 +23,7 @@ const REPO: Repository = {
   required_approvals: 1,
   auto_land: false,
   hold_while_failing: false,
+  review_rounds: 3,
   ci_network: false,
   labels: [],
   revision: 1,

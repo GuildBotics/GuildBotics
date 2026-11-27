@@ -272,7 +272,9 @@ The ticket workflow and pull request patrol read the workspace's board and conve
 - A member's pull request is taken up when someone says something the member has not
   answered; a pull request the member reviews, when a review is requested, when new
   commits land after its last review, or when there is a statement it has not answered.
-  After a member has reviewed 3 heads, automatic re-review not driven by a request
+  After a member has reviewed as many heads as the repository's limit (**Automatic
+  re-review limit** on the CI tab of **Settings → Repositories**, 3 by default),
+  automatic re-review not driven by a request
   stops when a head that member has never reviewed is pushed: the host ticket selector makes the
   pull request a draft during candidate selection, records it in Activity, and
   announces it on the PR and through the owner’s webhook in **Settings → Notifications**. Statements and thread replies on an already reviewed head still
@@ -370,3 +372,10 @@ On Linux, use `systemctl --user status guildbotics-runner-7878.service` with the
 forwarded port to check the service. Rejoining revokes that device's previous
 runner token. The runtime is downloaded from the pinned microsandbox release
 and verified with SHA-256 and `msb --version`.
+
+A joined runner is named `runner-<device ID>`. Runners are not listed in
+Settings → Members; Settings → CI handles them. To tell runners apart, select a
+runner there and give it a display name. The same page lists and revokes that
+runner's tokens. The CI settings, checks,
+and job pages show the display name; job details and the CI settings add the
+name that `--runner` and the logs use in parentheses.

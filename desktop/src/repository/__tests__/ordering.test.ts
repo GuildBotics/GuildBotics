@@ -1,12 +1,23 @@
 import { describe, expect, it } from "vitest";
 import type { Checks } from "../api/types";
-import { ticketRef } from "../api/types";
-import { rollup } from "../views/board/ordering";
+import { LANES, ticketRef } from "../api/types";
+import { hasFilter, matchesFilter, NO_FILTER, rollup } from "../views/board/ordering";
 import { card } from "./fixtures";
 
 describe("card helpers", () => {
   it("names a card by its repository and number", () => {
     expect(ticketRef(card("1", "new", { repository: "acme/web" }))).toBe("acme/web#1");
+  });
+
+  it("matches a selected lane or all lanes when no filter is set", () => {
+    const cards = LANES.map((lane) => card(lane, lane));
+    expect(hasFilter(NO_FILTER)).toBe(false);
+    expect(cards.filter((c) => matchesFilter(c, NO_FILTER))).toEqual(cards);
+    for (const lane of LANES) {
+      const filter = { ...NO_FILTER, lane };
+      expect(hasFilter(filter)).toBe(true);
+      expect(cards.filter((c) => matchesFilter(c, filter)).map((c) => c.lane)).toEqual([lane]);
+    }
   });
 
   it("never reports success for missing or unfinished checks", () => {

@@ -1,9 +1,11 @@
 import json
+import logging
 from pathlib import Path
 
 import pytest
 
 from guildbotics.entities.message import Message
+from guildbotics.entities.team import Person, Role
 from guildbotics.intelligences import functions as f
 from guildbotics.intelligences.common import (
     AgentResponse,
@@ -11,6 +13,87 @@ from guildbotics.intelligences.common import (
     MessageResponse,
 )
 from guildbotics.utils.fileio import load_markdown_with_frontmatter
+from guildbotics.utils.import_utils import ClassResolver
+
+
+class FakeProject:
+    """
+    Fake project for testing, returns English language code and name.
+    """
+
+    def get_language_code(self) -> str:
+        return "en"
+
+    def get_language_name(self) -> str:
+        return "English"
+
+
+class FakeContext:
+    """
+    Fake context that holds team, person, task, logger, and a brain registry.
+    """
+
+    def __init__(self):
+        # Minimal team and project for intelligences.functions
+        self.team = type("T", (), {"project": FakeProject()})()
+        # Create a person with "dev" and "pm" roles and account_info
+        self.person = Person(
+            person_id="p1",
+            name="Tester",
+            roles={
+                "dev": Role(id="dev", summary="Developer", description="Writes code"),
+                "pm": Role(id="pm", summary="PM", description="Manages project"),
+            },
+        )
+        # Add account_info to person
+        self.person.account_info = {
+            "git_user": "Test User",
+            "git_email": "test@example.com",
+        }
+        self.logger = logging.getLogger("test.context")
+        # Registry for fake brains
+        self._brains: dict[str, FakeBrain] = {}
+
+    def get_brain(
+        self, name: str, config: dict | None, class_resolver: ClassResolver | None
+    ):
+        return self._brains[name]
+
+
+class FakeBrain:
+    """
+    Fake brain that returns a preset result and optional response_class.
+    """
+
+    def __init__(self, result, response_class=None):
+        self._result = result
+        self.response_class = response_class
+
+    async def run(self, **kwargs):
+        return self._result
+
+
+@pytest.fixture
+def fake_context() -> FakeContext:
+    """
+    Provides a FakeContext for tests.
+    """
+    return FakeContext()
+
+
+@pytest.fixture
+def stub_brain(fake_context):
+    """
+    Provides a helper to register a FakeBrain in the fake_context.
+
+    Usage:
+        stub_brain(name: str, result, response_class=None)
+    """
+
+    def _stub(name: str, result, response_class=None):
+        fake_context._brains[name] = FakeBrain(result, response_class)
+
+    return _stub
 
 
 def test_to_text_with_model_and_list():

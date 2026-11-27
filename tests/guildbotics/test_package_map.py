@@ -18,6 +18,7 @@ import tomllib
 from pathlib import Path
 
 import grimp
+import pytest
 import yaml
 
 _PYPROJECT = Path(__file__).resolve().parents[2] / "pyproject.toml"
@@ -34,7 +35,7 @@ _BRAIN_MAPPING = _TEMPLATES / "intelligences" / "brain_mapping.yml"
 #: adapter, every module of the machinery, every bundled Python command the way
 #: the machinery loads one, and every response class a bundled prompt names.
 _PROBE = """
-import importlib, json, pkgutil, sys
+import asyncio, importlib, json, pkgutil, sys
 from pathlib import Path
 import guildbotics.commands as package
 from guildbotics.commands.python_command import _load_python_module
@@ -60,14 +61,9 @@ for path in sorted((templates / "commands").rglob("*.md")):
         ClassResolver(config.get("schema", ""), None).get_model_class(
             config["response_class"]
         )
-print(json.dumps(sorted(sys.modules)))
-"""
+loaded = sorted(sys.modules)
 
-#: Drives a completion-managed invocation against a stub ledger: the first
-#: attempt ends without completion, the second completes. The ledger is the
-#: only way to the run record, so no host module is needed at run time either.
-_TURN_PROBE = """
-import asyncio, json, sys
+# The stub ledger sees a first attempt with no completion and a second that completes.
 from guildbotics.commands.runner import CommandRunner
 
 calls = []
@@ -102,14 +98,15 @@ result = asyncio.run(
         agent_execution_context={"max_completion_attempts": 2, "event_id": "E1"},
     )
 )
-print(json.dumps({"result": result, "calls": calls, "loaded": sorted(sys.modules)}))
+print(json.dumps({"loaded": loaded, "turn": {"result": result, "calls": calls, "loaded": sorted(sys.modules)}}))
 """
 
 
-def _run(probe: str) -> object:
+@pytest.fixture(scope="module")
+def probe() -> dict:
     return json.loads(
         subprocess.run(
-            [sys.executable, "-c", probe],
+            [sys.executable, "-c", _PROBE],
             capture_output=True,
             check=True,
             text=True,
@@ -128,10 +125,8 @@ def _host_only(loaded: list[str]) -> list[str]:
     ] + sorted({name.split(".")[0] for name in loaded} & _HOST_ONLY)
 
 
-def test_what_runs_in_the_environment_loads_nothing_host_only() -> None:
-    loaded = _run(_PROBE)
-
-    assert isinstance(loaded, list)
+def test_guest_imports_and_completion_managed_turn(probe) -> None:
+    loaded = probe["loaded"]
     assert {
         "guildbotics.commands.runner",
         "guildbotics.guest.cli_agent",
@@ -139,6 +134,18 @@ def test_what_runs_in_the_environment_loads_nothing_host_only() -> None:
         "guildbotics.guest.codex",
     } <= set(loaded)
     assert _host_only(loaded) == []
+
+    outcome = probe["turn"]
+    assert outcome["result"] == "response"
+    assert outcome["calls"] == [
+        "evidence",
+        "require_completion",
+        "record_completion_missing",
+        "evidence",
+        "require_completion",
+        "record_completed",
+    ]
+    assert _host_only(outcome["loaded"]) == []
 
 
 def test_the_bundled_python_commands_import_nothing_host_only() -> None:
@@ -156,26 +163,6 @@ def test_the_bundled_python_commands_import_nothing_host_only() -> None:
 
     assert "guildbotics.commands.errors.CommandError" in imported
     assert _host_only(imported) == []
-
-
-def test_a_completion_managed_turn_reaches_the_run_record_only_through_the_ledger() -> (
-    None
-):
-    outcome = _run(_TURN_PROBE)
-
-    assert isinstance(outcome, dict)
-    assert outcome["result"] == "response"
-    assert outcome["calls"] == [
-        "evidence",
-        "require_completion",
-        "record_completion_missing",
-        "evidence",
-        "require_completion",
-        "record_completed",
-    ]
-    assert [
-        name for name in outcome["loaded"] if name.startswith("guildbotics.drivers")
-    ] == []
 
 
 def _unreached_shared_packages(graph: grimp.ImportGraph) -> list[str]:
@@ -225,20 +212,20 @@ def _is_package(name: str) -> bool:
     return spec is not None and spec.submodule_search_locations is not None
 
 
-def test_every_shared_package_is_used_inside_the_environment() -> None:
-    """A package the guest never reaches is the host's, misfiled as shared."""
-    graph = grimp.build_graph("guildbotics")
+@pytest.fixture(scope="module")
+def graph() -> grimp.ImportGraph:
+    return grimp.build_graph("guildbotics")
 
+
+def test_every_shared_package_is_used_inside_the_environment(graph) -> None:
+    """The guest reaches all shared packages and reports an unreachable one."""
     assert _unreached_shared_packages(graph) == []
 
-
-def test_a_shared_package_the_guest_does_not_reach_is_reported() -> None:
-    graph = grimp.build_graph("guildbotics")
+    # Remove incoming edges to a package to exercise the failing case.
     loader = {name for name in graph.modules if name.startswith("guildbotics.loader")}
     for module in loader:
         for importer in graph.find_modules_that_directly_import(module) - loader:
             graph.remove_import(importer=importer, imported=module)
-
     assert _unreached_shared_packages(graph) == [
         "guildbotics.loader",
         "guildbotics.loader.yaml",

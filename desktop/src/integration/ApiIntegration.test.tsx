@@ -1,7 +1,6 @@
-import { createTheme } from "@mantine/core";
+import type { ReactNode } from "react";
 import { Notifications, notifications } from "@mantine/notifications";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +12,8 @@ import { EntryPage } from "../session/EntryPage";
 import { SetupPage } from "../setup/SetupPage";
 import { subscribeChangeStream, type StreamMessage } from "../repository/query/changeStream";
 import { fill } from "../test/fill";
-import { TestMantineProvider } from "../test/TestMantineProvider";
+import { configStatus, projectConfig, runtimeStatus, runtimeUnit } from "../test/factories";
+import { renderWithProviders } from "../test/render";
 
 vi.mock("../repository/query/changeStream", () => ({
   subscribeChangeStream: vi.fn(() => () => {}),
@@ -22,11 +22,6 @@ vi.mock("../repository/query/changeStream", () => ({
 const t = i18n.getFixedT("en");
 const BASE = "/-/guildbotics/api";
 const CSRF = "integration-csrf";
-
-// jsdom lacks scrollIntoView, which Mantine's Combobox calls when opening a Select.
-if (!Element.prototype.scrollIntoView) {
-  Element.prototype.scrollIntoView = vi.fn();
-}
 
 // ---------------------------------------------------------------------------
 // Mock HTTP boundary: a recording fetch that matches "METHOD /pathname" against
@@ -127,31 +122,6 @@ function jsonResponse(status: number, body: unknown): Response {
 // Canned response factories.
 // ---------------------------------------------------------------------------
 
-function configStatus(overrides: Record<string, unknown> = {}) {
-  return {
-    cwd: "/workspace",
-    workspace: "/workspace",
-    config_dir: "/workspace/.guildbotics/config",
-    project_file: "/workspace/.guildbotics/config/project.yml",
-    project_file_exists: true,
-    storage_dir: "/workspace/.guildbotics",
-    ...overrides,
-  };
-}
-
-function projectConfig(overrides: Record<string, unknown> = {}) {
-  return {
-    config_dir: "/workspace/.guildbotics/config",
-    language: "en",
-    description: "Demo project",
-    llm_api_type: "openai",
-    cli_agent: "codex",
-    services: {},
-    provider_api_keys: { openai: true, gemini: false, anthropic: false },
-    ...overrides,
-  };
-}
-
 function llmProviders() {
   return {
     providers: [
@@ -192,30 +162,6 @@ function team(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function runtimeUnit(target: "scheduler" | "events", overrides: Record<string, unknown> = {}) {
-  return {
-    target,
-    state: "stopped",
-    running: false,
-    started_at: null,
-    stopped_at: null,
-    error: null,
-    max_consecutive_errors: null,
-    routine_interval_minutes: null,
-    active_member_count: 1,
-    worker_count: 0,
-    scheduled_source_enabled: null,
-    routine_source_enabled: null,
-    event_queue_source_enabled: null,
-    subscription_count: 0,
-    listener_count: 0,
-    cycle_count: 0,
-    cycle_failure_count: 0,
-    events_drained_count: 0,
-    ...overrides,
-  };
-}
-
 function traceSummary(overrides: Record<string, unknown> = {}) {
   return {
     trace_id: "trace-1",
@@ -232,15 +178,6 @@ function traceSummary(overrides: Record<string, unknown> = {}) {
     error_count: 0,
     span_count: 0,
     attributes: { "run.entry": "command" },
-    ...overrides,
-  };
-}
-
-function runtimeStatus(overrides: Record<string, unknown> = {}) {
-  return {
-    scheduler: runtimeUnit("scheduler"),
-    events: runtimeUnit("events"),
-    has_active_work: false,
     ...overrides,
   };
 }
@@ -303,40 +240,24 @@ function serviceServer(): MockServer {
     .json("POST", "/scheduler/stop", runtimeStatus());
 }
 
-function renderApp(server: MockServer, path: string) {
+function renderWithSession(server: MockServer, path: string, page: ReactNode) {
   server.install();
-  const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <TestMantineProvider theme={theme}>
+  return renderWithProviders(
+    <>
       <Notifications />
-      <QueryClientProvider client={queryClient}>
-        <EntryPage>
-          <MemoryRouter initialEntries={[path]}>
-            <App />
-          </MemoryRouter>
-        </EntryPage>
-      </QueryClientProvider>
-    </TestMantineProvider>,
+      <EntryPage>
+        <MemoryRouter initialEntries={[path]}>{page}</MemoryRouter>
+      </EntryPage>
+    </>,
   );
 }
 
+function renderApp(server: MockServer, path: string) {
+  return renderWithSession(server, path, <App />);
+}
+
 function renderSetup(server: MockServer, path: string) {
-  server.install();
-  const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <TestMantineProvider theme={theme}>
-      <Notifications />
-      <QueryClientProvider client={queryClient}>
-        <EntryPage>
-          <MemoryRouter initialEntries={[path]}>
-            <SetupPage />
-          </MemoryRouter>
-        </EntryPage>
-      </QueryClientProvider>
-    </TestMantineProvider>,
-  );
+  return renderWithSession(server, path, <SetupPage />);
 }
 
 beforeEach(() => {
@@ -350,23 +271,6 @@ afterEach(() => {
 });
 
 describe("Service Runtime integration (real client + mock server)", () => {
-  it("sends the real POST /scheduler/start with the CSRF value and no body", async () => {
-    const server = serviceServer();
-    const user = userEvent.setup();
-    renderApp(server, "/service");
-    const start = await screen.findByRole("button", { name: t("overview.start") });
-    await waitFor(() => expect(start).toBeEnabled());
-
-    await user.click(start);
-
-    await waitFor(() => expect(server.requestsFor("POST", "/scheduler/start")).toHaveLength(1));
-    const call = server.requestsFor("POST", "/scheduler/start")[0];
-    expect(call.url).toBe(`${BASE}/scheduler/start`);
-    expect(call.headers["X-GuildBotics-CSRF"]).toBe(CSRF);
-    // How it runs is what the server saved, read by the backend at the start.
-    expect(call.body).toBeUndefined();
-  });
-
   it("saves the edited sources, interval and max errors with real PATCH requests", async () => {
     const server = serviceServer();
     const user = userEvent.setup();

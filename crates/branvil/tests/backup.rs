@@ -54,15 +54,13 @@ fn ls_remote(server: &Server, dir: &Path, token: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_backup_restores_into_another_directory_with_everything_linked() {
-    let mut w = World::new().await;
-    let gh = common::github::FakeGitHub::start(&w.dir.path().join("github")).await;
+    let gh = common::github::FakeGitHub::start().await;
+    let mut w = World::with_config(|data| gh.configure(data)).await;
     gh.repository("octo/demo", &w.work);
     let secret = "gh-token-7d1f";
     gh.account(secret, "alice-gh");
     let key = common::github::AppKey::generate();
     gh.app("4242", "777", "octo-app", &key);
-    gh.configure(&w.server.data);
-    w.restart(&[]);
     let s = &w.server;
 
     // Data of every kind: a ticket on the board, a pull request that closes
@@ -159,6 +157,18 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         .await;
     assert_eq!(st, StatusCode::CREATED, "{v}");
     let kept = v["token"].as_str().unwrap().to_string();
+    // A release of main, a record the previous schema version already kept.
+    let main = git_as_ok(
+        &w.work,
+        "aiko",
+        &w.aiko,
+        &["ls-remote", "origin", "refs/heads/main"],
+    );
+    let main = main.split_whitespace().next().unwrap().to_owned();
+    let releases = format!("{}/releases", w.repo_path());
+    let (st, made) = s.post(&releases, &w.owner, json!({"sha": main})).await;
+    assert_eq!(st, StatusCode::OK, "{made}");
+    let release = made["releases"][0].clone();
 
     // Only the owner backs up; the target must be new and absolute.
     let out_dir = tempfile::tempdir().unwrap();
@@ -281,8 +291,7 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     );
     assert!(text(&out).contains(&serves), "{}", text(&out));
 
-    // A backup of the previous schema version, with its configuration file
-    // under the previous name.
+    // A backup of the previous schema version.
     let previous = out_dir.path().join("previous");
     copy_backup(&backup, &previous, &manifest);
     let db = previous.join("branvil.redb");
@@ -292,9 +301,6 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     old["schema_version"] = json!(PREVIOUS_SCHEMA_VERSION);
     // Refresh the checksum of the database rewritten by the fixture.
     for f in old["files"].as_array_mut().unwrap() {
-        if f["path"] == "config.toml" {
-            f["path"] = json!(PREVIOUS_CONFIG_FILE);
-        }
         if f["path"] == "branvil.redb" {
             let bytes = std::fs::read(previous.join(f["path"].as_str().unwrap())).unwrap();
             f["bytes"] = json!(bytes.len());
@@ -328,22 +334,20 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
         text(&out)
     );
     assert!(
-        text(&out).contains("from schema version 46 to 47"),
+        text(&out).contains("from schema version 48 to 49"),
         "{}",
         text(&out)
     );
     assert!(
-        text(&out).contains("copied branvil.toml to config.toml"),
+        text(&out).contains("added review_rounds=3 to repositories"),
         "{}",
         text(&out)
     );
     let restored_data = target.path().join("data");
-    for name in ["config.toml", PREVIOUS_CONFIG_FILE] {
-        assert_eq!(
-            std::fs::read_to_string(restored_data.join(name)).unwrap(),
-            settings
-        );
-    }
+    assert_eq!(
+        std::fs::read_to_string(restored_data.join("config.toml")).unwrap(),
+        settings
+    );
     // Upgraded on the way: it has to pass its check before it serves.
     let checks_first = format!(
         "restored into {}; `guildbotics server hub-data check` has to pass before the server opens {}",
@@ -424,6 +428,10 @@ async fn a_backup_restores_into_another_directory_with_everything_linked() {
     let members = r.ok("/members?limit=100", &owner).await;
     assert!(members.to_string().contains("alice-gh"), "{members}");
     assert_eq!(r.ok(&w.repo_path(), &owner).await["auto_land"], false);
+    // The release recorded before the upgrade is kept, and the repository
+    // has the review rounds the upgrade gave it.
+    assert_eq!(r.ok(&releases, &owner).await["releases"], json!([release]));
+    assert_eq!(r.ok(&w.repo_path(), &owner).await["review_rounds"], 3);
     let (st, v) = r
         .post(
             &format!("/repos/{}/upstream/refresh", encode(REPO)),

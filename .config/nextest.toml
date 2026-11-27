@@ -1,5 +1,8 @@
 # cargo-nextest settings for every `cargo nextest run` of the workspace.
 
+[test-groups.cli-tmp]
+max-threads = 2
+
 # After #352, CI's longest test took 56.843s. Allow roughly twice that
 # duration for runner variation, but fail a stuck test before the job timeout.
 [profile.default]
@@ -13,6 +16,18 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 [[profile.default.overrides]]
 filter = "package(guildbotics) & binary(main) & test(=hub_server::a_guildbotics_process_takes_its_source_tree_before_it_starts)"
 threads-required = "num-test-threads"
+
+# The install and isolation tests copy the CLI into /tmp. The image archive
+# test has also failed when it overlapped with those copies in CI (#447).
+[[profile.default.overrides]]
+filter = '''
+package(=guildbotics) & binary(=main) & (
+    test(/^install_(cli|isolation)::/) |
+    test(=client_only::relocated_client_installs_embedded_skills_and_has_only_client_commands) |
+    test(=image_cli::loads_and_reloads_real_archives_without_booting_a_vm)
+)
+'''
+test-group = "cli-tmp"
 
 # Retain per-test CI durations so contract splits can be compared after a run.
 [profile.ci.junit]

@@ -4,6 +4,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { fakeApi, json, ME, renderApp, SESSION } from "../test/fakeApi";
+import { fill } from "../../test/fill";
 import { choose } from "../test/mantine";
 
 const page = (items: unknown[]) => json(200, { items, next_cursor: null });
@@ -24,6 +25,7 @@ const REPO = {
   required_approvals: 1,
   auto_land: false,
   hold_while_failing: false,
+  review_rounds: 3,
   ci_network: false,
   responder: { member: "aiko", chosen: false, automatic: "aiko" },
   labels: ["bug"],
@@ -56,7 +58,7 @@ describe("settings", () => {
           ME,
           { name: "aiko", kind: "agent", accounts: [], reviewers: [] },
           { name: "ken", kind: "agent", accounts: [], reviewers: [] },
-          { name: "runner", kind: "runner", accounts: [], reviewers: [] },
+          { name: "runner", display_name: "runner", kind: "runner", accounts: [], reviewers: [] },
         ]),
         "PATCH /api/v1/repos/acme/demo": (req) => {
           const body = req.body as { responder: string | null; revision: number };
@@ -132,12 +134,13 @@ describe("settings", () => {
     },
   );
 
-  it("lists the owner, agents, and runners and creates agents or runners", async () => {
+  it("lists the owner and agents, not runners, and creates agents", async () => {
     const aiko = { name: "aiko", display_name: "Aiko", kind: "agent", accounts: [], reviewers: [] };
+    const ci = { name: "ci", display_name: "CI", kind: "runner", accounts: [], reviewers: [] };
     const fake = fakeApi({
       ...SHELL,
-      "GET /api/v1/members": page([ME, aiko]),
-      "POST /api/v1/members": json(201, { name: "rin", display_name: "rin", kind: "runner" }),
+      "GET /api/v1/members": page([ME, aiko, ci]),
+      "POST /api/v1/members": json(201, { name: "rin", display_name: "rin", kind: "agent" }),
     });
     const user = userEvent.setup();
     renderApp("/settings/repositories/members");
@@ -150,20 +153,15 @@ describe("settings", () => {
     ).toEqual([expect.stringContaining("Owner (owner)"), expect.stringContaining("Aiko (aiko)")]);
     await user.click(screen.getByRole("button", { name: "Create member" }));
     const form = await screen.findByRole("form", { name: "Create member" });
-    await user.type(within(form).getByRole("textbox", { name: "Name" }), "rin");
-    // Only agents and runners can be created: there is one owner.
-    await user.click(within(form).getByRole("combobox", { name: "Kind" }));
-    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual([
-      "agent",
-      "runner",
-    ]);
-    await user.click(screen.getByRole("option", { name: "runner" }));
+    await fill(user, within(form).getByRole("textbox", { name: "Name" }), "rin");
+    // Only agents are created here: there is one owner, and runners join from their machines.
+    expect(within(form).queryByRole("combobox", { name: "Kind" })).not.toBeInTheDocument();
     await user.click(within(form).getByRole("button", { name: "Add" }));
     await waitFor(() => expect(fake.calls("POST", "/api/v1/members")).toHaveLength(1));
     expect(fake.calls("POST", "/api/v1/members")[0]?.body).toEqual({
       name: "rin",
       display_name: "",
-      kind: "runner",
+      kind: "agent",
     });
   });
 
@@ -179,7 +177,7 @@ describe("settings", () => {
     renderApp("/settings/repositories");
     await choose(user, "Workspace", "+ New workspace…");
     const dialog = await screen.findByRole("dialog", { name: "New workspace" });
-    await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "beta");
+    await fill(user, within(dialog).getByRole("textbox", { name: "Name" }), "beta");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(fake.calls("POST", "/api/v1/workspaces")).toHaveLength(1));
     expect(fake.calls("POST", "/api/v1/workspaces")[0]?.body).toEqual({ name: "beta" });
@@ -196,7 +194,7 @@ describe("settings", () => {
     renderApp("/settings/repositories");
     await user.click(await screen.findByRole("button", { name: "Create repository" }));
     const form = await screen.findByRole("form", { name: "Create repository" });
-    await user.type(within(form).getByRole("textbox", { name: "Name" }), "demo");
+    await fill(user, within(form).getByRole("textbox", { name: "Name" }), "demo");
     await addPills(user, "Ticket labels", ["bug", "ui"]);
     await user.click(within(form).getByRole("button", { name: "Add" }));
     await waitFor(() => expect(fake.calls("POST", "/api/v1/repos")).toHaveLength(1));
@@ -279,6 +277,7 @@ describe("settings", () => {
       required_approvals: 2,
       auto_land: false,
       hold_while_failing: false,
+      review_rounds: 3,
       ci_network: true,
       responder: null,
       labels: ["bug", "ui"],
@@ -422,7 +421,7 @@ describe("settings", () => {
     expect(await screen.findByText("Not set")).toBeInTheDocument();
     const form = screen.getByRole("form", { name: "Webhook URL" });
     expect(within(form).getByLabelText("Webhook URL")).not.toHaveAttribute("placeholder");
-    await user.type(within(form).getByLabelText("Webhook URL"), secret);
+    await fill(user, within(form).getByLabelText("Webhook URL"), secret);
     await user.click(within(form).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(fake.calls("PUT", "/api/v1/admin/webhook")).toHaveLength(1));
     expect(fake.calls("PUT", "/api/v1/admin/webhook")[0]?.body).toEqual({ url: secret });
@@ -470,6 +469,41 @@ describe("settings", () => {
     });
   });
 
+  it.each([
+    { lang: "en", help: /a new push no longer starts its re-review/ },
+    { lang: "ja", help: /新しい push で再レビューを始めず/ },
+  ] as const)(
+    "saves the automatic re-review limit from the CI tab ($lang)",
+    async ({ lang, help }) => {
+      const words = lang === "ja" ? ja : en;
+      const fake = fakeApi({
+        ...SHELL,
+        "GET /api/v1/repos": page([REPO]),
+        "GET /api/v1/members": page([]),
+        "PATCH /api/v1/repos/acme/demo": json(200, { ...REPO, review_rounds: 5, revision: 5 }),
+      });
+      const user = userEvent.setup();
+      renderApp("/settings/repositories", lang);
+      await user.click(await screen.findByRole("button", { name: words["common.edit"] }));
+      await user.click(screen.getByRole("tab", { name: "CI" }));
+      const ci = screen.getByRole("tabpanel", { name: "CI" });
+      expect(within(ci).getByText(help)).toBeInTheDocument();
+      const rounds = within(ci).getByRole("textbox", { name: words["settings.reviewRounds"] });
+      expect(rounds).toHaveValue("3");
+      await user.clear(rounds);
+      const save = within(ci).getByRole("button", { name: words["common.save"] });
+      // An empty limit cannot be saved.
+      expect(save).toBeDisabled();
+      await user.type(rounds, "5");
+      await user.click(save);
+      await waitFor(() => expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")).toHaveLength(1));
+      expect(fake.calls("PATCH", "/api/v1/repos/acme/demo")[0]?.body).toMatchObject({
+        revision: 4,
+        review_rounds: 5,
+      });
+    },
+  );
+
   it("sets an agent's code host account with a token that is sent once and never shown", async () => {
     const aiko = { name: "aiko", display_name: "Aiko", kind: "agent", accounts: [], reviewers: [] };
     const withAccount = {
@@ -489,7 +523,7 @@ describe("settings", () => {
     const row = (await screen.findByText("Aiko (aiko)")).closest("[role=listitem]") as HTMLElement;
     await user.click(within(row).getByRole("button", { name: "Edit" }));
     await user.click(within(row).getByRole("tab", { name: "Accounts on code hosts" }));
-    await user.type(within(row).getByLabelText("GitHub token"), "gh-secret");
+    await fill(user, within(row).getByLabelText("GitHub token"), "gh-secret");
     await user.click(within(row).getByRole("button", { name: "Save account" }));
     await waitFor(() =>
       expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")).toHaveLength(1),
@@ -610,10 +644,8 @@ describe("settings", () => {
     );
     expect(await within(row).findByText("No one is asked yet.")).toBeInTheDocument();
 
-    // A runner opens no pull requests: it has no reviewers.
-    const runner = screen.getByText("CI (ci)").closest("[role=listitem]") as HTMLElement;
-    await user.click(within(runner).getByRole("button", { name: "Edit" }));
-    expect(within(runner).queryByRole("tab", { name: "Reviewers" })).not.toBeInTheDocument();
+    // A runner is not a member of this list: it is on Settings → CI.
+    expect(screen.queryByText("CI (ci)")).not.toBeInTheDocument();
   });
 
   it("switches an account between a token and a GitHub App and sends each form's credential", async () => {
@@ -657,8 +689,8 @@ describe("settings", () => {
     expect(within(row).queryByLabelText("Replace the GitHub token")).not.toBeInTheDocument();
     expect(within(row).getByLabelText("Private key (PEM)")).not.toHaveAttribute("placeholder");
     const save = within(row).getByRole("button", { name: "Save account" });
-    await user.type(within(row).getByLabelText("App ID"), " 4242 ");
-    await user.type(within(row).getByLabelText("Installation ID"), "777");
+    await fill(user, within(row).getByLabelText("App ID"), " 4242 ");
+    await fill(user, within(row).getByLabelText("Installation ID"), "777");
     expect(save).toBeDisabled();
     // The key comes from a chosen file (or is pasted).
     const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n";
@@ -688,7 +720,7 @@ describe("settings", () => {
     expect(within(row).getByLabelText("Replace the GitHub token")).not.toHaveAttribute(
       "placeholder",
     );
-    await user.type(within(row).getByLabelText("Replace the GitHub token"), "gh-new");
+    await fill(user, within(row).getByLabelText("Replace the GitHub token"), "gh-new");
     await user.click(within(row).getByRole("button", { name: "Save account" }));
     await waitFor(() =>
       expect(fake.calls("PUT", "/api/v1/members/aiko/accounts/github")).toHaveLength(2),
@@ -747,7 +779,7 @@ describe("settings", () => {
     await user.click(screen.getByRole("tab", { name: "Upstream" }));
     expect(screen.getByText("No upstream: pull requests are merged here.")).toBeInTheDocument();
     const form = screen.getByRole("form", { name: "Set upstream" });
-    await user.type(within(form).getByRole("textbox", { name: "Repository there" }), "octo/demo");
+    await fill(user, within(form).getByRole("textbox", { name: "Repository there" }), "octo/demo");
     await user.click(within(form).getByRole("button", { name: "Set upstream" }));
     expect(
       await screen.findByText(

@@ -1,9 +1,7 @@
-import { createTheme } from "@mantine/core";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fill } from "./test/fill";
 
 import { App } from "./App";
 import {
@@ -20,18 +18,15 @@ import {
   runScenarioDiagnostics,
   updateTranscriptSettings,
   updateRuntimeDebug,
-  type ConfigStatus,
   type DiagnosticCheck,
   type MemoryEvent,
-  type ProjectConfig,
-  type RuntimeStatus,
-  type RuntimeUnitStatus,
   type ScenarioDiagnosticsResponse,
   type TranscriptSettingsStatus,
 } from "./api/client";
 import i18n from "./i18n";
 import { makeTraceRecord } from "./test/factories";
-import { TestMantineProvider } from "./test/TestMantineProvider";
+import { configStatus, projectConfig, runtimeStatus } from "./test/factories";
+import { renderWithProviders } from "./test/render";
 import "./i18n";
 
 const t = i18n.getFixedT("en");
@@ -171,7 +166,7 @@ describe("Diagnostics settings tab", () => {
     expect(screen.getByText("256 B / 8.0 MiB")).toBeInTheDocument();
     const retention = await screen.findByLabelText(t("diagnostics.transcripts.retentionDays"));
     await user.clear(retention);
-    await user.type(retention, "14");
+    await fill(user, retention, "14");
     await user.tab();
 
     await waitFor(() => expect(updateTranscriptSettings).toHaveBeenCalled());
@@ -259,7 +254,7 @@ describe("Diagnostics memory tab", () => {
       });
     });
 
-    await user.type(screen.getByLabelText(t("diagnostics.memory.search")), "retry");
+    await fill(user, screen.getByLabelText(t("diagnostics.memory.search")), "retry");
     await user.keyboard("{Enter}");
 
     await waitFor(() => {
@@ -1055,43 +1050,7 @@ async function openTab(user: ReturnType<typeof userEvent.setup>, name: string) {
 }
 
 function renderApp(initialPath = "/diagnostics") {
-  const theme = createTheme({ primaryColor: "dark", defaultRadius: "md" });
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <TestMantineProvider theme={theme}>
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[initialPath]}>
-          <App />
-        </MemoryRouter>
-      </QueryClientProvider>
-    </TestMantineProvider>,
-  );
-}
-
-function configStatus(overrides: Partial<ConfigStatus> = {}): ConfigStatus {
-  return {
-    cwd: "/workspace",
-    workspace: "/workspace",
-    config_dir: "/workspace/.guildbotics/config",
-    project_file: "/workspace/.guildbotics/config/project.yml",
-    project_file_exists: true,
-    storage_dir: "/workspace/.guildbotics",
-    ...overrides,
-  };
-}
-
-function projectConfig(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
-  return {
-    config_dir: "/workspace/.guildbotics/config",
-    revisions: {},
-    language: "en",
-    description: "Demo project",
-    llm_api_type: "openai",
-    cli_agent: "codex",
-    services: {},
-    provider_api_keys: { openai: true, gemini: false, anthropic: false },
-    ...overrides,
-  };
+  return renderWithProviders(<App />, { router: "memory", initialPath });
 }
 
 function transcriptSettings(
@@ -1160,44 +1119,6 @@ function diagnosticCheck(overrides: Partial<DiagnosticCheck> = {}): DiagnosticCh
   };
 }
 
-function runtimeStatus(): RuntimeStatus {
-  return {
-    scheduler: runtimeUnit("scheduler"),
-    events: runtimeUnit("events"),
-    has_active_work: false,
-  };
-}
-
-function runtimeUnit(target: "scheduler" | "events"): RuntimeUnitStatus {
-  return {
-    target,
-    state: "stopped",
-    running: false,
-    started_at: null,
-    stopped_at: null,
-    error: null,
-    max_consecutive_errors: null,
-    routine_interval_minutes: null,
-    active_member_count: 1,
-    worker_count: 0,
-    scheduled_source_enabled: null,
-    routine_source_enabled: null,
-    event_queue_source_enabled: null,
-    subscription_count: 0,
-    listener_count: 0,
-    cycle_count: 0,
-    cycle_failure_count: 0,
-    events_drained_count: 0,
-    events_auth_failed_count: 0,
-    events_auth_failed_persons: [],
-    events_missing_credential_count: 0,
-    events_missing_credential_persons: [],
-    events_chat_provider: "",
-    member_routines: [],
-    member_pull_requests: {},
-  };
-}
-
 describe("Diagnostics troubleshooting assistant", () => {
   const failedTrace = {
     trace_id: "trace-1",
@@ -1244,7 +1165,8 @@ describe("Diagnostics troubleshooting assistant", () => {
     const user = userEvent.setup();
     const panel = await openAssistant(user);
 
-    await user.type(
+    await fill(
+      user,
       within(panel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
       "why did this fail?",
     );
@@ -1270,7 +1192,8 @@ describe("Diagnostics troubleshooting assistant", () => {
     const user = userEvent.setup();
     const panel = await openAssistant(user);
 
-    await user.type(
+    await fill(
+      user,
       within(panel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
       "why?",
     );
@@ -1326,7 +1249,8 @@ describe("Diagnostics troubleshooting assistant", () => {
     const nextPanel = await screen.findByRole("region", {
       name: t("diagnostics.troubleshooting.title"),
     });
-    await user.type(
+    await fill(
+      user,
       within(nextPanel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
       "why did this fail?",
     );
@@ -1347,7 +1271,8 @@ describe("Diagnostics troubleshooting assistant", () => {
     const panel = await openAssistant(user);
     scrollIntoView.mockClear();
 
-    await user.type(
+    await fill(
+      user,
       within(panel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
       "why?",
     );
@@ -1404,7 +1329,8 @@ describe("Diagnostics troubleshooting assistant", () => {
     const user = userEvent.setup();
     const panel = await openAssistant(user);
 
-    await user.type(
+    await fill(
+      user,
       within(panel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
       "why?",
     );
@@ -1441,7 +1367,8 @@ describe("Diagnostics troubleshooting assistant", () => {
     const panel = await screen.findByRole("region", {
       name: t("diagnostics.troubleshooting.title"),
     });
-    await user.type(
+    await fill(
+      user,
       within(panel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
       "what is this?",
     );
@@ -1467,7 +1394,8 @@ describe("Diagnostics troubleshooting assistant", () => {
     const user = userEvent.setup();
     const panel = await openAssistant(user);
 
-    await user.type(
+    await fill(
+      user,
       within(panel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
       "why?",
     );
@@ -1486,7 +1414,8 @@ describe("Diagnostics troubleshooting assistant", () => {
     const user = userEvent.setup();
     const panel = await openAssistant(user);
 
-    await user.type(
+    await fill(
+      user,
       within(panel).getByLabelText(t("diagnostics.troubleshooting.inputLabel")),
       "why?",
     );

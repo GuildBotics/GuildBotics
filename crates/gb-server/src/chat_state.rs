@@ -4,7 +4,7 @@ use gb_integrations::chat::{ChatEvent, ChatMessage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -295,16 +295,52 @@ impl Store {
         Ok(messages)
     }
     pub fn cache(&self, service: &str, person: &str, message: &ChatMessage) -> anyhow::Result<()> {
-        let channel = &message.channel_id;
-        let thread = &message.thread_id;
+        self.cache_all(service, person, &[message])
+    }
+
+    pub fn cache_all(
+        &self,
+        service: &str,
+        person: &str,
+        incoming: &[&ChatMessage],
+    ) -> anyhow::Result<()> {
+        let Some(first) = incoming.first() else {
+            return Ok(());
+        };
+        let channel = &first.channel_id;
+        let thread = &first.thread_id;
+        anyhow::ensure!(
+            incoming
+                .iter()
+                .all(|m| &m.channel_id == channel && &m.thread_id == thread),
+            "mixed chat threads"
+        );
         let path = self.thread_file(service, person, channel, thread, true)?;
         let shared = self.thread_file(service, person, channel, thread, false)?;
         self.writes.transaction(|writer| {
-            let mut messages=self.messages(service,person,channel,thread)?;
-            messages.retain(|m|m.message_id!=message.message_id);messages.push(message.clone());messages.sort_by_key(ChatMessage::position);
-            let excess=messages.len().saturating_sub(self.limit.max(1));messages.drain(..excess);
-            writer.write_json(&path,&json!({"schema_version":gb_base::files::SHARED_RECORD_SCHEMA_VERSION,"messages":messages}))?;
-            if read(&shared)?.as_object().is_some_and(|v|v.is_empty()) {writer.write_json(&shared,&json!({"schema_version":gb_base::files::SHARED_RECORD_SCHEMA_VERSION,"channel_id":channel,"thread_id":thread}))?;}
+            let cached = self.messages(service, person, channel, thread)?;
+            let mut positions = BTreeMap::new();
+            let mut messages = BTreeMap::new();
+            for message in cached.iter().chain(incoming.iter().copied()) {
+                let position = message.position();
+                if let Some(old) = positions.insert(&message.message_id, position.clone()) {
+                    messages.remove(&old);
+                }
+                messages.insert(position, message);
+                if messages.len() > self.limit.max(1) {
+                    let (_, removed) = messages.pop_first().unwrap();
+                    positions.remove(&removed.message_id);
+                }
+            }
+            let messages = messages.into_values().collect::<Vec<_>>();
+            let schema = gb_base::files::SHARED_RECORD_SCHEMA_VERSION;
+            writer.write_json(&path, &json!({"schema_version":schema,"messages":messages}))?;
+            if read(&shared)?.as_object().is_some_and(|v| v.is_empty()) {
+                writer.write_json(
+                    &shared,
+                    &json!({"schema_version":schema,"channel_id":channel,"thread_id":thread}),
+                )?;
+            }
             Ok(())
         })
     }

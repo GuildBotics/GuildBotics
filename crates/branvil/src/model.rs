@@ -121,6 +121,10 @@ pub struct Repo {
     /// Its pull requests land by themselves once they can (`autoland`).
     pub auto_land: bool,
     pub hold_while_failing: bool,
+    /// The heads a member reviews before its automatic re-review of a pull
+    /// request stops and the pull request becomes a draft
+    /// (`agent::pr_patrol`; `REVIEW_ROUNDS`).
+    pub review_rounds: u32,
     pub ci_network: bool,
     pub responder: Option<String>,
     /// The labels its tickets may carry.
@@ -178,6 +182,9 @@ impl Repo {
         self.protected().iter().any(|b| b == branch)
     }
 }
+
+/// What a repository's `review_rounds` may be; new repositories take 3.
+pub const REVIEW_ROUNDS: std::ops::RangeInclusive<u32> = 1..=20;
 
 pub const LANES: [&str; 4] = ["new", "ready", "in_progress", "done"];
 
@@ -1002,6 +1009,7 @@ pub fn expected_index(r: &impl Rd) -> AppResult<Vec<IxEntry>> {
         }
     }
     let _: Vec<crate::ci::verify::Verification> = r.prefix_all(store::CI_VERIFICATIONS, &[])?;
+    crate::ci::release::check(r)?;
     out.extend(crate::ci::queue::expected_index(r)?);
     out.extend(crate::ci::narrow::expected_index(r)?);
     Ok(out)

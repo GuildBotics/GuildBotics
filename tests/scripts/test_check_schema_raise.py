@@ -1,11 +1,11 @@
 """Exercise the schema guard against real, disposable Git histories."""
 
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -82,6 +82,8 @@ def test_schema_steps(repo: Path, number: int, changed: bool, success: bool) -> 
     assert "25" in output and str(number) in output
     if not success:
         assert "still-unverified" in output and "single step" in output
+    point = f"::release-point::Branvil storage format 25 → {number}\n"
+    assert (point in result.stdout) is (success and number == 26)
 
 
 @pytest.mark.parametrize("verified", [None, ""])
@@ -109,6 +111,7 @@ def test_missing_version_fails(repo: Path, target: str) -> None:
     assert "exactly one SCHEMA_VERSION" in result.stderr
 
 
+@pytest.mark.repo_policy
 def test_repository_itself() -> None:
     result = run(ROOT, "HEAD")
     assert result.returncode == 0, result.stderr

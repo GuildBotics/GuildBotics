@@ -146,6 +146,8 @@ enum RunnerCommand {
     },
 }
 
+const DEFAULT_IDLE_WAIT: Duration = Duration::from_secs(2);
+
 /// What the runner process needs, resolved from flags, environment, and the
 /// optional configuration.
 pub struct Settings {
@@ -154,6 +156,7 @@ pub struct Settings {
     pub work_dir: PathBuf,
     pub msb_path: Option<PathBuf>,
     pub msb_home: PathBuf,
+    pub idle_wait: Duration,
     #[cfg(feature = "host")]
     pub vm_home: Option<PathBuf>,
 }
@@ -175,6 +178,7 @@ impl Settings {
                 .or(default_work_dir)
                 .unwrap_or_else(|| executor::runner_home().join("work")),
             msb_path: ci.microsandbox.msb_path.clone(),
+            idle_wait: DEFAULT_IDLE_WAIT,
             #[cfg(feature = "host")]
             vm_home: None,
             msb_home: ci
@@ -539,6 +543,7 @@ impl Api {
         conclusion: &str,
         details: Option<String>,
         info: ResultInfo,
+        release_points: Vec<String>,
     ) -> Result<(), ApiError> {
         let resp = self
             .http
@@ -547,7 +552,8 @@ impl Api {
             .json(
                 &serde_json::json!({"lease": c.lease, "conclusion": conclusion, "details": details,
                 "image_digest": info.image_digest, "peak_memory_mib": info.peak_memory_mib,
-                "reused_from": info.reused_from, "cache_key": info.cache_key}),
+                "reused_from": info.reused_from, "cache_key": info.cache_key,
+                "release_points": release_points}),
             )
             .send()
             .await
@@ -713,7 +719,7 @@ pub async fn run(settings: Settings) -> anyhow::Result<()> {
             settings.work_dir.display()
         );
     }
-    let runner = Runner::new(api, settings.work_dir.clone());
+    let runner = Runner::new(api, settings.work_dir.clone()).idle_wait(settings.idle_wait);
     tracing::info!(
         "runner {name} serving {} (work directory {})",
         settings.url,
@@ -739,6 +745,7 @@ pub struct Runner {
     pub work_dir: PathBuf,
     cache: Arc<workspace::Cache>,
     sync_detail: Mutex<Option<String>>,
+    idle_wait: Duration,
 }
 
 impl Runner {
@@ -746,9 +753,16 @@ impl Runner {
         Self {
             cache: Arc::new(workspace::Cache::new(work_dir.join("cache"))),
             sync_detail: Mutex::new(None),
+            idle_wait: DEFAULT_IDLE_WAIT,
             api,
             work_dir,
         }
+    }
+
+    /// Sets the delay between successful polls when no job was claimed.
+    pub fn idle_wait(mut self, delay: Duration) -> Self {
+        self.idle_wait = delay;
+        self
     }
 
     #[cfg(feature = "test-support")]
@@ -777,7 +791,7 @@ impl Runner {
         let mut backoff = 1;
         let mut version_changed = false;
         'claiming: loop {
-            let mut wait = Duration::from_secs(2);
+            let mut wait = self.idle_wait;
             let result = async {
                 let hub = self.api.health().await?;
                 version_changed = hub.version != gb_base::BUILD_VERSION;
@@ -1068,13 +1082,13 @@ impl Runner {
         let result = self
             .work(executor, health, c, log_tx, cancel_rx, &lost)
             .await;
-        let _ = uploader.await;
+        let points = uploader.await.unwrap_or_default();
         beat.abort();
         if lost.load(Ordering::SeqCst) {
             return Err(ApiError::Lost);
         }
         let (conclusion, details, info) = result;
-        self.api.finish(c, conclusion, details, info).await
+        self.api.finish(c, conclusion, details, info, points).await
     }
 
     /// Everything between the claim and the finish. Returns the conclusion,
@@ -1507,15 +1521,18 @@ async fn heartbeats(api: Api, c: Claim, cancel: watch::Sender<bool>, lost: Arc<A
     }
 }
 
-/// Sends the log in batches (at most every 500 ms or 64 KiB) until every
-/// sender is gone or the service says the log is full.
-async fn upload_log(api: Api, c: Claim, mut rx: mpsc::Receiver<Vec<u8>>) {
+/// Sends the job's output to its log in batches (at most every 500 ms or 64
+/// KiB) until the service says the log is full, and reads it to the end:
+/// returns the release points of the whole output.
+async fn upload_log(api: Api, c: Claim, mut rx: mpsc::Receiver<Vec<u8>>) -> Vec<String> {
     let mut buf: Vec<u8> = Vec::new();
     let mut full = false;
+    let mut points = crate::ci::queue::ReleasePoints::default();
     loop {
         let more = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await;
         let closed = matches!(more, Ok(None));
         if let Ok(Some(bytes)) = more {
+            points.read(&bytes);
             if !full {
                 buf.extend_from_slice(&bytes);
             }
@@ -1536,7 +1553,7 @@ async fn upload_log(api: Api, c: Claim, mut rx: mpsc::Receiver<Vec<u8>>) {
         }
         buf.clear();
         if closed {
-            return;
+            return points.finish();
         }
     }
 }

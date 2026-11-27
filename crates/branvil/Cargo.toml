@@ -29,6 +29,8 @@ aws-lc-rs = { version = "1.18.2", default-features = false, features = ["aws-lc-
 base64 = "0.23.1"
 bytes = "1.12.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde", "std"] }
+# The time zone of a pipeline's release schedule.
+chrono-tz = { version = "0.10", default-features = false }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 futures-util = "0.3.34"
 # The data directory's lock handed to the service's Git (`git::hold`).

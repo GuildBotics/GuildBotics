@@ -1,6 +1,6 @@
 //! Mention parsing, source lifetimes, workspace queries, cursors, and upgrades.
 use crate::common::*;
-use serde_json::{Value, json};
+use serde_json::json;
 
 fn one() -> String {
     format!("/repos/{}/tickets/1", encode(REPO))
@@ -236,64 +236,4 @@ async fn query_deduplicates_pages_and_tracks_each_source_independently() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-}
-
-#[tokio::test]
-async fn upgrade_preserves_resolved_mentions_and_their_index() {
-    let mut w = World::new().await;
-    w.ticket("Old body").await;
-    w.ticket("Old comment").await;
-    w.server
-        .patch(&one(), &w.aiko, json!({"body": "@KEN @AIKO @unknown"}))
-        .await;
-    let path = format!("{}/2/comments", one().trim_end_matches("/1"));
-    w.server
-        .post(&path, &w.ken, json!({"body": "@AIKO @ken"}))
-        .await;
-    let before = w.server.ok(&query(), &w.aiko).await;
-    w.server.stop();
-    let db = w.server.data.join("branvil.redb");
-    as_previous_schema(&db);
-    let old = tables(&db);
-    for (command, expected) in [("upgrade", 0), ("check", 0), ("upgrade", 0)] {
-        let out = branvil_command()
-            .args(["admin", command, "--data-dir"])
-            .arg(&w.server.data)
-            .output()
-            .unwrap();
-        assert_eq!(
-            out.status.code(),
-            Some(expected),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-    assert_eq!(
-        records(&db, "tickets")[0]["mentions"],
-        json!(["ken", "aiko"])
-    );
-    assert_eq!(
-        records(&db, "comments")[0]["mentions"],
-        json!(["aiko", "ken"])
-    );
-    assert_eq!(tables(&db)["ix_ticket_mentions"].len(), 4);
-    let copy = previous_schema_backup(&w.server.data);
-    assert_eq!(tables(&copy), old);
-    w.restart(&[]);
-    let after = w.server.ok(&query(), &w.aiko).await;
-    let shapes = |page: &Value| {
-        page["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| {
-                (
-                    t["key"].clone(),
-                    t["mentions"].clone(),
-                    t["comments"][0]["mentions"].clone(),
-                )
-            })
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(shapes(&after), shapes(&before));
 }

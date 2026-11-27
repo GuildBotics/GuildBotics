@@ -10,6 +10,7 @@ const SHELL = {
   "GET /api/v1/session": json(200, SESSION),
   "GET /api/v1/workspaces": page([{ name: "acme", lanes: [] }]),
   "GET /api/v1/admin/diagnostics": json(200, {}),
+  "GET /api/v1/members": page([]),
 };
 
 const DIGEST = `sha256:${"4".repeat(64)}`;
@@ -237,9 +238,12 @@ describe("CI settings", () => {
     ).toHaveAttribute("href", "/workspaces/acme/setup?section=environment#agent-environment-image");
     expect(screen.queryByRole("region", { name: "Images" })).not.toBeInTheDocument();
 
-    // The only Save button is the job resources', inside their card.
+    // The Save buttons are the selected runner's display name's and job resources', each inside its card.
     const limits = screen.getByRole("region", { name: "Job resources" });
+    const naming = screen.getByRole("region", { name: "Display name" });
+    expect(await within(naming).findByRole("button", { name: "Save" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Save" })).toEqual([
+      within(naming).getByRole("button", { name: "Save" }),
       within(limits).getByRole("button", { name: "Save" }),
     ]);
     for (const other of ["Runner", "Executor", "Network"])
@@ -566,6 +570,137 @@ describe("CI settings", () => {
     );
   });
 
+  it("names runners by their display names and renames the selected one on this page", async () => {
+    const resource_wait = {
+      attempt_id: "att_waiting",
+      repo: "acme/demo",
+      job: "rust-test",
+      cpu_shortfall: 2,
+      memory_shortfall_mib: 0,
+    };
+    const runner = {
+      ...CI.runner,
+      mode: "off",
+      state: "executor_unavailable",
+      detail: "runner build differs",
+      version_mismatch: { name: REMOTE_RUNNER.name, version: REMOTE_RUNNER.version },
+      runners: [{ ...HUB_RUNNER, resource_wait }, REMOTE_RUNNER, NEW_RUNNER],
+    };
+    const member = (name: string, display_name: string) => ({
+      name,
+      display_name,
+      kind: "runner",
+      accounts: [],
+      reviewers: [],
+    });
+    const others = [
+      member(REMOTE_RUNNER.name, "Gaming PC"),
+      member(NEW_RUNNER.name, NEW_RUNNER.name),
+    ];
+    const fake = fakeApi({
+      ...SHELL,
+      "GET /api/v1/admin/ci": json(200, { ...CI, runner }),
+      "GET /api/v1/admin/diagnostics": json(200, { runner }),
+      // NEW_RUNNER has no display name of its own: its name is its display name.
+      "GET /api/v1/members": [
+        page([member(HUB_RUNNER.name, "Mac mini"), ...others]),
+        page([member(HUB_RUNNER.name, "Studio"), ...others]),
+      ],
+      [`PATCH /api/v1/members/${HUB_RUNNER.name}`]: json(200, member(HUB_RUNNER.name, "Studio")),
+      [`GET /api/v1/members/${HUB_RUNNER.name}/tokens`]: page([
+        {
+          id: "tok_1",
+          label: "runner-join",
+          created_at: "2026-11-20T00:00:00Z",
+          last_used_at: null,
+        },
+      ]),
+      [`GET /api/v1/members/${REMOTE_RUNNER.name}/tokens`]: page([]),
+    });
+    const user = userEvent.setup();
+    renderApp("/settings/repositories/ci");
+    const list = await screen.findByRole("list", { name: "Runners" });
+    expect(await within(list).findByRole("radio", { name: "Mac mini (hub-runner)" })).toBeChecked();
+    expect(
+      within(list).getByRole("radio", { name: "Gaming PC (desktop-runner)" }),
+    ).toBeInTheDocument();
+    expect(within(list).getByRole("radio", { name: "new-runner" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "CI jobs waiting for capacity" })).toHaveTextContent(
+      "Mac mini has a vCPU shortfall of 2",
+    );
+    expect(
+      within(screen.getByRole("region", { name: "Job resources" })).getByText(
+        "Mac mini (hub-runner)",
+      ),
+    ).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Gaming PC reported version older-build, which differs from the Hub.",
+    );
+
+    // The selected runner is renamed here, by its name; every place shows the new display name.
+    const naming = screen.getByRole("region", { name: "Display name" });
+    expect(naming).toHaveTextContent("Leave it empty to show hub-runner.");
+    const field = within(naming).getByRole("textbox", { name: "Display name" });
+    expect(field).toHaveValue("Mac mini");
+    await user.clear(field);
+    await user.type(field, "  Studio ");
+    await user.click(within(naming).getByRole("button", { name: "Save" }));
+    expect(fake.calls("PATCH", `/api/v1/members/${HUB_RUNNER.name}`)[0]?.body).toEqual({
+      display_name: "Studio",
+    });
+    expect(await within(list).findByRole("radio", { name: "Studio (hub-runner)" })).toBeChecked();
+    expect(within(naming).getByRole("textbox", { name: "Display name" })).toHaveValue("Studio");
+
+    // The selected runner's tokens are here too, and follow the selection.
+    const tokens = screen.getByRole("region", { name: "Tokens" });
+    expect(await within(tokens).findByText("runner-join")).toBeInTheDocument();
+    await user.click(within(list).getByRole("radio", { name: "Gaming PC (desktop-runner)" }));
+    // The selected runner's panels are replaced together.
+    const replaced = screen.getByRole("region", { name: "Tokens" });
+    expect(await within(replaced).findByText("No tokens.")).toBeInTheDocument();
+    expect(within(replaced).queryByText("runner-join")).not.toBeInTheDocument();
+  });
+
+  it("keeps the runner first shown selected when another joins at the top of the polled list", async () => {
+    // Without a runner reporting, the page polls the settings every 3 seconds.
+    const waiting = { ...CI.runner, state: "no_runner", detail: "No runner." };
+    const before = { ...CI, runner: { ...waiting, runners: [REMOTE_RUNNER] } };
+    const after = { ...CI, runner: { ...waiting, runners: [HUB_RUNNER, REMOTE_RUNNER] } };
+    const tokens = `/api/v1/members/${REMOTE_RUNNER.name}/tokens`;
+    fakeApi({
+      ...SHELL,
+      "GET /api/v1/admin/ci": [json(200, before), json(200, after)],
+      [`GET ${tokens}`]: page([]),
+      [`POST ${tokens}`]: json(201, {
+        id: "tok_new",
+        label: "spare",
+        token: "fixture-token-value",
+        created_at: "2026-11-27T00:00:00Z",
+      }),
+      [`GET /api/v1/members/${HUB_RUNNER.name}/tokens`]: page([]),
+    });
+    const user = userEvent.setup();
+    renderApp("/settings/repositories/ci");
+    const section = await screen.findByRole("region", { name: "Tokens" });
+    // The section says which runner its tokens are.
+    expect(within(section).getByText(REMOTE_RUNNER.name)).toBeInTheDocument();
+    await user.type(within(section).getByRole("textbox", { name: "Label" }), "spare");
+    await user.click(within(section).getByRole("button", { name: "Issue token" }));
+    expect(await within(section).findByText("fixture-token-value")).toBeInTheDocument();
+
+    const list = screen.getByRole("list", { name: "Runners" });
+    await waitFor(
+      () => expect(within(list).getByRole("radio", { name: HUB_RUNNER.name })).toBeInTheDocument(),
+      { timeout: 10_000 },
+    );
+    expect(within(list).getByRole("radio", { name: REMOTE_RUNNER.name })).toBeChecked();
+    expect(within(section).getByText(REMOTE_RUNNER.name)).toBeInTheDocument();
+    expect(within(section).getByText("fixture-token-value")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Display name" })).getByText(REMOTE_RUNNER.name),
+    ).toBeInTheDocument();
+  });
+
   it("shows runner reports and saves the selected offline runner's resources without a global warning", async () => {
     const offlineMatch = { ...HUB_RUNNER, name: "stopped-runner", connection: "offline" };
     const runner = { ...CI.runner, runners: [HUB_RUNNER, REMOTE_RUNNER, NEW_RUNNER, offlineMatch] };
@@ -575,6 +710,8 @@ describe("CI settings", () => {
       ...SHELL,
       "GET /api/v1/admin/ci": json(200, { ...CI, runner }),
       "GET /api/v1/admin/diagnostics": json(200, { runner }),
+      "GET /api/v1/members/hub-runner/tokens": page([]),
+      "GET /api/v1/members/desktop-runner/tokens": page([]),
       [`PUT ${path}`]: json(200, {
         ...CI,
         runner: { ...runner, runners: [HUB_RUNNER, saved, NEW_RUNNER, offlineMatch] },
@@ -628,6 +765,80 @@ describe("CI settings", () => {
     expect(fake.calls("PUT", path)[0]?.body).toEqual(saved.limits);
     await user.click(within(list).getByRole("radio", { name: "new-runner" }));
     expect(within(limits()).getByRole("textbox", { name: "CPUs" })).toHaveValue("4");
+  });
+
+  it("deletes a stopped runner after a confirmation and says why a running one stays", async () => {
+    const runner = { ...CI.runner, runners: [HUB_RUNNER, REMOTE_RUNNER, NEW_RUNNER] };
+    const path = (name: string) => `/api/v1/admin/ci/runners/${name}`;
+    const fake = fakeApi({
+      ...SHELL,
+      "GET /api/v1/admin/ci": json(200, { ...CI, runner }),
+      "GET /api/v1/admin/diagnostics": json(200, { runner }),
+      // Named as the list names it: by its display name, with its member name.
+      "GET /api/v1/members": page([
+        {
+          name: REMOTE_RUNNER.name,
+          display_name: "Gaming PC",
+          kind: "runner",
+          accounts: [],
+          reviewers: [],
+        },
+      ]),
+      [`GET /api/v1/members/${HUB_RUNNER.name}/tokens`]: page([]),
+      [`GET /api/v1/members/${REMOTE_RUNNER.name}/tokens`]: page([]),
+      [`DELETE ${path("hub-runner")}`]: apiError(409, "runner_online", "hub-runner reported."),
+      [`DELETE ${path("new-runner")}`]: apiError(
+        409,
+        "runner_holds_attempts",
+        "new-runner holds attempts.",
+      ),
+      [`DELETE ${path("desktop-runner")}`]: json(200, {
+        ...CI,
+        runner: { ...runner, runners: [HUB_RUNNER, NEW_RUNNER] },
+      }),
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValue(true);
+    const user = userEvent.setup();
+    renderApp("/settings/repositories/ci");
+    const list = await screen.findByRole("list", { name: "Runners" });
+    const remove = (name: string) =>
+      user.click(within(list).getByRole("button", { name: `Delete runner ${name}` }));
+
+    await remove("Gaming PC (desktop-runner)");
+    expect(confirm).toHaveBeenLastCalledWith(
+      "Delete the runner Gaming PC (desktop-runner)? All its tokens are revoked, and it leaves the list and the job resource settings. Past jobs keep its name.",
+    );
+    expect(fake.calls("DELETE", path("desktop-runner"))).toHaveLength(0);
+
+    await remove("hub-runner");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This runner is running (it reported recently). Stop it on its machine before deleting it.",
+    );
+    await remove("new-runner");
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "This runner still holds attempts. Stop it and let them finish or be queued again before deleting it.",
+      ),
+    );
+    expect(within(list).getAllByRole("radio")).toHaveLength(3);
+
+    // The selected runner: its panels go with it, and the next runner's
+    // take their place.
+    await user.click(within(list).getByRole("radio", { name: "Gaming PC (desktop-runner)" }));
+    expect(screen.getByRole("textbox", { name: "Display name" })).toHaveValue("Gaming PC");
+    await remove("Gaming PC (desktop-runner)");
+    await waitFor(() =>
+      expect(
+        within(list).queryByRole("radio", { name: "Gaming PC (desktop-runner)" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(fake.calls("DELETE", path("desktop-runner"))).toHaveLength(1);
+    for (const panel of ["Display name", "Tokens", "Job resources"]) {
+      expect(screen.getAllByRole("region", { name: panel })).toHaveLength(1);
+    }
+    expect(screen.getByRole("textbox", { name: "Display name" })).toHaveValue("hub-runner");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    confirm.mockRestore();
   });
 
   it("follows a runner switched on until it reports", async () => {

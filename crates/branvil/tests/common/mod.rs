@@ -89,6 +89,7 @@ async fn process(args: Vec<String>) -> i32 {
                 &env("GUILDBOTICS_RUNNER_URL"),
                 &env("GUILDBOTICS_RUNNER_TOKEN"),
                 Path::new(to),
+                false,
             )
             .await
             .map(|()| 0)
@@ -598,8 +599,14 @@ pub const REPO: &str = "acme/demo";
 
 impl World {
     pub async fn new() -> World {
+        Self::with_config(|_| {}).await
+    }
+
+    /// Configure the initialized data directory before the service reads it.
+    pub async fn with_config(configure: impl FnOnce(&Path)) -> World {
         let dir = tempfile::tempdir().unwrap();
         let owner = init(dir.path(), "alice");
+        configure(&dir.path().join("data"));
         let server = Server::start(dir.path());
         let s = &server;
         assert_eq!(
@@ -814,22 +821,19 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
     txn.commit().unwrap();
 }
 
-pub const PREVIOUS_SCHEMA_VERSION: u64 = 46;
-/// The configuration file's name in the previous schema version's data.
-pub const PREVIOUS_CONFIG_FILE: &str = "branvil.toml";
+pub const PREVIOUS_SCHEMA_VERSION: u64 = 48;
 
-/// Recreates the immediately preceding schema in a stopped database and its
-/// data directory.
+/// Makes the database look written by the previous schema version: its
+/// version, and repositories without the review rounds it did not keep.
 pub fn as_previous_schema(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
             *v = json!(PREVIOUS_SCHEMA_VERSION);
         }
     });
-    let data = db.parent().unwrap();
-    if data.join("config.toml").exists() {
-        std::fs::rename(data.join("config.toml"), data.join(PREVIOUS_CONFIG_FILE)).unwrap();
-    }
+    edit_records(db, "repos", |v| {
+        v.as_object_mut().unwrap().remove("review_rounds");
+    });
 }
 
 pub fn previous_schema_backup(data: &Path) -> PathBuf {

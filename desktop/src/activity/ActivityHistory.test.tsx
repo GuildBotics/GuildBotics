@@ -1,9 +1,6 @@
-import { createTheme } from "@mantine/core";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router";
 
 import {
   ActivityHistoryPage,
@@ -40,7 +37,8 @@ import type {
   TraceRecord,
 } from "../api/client";
 import i18n from "../i18n";
-import { TestMantineProvider } from "../test/TestMantineProvider";
+import { runtimeStatus as baseRuntimeStatus, runtimeUnit } from "../test/factories";
+import { renderWithProviders } from "../test/render";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -127,43 +125,28 @@ const ACTIVITY_FIXTURE: ActivityHistoryResponse = {
   unsupported_event_sources: [],
 };
 
-function runtimeUnitStatus(): RuntimeUnitStatus {
-  return {
-    target: "scheduler",
+function runtimeUnitStatus(target: RuntimeUnitStatus["target"]) {
+  return runtimeUnit(target, {
     state: "running",
     running: true,
-    started_at: null,
-    stopped_at: null,
-    error: null,
-    max_consecutive_errors: null,
-    routine_interval_minutes: null,
     active_member_count: null,
     worker_count: null,
-    scheduled_source_enabled: null,
-    routine_source_enabled: null,
-    event_queue_source_enabled: null,
     subscription_count: null,
     listener_count: null,
     cycle_count: null,
     cycle_failure_count: null,
     events_drained_count: null,
     events_auth_failed_count: null,
-    events_auth_failed_persons: [],
-    events_missing_credential_count: 0,
-    events_missing_credential_persons: [],
-    events_chat_provider: "",
-    member_routines: [],
-    member_pull_requests: {},
-  };
+  });
 }
 
 function runtimeStatus(activeWorks: RuntimeActiveWork[]): RuntimeStatus {
-  return {
-    scheduler: runtimeUnitStatus(),
-    events: { ...runtimeUnitStatus(), target: "events" },
+  return baseRuntimeStatus({
+    scheduler: runtimeUnitStatus("scheduler"),
+    events: runtimeUnitStatus("events"),
     active_works: activeWorks,
     has_active_work: activeWorks.length > 0,
-  };
+  });
 }
 
 const ACTIVE_WORK: RuntimeActiveWork = {
@@ -1806,22 +1789,7 @@ describe("matchActivityHistory", () => {
 });
 
 function renderActivity() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  const theme = createTheme({
-    primaryColor: "dark",
-    defaultRadius: "md",
-  });
-  return render(
-    <TestMantineProvider theme={theme}>
-      <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <ActivityHistoryPage />
-        </MemoryRouter>
-      </QueryClientProvider>
-    </TestMantineProvider>,
-  );
+  return renderWithProviders(<ActivityHistoryPage />, { router: "memory" });
 }
 
 it("shows a PR handed over at the review limit as Activity without a session", async () => {

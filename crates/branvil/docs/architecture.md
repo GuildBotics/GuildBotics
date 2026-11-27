@@ -98,6 +98,9 @@ or diffs, and then run one short write transaction.
   `limits.git_http_timeout_secs` per Smart HTTP request
   (the child is killed), `limits.git_push_max_mib` request body,
   `limits.git_command_timeout_secs` and 64 MiB of output per service command.
+- The running service limits each owner webhook request to
+  `limits.webhook_timeout_secs` (10 seconds by default). The standalone
+  `server hub-notify` command uses the default so it can report startup failures.
 - Service-side Git children (Smart HTTP's included) run in a process group of
   their own, so a terminal's Ctrl-C or a supervisor that kills the service's
   group never reaches Git in the middle of a ref update: Git killed there
@@ -505,7 +508,13 @@ For automatically published PRs in automatic repositories, `owner_merge_host`
 sends a webhook notice once per head. Checks must have settled and the
 registration window must have ended. Author statements block the notice.
 Successful delivery stores `notified_at`; failed delivery is retried. Delivery
-is at least once across a crash between sending and recording success.
+is at least once across a crash between sending and recording success. The
+notice is decided on what it reads under the repository's setting lock and the
+pull request's lock (`Upstream::setting_lock`, then `pull_lock`), and only for
+an automatic publication of a repository that still lands automatically. A
+change of the repository's upstream or settings waits for a notice being
+decided and sent, so no notice is decided under settings the owner has since
+changed.
 
 ## Backups
 

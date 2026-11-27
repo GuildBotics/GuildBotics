@@ -1207,16 +1207,16 @@ pub(crate) mod tests {
             identity_root: native.identity_root.clone(),
         });
         let controller = crate::service_runtime::Controller::new(native.clone(), host.clone());
-        let api = Arc::new(crate::api::Api::new(
+        let api = Arc::new(crate::api::Api::for_test_with(
+            root.path(),
             crate::api::Selected {
                 workspace: Some(workspace.clone()),
                 service: controller,
                 ..Default::default()
             },
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            crate::auth::ServerAuth::open(&native.data, 8765).unwrap(),
-            "fixture".into(),
-            native.data.clone(),
+            &native.data,
+            8765,
+            "fixture",
         ));
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
         let app = crate::api::router(api.clone());
@@ -2464,16 +2464,16 @@ pub(crate) mod tests {
             identity_root: native.identity_root.clone(),
         });
         let controller = crate::service_runtime::Controller::new(native.clone(), host);
-        let api = Arc::new(crate::api::Api::new(
+        let api = Arc::new(crate::api::Api::for_test_with(
+            root.path(),
             crate::api::Selected {
                 workspace: Some(native.workspace.clone()),
                 service: controller,
                 ..Default::default()
             },
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            crate::auth::ServerAuth::open(&native.data, 8765).unwrap(),
-            "fixture".into(),
-            native.data.clone(),
+            &native.data,
+            8765,
+            "fixture",
         ));
         let work = tokio_util::task::TaskTracker::new();
         let runtime = api
@@ -4940,7 +4940,8 @@ pub(crate) mod tests {
     }
     async fn http(native: Native, request: MemberRequest, path: &str) -> Value {
         let root = tempfile::tempdir().unwrap();
-        let api = Arc::new(crate::api::Api::new(
+        let api = Arc::new(crate::api::Api::for_test(
+            root.path(),
             crate::api::Selected {
                 member: Some(Arc::new(Backend {
                     version: "fixture".into(),
@@ -4950,10 +4951,6 @@ pub(crate) mod tests {
                 })),
                 ..Default::default()
             },
-            crate::input_files::InputFileStore::deferred(&root.path().join("inputs")),
-            crate::auth::ServerAuth::open(root.path(), 8765).unwrap(),
-            "fixture".into(),
-            root.path().into(),
         ));
         let token = std::fs::read_to_string(api.auth.owner_token_path()).unwrap();
         // MemberRequest is input-only; construct the wire object explicitly.

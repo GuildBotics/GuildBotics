@@ -1,9 +1,10 @@
 use crate::support;
+use crate::support::{Current, Unused};
 use branvil::agent::port::*;
 use branvil::agent::{CodeAgent, TicketAgent};
 use gb_base::shared_writes::SharedWrites;
 use gb_member::{
-    MemberError, WriteGuard,
+    MemberError,
     command::Parsed,
     memory::{Memory, Scope},
 };
@@ -14,22 +15,6 @@ use gb_server::member::{
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path, sync::Mutex};
-/// Commands that end before a service operation.
-struct Unused;
-impl RepositoryServices for Unused {
-    fn code(&self) -> gb_member::Result<&CodeAgent> {
-        panic!("unexpected provider access")
-    }
-    fn tickets(&self) -> gb_member::Result<&TicketAgent> {
-        panic!("unexpected provider access")
-    }
-}
-struct Current;
-impl WriteGuard for Current {
-    fn ensure_current(&self) -> gb_member::Result<()> {
-        Ok(())
-    }
-}
 #[derive(Default)]
 struct Records(Mutex<Vec<Value>>);
 impl Control for Records {

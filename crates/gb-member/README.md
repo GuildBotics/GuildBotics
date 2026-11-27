@@ -37,7 +37,6 @@ download は host ではバイト列と metadata を返す。`archive` のファ
 ZIP の展開と metadata の解釈はライブラリに任せるが、ライブラリが同名エントリを索引で
 置き換えるため、元の central header 数と索引数を展開前に照合する。
 
-[凍結版テスト対応表](tests/frozen-map.txt) は関数ごとの移植先、再利用先、範囲外の理由を記す。
 検索は Rust の Unicode 対応実装だけを使うため、Python の rg subprocess、CP932 decode、
 rg 不在時の fallback 警告という機構は持たない。検索の結果、metadata のみの検索、
 Unicode、空白 query、監査は Rust で検証する。文書の形式は `meta.yml` と `body.md` である。

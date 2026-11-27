@@ -846,18 +846,38 @@ fn open_without_a_server_says_so() {
     );
 }
 
-/// A listener answering every request with `answer`, and the requests it
-/// read, lowercased, once no more come.
-async fn listener(answer: String) -> (u16, tokio::task::JoinHandle<Vec<String>>) {
+/// Answers requests until stopped, then drains any pending connections.
+async fn listener(
+    answer: String,
+) -> (
+    u16,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<Vec<String>>,
+) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
+    let (stop, mut stopped) = tokio::sync::oneshot::channel();
     let requests = tokio::spawn(async move {
         let mut seen = Vec::new();
-        while let Ok(Ok((mut stream, _))) =
-            tokio::time::timeout(Duration::from_secs(5), listener.accept()).await
-        {
+        let mut drain = None;
+        loop {
+            let accepted = if let Some(deadline) = drain {
+                let Ok(result) = tokio::time::timeout_at(deadline, listener.accept()).await else {
+                    break;
+                };
+                result
+            } else {
+                tokio::select! {
+                    _ = &mut stopped => {
+                        drain = Some(tokio::time::Instant::now() + Duration::from_millis(50));
+                        continue;
+                    }
+                    result = listener.accept() => result,
+                }
+            };
+            let (mut stream, _) = accepted.unwrap();
             let mut request = vec![0; 8192];
             let read = stream.read(&mut request).await.unwrap();
             seen.push(String::from_utf8_lossy(&request[..read]).to_lowercase());
@@ -865,7 +885,7 @@ async fn listener(answer: String) -> (u16, tokio::task::JoinHandle<Vec<String>>)
         }
         seen
     });
-    (port, requests)
+    (port, stop, requests)
 }
 
 /// Whatever listens on the port sees the owner token only once it proves it
@@ -878,7 +898,8 @@ async fn open_sends_the_token_only_to_a_listener_that_proves_it_is_the_server() 
             body.len()
         )
     };
-    let (elsewhere, reached) = listener(json("200 OK", "", r#"{"proof":"0000"}"#)).await;
+    let (elsewhere, stop_elsewhere, reached) =
+        listener(json("200 OK", "", r#"{"proof":"0000"}"#)).await;
     // The redirect first, while the listener it names still listens.
     for answer in [
         json(
@@ -891,7 +912,7 @@ async fn open_sends_the_token_only_to_a_listener_that_proves_it_is_the_server() 
         json("200 OK", "", r#"{"proof":"0000"}"#),
     ] {
         let dir = tempfile::tempdir().unwrap();
-        let (port, requests) = listener(answer).await;
+        let (port, stop, requests) = listener(answer).await;
         let tokens = dir.path().join(format!("home/data/server/{port}"));
         std::fs::create_dir_all(&tokens).unwrap();
         std::fs::write(tokens.join("owner.token"), "gbt_0123456789abcdef_secret\n").unwrap();
@@ -902,6 +923,7 @@ async fn open_sends_the_token_only_to_a_listener_that_proves_it_is_the_server() 
         .await
         .unwrap();
         assert!(!opened.status.success());
+        stop.send(()).unwrap();
         let seen = requests.await.unwrap();
         assert_eq!(seen.len(), 1, "{seen:?}");
         assert!(
@@ -910,7 +932,8 @@ async fn open_sends_the_token_only_to_a_listener_that_proves_it_is_the_server() 
         );
         assert!(!seen[0].contains("authorization") && !seen[0].contains("secret"));
     }
-    assert_eq!(reached.await.unwrap(), Vec::<String>::new());
+    stop_elsewhere.send(()).unwrap();
+    assert!(reached.await.unwrap().is_empty());
 }
 
 #[test]
@@ -1934,6 +1957,7 @@ async fn graceful_shutdown_keeps_branvil_available_until_guildbotics_drains() {
 
 #[tokio::test]
 async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interrupted() {
+    let claim_input = || json!({"executor": "test", "executor_state": "ready", "version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true, "architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","a".repeat(64))}]});
     for mode in ["deadline", "finish", "force-ci", "force-work"] {
         let dir = tempfile::tempdir().unwrap();
         let data = code_host_data(dir.path());
@@ -1941,7 +1965,7 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
         let configure = |seconds| {
             std::fs::write(&config, format!("[ci]\nstop_wait_secs = {seconds}\n")).unwrap();
         };
-        configure(if mode == "deadline" { 10 } else { 30 });
+        configure(if mode == "deadline" { 1 } else { 30 });
         let mut server = Server::start(dir.path());
         let url = server.branvil_url();
         code_host(&server, "/workspaces", json!({"name": "acme"})).await;
@@ -1981,7 +2005,7 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
                     .http
                     .post(format!("{url}/api/v1/runner/claim"))
                     .bearer_auth(runner.trim())
-                    .json(&json!({"executor": "test", "executor_state": "ready", "version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true, "architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","a".repeat(64))}]}))
+                    .json(&claim_input())
                     .send()
                     .await
                     .unwrap();
@@ -2005,12 +2029,17 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
             .await
             .unwrap();
         assert_eq!(stop.status(), StatusCode::ACCEPTED);
+        if mode == "deadline" {
+            drop(registry);
+            assert!(server.exit_within(Duration::from_secs(5)).await.success());
+            continue;
+        }
         // While GuildBotics work holds the registry, CI must keep leasing jobs.
         let queued = server
             .http
             .post(format!("{url}/api/v1/runner/claim"))
             .bearer_auth(runner.trim())
-            .json(&json!({"executor": "test", "executor_state": "ready", "version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true, "architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","a".repeat(64))}]}))
+            .json(&claim_input())
             .send()
             .await
             .unwrap();
@@ -2099,7 +2128,7 @@ async fn combined_shutdown_waits_for_ci_with_the_machine_lock_and_can_be_interru
             .http
             .post(format!("{url}/api/v1/runner/claim"))
             .bearer_auth(runner.trim())
-            .json(&json!({"executor": "test", "executor_state": "ready", "version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true, "architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","a".repeat(64))}]}))
+            .json(&claim_input())
             .send()
             .await
             .unwrap();

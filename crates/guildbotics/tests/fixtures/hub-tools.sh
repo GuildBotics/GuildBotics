@@ -9,7 +9,7 @@ name=${0##*/}
 case "$name" in
     uname) cat "$FAKE_ROOT/os" ;;
     id) printf '1234\n' ;;
-    npm) : ;;
+    npm|sleep) : ;;
     # A test links these to record the call; the real tool still does the work.
     rm|tar)
         PATH=${PATH#*:}
@@ -170,17 +170,17 @@ case "$name" in
                 [ ! -f "$FAKE_ROOT/missing-clients" ] || exit 1
                 printf '{"ready":true}\n'
                 ;;
-            server:hub-verified)
-                [ ! -f "$FAKE_ROOT/fail-verified" ] || exit 1
-                if [ -f "$FAKE_ROOT/verified" ]; then cat "$FAKE_ROOT/verified"; exit 0; fi
+            server:hub-releases)
+                [ ! -f "$FAKE_ROOT/fail-releases" ] || exit 1
+                if [ -f "$FAKE_ROOT/releases" ]; then cat "$FAKE_ROOT/releases"; exit 0; fi
                 since=$6
                 found=false
-                commits=
+                releases=
                 for sha in $(git rev-list --first-parent FETCH_HEAD); do
                     if [ "$sha" = "$since" ]; then found=true; break; fi
-                    commits="${commits}${commits:+,}\"$sha\""
+                    releases="${releases}${releases:+,}{\"name\":\"release/$sha\",\"sha\":\"$sha\"}"
                 done
-                printf '{"since_on_main":%s,"verified":[%s]}\n' "$found" "$commits"
+                printf '{"since_on_main":%s,"releases":[%s]}\n' "$found" "$releases"
                 ;;
             # The loop and the build removal under test are the real ones.
             server:hub-auto-update|server:hub-prune) exec "$GUILDBOTICS_TEST_BINARY" "$@" ;;

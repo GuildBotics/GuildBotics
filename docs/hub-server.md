@@ -90,11 +90,11 @@ GuildBotics の CI では、ランナーが受け持つ各ジョブの最新世�
 
 ## 手動更新
 
-Hubのチェックアウトで、オーナーがプルリクエスト一覧のmainの表示にある確認済みのコミットを確認してから実行します。保存形式を上げる場合は、稼働中の版から1段ずつ進めてください。
+Hubのチェックアウトで、オーナーがGuildBoticsのリポジトリのリリースの画面にあるリリースを確認してから実行します。保存形式を上げる場合は、稼働中の版から1段ずつ進めてください。
 
 ```sh
 git fetch origin main
-git merge --ff-only <確認済みのコミットのSHA>
+git merge --ff-only <リリースのコミットのSHA>
 scripts/hub-server.sh update
 ```
 
@@ -133,91 +133,17 @@ scripts/hub-server.sh recover
 
 通常停止が作業とCIを待っている間も、画面とCLIは使えます。待機を中断する必要がある場合は、`scripts/hub-server.sh status` でジョブを確認し、そのプロセスにSIGTERMを送ります。
 
-## 署名を入れる前のHubを移す
-
-`hub-update.json` の `manual_update_version` 1 の手作業です。署名の識別を記録していないHubでは、`update` が切り替えの前に止まります。次のコマンドは、Hubのチェックアウトの同じターミナルで続けて実行します。
-
-1. [署名の識別を用意する](#署名の識別を用意する)の手順で識別を用意します。
-2. 署名を入れた変更のコミットを求め、その直前のコミットまで、退避と予行を通すいつもの手動更新を行います。チェックアウトがすでに先へ進んでいれば、`git reset --keep` がそこへ戻します。
-
-   ```sh
-   git fetch origin main
-   change=$(git log --first-parent --reverse --format=%H -G'"manual_update_version":1' FETCH_HEAD -- hub-update.json | head -n 1)
-   git reset --keep "$change^"
-   scripts/hub-server.sh update
-   ```
-
-   この `update` が途中で止まった場合は、チェックアウトを動かさずに `scripts/hub-server.sh recover` を済ませてから、手順 3 へ進みます。
-
-3. 署名を入れた変更のコミットへ進め、LaunchAgentの登録を解除してから、識別を指定してインストールし直します。`install` はこのシェルの `PATH` をLaunchAgentに記録します。`GUILDBOTICS_HOME` や `GUILDBOTICS_SERVER_PORT` を変えていた場合は、それも同じ値を設定します。最初の起動で出るキーチェーンと「書類」フォルダの確認には、[インストール](#インストール)のとおりに答えます。
-
-   ```sh
-   git merge --ff-only "$change"
-   scripts/hub-server.sh uninstall
-   export GUILDBOTICS_CODE_HOST_DATA_DIR="/absolute/path/to/code-host-data"
-   export GUILDBOTICS_HUB_SIGNING_IDENTITY="<控えたSHA-1>"
-   scripts/hub-server.sh install
-   ```
-
-4. 残りのコミットへ、いつもの手動更新で進めます。
-
-   ```sh
-   git merge --ff-only FETCH_HEAD
-   scripts/hub-server.sh update
-   ```
-
 ## 自動更新用の内部コマンド
 
 以下はシェルの更新ループ向けの隠しコマンドです。成功時の標準出力は1行の JSON、実行エラーは終了コード1です。状態の判定結果は終了コード0で返します。実データを変更せず、通知だけは外部の webhook へ送信します。
 
 - `guildbotics service status`: `server_running`、サービスの `running`、`state` を返します。サーバー停止中はそれぞれ `false`、`false`、`stopped`。サーバーのロックが指すポートへ接続し、オーナーの証明を検証してから状態を読みます。認証できない場合は停止扱いにせずエラーにします。
-- `guildbotics server hub-verified --repo GuildBotics/GuildBotics --since <full-sha>`: `since_on_main` と `verified` を返します。mainのfirst-parent履歴をカーソルでたどり、指定コミットの直前までの確認済みのSHAを新しい順に返します。指定コミットが最後まで見つからなければ `since_on_main` は `false` です。
+- `guildbotics server hub-releases --repo GuildBotics/GuildBotics --since <full-sha>`: `since_on_main` と `releases`（`name` と `sha`）を返します。mainのfirst-parent履歴で、指定コミットより新しいリリースを新しい順に返します。指定コミットがfirst-parent履歴になければ `since_on_main` は `false` です。
 - `--repo` の代わりに `--checkout <path>` を渡すと、そのチェックアウトの origin からリポジトリを取得します。origin はコードホストの clone URL（`{base}/git/{repo}.git`）の形で、このマシンのサーバーの URL（`http://127.0.0.1:<GUILDBOTICS_SERVER_PORT>`）と一致する HTTP(S) URL に限ります。認証情報や query を含まないものに限ります。接続先はこのマシンのサーバーに固定し、プロキシやリダイレクトを使いません。トークンはサーバーのオーナーのトークンファイル（`GUILDBOTICS_HOME/data/server/<port>/owner.token`）から直接読み、サーバーがそのダイジェストを持つことを確かめてから送ります。引数や環境変数では受け取りません。
-- `guildbotics server hub-notify`: 標準入力の文を identity の store の webhook へ送り、`sent` を返します。サーバー停止中にも使えます。未設定なら `false`、送信成功なら `true`、送信失敗はエラーです。URL は出力しません。入力する文には秘密を含めないでください。キーチェーンのアクセス権は実行ファイルの署名に従います。
-- `guildbotics server hub-migration`: 実行中のバイナリに埋め込まれた `manual_update_version` と `instructions`（手順書の相対パス、不要なら `null`）を返します。ルートの `hub-update.json` が宣言です。宣言のないソースからのビルドでは番号0となります。このコマンド自体のない旧バイナリも更新ループで番号0として扱います。候補の番号が現在の番号より大きければ手作業が必要です。
+- `guildbotics server hub-notify`: 標準入力の文を identity の store の webhook へ送り、`sent` を返します。サーバー停止中や設定ファイルが壊れているときにも使えます。送信の上限は既定の 10 秒です。未設定なら `false`、送信成功なら `true`、送信失敗はエラーです。URL は出力しません。入力する文には秘密を含めないでください。キーチェーンのアクセス権は実行ファイルの署名に従います。
+- `guildbotics server hub-migration`: 実行中のバイナリに埋め込まれた `manual_update_version` と `instructions`（手作業のチケット URL、不要なら `null`）を返します。ルートの `hub-update.json` が宣言です。宣言のないソースからのビルドでは番号0となります。候補の番号が現在の番号より大きければ、その間に入った手作業を確認します。
 
-## ポートを 7878 にまとめる版への切り替え
-
-この版の `manual_update_version` は 3。自動更新は手作業が必要として止まる。
-実機への適用は #177 で行う。既存のチケット・PR・Git remote の 7878 の URL は変えない。
-入口リンクとブラウザセッションは GuildBotics を正として共用する。更新後は
-`guildbotics open` の新しい入口リンクで一度入り直す。
-旧版のコードホストの画面のセッションは統合サーバーで使えない。単体のコードホスト（`guildbotics branvil serve`）は従来どおり。
-
-### Hub
-
-1. 稼働中の作業が終わるのを待ち、保存した設定で `sh scripts/hub-server.sh update` を実行する。
-   LaunchAgent に `GUILDBOTICS_SERVER_PORT=8765` を設定していた場合は、その指定を外すか
-   7878 に変更して `sh scripts/hub-server.sh install` で登録し直す。CLI 側も同じ値にする。
-2. `guildbotics open` で `http://127.0.0.1:7878/-/guildbotics/` に入り直す。
-   8765 のセッションは移せない。言語などブラウザの origin ごとの設定も選び直す。
-3. `connections/branvil.yml` の `base_url` が共通の URL と一致することを確認する。
-   既定の 7878 なら変更不要。独自ポートなら GuildBotics の接続設定も同じ URL にする。
-   統合サーバーと `guildbotics branvil` のクライアントは `GUILDBOTICS_SERVER_PORT` を使い、
-   コードホストの設定の `listen` は単体の `guildbotics branvil serve` だけで使う。
-4. 新しい接続を確認後、古い `~/.guildbotics/data/server/8765/` を削除する。
-   キーチェーンアクセスで service `guildbotics-server`、account `127.0.0.1:8765` の
-   古い同意トークンを削除する。別の項目や新しい 7878 の記録は削除しない。
-
-### Hub 以外のマシン
-
-1. 既存の転送サービスを、完全なポート一覧として 7878 だけを指定して入れ直す。
-   POSIX は `sh scripts/hub-forward.sh install --hub my-hub --port 7878`。
-   Windows は `powershell -ExecutionPolicy Bypass -File scripts\hub-forward.ps1 -Action install -Hub my-hub -Port "7878"`。
-   `my-hub` は実際の SSH 設定の別名に置き換える。
-2. ブラウザで `guildbotics open` の新しい入口を開く。`guildbotics connect` を使っていた
-   マシンでは同じコマンドで同意を取り直す。古い 8765 の同意トークンと記録を上記と同様に削除する。
-3. GuildBotics とコードホストの画面、チケット URL、Git fetch / push を確認する。
-   8765 の転送では GuildBotics の画面を開けない。
-
-### 開発用データ
-
-`scripts/dev.sh` は両方を 8866（変更時は `GUILDBOTICS_SERVER_PORT`）で起動する。
-既存の開発用のコードホストのデータはそのまま使う。`branvil.toml` の 7879 の `listen` や
-`base_url` は統合サーバーでは使わない。開発ワークスペースのコードホストの接続設定も共通 URL に変更する。
-
-
-## 確認済みのコミットを追う自動更新
+## リリースを追う自動更新
 
 Hubのチェックアウトで、上記と同じRust、Node.js 24、npm、GitをPATHに入れ、
 オーナーのデスクトップセッションから、サーバーを `install` したあとに登録します。
@@ -233,12 +159,13 @@ scripts/hub-server.sh auto-uninstall
 常駐するのはGuildBoticsの実行ファイルだけで、ログイン項目やアクセスの確認にもその署名で表示されます。
 チェックアウトの場所は登録時に引数として記録します。登録時のPATHは更新のビルドのために保存し、サーバーのデータ、identity root、ポートは
 `local.guildbotics.plist` から読みます。チェックアウトは自動更新専用にしてください。
-HEADより先にある確認済みのコミットのうち、保存形式の版が稼働中の版+1以下で最も新しいものを選びます。
-手動更新版の番号が現行以下、独自ベースイメージが
-読み込み済みのときだけfast-forwardして通常の `update` を実行します。
+HEADより先にあるリリースのうち、保存形式の版が稼働中の版+1以下で最も新しいものを選びます。
+リリースは、リポジトリのリリースの画面で作るか、`.guildbotics-ci.toml` の `[release]` の時刻に自動で作られます（[リリース](../crates/branvil/docs/ci.md#releases)）。
+保存形式を上げるコミットは `schema-raise` がリリースの区切りとして印を付け、それだけでリリースされるので、版を1段ずつたどれます。
+手作業の完了を確認し、独自ベースイメージを読み込み済みであれば、fast-forward して通常の `update` を実行します。
 独自イメージとスナップショットはCLIで選択中のワークスペースについて確認します。
-保存形式の版を1段ずつたどり、次の回でさらに先の確認済みのコミットへ進みます。候補がなければ待ちます。
-本番がmainからどれだけ遅れているかは、プルリクエスト一覧の見出しのmainの状態（「確認済みから n 本進んでいる」、失敗時は待っている修復チケット）で確認します。
+保存形式の版を1段ずつたどり、次の回でさらに先のリリースへ進みます。候補がなければ待ちます。
+本番にまだ入っていないリリースは、GuildBoticsの画面のHubの状態（適用待ちのリリースと、リリースの画面へのリンク）で確認します。
 
 更新がサーバーを止めた時点でサービスが動いていた場合だけ、更新後やロールバック後に
 `guildbotics service start` で再開します。ビルド中に開始したサービスは再開し、ビルド中に止めたサービス（作業の終わりを待っている途中を含む）は再開しません。途中で停止した場合も、再開の意図を保存しておき、
@@ -258,48 +185,25 @@ HEADより先にある確認済みのコミットのうち、保存形式の版�
 通知は `server hub-notify` を使います。webhook未設定時も、コミット・段階・理由・
 次にすることが `~/Library/Logs/guildbotics-update.log` に残ります。
 コミット由来の通知は同じコミット・同じ段階で一度だけです。操作ロック・復旧待ち・通信障害・サーバー停止は、その状態の発生ごとに通知し、解消後の再発も通知します。操作ロックは同じロックが1時間続いた場合に通知し、短い手動操作では通知しません。送信エラーは未送信の文を保持し、導入済み・試行済みのコミットでも次の回で再試行します。
-`Hub/auto-update.json` に試行したコミット、結果、通知を保存します。サービス再開の意図は、停止する現行ビルドが `Hub/service-before` に保存し、再開処理が成功したら削除します。更新スクリプトは止めるビルドより新しいので、保存の依頼は古いビルドが無視できる環境変数 `GUILDBOTICS_HUB_SERVICE_STATE` で渡し、知らないビルドは保存しません。
+`Hub/auto-update.json` に試行したコミット、結果、画面の状態と通知を保存します。オーナーが確認した手作業の版とチケットは `Hub/auto-update-confirmed.json` に保存します。サービス再開の意図は、停止する現行ビルドが `Hub/service-before` に保存し、再開処理が成功したら削除します。更新スクリプトは止めるビルドより新しいので、保存の依頼は古いビルドが無視できる環境変数 `GUILDBOTICS_HUB_SERVICE_STATE` で渡し、知らないビルドは保存しません。
 `Hub/last-failure` は判定に使いません。
 
-止まった場合はログの段階に応じて対処します。
+手作業が必要な更新で止まると、画面上部とサービス画面に、更新先のリリースと、稼働中の版からそのリリースまでに入った手作業のチケットがすべて表示されます。通知にも同じチケットが出ます。各チケットに従って人が行う作業を済ませ、オーナーの画面で **手作業を済ませたので更新する** を押します。自動更新は次の確認でその記録を読み、ビルドと切り替えを進めます。更新先が変わって手作業が増えた場合は、画面で新しい手順を確認します。
 
-- 手動更新版：通知の `docs/` の手順を読み、手動更新を済ませます。以後は自動で続行します。
+失敗した場合は画面上部とサービス画面に、止まった段階、理由と次にすることが表示されます。ログにも同じ情報が残ります。
+
 - 独自イメージ未読込：`guildbotics environment image load <archive.tar>` で読み込みます。
 - チェックアウトの変更・分岐：未コミットの変更を解消し、origin/mainへfast-forwardできる状態に戻します。
 - `builds/update-from` が残る：上の復旧手順で `recover` を実行します。自動では復旧を始めません。
 - `operation` が残る：ほかの操作中なら待ちます。古いロックかをPIDだけで決めず、更新とビルドの
   プロセスが終わったことを確認してから取り除きます。自動削除はしません。
 - サーバー無応答：サーバーログを確認し、必要なら `restart` または `recover` を実行します。
-- 更新失敗：同じコミットでは再試行しません。手で対処するか、より新しい、保存形式の条件を満たす確認済みのコミットで自動に再試行します。
+- 更新失敗：同じコミットでは再試行しません。手で対処するか、より新しい、保存形式の条件を満たすリリースで自動に再試行します。
   更新途中でループが終了し、結果を記録できなかった場合も同じ扱いです。
 
 診断用に `scripts/hub-server.sh auto-once` で1回だけ実行できます。
 ループの間隔は起動時の `GUILDBOTICS_HUB_UPDATE_INTERVAL`（秒、既定300）、
 長時間通知は `GUILDBOTICS_HUB_WAIT_NOTICE`（秒、既定3600）で指定できます。
-
-## 自動更新をGuildBoticsの実行ファイルへ移す版への切り替え
-
-この版の `manual_update_version` は 4。それまでの自動更新（Node.jsで動く `scripts/hub-auto-update.mjs`）は、
-この版を見ると手作業が必要として通知し、更新しません。そのスクリプトはこの版で無くなるので、
-先に止めてからチェックアウトを進めます。Hubのチェックアウトの同じターミナルで続けて実行します。
-
-```sh
-scripts/hub-server.sh auto-uninstall
-git fetch origin main
-git merge --ff-only FETCH_HEAD
-scripts/hub-server.sh update
-scripts/hub-server.sh auto-install
-```
-
-ログイン項目の `node` が無くなり、自動更新は署名した実行ファイルとして動きます。
-
-## 作業停止の通知を webhook に切り替える
-
-`hub-update.json` の `manual_update_version` 10 の手作業です。メンバーのチケットや PR の作業停止は、**設定 → 通知** の webhook に届くようになります。webhook が未設定の場合、作業停止の通知は届きません。
-
-1. 更新前の Hub で、オーナーとして **設定 → 通知** を開きます。設定画面が分かれている版では、コードホスト側の **設定 → 通知** を使います。設定状況と送り先のホストを確認します。Slack で受け取る場合は、Slack 側で送り先を確認し、どのメンバーも監視していないチャンネルを使います。未設定の場合や送り先を変える場合は、受け取り先の Incoming Webhook の URL を入力して保存します。
-2. [手動更新](#手動更新)の手順で、版 10 の確認済みコミットへ更新します。
-3. **設定 → 通知** を開き直し、「設定済み」と送り先のホストを確認します。次に作業が人の対応を待って止まったとき、送り先にメンバー名と対象へのリンクが届くことを確認します。送信の失敗は同じ画面に表示されます。
 
 ## Hubの写しで更新を確かめる
 
@@ -370,7 +274,7 @@ Hub の LaunchAgent と同じ OS ユーザー・`GUILDBOTICS_HOME`、運用ワ�
 `guildbotics server hub-data` が、GuildBotics の記録とコードホストのデータを1つのコマンドで扱います。
 
 ```sh
-guildbotics server hub-data backup --to <空のディレクトリ>            # サーバーの稼働中
+guildbotics server hub-data backup --to <空のディレクトリ> [--without-ci-files]   # サーバーの稼働中
 guildbotics server hub-data restore --from <退避> --data-dir <空のディレクトリ>
 guildbotics server hub-data check [--data-dir <復元先>]               # サーバーの停止中
 guildbotics server hub-data upgrade [--data-dir <復元先>]             # 検査を含む
@@ -379,9 +283,11 @@ guildbotics server hub-data reindex [--data-dir <復元先>]
 
 `backup` は、稼働中のサーバーにコードホストのデータの退避を `code-host/` へ書かせ、続けて GuildBotics の記録を写します。サーバーへの要求には、このマシンのサーバーのオーナーのトークンを使います。最後に `manifest.json` を書き、その有無で退避の完了を表します。
 
+`--without-ci-files` は、コードホストの CI のログと成果物を写しません。退避の大半を占めるのはこの 2 つで、設定・チケット・文書を短い間隔で別のマシンへ写すときに使います。稼働中のサーバーのジョブは、そのまま動き続けます。この退避の DB の写しにだけ、始まっていたジョブを、保持期間を過ぎてファイルを消したときと同じ状態として記録します（結果は残り、ログは空、成果物は無し）。実行中だったジョブは、サーバーを止めたときと同じく中断として記録し、最初の中断だったジョブはもう一度キューに入れます。この状態は `restore` したときに見え、どの版で戻しても同じです。更新の退避は、CI のログと成果物を含めて写します。
+
 GuildBotics の記録は、このマシンの `data/workspaces.json` に登録した全ワークスペース（`gb_workspace::selection::registered`）と identity root の `.guildbotics/config`・`state`・`local` です。写しの番号は identity root が 0 で、ワークスペースが続きます。manifest の版は 2 で、ほかの版の退避は扱いません。identity root は `GUILDBOTICS_IDENTITY_ROOT`、未指定なら `GUILDBOTICS_HOME/identity` です。共有書き込みと同じ identity → workspace のロックを取り、通常ファイルをコピーします。リンクと特殊ファイルは拒否し、退避先は所有者だけが開けます。
 
-再作成可能な `local/clones`、`local/cache`、`local/agent_environment/snapshots`、`local/msb` と実行中だけ使う `local/run` は除外します。マシンの `data/msb` にある runtime は対象の外です。秘密の暗号化ファイルは復号せず退避します。OS キーチェーンの鍵は含まれないため、この退避だけでは別のマシンへ秘密を移せません。コードホストの退避に含まれるデータと含まれない資格情報は[コードホストのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
+再作成可能な `local/clones`、`local/cache`、メンバーのビルドのキャッシュ `local/build-cache`、`local/agent_environment/snapshots`、`local/msb` と実行中だけ使う `local/run` は除外します。マシンの `data/msb` にある runtime は対象の外です。秘密の暗号化ファイルは復号せず退避します。OS キーチェーンの鍵は含まれないため、この退避だけでは別のマシンへ秘密を移せません。コードホストの退避に含まれるデータと含まれない資格情報は[コードホストのバックアップと復元](../crates/branvil/docs/backup-restore.md)を参照してください。
 
 更新は `backups/hub-update-<時刻>.<乱数>/` に退避し、直近3世代を残します。不完全な退避は次の退避時に削除します。更新前の退避には、その後に完了した仕事の書き込みは含まれません。
 
@@ -392,22 +298,6 @@ GuildBotics の記録は、このマシンの `data/workspaces.json` に登録�
 `upgrade --data-dir <復元先>` と `check --data-dir <復元先>` は番号付きの写しと `code-host/` だけを扱い、manifest の元のパスへはアクセスしません。GuildBotics の記録はJSON・JSONL・YAML の構文と記録の schema_version を検査します。JSONL は製品の読み取りと同様に壊れた行とオブジェクト以外を読み飛ばし、読めた全記録の版を検査します。検査は退避した元の行を書き換えません。版1〜4は項目追加だけなので変換しません。版4から版5への変換は、identity root から組み込みのコードホストへの接続設定 `config/connections/branvil.yml`、秘密の `BRANVIL_ADMIN_TOKEN` と各メンバーの `BRANVIL_TOKEN`・`BRANVIL_TOKEN_ID`、各メンバーの identity の `account_info.branvil_username` を削除し、変換したときは identity root の `state/schema.json` に `schema_version: 5` を記録します。版4はこれらを identity root だけに置くので、ワークスペースは検査だけを行います。旧ビルドの検査はこの記録で停止します。変換は対象のファイルと秘密をすべて読んでから変更するので、秘密を復号できない場合は何も変更せずに失敗します。秘密の復号にはこのマシンの OS キーチェーンの鍵を使います。繰り返し実行しても、変換済みの root は変わりません。互換性を壊す版では直前の1版からの変換と検査を追加します。それ以前の形式を並行サポートしません。`--data-dir` を省略すると登録済みの本物を対象にします。更新ではサーバー停止後に本物へ `upgrade`（検査を含む）を行い、その成功後だけ起動します。`recover` も候補の変換と検査を再実行します。
 
 旧ビルドへ戻す場合も検査が必要です。検査に通らない場合はデータを残して停止し、退避の親ディレクトリを表示します。オーナーは退避後の書き込みを確認し、戻す対象を決めてください。自動では実データを退避で上書きしません。
-
-## CLI の写しと結果の取り直しへの更新（手動更新版 5）
-
-実行中の `guildbotics run` が終わってから `scripts/hub-server.sh update` を実行してください。
-利用者が編集したスキルは `guildbotics install` で置き直されないため、`skills/guildbotics/SKILL.md` の
-`run ask` の説明を手で取り込んでください。読み書き可の許可先やメンバー clone 内の cwd も
-写しで実行します。そこでの commit、ignore されるファイルの生成は、書き戻し後に対話の側で行ってください。
-
-cwd はリポジトリのルートにしてください。下位フォルダだけを写すと、許可先や clone の親にある本物の `.git` が見えるため、実行中に commit すると本物の履歴を変更します。
-
-
-## 受け渡しフォルダを廃止する更新（版6）
-
-更新前に、`~/Documents/GuildBotics` に残したいファイルを別の場所へ移し、自作コマンドの固定パスを実行の作業ディレクトリへ書き換えます。GuildBotics はこの既存フォルダを削除しません。更新後は共通許可を与えず、画面で cwd が空欄の手動実行と巡回・チャット・定期実行は、端末状態の `run/files/<run_id>/work` を使います。成果物は実行終了後にコマンド画面・診断画面からダウンロードします（7日間保持、通常ファイルのみ、1ファイル64 MBまで）。アップロードも7日間保持し、要求した実行にだけ読み取り専用で渡します。期限切れは次の利用時に掃除します。
-
-**macOS のシステム設定 → プライバシーとセキュリティ → ファイルとフォルダで、以前 `python3.15` に与えた「書類フォルダ」の許可を外してください。** 同じ uv 管理の Python を使う別のプログラムにも影響する許可です。「書類」の下に明示的な許可先やワークスペースを置く場合だけ、その用途の許可を残します。Hub 以外のクライアントでの手作業はありません。
 
 ## 別のマシンから member CLI と Git を使う
 
@@ -431,7 +321,7 @@ CLI は手元の稼働中サーバー（`app-api.lock`）があればオーナ�
 設定・秘密・隔離環境・サービス・画面用の API は従来の認証を維持します。
 `guildbotics run` のクライアント対応は別の変更で扱います。
 
-### 画面で見る更新の段階と版
+## 画面で見る更新の段階と版
 
 GuildBotics は、すべてのページの上部に Hub の更新・再起動・停止の段階を表示します。帯は段階が変わるまで閉じられます。
 
@@ -443,95 +333,11 @@ GuildBotics は、すべてのページの上部に Hub の更新・再起動・
 
 更新スクリプトは現行ビルドの `server stop` に新しい引数を渡さず、`GUILDBOTICS_HUB_STOP_REASON` をシェルから継承しない形で設定します（`update` / `restart`、指定しなければ `stop`）。`server hub-phase` の準備・解除の通知は表示用で、古いビルドが受け付けない場合もログに残して更新を続けます。最初の更新で帯が出なくても、対応版の次の更新から表示します。
 
-## CPU 別の CI イメージへの更新（手作業の版 8）
 
-Hub とランナーを新しい版に更新してから、Hub のリポジトリで
-`scripts/build-agent-environment-image.sh` を実行し直す。
-arm64 と amd64 のアーカイブが Hub のデータに保存され、各ランナーが
-自分の CPU のイメージを取得する。既存のアーカイブを使う場合は、それぞれを
-`guildbotics environment image load-ci <archive>` で登録する。
-Hub の既存キャッシュだけでは、別 CPU のアーカイブは配布されない。
+## ワークスペースとコードホストのリンク
 
-ランナーは取得・読み込みのあと、保有するタグ・CPU・digest を通知する。
-レジストリのイメージは各ランナーで `guildbotics runner pull <tag>` を実行する。
+実行設定は、その設定が属するワークスペースのリポジトリを巡回します。チケット用とコードホスト用のワークスペースを分けていた旧環境では、引き継いだ実行設定を利用するワークスペースで確認します。
 
-## HubのCIイメージを共有ストアへ移す（手作業の版9）
+旧環境から引き継いだ実行設定のうち、コードホストのワークスペース指定がなかったものには、`workspace-` に 16 桁の 16 進数が続く名前が付いています。この名前はワークスペースの選択欄と URL に表示されます。移行時に新しく作られたワークスペースは、リポジトリを登録してから巡回します。
 
-新しいHubは、CIと隔離コマンドのイメージを `<GuildBoticsのデータディレクトリ>/msb` に置きます。
-データディレクトリの既定値は `~/.guildbotics/data` です。
-
-1. 更新前に、CI設定画面のイメージ一覧で、使っているタグと設定digestを控えます。配布済みのイメージは、Hubのコードホストデータにある `ci/images/catalog.json` を見て、該当するCPUとタグの `<id>.tar` を取り出します。手元に元のアーカイブがある場合も、そのファイルを使えます。
-
-   元のアーカイブもレジストリから取得できる同じ版もない場合は、旧CIストアからタグを一つずつ書き出します。再書き出しでは設定digestが変わるため、取り込んだあとに新しいdigestで使うことを確認します。次の例のパスとタグは、旧CI設定画面のランタイムとイメージに合わせて置き換えます。
-
-   ```sh
-   MSB_HOME="/absolute/path/to/old-ci-msb-home" "$HOME/.guildbotics/data/msb/bin/msb" save \
-     --output /absolute/path/to/ci-image.tar guildbotics/agent-environment:dev
-   ```
-
-2. [手動更新](#手動更新)の手順でHubを更新します。旧ストアと書き出したアーカイブは、動作確認が済むまで保管します。次の手順で読み込むまでにイメージが見つからず `startup_failure` になったジョブは、手順4のあとに再実行します。
-3. 新しいHubで、必要なタグのアーカイブを読み込みます。次のコマンドはHubのストアに読み込み、同じCPUの別マシンのランナーにも配ります。
-
-   ```sh
-   guildbotics environment image load --ci /absolute/path/to/ci-image.tar
-   ```
-
-   レジストリから同じ版を取得できるタグは、Hubで `guildbotics runner pull <tag>` を実行する方法もあります。
-
-4. 更新後のイメージ一覧で、読み込んだタグと設定digestを手順1の記録と照合します。統合した設定画面では **設定 → エージェント実行環境 → イメージ**、旧構成の版では **CI** 設定で一覧を開きます。再書き出ししたタグの新しいdigestを隔離環境の宣言にも使う場合は、該当するCPUのdigestを更新してスナップショットをビルドします。同じタグを使うCIジョブをHubで実行し、隔離コマンドも起動できることを確認します。
-5. 元に戻す必要がなくなったら、旧ストアと作業用に書き出したアーカイブを削除できます。削除できるのは旧ストア専用のディレクトリです。パスを `realpath` で確認し、新しいストアやHubの運用データを配下に含む場合はディレクトリごと保管します。旧ストアが専用ディレクトリなら、`rm -ri` で削除する内容を確認しながら進めます。コードホストの配布用アーカイブはランナーが取得に使うため保管します。
-
-CI設定の `[ci.microsandbox]` で旧ストアを指定していた場合は、その設定値を手順1の書き出しに使います。更新後のHubは共有ストアを使います。
-
-## CI の設定ファイルと環境変数の名前を変える更新（手作業の版 11）
-
-自動更新がこの版で止まった版 10 の Hub は、先にコミット `148f4f56508088e96299a009428dd787fab123e4` まで手作業で更新します。このコミットは、更新に失敗して前のビルドへ戻っても同じデータを開けるように、新旧の設定を両方渡します。より新しいコミットへ直接更新しないでください。
-
-手順は、このコミットの文書の同じ節にあります。手順の `<確認済みのコミットのSHA>` には、上のコミットを指定します。
-
-```sh
-git fetch origin main
-git show 148f4f56508088e96299a009428dd787fab123e4:docs/hub-server.md
-```
-
-このコミットへ更新したあとは、通常の更新で最新の版へ進みます。
-
-## 画面とワークスペースの統合（手作業の版 12）
-
-稼働中の旧版で `guildbotics server hub-data backup <保存先>` を実行し、Hub を停止します。更新候補のバイナリで、退避したデータに対して先に `guildbotics server hub-data upgrade --data-dir <保存先>` と `guildbotics server hub-data check --data-dir <保存先>` を実行します。確認できたら、停止したまま実データに対して同じコマンドを `--data-dir` なしで実行し、Hub を起動します。
-
-移行後の実行設定は、その設定が属するワークスペースのリポジトリを巡回します。旧版でチケット用とコードホスト用に別々のワークスペースを選んでいる場合は、旧版の設定でどちらを使うか選び、両方の指定をそろえてから移行します。同じワークスペースに複数の実行設定が結び付いている場合は、引き継ぐ実行設定の指定を残します。再実行前に設定変更を含むバックアップを取得します。
-
-移行時にコードホストのワークスペース指定がない実行設定（上の手順ですべての指定を外したものを含む）は、`workspace-` に 16 桁の 16 進数が続く名前で登録されます。選択欄と画面の URL にはこの名前が表示されます。この名前でワークスペースが新規に作られた場合、移行直後に巡回するリポジトリはありません。
-
-チケット、PR、コメントの新しいリンクは `/workspaces/{workspace}/repos/{repo}/` の下を指します。既存の本文とコメントはそのまま保存されます。
-
-## コードホストの設定ファイルの名前を変える更新（手作業の版 13）
-
-この版から、コードホストとランナーの設定ファイルの名前が `branvil.toml` から `config.toml` に変わります。新しい版は `config.toml` だけを読み、ファイルが無ければ既定値で動きます。
-
-先に Hub 以外のランナーのマシンで設定を写します。ランナーは Hub の版に追従して再起動し、新しい版は `GUILDBOTICS_HOME/runner/config.toml` を読みます。このファイルが無いと、msb のホームと作業場所が既定の場所に戻り、それまでのイメージとキャッシュが見えなくなります。古いファイルは、ランナーが新しい版になるまで前の版が読むので残します。`branvil.toml` が無いマシンでは何もしません。
-
-```sh
-cp ~/.guildbotics/runner/branvil.toml ~/.guildbotics/runner/config.toml
-```
-
-```powershell
-Copy-Item "$env:USERPROFILE\.guildbotics\runner\branvil.toml" "$env:USERPROFILE\.guildbotics\runner\config.toml"
-```
-
-`GUILDBOTICS_HOME` を変えているマシンでは、そのディレクトリの `runner` を使います。
-
-次に、[手動更新](#手動更新)の手順で Hub を更新します。`hub-data upgrade` の変換で、コードホストの保存形式の版は 47 になります。前の版のバックアップを復元するときも、同じ変換を行います。変換は次のことを行います。
-
-- コードホストのデータディレクトリ（`GUILDBOTICS_CODE_HOST_DATA_DIR`、未指定なら `GUILDBOTICS_HOME/data/code-host`）の `branvil.toml` を `config.toml` に写します。`branvil.toml` は、更新に失敗して前のビルドへ戻ったときに前のビルドが読むので残ります。
-- 自動ランナーのメンバー名を `branvil-runner` から `hub-runner` に変え、保存したランナーごとの上限も新しい名前へ移します。過去の実行の記録は古い名前のままです。
-- 手動で発行したトークンを持つ `branvil-runner` は、人が登録したランナーなので名前を変えません。`hub-runner` という名前のメンバーがすでにあるときも、どちらも名前を変えません。この場合、自動ランナーはその `hub-runner` として動き、ランナーでなければ起動できません。そのような Hub では、ランナーの動かし方を「自動」にしません。
-
-自動ランナーを名前で指定して待っている再試行は、古い名前のままになります。そのような再試行は、更新の前に取り消します。
-
-更新のあと、Hub と各ランナーが新しい版で動き、ランナーが試行を取りに行くことを確かめてから、Hub のデータディレクトリと各ランナーのマシンの古い `branvil.toml` を消します。
-
-開発用の `scripts/dev.sh` は、コードホストのデータを `--data-dir` の `branvil/` ではなく `code-host/` に置きます。既存の開発用データを使い続ける場合は、サーバーを止めて `branvil/` を `code-host/` に名前を変えます。続けて、`GUILDBOTICS_HOME` を `--data-dir` の `home`、`GUILDBOTICS_CODE_HOST_DATA_DIR` を `--data-dir` の `code-host` にし、`scripts/dev.sh` と同じく `GUILDBOTICS_IDENTITY_ROOT` と `GUILDBOTICS_CONFIG_DIR` を外して、このチェックアウトのビルドで `guildbotics server hub-data upgrade` を実行してから起動します。
-
-上流アカウントの資格情報と通知の webhook は、データディレクトリの場所に結び付けて保存されています。改名したデータディレクトリからは見えないので、起動後に **設定 → メンバー** の各メンバーのコードホストのアカウントと、**設定 → 通知** の webhook を設定し直します。
+チケット、PR、コメントのリンクは `/workspaces/{workspace}/repos/{repo}/` の下を指します。旧環境から引き継いだチケット本文とコメントはそのまま保存されています。

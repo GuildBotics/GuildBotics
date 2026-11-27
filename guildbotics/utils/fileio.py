@@ -1,8 +1,5 @@
 import json
 import os
-import tempfile
-from collections.abc import Iterator
-from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -71,110 +68,6 @@ def get_identity_config_dir() -> Path:
     return get_identity_root() / CONFIG_PATH
 
 
-def get_machine_state_root() -> Path:
-    """Return the machine-local GuildBotics state root."""
-    return get_machine_root() / "data"
-
-
-def get_machine_state_path(*parts: str) -> Path:
-    """Return a path under the machine-local GuildBotics state root."""
-    return get_machine_state_root().joinpath(*parts)
-
-
-def host_temporary_root() -> Path:
-    """Where the host keeps what it names by path for a moment: a script git
-    runs, a key a TLS context loads, a bundle git reads.
-
-    It is under the machine-local state root, which is protected state no
-    microVM ever mounts. The OS temporary directory is a place a grant may
-    open, and what the host runs or trusts there a command could change.
-    """
-    from guildbotics.utils.safe_paths import inspect_host_path
-
-    return inspect_host_path(get_machine_state_path("tmp"), create=True).path
-
-
-def host_temporary_directory(prefix: str) -> tempfile.TemporaryDirectory[str]:
-    """A temporary directory under :func:`host_temporary_root`."""
-    return tempfile.TemporaryDirectory(
-        prefix=prefix, dir=host_temporary_root(), ignore_cleanup_errors=True
-    )
-
-
-#: What an in-progress atomic write is called while it exists. It is created
-#: beside its destination, so a reader that lists a directory has to be told to
-#: ignore it by name.
-ATOMIC_WRITE_SUFFIX = ".tmp"
-
-
-def atomic_write_bytes(path: Path, data: bytes) -> None:
-    """Replace ``path`` with ``data`` so readers never observe a partial file.
-
-    Args:
-        path (Path): The destination file. Parent directories are created.
-        data (bytes): The complete new file content.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=path.parent,
-            prefix=f"{path.name}.",
-            suffix=ATOMIC_WRITE_SUFFIX,
-            delete=False,
-        ) as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-            tmp_path = Path(handle.name)
-        tmp_path.replace(path)
-        tmp_path = None
-    finally:
-        if tmp_path is not None:
-            with suppress(OSError):
-                tmp_path.unlink()
-
-
-def atomic_write_text(path: Path, text: str) -> None:
-    """Replace ``path`` with UTF-8 encoded ``text`` atomically."""
-    atomic_write_bytes(path, text.encode("utf-8"))
-
-
-def resolve_from_existing_ancestor(path: Path) -> Path:
-    """Resolve existing ancestors, then append missing components by spelling.
-
-    Args:
-        path: Path whose existing ancestors and symlinks are resolved.
-
-    Returns:
-        The resolved ancestor with missing components appended by name.
-
-    Raises:
-        RuntimeError: A symlink cycle is found.
-        OSError: An existing ancestor cannot be inspected or resolved.
-    """
-    candidate = path.expanduser().absolute()
-    missing: list[str] = []
-    seen_links: set[Path] = set()
-    while True:
-        if candidate.is_symlink():
-            if candidate in seen_links:
-                raise RuntimeError(f"Symlink loop: {candidate}")
-            seen_links.add(candidate)
-            target = candidate.readlink()
-            candidate = target if target.is_absolute() else candidate.parent / target
-            continue
-        try:
-            resolved = candidate.resolve(strict=True)
-            return resolved.joinpath(*reversed(missing))
-        except FileNotFoundError:
-            if candidate == candidate.parent:
-                raise
-            missing.append(candidate.name)
-            candidate = candidate.parent
-
-
 def workspace_root_from_config_dir(config_dir: Path) -> Path | None:
     """Return the workspace root when ``config_dir`` is ``<ws>/.guildbotics/config``."""
     from guildbotics.utils.safe_paths import inspect_host_path
@@ -215,45 +108,9 @@ def get_workspace_root(workspace_root: Path | None = None) -> Path:
     )
 
 
-def apply_workspace_root(workspace_root: Path) -> Path:
-    """Publish the selected workspace root and its config dir."""
-    from guildbotics.utils.safe_paths import inspect_host_path
-
-    resolved = inspect_host_path(workspace_root, missing=True).path
-    os.environ[GUILDBOTICS_WORKSPACE_ROOT] = str(resolved)
-    os.environ[GUILDBOTICS_CONFIG_DIR] = str(resolved / ".guildbotics" / "config")
-    return resolved
-
-
 def get_workspace_config_dir(workspace_root: Path | None = None) -> Path:
     """Return ``<workspace>/.guildbotics/config``."""
     return get_workspace_root(workspace_root) / ".guildbotics" / "config"
-
-
-def iter_json_objects(directory: Path, pattern: str) -> Iterator[dict[str, Any]]:
-    """Yield the JSON objects in the files matching ``pattern`` under ``directory``.
-
-    A store that keeps one record per file reads them all this way. A file
-    that cannot be read or does not hold an object is skipped: a screen does
-    not fail on one damaged record.
-    """
-    if not directory.is_dir():
-        return
-    for path in sorted(directory.glob(pattern)):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except OSError, json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            yield payload
-
-
-def get_workspace_state_path(
-    *parts: str,
-    workspace_root: Path | None = None,
-) -> Path:
-    """Return a path under ``<workspace>/.guildbotics/state``."""
-    return get_workspace_root(workspace_root).joinpath(".guildbotics", "state", *parts)
 
 
 def get_workspace_local_path(
@@ -279,14 +136,6 @@ def get_member_clone_path(person_id: str, workspace_root: Path | None = None) ->
             raise ValueError("The resolved member clone path must be absolute.")
         return path
     return get_workspace_local_path("clones", person_id, workspace_root=workspace_root)
-
-
-def get_workspace_work_path(
-    *parts: str,
-    workspace_root: Path | None = None,
-) -> Path:
-    """Return a path under the local work directory."""
-    return get_workspace_local_path("work", *parts, workspace_root=workspace_root)
 
 
 def get_template_path() -> Path:
@@ -498,63 +347,6 @@ def load_markdown_with_frontmatter(file: Path) -> dict:
 def load_yaml_file(file: Path) -> dict | list[dict]:
     with file.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f)
-
-
-def dump_yaml(data: dict | list[dict]) -> str:
-    """Serialize ``data`` the one way this project writes YAML.
-
-    Keys whose value is None or an empty string are omitted, so a config file
-    describes only what was actually set.
-
-    Args:
-        data (dict or list of dict): Data to serialize.
-
-    Returns:
-        str: The YAML text.
-    """
-    return yaml.dump(
-        _clean_data(data),
-        allow_unicode=True,
-        sort_keys=False,
-        default_flow_style=False,
-    )
-
-
-def save_yaml_file(file_path: Path, data: dict | list[dict]) -> None:
-    """
-    Save the given data to a YAML file, omitting keys with None or empty-string values.
-
-    Args:
-        file_path (Path): Path to the output YAML file.
-        data (dict or list of dict): Data to save.
-
-    Returns:
-        None
-    """
-    # Imported here because the write helpers build on this module. Config is
-    # a shared root, so every YAML save under it takes the shared-write lock;
-    # routing it through the helpers keeps that true for callers that never
-    # learn of the lock, and paths outside the shared roots take none.
-    from guildbotics.utils.shared_writes import write_shared_text
-
-    write_shared_text(file_path, dump_yaml(data))
-
-
-def _clean_data(data):
-    """
-    Recursively remove keys with None or empty-string values from dicts, and clean lists.
-
-    Args:
-        data (dict or list): Input data structure.
-
-    Returns:
-        Cleaned data with empty entries removed.
-    """
-    if isinstance(data, dict):
-        return {k: _clean_data(v) for k, v in data.items() if v is not None and v != ""}
-    if isinstance(data, list):
-        return [_clean_data(item) for item in data]
-    return data
 
 
 def get_intelligence_roots(

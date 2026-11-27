@@ -12,6 +12,38 @@ export const en = {
   "verification.ahead": "{{count}} commit(s) since the last verified commit",
   "verification.noVerified": "No verified commit yet",
   "verification.more": "Load more commits",
+  "release.title": "Releases",
+  "release.noRepositories": "The workspace {{workspace}} has no repositories yet.",
+  "release.rule": "Automatic releases",
+  "release.schedule":
+    "Released {{times}} ({{zone}}) when the default branch has a newer verified commit. Commits marked ⚠️ are released first, oldest first.",
+  "release.daily": "every day at {{time}}",
+  "release.hourly": "every hour at minute {{minute}}",
+  "release.and": ", ",
+  "release.nextAt": "Next automatic release",
+  "release.manualOnly":
+    "Releases are made only from this page. Write release times in the [release] section of .guildbotics-ci.toml to release automatically.",
+  "release.problem":
+    "The release rule cannot be read, so no automatic release is made: {{problem}}",
+  "release.prefix": "Release tags start with {{prefix}}; they cannot be pushed.",
+  "release.candidates": "Verified commits",
+  "release.release": "Release",
+  "release.point": "A commit that must be released by itself",
+  "release.pointsHelp":
+    "A commit marked ⚠️ must be released by itself. Until it is, no newer commit can be released.",
+  "release.history": "Releases so far",
+  "release.none": "Nothing has been released yet.",
+  "release.confirmTitle": "Release this commit",
+  "release.name": "Tag name",
+  "release.nameHelp": "Keep the suggested name, or change the part after the prefix.",
+  "release.error.release_point_first": "Release the older commit marked ⚠️ first.",
+  "release.error.release_not_newer":
+    "Only a commit of the default branch newer than the latest release can be released.",
+  "release.error.release_not_verified":
+    "This commit has not passed the verification of the default branch.",
+  "release.error.release_tag_exists": "A tag with this name exists. Choose another name.",
+  "release.error.release_pipeline_invalid":
+    "The default branch's .guildbotics-ci.toml is invalid, so the release rule is unknown.",
   "pull.conflicts": "Conflicting files: {{files}}",
   "markdown.ticket": "Ticket",
   "markdown.pull": "Pull request",
@@ -42,6 +74,7 @@ export const en = {
 
   "board.filters": "Filter cards",
   "board.filterAssignee": "Assignee",
+  "board.filterStatus": "Status",
   "board.filterLabel": "Label",
   "board.filterText": "Text",
   "board.any": "Any",
@@ -217,6 +250,9 @@ export const en = {
     "During a verification failure, only repair PRs can merge into the affected default or collection branch.",
   "settings.holdWhileFailingHelpUpstream":
     "PRs without a repair ticket stay unpublished to {{host}} until main verification passes. Merges on {{host}} of PRs already published to {{host}} cannot be stopped from here. Those PRs are shown as held. Local merges into failing collection branches are also held except for their repair PRs.",
+  "settings.reviewRounds": "Automatic re-review limit",
+  "settings.reviewRoundsHelp":
+    "After a member has reviewed this many heads of a pull request, a new push no longer starts its re-review: the pull request becomes a draft, and marking it Ready for review starts the count over. Explicit review requests are not limited. 1–20.",
   "landing.blocker.held": "Held (main failing)",
   "landing.held":
     "Held: main verification is failing (repair #{{number}}, assigned to {{name}}). The hold lifts when main verification passes.",
@@ -333,6 +369,10 @@ export const en = {
     "Runner selection requires a current, unprotected pull request head.",
   "ci.error.retry_runner_ineligible": "Select a runner with the job's image and the Hub version.",
   "ci.error.retry_runner_excluded": "The selected runner is also excluded.",
+  "ci.error.runner_online":
+    "This runner is running (it reported recently). Stop it on its machine before deleting it.",
+  "ci.error.runner_holds_attempts":
+    "This runner still holds attempts. Stop it and let them finish or be queued again before deleting it.",
   "ci.retryRunner": "Select runner",
   "ci.excludeRunners": "Exclude runners",
   "ci.runnerDeferral": "Runner resource deferral",
@@ -476,6 +516,7 @@ export const en = {
   "commit.authoredAt": "Authored",
   "commit.parents": "Parents",
 
+  "nav.releases": "Releases",
   "nav.pulls": "Pull requests",
   "nav.relations": "Task flow",
   "relations.title": "Task flow",
@@ -653,7 +694,7 @@ export const en = {
   "settings.addBranch": "Add a branch",
   "settings.addLabel": "Add a label",
   "settings.saved": "Saved.",
-  "settings.membersHelp": "The owner, agents, and runners, and their accounts on code hosts.",
+  "settings.membersHelp": "The owner and agents, and their accounts on code hosts.",
   "upstream.readerChoose": "Choose a member…",
   "settings.tabCi": "CI",
   "settings.autoLand": "Land automatically",
@@ -690,6 +731,15 @@ export const en = {
     "The Hub starts the runner with the service. Switching it off interrupts the running job.",
   "ci.settings.runners": "Runners",
   "ci.settings.noRunners": "No runner members.",
+  "ci.settings.deleteRunner": "Delete",
+  "ci.settings.deleteRunnerLabel": "Delete runner {{name}}",
+  "ci.settings.confirmDeleteRunner":
+    "Delete the runner {{name}}? All its tokens are revoked, and it leaves the list and the job resource settings. Past jobs keep its name.",
+  "ci.settings.tokensHelp":
+    "The selected runner's tokens. `guildbotics runner join` issues one. When the machine is no longer used, delete the runner from the list above, which revokes its tokens too.",
+  "ci.settings.displayName": "Display name",
+  "ci.settings.displayNameHelp":
+    "The name the checks, jobs, and this page show for this runner. Leave it empty to show {{name}}.",
   "ci.settings.connection.online": "Connected",
   "ci.settings.connection.offline": "Contact lost",
   "ci.settings.connection.never_seen": "No contact since the Hub started",

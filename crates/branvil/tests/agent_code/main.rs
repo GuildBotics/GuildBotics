@@ -4,12 +4,14 @@ mod code_behavior;
 mod contracts;
 mod extra;
 mod readiness;
+use crate::ci::Runner;
+use crate::common::{git_as_ok, git_ok};
 use branvil::agent::port::*;
 use branvil::agent::{CodeAgent, TicketAgent};
+use branvil::test_support::ticket_request;
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
-    process::Command,
     sync::Arc,
 };
 const REPO: &str = "acme/demo";
@@ -19,64 +21,23 @@ fn input<T: serde::de::DeserializeOwned>(v: Value) -> T {
 }
 struct Git {
     root: PathBuf,
-    home: PathBuf,
-    askpass: PathBuf,
 }
 impl Git {
     fn new(root: &Path) -> Self {
-        let home = root.join("git-home");
-        std::fs::create_dir_all(&home).unwrap();
-        let askpass = home.join("askpass.sh");
-        std::fs::write(&askpass,"#!/bin/sh\ncase \"$1\" in\nUsername*) printf '%s\\n' \"$TEST_GIT_USER\" ;;\n*) printf '%s\\n' \"$TEST_GIT_TOKEN\" ;;\nesac\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&askpass, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        let s = Self {
-            root: root.join("work"),
-            home,
-            askpass,
-        };
-        s.run(
-            &["init", "-q", "-b", "main", s.root.to_str().unwrap()],
-            "owner",
-            "",
-        );
-        s
+        let root = root.join("work");
+        std::fs::create_dir_all(&root).unwrap();
+        git_ok(&root, &["init", "-q", "-b", "main"]);
+        Self { root }
     }
+
     fn run(&self, args: &[&str], user: &str, token: &str) -> String {
-        let out = Command::new("git")
-            .args(["-c", "credential.helper=", "-c", "core.askPass="])
-            .args(args)
-            .current_dir(if self.root.exists() {
-                &self.root
-            } else {
-                &self.home
-            })
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", &self.home)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", self.home.join("empty-config"))
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_ASKPASS", &self.askpass)
-            .env("TEST_GIT_USER", user)
-            .env("TEST_GIT_TOKEN", token)
-            .env("GIT_AUTHOR_NAME", user)
-            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
-            .env("GIT_COMMITTER_NAME", user)
-            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "git {:?}: {}",
-            args,
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8(out.stdout).unwrap().trim().into()
+        if token.is_empty() {
+            git_ok(&self.root, args)
+        } else {
+            git_as_ok(&self.root, user, token, args)
+        }
     }
+
     fn commit(&self, start: &str, file: &str, body: &str) -> String {
         if !start.is_empty() {
             self.run(&["checkout", "-q", "--detach", start], "owner", "");
@@ -96,119 +57,17 @@ impl Git {
         );
     }
 }
-async fn api_call(base: &str, path: &str, token: &str, body: Value) -> Value {
-    let response = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .unwrap()
-        .post(format!("{base}/api/v1{path}"))
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await
-        .unwrap();
-    assert!(
-        response.status().is_success(),
-        "fixture API {path} status {}",
-        response.status()
-    );
-    response.json().await.unwrap()
-}
-async fn finish(base: &str, runner: &str, sha: &str, conclusion: &str) {
-    finish_artifact(base, runner, sha, conclusion, None).await;
-}
-async fn next_claim(base: &str, runner: &str) -> Value {
-    tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .unwrap();
-        loop {
-            let response = client
-                .post(format!("{base}/api/v1/runner/claim"))
-                .bearer_auth(runner)
-                .json(&json!({"executor":"microsandbox","executor_state":"ready","version":gb_base::BUILD_VERSION,"max_jobs":1,"running_jobs":0,"accept":true,"architecture":"arm64", "images":[{"reference":"docker.io/library/alpine:3.22","architecture":"arm64","digest":format!("sha256:{}","2".repeat(64))}]}))
-                .send()
-                .await
-                .unwrap();
-            match response.status() {
-                reqwest::StatusCode::NO_CONTENT => {
-                    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                }
-                reqwest::StatusCode::OK => {
-                    let claim: Value = response.json().await.unwrap();
-                    for field in ["attempt_id", "lease", "sha"] {
-                        assert!(
-                            claim[field].as_str().is_some_and(|v| !v.is_empty()),
-                            "fixture claim missing {field}"
-                        );
-                    }
-                    return claim;
-                }
-                status => panic!("fixture claim status {status}"),
-            }
-        }
-    })
-    .await
-    .expect("fixture queued job did not appear within 15 seconds")
-}
-async fn finish_artifact(
-    base: &str,
-    runner: &str,
-    sha: &str,
-    conclusion: &str,
-    artifact: Option<&[u8]>,
-) {
-    for _ in 0..100 {
-        let attempt = next_claim(base, runner).await;
-        let matching = attempt["sha"].as_str() == Some(sha);
-        if matching && let Some(bytes) = artifact {
-            let response = reqwest::Client::builder()
-                .no_proxy()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap()
-                .put(format!(
-                    "{base}/api/v1/runner/attempts/{}/artifacts/report",
-                    attempt["attempt_id"].as_str().unwrap()
-                ))
-                .bearer_auth(runner)
-                .header("x-branvil-lease", attempt["lease"].as_str().unwrap())
-                .body(bytes.to_vec())
-                .send()
-                .await
-                .unwrap();
-            assert!(
-                response.status().is_success(),
-                "fixture artifact upload {}",
-                response.status()
-            );
-        }
-        api_call(base,&format!("/runner/attempts/{}/finish",attempt["attempt_id"].as_str().unwrap()),runner,json!({"lease":attempt["lease"],"conclusion":if matching{conclusion}else{"success"},"image_digest":format!("sha256:{}","2".repeat(64))})).await;
-        if matching {
-            return;
-        }
-    }
-    panic!("fixture job was never claimed")
+async fn finish(base: &str, token: &str, sha: &str, conclusion: &str) {
+    let runner = Runner::at(base, token);
+    let attempt = runner.claim_head(sha).await;
+    assert_eq!(runner.finish(&attempt, conclusion).await.0, 200);
 }
 async fn create(t: &TicketAgent, title: &str) -> String {
-    t.create_ticket(CreateTicket {
-        tracker: REPO.into(),
-        title: title.into(),
-        body: String::new(),
-        labels: vec![],
-        interactive: false,
-        assignee: None,
-        lane: None,
-        parent: None,
-        blocked_by: vec![],
-    })
-    .await
-    .unwrap()
-    .target
-    .url
+    t.create_ticket(ticket_request(REPO, title))
+        .await
+        .unwrap()
+        .target
+        .url
 }
 async fn merge_checked(
     owner: &::branvil::api::MemberApi,
@@ -216,8 +75,6 @@ async fn merge_checked(
     n: u64,
     head: &str,
     base_sha: &str,
-    _base_url: &str,
-    _runner: &str,
 ) {
     tokio::time::timeout(std::time::Duration::from_secs(120), async {
         let mut previous=json!({"unset":true});
@@ -530,7 +387,7 @@ async fn empty_runner_queue() {
     assert!(
         tokio::time::timeout(
             std::time::Duration::from_millis(100),
-            next_claim(base, runner)
+            Runner::at(base, runner).next_claim()
         )
         .await
         .is_err()
@@ -573,7 +430,18 @@ async fn artifacts_and_stale_head() {
     assert_eq!(again.report.head_sha, moved);
     assert_eq!(again.report.required_checks, Some(RequiredChecks::Running));
     let artifact = b"PK\x03\x04synthetic test artifact";
-    finish_artifact(base, runner, &moved, "success", Some(artifact)).await;
+    let scripted = Runner::at(base, runner);
+    let attempt = scripted.claim_head(&moved).await;
+    let (status, _) = scripted
+        .raw(
+            reqwest::Method::PUT,
+            &attempt,
+            "artifacts/report",
+            artifact.to_vec(),
+        )
+        .await;
+    assert!(status.is_success(), "fixture artifact upload {status}");
+    assert_eq!(scripted.finish(&attempt, "success").await.0, 200);
     let too_large = c
         .artifact(&next.written.target.url, "report", 1)
         .await
@@ -705,7 +573,7 @@ async fn code_open_order() {
     let (git, main, remote) = f.repository("README.md", "base\n").await;
     let credential = c.git_credential().await.unwrap().unwrap();
     let head = git.commit(&main, "feature.txt", "feature\n");
-    let bases = (0..101)
+    let bases = (0..100)
         .map(|n| format!("order-base-{n}"))
         .collect::<Vec<_>>();
     let args = std::iter::once("push".to_owned())
@@ -719,7 +587,30 @@ async fn code_open_order() {
         &credential.username,
         &credential.password,
     );
-    contracts::code_open_order_contract(c.as_ref(), REPO, "contract-order", &bases, true).await;
+    let first = c
+        .create_pull_request(CreatePullRequest {
+            repository: REPO.into(),
+            head: "contract-order".into(),
+            base: "main".into(),
+            title: "First pull".into(),
+            body: String::new(),
+            draft: false,
+            tickets: vec![],
+        })
+        .await
+        .unwrap();
+    assert!(first.created);
+    let mut created = vec![first.written.target.url];
+    created.extend(
+        branvil::test_support::seed_open_pulls(
+            &f.fixture.data(),
+            REPO,
+            "contract-order",
+            bases.len(),
+        )
+        .await,
+    );
+    contracts::code_open_order_contract(c.as_ref(), REPO, "contract-order", created).await;
 
     f.stop().await;
 }
@@ -795,7 +686,7 @@ async fn code_links() {
             )
             .await
             .unwrap();
-        merge_checked(owner, REPO, n, &current_head, &current_base, base, runner).await;
+        merge_checked(owner, REPO, n, &current_head, &current_base).await;
         contracts::code_link_case_finished(t.as_ref(), &case).await;
     }
 

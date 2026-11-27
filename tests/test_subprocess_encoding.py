@@ -1,19 +1,12 @@
-"""Every text subprocess declares its encoding or explains its locale contract."""
+"""Every text subprocess in the Python guest declares its encoding."""
 
 import ast
 import subprocess
-from collections import Counter
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-
-# Native console tools use the local code page; UTF-8 protocols do not.
-LOCALE_OUTPUT = {
-    "guildbotics/utils/os_language.py:_macos_ui_language_tag": "macOS defaults prints ASCII language tags in its native locale.",
-    "guildbotics/utils/processes.py:launching_app_name": "macOS ps prints native process paths in its native locale.",
-}
 
 
 def _text_calls(source: str):
@@ -62,7 +55,6 @@ def test_every_text_subprocess_has_an_encoding_contract() -> None:
         capture_output=True,
         check=True,
     )
-    locale_calls = Counter()
     unclassified = []
     for relative in listed.stdout.decode("utf-8").splitlines():
         path = ROOT / "guildbotics" / relative
@@ -71,18 +63,10 @@ def test_every_text_subprocess_has_an_encoding_contract() -> None:
             encoding = keywords.get("encoding")
             if isinstance(encoding, ast.Constant) and isinstance(encoding.value, str):
                 assert encoding.value, f"Empty subprocess encoding: {key}:{line}"
-            elif key in LOCALE_OUTPUT:
-                assert LOCALE_OUTPUT[key].strip()
-                locale_calls[key] += 1
             else:
                 unclassified.append(f"{key}:{line}")
 
-    assert not unclassified, (
-        f"Declare an encoding or explain the locale: {unclassified}"
-    )
-    assert locale_calls == Counter(dict.fromkeys(LOCALE_OUTPUT, 1)), (
-        "Locale exceptions must each name exactly one current subprocess call."
-    )
+    assert not unclassified, f"Declare an encoding: {unclassified}"
 
 
 @pytest.mark.parametrize(

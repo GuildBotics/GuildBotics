@@ -1,5 +1,5 @@
 //! Durable, serial verification of the default branch.
-use super::{Ci, queue};
+use super::{Ci, queue, release};
 use crate::error::AppResult;
 use crate::model::Repo;
 use crate::store::{self, Key, Rd};
@@ -276,11 +276,33 @@ impl Ci {
                 })
                 .await?;
             if let Some((run, latest)) = snapshot {
+                // The release points of the executions whose results count.
+                let points: Vec<_> = latest
+                    .iter()
+                    .flat_map(|(a, source)| {
+                        source
+                            .attempt
+                            .release_points
+                            .iter()
+                            .map(|message| release::Note {
+                                job: a.job.name.clone(),
+                                attempt_id: a.id.clone(),
+                                message: message.clone(),
+                            })
+                    })
+                    .collect();
                 let checks = self.run_checks(&run, latest)?.checks;
                 if checks.iter().all(|c| c.status == "completed") {
                     let now = crate::util::now();
                     let passed = checks.iter().all(|c| c.succeeded());
                     if passed {
+                        // Before the commit counts as verified: a stop between
+                        // the two must not let a release pass a release point.
+                        let (id, sha) = (repo.id.clone(), v.sha.clone());
+                        self.inner
+                            .store
+                            .write(move |w| release::put_points(w, &id, &sha, &points))
+                            .await?;
                         let name = format!("refs/branvil/verified/{}", v.sha);
                         let refs = self.inner.git.all_refs(&dir).await?;
                         if refs.get(&name) != Some(&v.sha) {

@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use redb::{
-    Database, ReadTransaction, ReadableDatabase, ReadableTable, TableDefinition, WriteTransaction,
+    Database, ReadTransaction, ReadableDatabase, ReadableTable, ReadableTableMetadata,
+    TableDefinition, WriteTransaction,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -23,7 +24,7 @@ pub type Tbl = TableDefinition<'static, &'static [u8], &'static [u8]>;
 /// The schema version this build reads and writes. A database of any other
 /// version is refused instead of being misread; one of the previous version
 /// is upgraded by `upgrade` (`guildbotics server hub-data upgrade` and `restore`).
-pub const SCHEMA_VERSION: u64 = 47;
+pub const SCHEMA_VERSION: u64 = 49;
 
 pub const META: Tbl = TableDefinition::new("meta");
 pub const COUNTERS: Tbl = TableDefinition::new("counters");
@@ -52,6 +53,10 @@ pub const IX_OPEN_REPAIRS: Tbl = TableDefinition::new("ix_open_repairs");
 pub const CI_NARROWINGS: Tbl = TableDefinition::new("ci_narrowings");
 pub const IX_CI_NARROWING: Tbl = TableDefinition::new("ix_ci_narrowing");
 pub const CI_VERIFICATIONS: Tbl = TableDefinition::new("ci_verifications");
+/// Repository id → the latest release time its schedule handled.
+pub const CI_RELEASES: Tbl = TableDefinition::new("ci_releases");
+/// (repository id, commit) → the release points its verification printed.
+pub const CI_RELEASE_POINTS: Tbl = TableDefinition::new("ci_release_points");
 pub const CI_RUNS: Tbl = TableDefinition::new("ci_runs");
 pub const CI_ATTEMPTS: Tbl = TableDefinition::new("ci_attempts");
 
@@ -106,6 +111,8 @@ pub const PRIMARY_TABLES: &[Tbl] = &[
     IDEMPOTENCY,
     CI_NARROWINGS,
     CI_VERIFICATIONS,
+    CI_RELEASES,
+    CI_RELEASE_POINTS,
     REPAIR_PENDING,
     CI_RUNS,
     CI_ATTEMPTS,
@@ -936,6 +943,18 @@ fn is_unchecked(r: &impl Rd) -> AppResult<bool> {
 pub fn needs_check(path: &Path) -> anyhow::Result<bool> {
     let db = open_db(path, 1 << 20)?;
     is_unchecked(&db.begin_read()?).map_err(|e| anyhow::anyhow!("{}", e.message))
+}
+
+/// The table names and entry counts `txn` sees.
+pub fn table_counts(txn: &ReadTransaction) -> AppResult<Vec<(String, u64)>> {
+    let mut counts = Vec::new();
+    for handle in txn.list_tables()? {
+        let name = redb::TableHandle::name(&handle).to_string();
+        let def: TableDefinition<&[u8], &[u8]> = TableDefinition::new(&name);
+        let n = txn.open_table(def)?.len()?;
+        counts.push((name, n));
+    }
+    Ok(counts)
 }
 
 /// Copies every table, as `txn` sees it, into a new database file at `path`

@@ -9,7 +9,7 @@
 # point CARGO_HOME here too: the image's is not writable to the job, and
 # `uv sync` builds dependencies without a wheel for this Python with Cargo.
 # PR heads select jobs by paths; default-branch verification runs execute
-# every job. test and markdown-links always run, as their inputs span the repo.
+# every job. repo-policy and markdown-links always run, as their inputs span the repo.
 # post_merge = true keeps a job, such as the release builds, off PR heads: it
 # runs after merge. As with required, the base's file decides for its jobs.
 # required = true makes a job required of PRs into this branch: the base's file
@@ -37,9 +37,26 @@
 # After successful verification, remove workspace artifacts, unused dependency
 # units across all Cargo builds in the job, and crates absent from Cargo.lock.
 
+# Releases are tags Branvil makes on verified commits of main; the Hub's
+# automatic update follows them (docs/hub-server.md). At each time below,
+# Branvil releases every commit schema-raise marked as a release point, oldest
+# first, then the newest verified commit, so the Hub upgrades its storage one
+# step at a time (crates/branvil/docs/ci.md, "Releases").
+[release]
+schedule = ["08:00", "12:00", "18:00"]
+time_zone = "Asia/Tokyo"
+
 [[jobs]]
 name = "test"
 required = true
+paths = [
+  "guildbotics/**", "tests/**", "scripts/**", ".cargo/**", "wire/**",
+  "records/golden/**", "skills/guildbotics/**", ".agents/skills/**", ".claude/skills/**",
+  "docs/custom_command_guide.*.md", "docker/agent-environment/cargo-wrapper.sh",
+  "rust-toolchain.toml",
+  "pyproject.toml", "uv.lock", ".python-version", "AGENTS.md", "README.md",
+  "LICENSE", "third_party_licenses/**", ".gitattributes", ".gitignore", ".guildbotics-ci.toml",
+]
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu
@@ -51,13 +68,27 @@ uv run --no-sync ruff check guildbotics
 uv run --no-sync mypy guildbotics
 uv run --no-sync pylint guildbotics
 uv run --no-sync lint-imports
-cargo build --locked -p gb-base --example worktree-list
-uv run --no-sync python -m pytest tests/ --ignore=tests/blackbox --ignore=tests/integration -n auto --durations=30
+uv run --no-sync python -m pytest tests/ --ignore=tests/blackbox --ignore=tests/integration -m "not repo_policy" -n auto --durations=30
 ''']
 timeout_secs = 3600
 cache = { paths = [".ci/uv"], key_files = ["uv.lock"] }
 
-# Read GB_CI_VERIFIED_SHA to keep successive verified builds one schema step apart.
+# Run repository-wide checks in a standalone pytest environment.
+[[jobs]]
+name = "repo-policy"
+required = true
+image = "guildbotics/agent-environment:dev"
+commands = ['''
+set -eu
+export UV_CACHE_DIR=/work/.ci/uv UV_LOCKED=1
+uv sync --only-group repo-policy
+uv run --no-sync python -m pytest --noconftest -m repo_policy tests/test_retired_names.py tests/test_cargo_workspace.py tests/test_npm_workspace.py tests/guildbotics/test_layer_boundaries.py tests/guildbotics/test_no_compat_code.py tests/scripts/test_check_schema_raise.py::test_repository_itself
+''']
+timeout_secs = 300
+cache = { paths = [".ci/uv"], key_files = ["uv.lock"] }
+
+# Read GB_CI_VERIFIED_SHA to keep successive verified builds one schema step apart,
+# and mark a build that raises the schema as a release point.
 [[jobs]]
 name = "schema-raise"
 post_merge = true
@@ -169,20 +200,23 @@ paths = [
   ".cargo/**",
   # The nextest settings every run of the tests reads.
   ".config/nextest.toml",
+  "scripts/ci-measure-tmp.py",
   "clippy.toml",
   "rustfmt.toml",
 ]
 image = "guildbotics/agent-environment:dev"
 commands = ['''
 set -eu
+python3 scripts/ci-measure-tmp.py target/nextest/ci/tmp-usage.json sh -eu <<'RUST_TEST'
 export CARGO_HOME=/work/.ci/cargo-home RUSTC_WRAPPER= CARGO_INCREMENTAL=0
 find crates -exec touch -c {} +
 python3 .cargo/ci-cache.py run cargo nextest run --locked --profile ci --workspace --exclude branvil --exclude loopback-auth
 python3 .cargo/ci-cache.py run cargo nextest run --locked -p guildbotics --no-default-features --test main
 cargo clean --workspace --offline --locked
 python3 .cargo/ci-cache.py prune
+RUST_TEST
 ''']
-artifacts = [{ name = "rust-test-results", paths = ["target/nextest/ci/junit.xml"] }]
+artifacts = [{ name = "rust-test-results", paths = ["target/nextest/ci/junit.xml", "target/nextest/ci/tmp-usage.json"] }]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
 
@@ -232,6 +266,7 @@ uv sync --extra test
 find crates -exec touch -c {} +
 python3 .cargo/ci-cache.py run cargo build --locked -p gb-server --example browser-test-server
 python3 .cargo/ci-cache.py run cargo build --locked -p gb-environment --example worktree-transfer
+python3 .cargo/ci-cache.py run cargo build --locked -p gb-base --example worktree-list
 python3 .cargo/ci-cache.py run cargo build --locked -p guildbotics
 target/debug/guildbotics generate-cli-reference --check
 export GUILDBOTICS_BLACKBOX_CLI="$PWD/target/debug/guildbotics"

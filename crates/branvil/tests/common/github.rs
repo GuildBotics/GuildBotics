@@ -163,7 +163,7 @@ pub struct Refusal {
 
 pub struct FakeGitHub {
     pub url: String,
-    pub root: PathBuf,
+    root: tempfile::TempDir,
     pub state: Arc<Mutex<State_>>,
 }
 
@@ -723,7 +723,8 @@ impl FakeGitHub {
         Paused(pause)
     }
 
-    pub async fn start(root: &Path) -> FakeGitHub {
+    pub async fn start() -> FakeGitHub {
+        let root = tempfile::tempdir().unwrap();
         let state = Arc::new(Mutex::new(State_::default()));
         let app = Router::new()
             .route("/user", get(user))
@@ -756,7 +757,7 @@ impl FakeGitHub {
                 "/repos/{owner}/{name}/dependabot/alerts/{n}",
                 get(alert_get),
             )
-            .with_state((state.clone(), root.to_path_buf()))
+            .with_state((state.clone(), root.path().to_path_buf()))
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 late_answer,
@@ -766,11 +767,7 @@ impl FakeGitHub {
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
-        FakeGitHub {
-            url,
-            root: root.to_path_buf(),
-            state,
-        }
+        FakeGitHub { url, root, state }
     }
 
     pub fn account(&self, token: &str, login: &str) {
@@ -825,11 +822,11 @@ impl FakeGitHub {
     }
 
     pub fn dir(&self, repo: &str) -> PathBuf {
-        self.root.join(format!("{repo}.git"))
+        self.root.path().join(format!("{repo}.git"))
     }
 
     pub fn tip(&self, repo: &str, branch: &str) -> Option<String> {
-        tip(&self.root, repo, branch)
+        tip(self.root.path(), repo, branch)
     }
 
     /// Pull request `number` of `octo/demo`.
@@ -865,7 +862,7 @@ impl FakeGitHub {
         let p = self.pull_of(repo, number);
         let dir = self.dir(repo);
         let d = dir.to_str().unwrap();
-        let base = tip(&self.root, repo, &p.base).unwrap();
+        let base = tip(self.root.path(), repo, &p.base).unwrap();
         // The tree of merging the head into the base, as GitHub computes it.
         let head_ref = format!("refs/heads/{}", p.head);
         let merged = git_ok(
@@ -920,7 +917,7 @@ impl FakeGitHub {
         let p = self.pull_of(repo, number);
         let dir = self.dir(repo);
         let d = dir.to_str().unwrap();
-        let base = tip(&self.root, repo, &p.base).unwrap();
+        let base = tip(self.root.path(), repo, &p.base).unwrap();
         let range = format!("{base}..refs/heads/{}", p.head);
         let commits = git_ok(&dir, &["--git-dir", d, "rev-list", "--reverse", &range]);
         let mut parent = base.clone();
@@ -1098,7 +1095,7 @@ impl FakeGitHub {
         );
         github.insert(
             "git_url".into(),
-            toml::Value::String(self.root.to_string_lossy().into_owned()),
+            toml::Value::String(self.root.path().to_string_lossy().into_owned()),
         );
         upstream.insert("github".into(), toml::Value::Table(github));
         std::fs::write(&path, toml::to_string(&doc).unwrap()).unwrap();

@@ -3,7 +3,7 @@
 This is the internal contract between the service and its clients in this
 repository: the browser GUI, the CI runner (`guildbotics runner`), the Git
 hooks, and the Hub's update commands (`guildbotics server hub-data backup`,
-`hub-verified`, `hub-clients`). GuildBotics' members call the operations
+`hub-releases`, `hub-clients`). GuildBotics' members call the operations
 in process through `api::DataApi`, without a token: `DataApi::owner()` acts as
 the owner and `DataApi::agent(name, display_name)` as the agent `name`,
 created with that display name when missing. When the service changes an
@@ -173,6 +173,7 @@ repository, and upstream events, including changes in another repository.
 | 409 | `children_open` | A ticket is closed as completed while one of its children is open. |
 | 409 | `blocked` | A ticket is moved into `in_progress` while one of its blockers is open. |
 | 409 | `delete_has_children`, `delete_blocks_tickets`, `delete_linked_pull`, `delete_upstream_issue` | Ticket deletion is refused because it has children, is named as a blocker, links a PR, or links an upstream issue, respectively. Closed children, dependents, and PRs count too. |
+| 409 | `runner_online`, `runner_holds_attempts` | Runner deletion is refused because the runner reported within `ci.runner_absent_secs` or holds attempts ("CI settings"). Nothing was written. |
 | 409 | `no_account` | The member whose account the upstream host needs has none there, or its credential is not on this machine ("Upstream"). |
 | 409 | `upstream_refused` | The upstream host refused what Branvil sent or asked for (the message says why). |
 | 409 | `idempotency_conflict` | See conventions. |
@@ -275,6 +276,7 @@ A workspace holds repositories (`<workspace>/<name>`) and has one board.
   "required_approvals": 1,
   "auto_land": false,
   "hold_while_failing": false,
+  "review_rounds": 3,
   "ci_network": false,
   "responder": {"member": "aiko", "chosen": false, "automatic": "aiko"},
   "labels": ["bug", "feature"],
@@ -287,12 +289,15 @@ A workspace holds repositories (`<workspace>/<name>`) and has one board.
 many approvals a merge or a publish needs (`0` needs none; a new repository
 needs 1; see "Pull requests"). `auto_land` says the repository lands its pull
 requests by itself (`false` for a new repository; see "Landing
-automatically"). `upstream` is the repository on
+automatically"). `review_rounds` is how many heads of a pull request a
+member reviews before its automatic re-review stops and the pull request
+becomes a draft (1–20; 3 for a new repository; the CI tab of the repository's
+settings). `upstream` is the repository on
 a code host it follows and publishes to, or `null` (see "Upstream").
 
 - `GET /api/v1/repos` → items (every repository), by path.
 - `POST /api/v1/repos` (owner) `{"path","default_branch"?,"labels"?}` (default `main`, no labels) → repository. `path` is `<workspace>/<name>` of an existing workspace (`404 not_found` otherwise). An empty bare repository is created.
-- `PATCH /api/v1/repos/{repo}` (owner) `{"revision", "default_branch"?, "required_approvals"?, "auto_land"?, "hold_while_failing"?, "protected_branches"?, "ci_network"?, "responder"?, "labels"?}` → `409 conflict` when `revision` is stale. Removing a label leaves it on the tickets that carry it. `ci_network` is the network access of CI jobs (`docs/ci.md`; the CI tab of the repository's settings). With an upstream, the default branch follows the upstream's and cannot be changed (`409 conflict`).
+- `PATCH /api/v1/repos/{repo}` (owner) `{"revision", "default_branch"?, "required_approvals"?, "auto_land"?, "hold_while_failing"?, "review_rounds"?, "protected_branches"?, "ci_network"?, "responder"?, "labels"?}` → `409 conflict` when `revision` is stale; `400 invalid` for `review_rounds` outside 1–20. Removing a label leaves it on the tickets that carry it. `ci_network` is the network access of CI jobs (`docs/ci.md`; the CI tab of the repository's settings). With an upstream, the default branch follows the upstream's and cannot be changed (`409 conflict`).
 
 ### `GET /api/v1/repos/{repo}/branches/{branch}`
 
@@ -338,6 +343,7 @@ A failure is never an empty list:
 | HTTP | `code` | When |
 | --- | --- | --- |
 | 422 | `unsupported` | The repository has no upstream. |
+| 409 | `runner_online`, `runner_holds_attempts` | Runner deletion is refused because the runner reported within `ci.runner_absent_secs` or holds attempts ("CI settings"). Nothing was written. |
 | 409 | `no_account` | The reader has no account on the host, or its credential is not on this machine. |
 | 404 | `not_found` | No alert of that `id`, or the host answered "not found" for the repository: the reader's account cannot see it, or the host keeps no alerts of it. |
 | 409 | `upstream_refused` | The host refused the reader's request (its token, its permissions, or the request itself). |
@@ -1253,8 +1259,10 @@ attempts are not interrupted by changes in class.
 - `PUT /attempts/{id}/artifacts/{name}` zip bytes → `{"name","bytes"}`. The name
   must be one the job declares; `400 invalid` for anything not starting like a
   zip archive, `413 too_large` above `ci.artifact_max_mib`.
-- `POST /attempts/{id}/finish` `{"lease","conclusion","details"?,"image_digest"?,"peak_memory_mib"?,"reused_from"?,"cache_key"?}`
-  → the attempt. `image_digest` is the configuration digest of the image the
+- `POST /attempts/{id}/finish` `{"lease","conclusion","details"?,"image_digest"?,"peak_memory_mib"?,"reused_from"?,"cache_key"?,"release_points"?}`
+  → the attempt. `release_points` are the messages of the job's output lines
+  that start with `::release-point::` ([Release points](ci.md#release-points)),
+  at most 10 of 200 characters kept. `image_digest` is the configuration digest of the image the
   job ran on (`sha256:<64 hex>`, `400 invalid` otherwise), recorded on the
   attempt. An actual execution of a cached job reports its computed
   `cache_key` (64 hex characters); other jobs leave it `null`. A reused success
@@ -1530,6 +1538,16 @@ the rest of the file, and take effect immediately. The Hub uses the shared image
   `[ci.runner_limits.<name>]` for the named runner member, including members
   that have never reported. An unknown name or a member of another kind returns
   `404`. Each runner without an override uses the Hub defaults.
+- `DELETE /api/v1/admin/ci/runners/{name}` (owner) → the settings. Deletes a
+  stopped runner member in one operation: every token of it is revoked (it
+  gets `401` from then on), its record and its row in `runner.runners` go,
+  and `[ci.runner_limits.<name>]` is removed from `config.toml`, keeping the
+  rest of the file. An unknown name or a member of another kind returns `404`.
+  A runner that reported within `ci.runner_absent_secs` is `409 runner_online`,
+  and one that holds attempts `409 runner_holds_attempts`; nothing is deleted.
+  Attempts and checks keep the runner's name in `runner`. A runner that joins
+  again under the same name (`guildbotics runner join` from the same device)
+  is a new member with the Hub defaults.
 - `POST /api/v1/admin/ci/images/pull` (owner) `{"reference"}` → `202` with the
   settings, `operation` running; `400 invalid` for a reference that is not
   `[registry/]name[:tag]` (pipelines name an image by its tag, so a digest
@@ -1551,10 +1569,12 @@ the rest of the file, and take effect immediately. The Hub uses the shared image
 
 ### Backups
 
-- `POST /api/v1/admin/backup` `{"to": "/absolute/new/dir"}` → the backup's manifest (see
-  `docs/backup-restore.md`). The directory is on the service's machine, must not exist or be
-  empty (`409 conflict` otherwise), and must be outside the data directory (`400 invalid`).
-  `guildbotics server hub-data backup --to <dir>` calls it for the code host's part.
+- `POST /api/v1/admin/backup` `{"to": "/absolute/new/dir"}` → the
+  backup's manifest (see `docs/backup-restore.md`). The directory is on the service's machine,
+  must not exist or be empty (`409 conflict` otherwise), and must be outside the data directory
+  (`400 invalid`). `without_ci_files` (optional, default `false`) leaves out CI logs and
+  artifacts. `guildbotics server hub-data backup --to <dir> [--without-ci-files]` calls it for
+  the code host's part.
 
 ### Diagnostics
 
@@ -1695,6 +1715,30 @@ a human operation. Creation and closure publish a ticket event. Updates to defau
 verification also publish a `verification` event.
 
 Board cards accept `repair=true` to select repair tickets independently of assignee (with the usual state and lane filters).
+
+### Releases
+
+`GET /api/v1/repos/{repo}/releases?since={sha}` accepts an owner or member token
+or a session. It returns the release rule of the default branch's tip
+(`tag_prefix`, `schedule` as `HH:MM` and `*:MM`, `time_zone`, `next_at`, and
+`problem`, the reason when its pipeline is invalid), `next_name` (the default
+name of a release made now), `points` (the unreleased release points, newest
+first: `[{"sha","notes":[{"job","attempt_id","message"}]}]`), and `releases`
+(`[{"name","sha","title","authored_at"}]`, newest first: the releases Branvil
+made, under any prefix). With `since`, a full
+SHA, `releases` holds only the releases newer than that commit and
+`since_on_main` says whether it is in the first-parent history (otherwise
+`null`).
+
+`POST /api/v1/repos/{repo}/releases` (owner only) `{"sha","name"?}` tags `sha`
+under the prefix and returns the same view. `name` is the part after the
+prefix (at most 64 characters); without it the default name is used. `400
+invalid` for a SHA that is not full or a name that is not a tag name; `409`
+`release_not_newer` (not newer than the latest release on the first-parent
+history), `release_not_verified`, `release_point_first` (an older release point
+is unreleased), `release_tag_exists`, or `release_pipeline_invalid`. A release
+publishes a `release` change event with the repository `path`; clients refetch
+the releases and the verification history.
 
 ### Repair hint comments
 

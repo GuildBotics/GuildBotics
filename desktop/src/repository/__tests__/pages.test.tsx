@@ -487,7 +487,7 @@ describe("pages", () => {
     },
   );
 
-  it("sends the selected runner and multiple exclusions when retrying a PR job", async () => {
+  it("sends the selected runner and multiple exclusions by name while showing their display names", async () => {
     const user = userEvent.setup();
     const sha = "f".repeat(40);
     const path = "/api/v1/repos/acme/demo/jobs/att_failed";
@@ -503,8 +503,21 @@ describe("pages", () => {
       artifact_names: [],
       reused_from: null,
     };
+    const runner = (name: string, display_name: string) => ({
+      name,
+      display_name,
+      kind: "runner",
+      accounts: [],
+      reviewers: [],
+    });
     const fake = fakeApi({
       ...SHELL,
+      // A runner without a display name of its own has its name as one.
+      "GET /api/v1/members": page([
+        runner("linux", "Linux box"),
+        runner("windows", "windows"),
+        runner("hub", "Mac mini"),
+      ]),
       "GET /api/v1/repos/acme/demo/pulls": page([]),
       [`GET /api/v1/repos/acme/demo/commits/${sha}`]: json(200, {
         sha,
@@ -533,6 +546,11 @@ describe("pages", () => {
           selection: { runner: "windows", exclude_runners: ["linux", "hub"] },
         },
         retry_wait: { reason: "offline" },
+        runner_recovery: {
+          failed_attempt: job.id,
+          failed_runner: "linux",
+          successful_runner: "hub",
+        },
       }),
       "GET /api/v1/repos/acme/demo/jobs/att_retry/log": json(200, {
         log: "",
@@ -542,19 +560,26 @@ describe("pages", () => {
     });
     renderApp("/workspaces/acme/repos/demo/jobs/att_failed");
     const panel = within(await screen.findByRole("dialog", { name: /test/ }));
+    expect(
+      await panel.findByText((text, el) => el?.tagName === "DD" && text === "Linux box (linux)"),
+    ).toBeInTheDocument();
     await user.click(panel.getByRole("combobox", { name: "Select runner" }));
     await user.click(screen.getByRole("option", { name: "windows" }));
     const exclude = panel.getByRole("combobox", { name: "Exclude runners" });
     await user.click(exclude);
-    await user.click(screen.getByRole("option", { name: "linux" }));
-    if (!screen.queryByRole("option", { name: "hub" })) await user.click(exclude);
-    await user.click(screen.getByRole("option", { name: "hub" }));
+    await user.click(screen.getByRole("option", { name: "Linux box (linux)" }));
+    if (!screen.queryByRole("option", { name: "Mac mini (hub)" })) await user.click(exclude);
+    await user.click(screen.getByRole("option", { name: "Mac mini (hub)" }));
     await user.click(panel.getByRole("button", { name: "Retry" }));
     expect(fake.calls("POST", `${path}/retry`)[0]?.body).toEqual({
       runner: "windows",
       exclude_runners: ["linux", "hub"],
     });
     expect(await panel.findByText("windows is offline")).toBeInTheDocument();
+    expect(panel.getByText("Linux box (linux), Mac mini (hub)")).toBeInTheDocument();
+    expect(
+      panel.getByRole("link", { name: "Failed on Linux box, passed on Mac mini" }),
+    ).toBeInTheDocument();
     expect(panel.getByRole("link", { name: "Previous attempt" })).toHaveAttribute(
       "href",
       "/workspaces/acme/repos/demo/jobs/att_failed",
@@ -898,16 +923,18 @@ describe("pages", () => {
   });
 
   it("waits for service warnings beyond the former one-second query deadline", async () => {
-    fakeApi({
-      ...SHELL,
-      "GET /api/v1/admin/diagnostics": async () => {
-        await new Promise((resolve) => setTimeout(resolve, 1_100));
-        return json(200, {
-          runner: { state: "stopping", detail: "Branvil is stopping.", mode: "off" },
-        });
-      },
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const diagnostics = vi.fn(async () => {
+      // Native AbortSignal.timeout uses a clock that fake timers do not advance.
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      return json(200, {
+        runner: { state: "stopping", detail: "Branvil is stopping.", mode: "off" },
+      });
     });
+    fakeApi({ ...SHELL, "GET /api/v1/admin/diagnostics": diagnostics });
     renderApp("/settings/repositories/members");
+    await waitFor(() => expect(diagnostics).toHaveBeenCalled());
+    await act(() => vi.advanceTimersByTimeAsync(1_100));
     const warnings = await screen.findByRole("region", { name: "Warnings" });
     expect(
       within(warnings).getByText(

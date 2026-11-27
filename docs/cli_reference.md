@@ -392,11 +392,14 @@ Options:
 ```text
 Write a backup of the running server's records into a new or empty directory
 
-Usage: guildbotics server hub-data backup --to <TO>
+Usage: guildbotics server hub-data backup [OPTIONS] --to <TO>
 
 Options:
       --to <TO>
           Directory to fill, on this machine
+
+      --without-ci-files
+          Leave out CI logs and artifacts. The running server's jobs go on; the backup's copy records them as a restore will show them: results without files, running jobs interrupted
 
   -h, --help
           Print help

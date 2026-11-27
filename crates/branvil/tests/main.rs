@@ -21,6 +21,7 @@ mod pulls;
 #[cfg(feature = "host")]
 mod real_executor;
 mod recovery;
+mod release;
 mod security;
 mod tickets;
 mod upstream;

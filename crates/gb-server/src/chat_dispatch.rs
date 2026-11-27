@@ -312,10 +312,13 @@ impl Dispatcher {
             )?;
             return Ok(None);
         }
-        for item in snapshot.iter().chain(batch.iter()) {
-            self.store
-                .cache(&self.service, &self.person, &item.message)?;
-        }
+        let messages = snapshot
+            .iter()
+            .chain(&batch)
+            .map(|item| &item.message)
+            .collect::<Vec<_>>();
+        self.store
+            .cache_all(&self.service, &self.person, &messages)?;
         let target = batch
             .iter()
             .rev()

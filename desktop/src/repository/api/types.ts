@@ -66,6 +66,8 @@ export interface Repository {
   /** Its pull requests land by themselves (merged, or published to the upstream) once they can. */
   auto_land: boolean;
   hold_while_failing: boolean;
+  /** The heads a member reviews before its automatic re-review stops (1–20). */
+  review_rounds: number;
   /** Whether its CI jobs may reach public network destinations. */
   ci_network: boolean;
   responder: { member: string; chosen: boolean; automatic: string };
@@ -671,6 +673,7 @@ export type ChangeKind =
   | "command"
   | "hub_status_changed"
   | "verification"
+  | "release"
   | "ticket"
   | "pull"
   | "board"
@@ -703,6 +706,34 @@ export interface Verification {
     failed_jobs: { name: string; attempt_id: string | null; details: string | null }[];
   } | null;
   failing_since: string | null;
+}
+/** A release point a verification job of the commit printed. */
+export interface ReleaseNote {
+  job: string;
+  attempt_id: string;
+  message: string;
+}
+export interface ReleasePoint {
+  sha: string;
+  notes: ReleaseNote[];
+}
+export interface Release {
+  name: string;
+  sha: string;
+  title: string;
+  authored_at: string;
+}
+export interface Releases {
+  tag_prefix: string;
+  /** `HH:MM` every day, `*:MM` every hour. */
+  schedule: string[];
+  time_zone: string;
+  next_at: string | null;
+  problem: string | null;
+  next_name: string;
+  /** Unreleased release points, newest first. */
+  points: ReleasePoint[];
+  releases: Release[];
 }
 export interface VerificationCommit {
   sha: string;

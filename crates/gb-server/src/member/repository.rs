@@ -309,11 +309,26 @@ fn push_url(urls: &mut Vec<String>, value: &Value) {
 }
 /// Only the ticket's links authorize waiting for a future PR transition.
 pub async fn has_open_linked_pull(code: &CodeAgent, ticket: &str) -> Result<bool> {
+    has_open_linked_pull_with_page_size(code, ticket, None).await
+}
+
+#[doc(hidden)]
+pub async fn has_open_linked_pull_with_page_size(
+    code: &CodeAgent,
+    ticket: &str,
+    page_size: Option<usize>,
+) -> Result<bool> {
+    let parameters = page_size.map(|size| serde_json::json!({"page_size":size}));
     let mut continuation = String::new();
     let mut open = false;
     loop {
         let page = code
-            .read(Resource::TicketPullRequests, ticket, None, &continuation)
+            .read(
+                Resource::TicketPullRequests,
+                ticket,
+                parameters.as_ref(),
+                &continuation,
+            )
             .await?;
         open |= page.items().iter().any(|pr| pr["state"] == "open");
         match page.continuation().filter(|s| !s.is_empty()) {

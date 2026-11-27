@@ -6,7 +6,8 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from guildbotics.utils.shared_writes import SHARED_RECORD_SCHEMA_VERSION
+# Keep in sync with gb_base::files::SHARED_RECORD_SCHEMA_VERSION.
+SHARED_RECORD_SCHEMA_VERSION = 5
 
 TaskRunExecutionMode = Literal["autonomous", "user_initiated", "remote"]
 TaskRunState = Literal[

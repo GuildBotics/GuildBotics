@@ -155,35 +155,58 @@ impl Control {
                 None => vec!["ci", "executor"],
             }
         };
-        self.persist(&path, |t| {
-            set(t, "max_cpus", i64::from(limits.max_cpus));
-            set(t, "max_jobs", i64::from(limits.max_jobs));
-            set(
-                t,
-                "memory_reserve_percent",
-                i64::from(limits.memory_reserve_percent),
-            );
-            set(
-                t,
-                "cpu_multiplier_percent",
-                i64::from(limits.cpu_multiplier_percent),
-            );
-            for (key, v) in [
-                ("max_memory_mib", limits.max_memory_mib),
-                ("work_quota_mib", limits.work_quota_mib),
-                ("max_timeout_secs", limits.max_timeout_secs),
-                ("cache_max_mib", limits.cache_max_mib),
-            ] {
-                set(t, key, v as i64);
-            }
-        })
-        .await?;
+        self.persist(&path, |t| write_limits(t, limits)).await?;
         let mut state = self.limits.lock().unwrap();
         if let Some(name) = name {
             state.1.insert(name, limits);
         } else {
             state.0 = limits;
         }
+        Ok(())
+    }
+
+    /// Removes the runner's own job resources (`[ci.runner_limits.<name>]`)
+    /// with the runner, which `delete` deletes, keeping every other setting.
+    /// The file goes first, so that a file that cannot be written deletes
+    /// nothing; claims and health reads keep the resources until `delete` has
+    /// deleted the runner, so that a runner that comes back meanwhile, which
+    /// `delete` then refuses to delete, runs its attempts with them. A
+    /// refused `delete` writes them back to the file; when that fails too,
+    /// the runner uses the defaults, as the file says.
+    pub async fn remove_limits(
+        &self,
+        runner: &str,
+        delete: impl std::future::Future<Output = AppResult<()>>,
+    ) -> AppResult<()> {
+        let _w = self.writing.lock().await;
+        let name = util::fold(runner);
+        let Some(limits) = self.limits.lock().unwrap().1.get(&name).copied() else {
+            return delete.await;
+        };
+        self.persist(&["ci"], |ci| {
+            let emptied = ci
+                .get_mut("runner_limits")
+                .and_then(|t| t.as_table_like_mut())
+                .is_some_and(|limits| {
+                    limits.remove(&name);
+                    limits.is_empty()
+                });
+            if emptied {
+                ci.remove("runner_limits");
+            }
+        })
+        .await?;
+        if let Err(e) = delete.await {
+            let path = ["ci", "runner_limits", name.as_str()];
+            if let Err(restore) = self.persist(&path, |t| write_limits(t, limits)).await {
+                // What the file says from now on, so that saving them again
+                // writes them.
+                self.limits.lock().unwrap().1.remove(&name);
+                tracing::warn!("restoring the job resources of {runner} failed: {restore}");
+            }
+            return Err(e);
+        }
+        self.limits.lock().unwrap().1.remove(&name);
         Ok(())
     }
 
@@ -274,6 +297,29 @@ impl Control {
                 }
             }
         }
+    }
+}
+
+fn write_limits(t: &mut dyn toml_edit::TableLike, limits: Limits) {
+    set(t, "max_cpus", i64::from(limits.max_cpus));
+    set(t, "max_jobs", i64::from(limits.max_jobs));
+    set(
+        t,
+        "memory_reserve_percent",
+        i64::from(limits.memory_reserve_percent),
+    );
+    set(
+        t,
+        "cpu_multiplier_percent",
+        i64::from(limits.cpu_multiplier_percent),
+    );
+    for (key, v) in [
+        ("max_memory_mib", limits.max_memory_mib),
+        ("work_quota_mib", limits.work_quota_mib),
+        ("max_timeout_secs", limits.max_timeout_secs),
+        ("cache_max_mib", limits.cache_max_mib),
+    ] {
+        set(t, key, v as i64);
     }
 }
 
@@ -389,6 +435,104 @@ mod tests {
             .await
             .unwrap();
         assert!(!seen.has_changed().unwrap(), "a running job would stop");
+    }
+
+    /// A deleted runner's own job resources leave the file, and nothing else
+    /// does: the other runners' resources, the defaults, and the comments.
+    /// Until the runner is deleted, claims keep reading them: a runner that
+    /// comes back meanwhile, whose deletion is then refused, runs with its
+    /// own resources, and the refusal writes them back to the file.
+    #[tokio::test]
+    async fn removing_a_runners_limits_keeps_the_rest_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        std::fs::write(
+            &file,
+            "# Branvil\n[ci]\n# who runs jobs\nrunner = \"off\"\n",
+        )
+        .unwrap();
+        let control = Control::new(file.clone(), &CiConfig::default());
+        control
+            .set_limits(Some("Old-Runner"), limits())
+            .await
+            .unwrap();
+        control.set_limits(Some("kept"), limits()).await.unwrap();
+        let before = std::fs::read_to_string(&file).unwrap();
+        let own = |name: &str| match control.runner_limits(name) {
+            (l, LimitsSource::Runner) => Some(l),
+            (_, LimitsSource::Default) => None,
+        };
+        let parsed = |text: &str| -> crate::config::ConfigFile { toml::from_str(text).unwrap() };
+
+        // Refused: the runner reported while it was being deleted.
+        let refused = control
+            .remove_limits("old-runner", async {
+                assert_eq!(own("old-runner"), Some(limits()), "a claim meanwhile");
+                assert!(
+                    !std::fs::read_to_string(&file)
+                        .unwrap()
+                        .contains("old-runner")
+                );
+                Err(AppError::conflict_code("runner_online", "back"))
+            })
+            .await;
+        assert_eq!(refused.unwrap_err().code, "runner_online");
+        assert_eq!(own("old-runner"), Some(limits()));
+        assert_eq!(
+            parsed(&std::fs::read_to_string(&file).unwrap())
+                .ci
+                .runner_limits,
+            parsed(&before).ci.runner_limits
+        );
+
+        control.set_limits(None, limits()).await.unwrap();
+        control
+            .remove_limits("old-runner", async {
+                assert_eq!(own("old-runner"), Some(limits()), "a claim meanwhile");
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            text.contains("# Branvil") && text.contains("# who runs jobs"),
+            "{text}"
+        );
+        assert_eq!(
+            parsed(&text).ci.runner_limits.keys().collect::<Vec<_>>(),
+            ["kept"]
+        );
+        assert_eq!(parsed(&text).ci.executor.max_cpus, 8);
+        assert_eq!(own("old-runner"), None);
+        assert_eq!(own("kept"), Some(limits()));
+
+        // A runner without resources of its own leaves the file as it is.
+        control
+            .remove_limits("old-runner", async { Ok(()) })
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+
+        // The last one takes the emptied table with it.
+        control
+            .remove_limits("kept", async { Ok(()) })
+            .await
+            .unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(!text.contains("runner_limits"), "{text}");
+        assert!(text.contains("[ci.executor]"), "{text}");
+
+        // A refusal whose write-back fails too leaves the runner with the
+        // defaults, as the file says, so that saving them again writes them.
+        control.set_limits(Some("back"), limits()).await.unwrap();
+        let refused = control
+            .remove_limits("back", async {
+                std::fs::write(&file, "listen = \n").unwrap();
+                Err(AppError::conflict_code("runner_online", "back"))
+            })
+            .await;
+        assert_eq!(refused.unwrap_err().code, "runner_online");
+        assert_eq!(own("back"), None);
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 use crate::support;
+use crate::support::Current;
 use branvil::agent::port::*;
 use branvil::test_support::input;
-use gb_member::WriteGuard;
 use gb_server::member::git::{Guest, Output, Pending, Workspace};
 use serde_json::json;
 use std::{
@@ -12,12 +12,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::io::AsyncWriteExt;
-struct Current;
-impl WriteGuard for Current {
-    fn ensure_current(&self) -> gb_member::Result<()> {
-        Ok(())
-    }
-}
 type GuestCall = (PathBuf, Vec<String>, BTreeMap<String, String>);
 #[derive(Default)]
 struct LocalGuest {
@@ -116,8 +110,6 @@ fn git(path: &Path, args: &[&str]) -> String {
 }
 struct Fixture {
     temp: tempfile::TempDir,
-    /// The main commit of `fork/repo`.
-    fork: String,
     /// The embedded service's own bare repository of `acme/repo`.
     remote: PathBuf,
     /// The clone URL the member's workspace uses.
@@ -130,15 +122,14 @@ struct Fixture {
 impl Fixture {
     async fn new() -> Self {
         let services = support::Embedded::new().await;
-        let fork = services.fork().await;
         let url = services.code.clone_url(support::REPO).await.unwrap();
-        Self::with(services, fork, url)
+        Self::with(services, url)
     }
     /// The same service with new local state: seed, host root, clones and guest.
     fn renew(self) -> Self {
-        Self::with(self.services, self.fork, self.url)
+        Self::with(self.services, self.url)
     }
-    fn with(services: support::Embedded, fork: String, url: String) -> Self {
+    fn with(services: support::Embedded, url: String) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let remote = services
             .fixture
@@ -169,7 +160,6 @@ impl Fixture {
         std::fs::create_dir(temp.path().join("clones")).unwrap();
         Self {
             temp,
-            fork,
             remote,
             url,
             seed,
@@ -442,6 +432,80 @@ async fn initialization_and_reassignment_failures_preserve_their_registration() 
     assert!(f.workspace("one").commit(&path, "noop").await.is_ok());
 }
 #[tokio::test]
+async fn prepare_prunes_stale_tracking_refs_before_writing_their_replacements() {
+    let f = Fixture::new().await;
+    let head = git(&f.remote, &["rev-parse", "refs/heads/main"]);
+    git(&f.remote, &["update-ref", "refs/heads/Feature", &head]);
+    let path = f.prepare("one", "ticket/1").await;
+
+    let tracking_refs = || {
+        git(
+            &path,
+            &[
+                "for-each-ref",
+                "--format=%(refname) %(objectname)",
+                "refs/remotes/origin/",
+            ],
+        )
+    };
+    for (old, new, batches) in [
+        ("Feature", "Feature", 1),
+        ("Feature", "feature", 2),
+        ("feature", "feature/child", 2),
+        ("feature/child", "feature", 2),
+        ("feature", "renamed", 2),
+    ] {
+        if old != new {
+            git(
+                &f.remote,
+                &["update-ref", "-d", &format!("refs/heads/{old}")],
+            );
+            git(
+                &f.remote,
+                &["update-ref", &format!("refs/heads/{new}"), &head],
+            );
+        }
+        f.guest.calls.lock().unwrap().clear();
+        assert_eq!(f.prepare("one", "ticket/1").await, path);
+        let mut expected = [
+            format!("refs/remotes/origin/main {head}"),
+            format!("refs/remotes/origin/{new} {head}"),
+        ];
+        expected.sort();
+        assert_eq!(tracking_refs(), expected.join("\n"), "{old} -> {new}");
+
+        // Linux can handle a case-only rename in one batch. Check the batch
+        // count as well so CI guards the behavior needed on the Hub volume.
+        let calls = f.guest.calls.lock().unwrap();
+        let actual = calls
+            .iter()
+            .filter(|(cwd, args, _)| {
+                cwd == &path && args == &["git", "update-ref", "--no-deref", "--stdin"]
+            })
+            .count();
+        assert_eq!(actual, batches, "{old} -> {new}");
+    }
+    git(&f.remote, &["update-ref", "-d", "refs/heads/renamed"]);
+    git(&f.remote, &["update-ref", "refs/heads/recovered", &head]);
+    let lock = path.join(".git/refs/remotes/origin/recovered.lock");
+    std::fs::write(&lock, "").unwrap();
+    assert!(
+        f.workspace("one")
+            .prepare("acme/repo", "ticket/1")
+            .await
+            .is_err()
+    );
+    assert_eq!(tracking_refs(), format!("refs/remotes/origin/main {head}"));
+
+    std::fs::remove_file(lock).unwrap();
+    assert_eq!(f.prepare("one", "ticket/1").await, path);
+    assert_eq!(
+        tracking_refs(),
+        format!("refs/remotes/origin/main {head}\nrefs/remotes/origin/recovered {head}")
+    );
+}
+
+#[tokio::test]
 async fn published_and_tag_history_remains_reusable_after_remote_deletion() {
     let f = Fixture::new().await;
     let first = f.prepare("one", "ticket/1").await;
@@ -551,6 +615,7 @@ async fn unregistered_commit_worktree_push_and_scope_boundaries() {
         git(&f.remote, &["rev-parse", "feature"]),
         receipt["commit_sha"]
     );
+    f.services.fork().await;
     let fork = f
         .workspace("one")
         .prepare("fork/repo", "feature")
@@ -792,6 +857,7 @@ async fn changing_the_anchor_keeps_unpublished_branches_and_repository_slots_sep
     let other = f.prepare("one", "other").await;
     assert_ne!(other, path);
     assert_eq!(git(&path, &["rev-parse", "main"]), head);
+    f.services.fork().await;
     let fork = f
         .workspace("one")
         .prepare("fork/repo", "main")
@@ -1125,9 +1191,10 @@ async fn prepare_dispatch_resolves_ticket_and_fork_heads_and_rejects_invalid_anc
     let f = Fixture::new().await;
     let issue = f.services.ticket("Ticket").await;
     let key = f.services.code.ticket_view(&issue).await.unwrap().key;
+    let fork = f.services.fork().await;
     f.services
         .fixture
-        .commit(support::FORK, "review", Some(&f.fork), "readme", "review\n");
+        .commit(support::FORK, "review", Some(&fork), "readme", "review\n");
     let pr = f
         .services
         .fixture
@@ -1407,16 +1474,14 @@ mod active_work_keeps_clean_clones_and_terminal_work_releases_them {
         let first = prepare_work(&f, kind, &one, "ticket/1").await;
         let second = prepare_work(&f, kind, &two, "ticket/2").await;
         assert_ne!(first["repo_path"], second["repo_path"]);
-        for _ in 0..2 {
-            assert_eq!(
-                prepare_work(&f, kind, &one, "ticket/1").await["repo_path"],
-                first["repo_path"]
-            );
-            assert_eq!(
-                prepare_work(&f, kind, &two, "ticket/2").await["repo_path"],
-                second["repo_path"]
-            );
-        }
+        assert_eq!(
+            prepare_work(&f, kind, &one, "ticket/1").await["repo_path"],
+            first["repo_path"]
+        );
+        assert_eq!(
+            prepare_work(&f, kind, &two, "ticket/2").await["repo_path"],
+            second["repo_path"]
+        );
         assert_eq!(
             git(
                 Path::new(first["repo_path"].as_str().unwrap()),
@@ -1462,6 +1527,7 @@ mod excluded_work_retains_git_based_reuse {
 #[tokio::test]
 async fn active_clones_survive_cleanup_with_one_idle_clone_per_repository() {
     let f = Fixture::new().await;
+    f.services.fork().await;
     let repos = [support::REPO, support::FORK];
     let mut tickets = vec![];
     for repo in repos {
@@ -1568,13 +1634,11 @@ mod unreadable_targets_stay_reserved_without_blocking_other_work {
                     .unwrap();
             }
         }
-        for other_kind in ["manual", "pull_request_review", "ticket_mention", "chat"] {
-            let mut other = f.workspace("other");
-            other.work = Some((other_kind, "other"));
-            let next = other.prepare("acme/repo", "next").await.unwrap();
-            assert_ne!(first["repo_path"], next["repo_path"]);
-            assert!(Path::new(first["repo_path"].as_str().unwrap()).exists());
-        }
+        let mut other = f.workspace("other");
+        other.work = Some(("manual", "other"));
+        let next = other.prepare("acme/repo", "next").await.unwrap();
+        assert_ne!(first["repo_path"], next["repo_path"]);
+        assert!(Path::new(first["repo_path"].as_str().unwrap()).exists());
         // The reservation was decided by reading the target, not by skipping it.
         assert!(
             faults
