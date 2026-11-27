@@ -85,21 +85,43 @@ pub fn prune(builds: &std::path::Path, keep: &[std::ffi::OsString]) -> anyhow::R
     Ok(())
 }
 
-fn declaration(text: &str) -> anyhow::Result<Value> {
-    let value: Value = serde_json::from_str(text)?;
-    let version = value
+pub(crate) fn migration_version(value: &Value) -> anyhow::Result<u64> {
+    anyhow::ensure!(value.is_object(), "invalid migration declaration");
+    Ok(value
         .get("manual_update_version")
         .map(|v| {
             v.as_u64()
                 .ok_or_else(|| anyhow::anyhow!("invalid manual_update_version"))
         })
         .transpose()?
-        .unwrap_or(0);
-    let instructions = value.get("instructions").and_then(Value::as_str);
+        .unwrap_or(0))
+}
+
+pub(crate) fn migration_ticket(value: &Value) -> anyhow::Result<&str> {
+    let ticket = value["instructions"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("manual update needs a ticket URL"))?;
+    let url = reqwest::Url::parse(ticket)?;
     anyhow::ensure!(
-        version == 0 || instructions.is_some_and(|p| p.starts_with("docs/") && !p.contains("..")),
-        "manual update needs a document under docs/"
+        matches!(url.scheme(), "http" | "https")
+            && url.host().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "manual update needs an HTTP(S) ticket URL without credentials"
     );
+    Ok(ticket)
+}
+
+fn declaration(text: &str) -> anyhow::Result<Value> {
+    let value: Value = serde_json::from_str(text)?;
+    let version = migration_version(&value)?;
+    let instructions = if version == 0 {
+        None
+    } else {
+        Some(migration_ticket(&value)?)
+    };
     Ok(json!({"manual_update_version": version, "instructions": instructions}))
 }
 
@@ -178,13 +200,15 @@ mod tests {
             json!({"manual_update_version":0,"instructions":null})
         );
         assert_eq!(
-            declaration(r#"{"manual_update_version":2,"instructions":"docs/hub-server.md"}"#)
+            declaration(r#"{"manual_update_version":2,"instructions":"https://hub.example/workspaces/team/repos/project/tickets/2"}"#)
                 .unwrap()["manual_update_version"],
             2
         );
         for text in [
             r#"{"manual_update_version":-1}"#,
             r#"{"manual_update_version":1}"#,
+            r#"{"manual_update_version":1,"instructions":"docs/hub-server.md"}"#,
+            r#"{"manual_update_version":1,"instructions":"javascript:alert(1)"}"#,
             "invalid",
         ] {
             assert!(declaration(text).is_err());

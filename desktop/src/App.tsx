@@ -1,4 +1,4 @@
-import { useHubStatus, HubVersion } from "./HubStatus";
+import { useHubStatus, HubVersion, HubUpdateNotice } from "./HubStatus";
 import { RunFiles } from "./commands/RunFiles";
 import { HubStatusBand } from "./ui/HubStatus";
 import { AppShell } from "./ui/AppShell";
@@ -309,6 +309,9 @@ export function App() {
         </Alert>
       ) : null}
       <HubStatusBand status={hub.data} t={t} />
+      {page !== "/service" && hub.data?.update && (
+        <HubUpdateNotice key={hub.data.update.sha} update={hub.data.update} />
+      )}
       {hosted ? <AlertBand hubOperating={Boolean(hub.data?.operation)} /> : null}
       {configured && !waitingForWorkspace ? <SystemAlertBand /> : null}
       {waitingForWorkspace ? null : workspaceRedirect ? (

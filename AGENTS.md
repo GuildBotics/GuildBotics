@@ -77,7 +77,7 @@ GuildBotics の共有記録を古い版で読めない形へ変えるときは `
 
 ## Hub の手作業が必要な更新
 
-ポート変更など、更新後にオーナーの作業が必要な変更を入れるチケットでは、ルートの `hub-update.json` の `manual_update_version` を直前の番号より上げ、`instructions` に `docs/` 配下の手順書への相対パスを書く。番号は最後に手作業が必要だった版を表し、その後の通常更新でも下げない。宣言はビルドに埋め込まれ、`guildbotics server hub-migration` が読む。宣言のない版の番号は 0 とする。コマンドの契約は [Hub の起動と更新](docs/hub-server.md#自動更新用の内部コマンド) を参照する。
+オーナーに手作業が必要な Hub の変更では、ルートの `hub-update.json` の `manual_update_version` を直前の番号より上げ、`instructions` に変更のチケットの HTTP(S) URL を書く。チケットの本文には人が行う作業を書く。オーナーが画面で完了を記録すると自動更新が続くため、手作業の案内に更新用の Git コマンドや `update` を含めない。番号は最後に手作業が必要だった版を表し、その後の通常更新でも下げない。宣言はビルドに埋め込まれ、`guildbotics server hub-migration` が読む。宣言のない版の番号は 0 とする。コマンドの契約は [Hub の起動と更新](docs/hub-server.md#自動更新用の内部コマンド) を参照する。
 
 ## 開発時の基本コマンド（CI準拠）
 

@@ -31,6 +31,7 @@ use loopback_auth::CSP;
 
 /// What every request of the server shares.
 pub struct Api {
+    pub(crate) hub_update_dir: Option<PathBuf>,
     pub(crate) hub_phase: std::sync::Mutex<Option<crate::hub_status::Phase>>,
     pub(crate) health_lock: tokio::sync::Mutex<()>,
     pub(crate) activity_sync:
@@ -111,6 +112,7 @@ impl Api {
                 .map(gb_observability::Diagnostics::open),
         );
         Api {
+            hub_update_dir: crate::hub_status::update_directory(),
             hub_phase: Default::default(),
             health_lock: Default::default(),
             activity_sync: Default::default(),
@@ -422,6 +424,12 @@ routes!(
     (OwnerSession, post, "/shutdown", crate::server::shutdown),
     (OwnerSession, get, "/hub-status", crate::hub_status::read),
     (OwnerSession, post, "/hub-status", crate::hub_status::set),
+    (
+        Session,
+        post,
+        "/hub-status/confirm",
+        crate::hub_status::confirm
+    ),
     (
         OwnerSession,
         get,
@@ -947,19 +955,22 @@ async fn authenticate(State(api): State<Shared>, req: Request, next: Next) -> Re
     } else {
         req.method().as_str()
     };
-    let consent = OWNER_CLASSIFIED
+    let route = OWNER_CLASSIFIED
         .iter()
         .chain(PUBLIC_CLASSIFIED)
         .chain(OUTER_CLASSIFIED)
-        .any(|route| {
-            Some(route.path) == path
-                && route.method.eq_ignore_ascii_case(method)
-                && route.auth == loopback_auth::RouteAuth::OwnerOrConsent
-        });
-    match api
-        .auth
-        .authenticate_for(req.method(), req.headers(), consent)
-    {
+        .find(|route| Some(route.path) == path && route.method.eq_ignore_ascii_case(method))
+        .map(|route| route.auth);
+    let result = if route == Some(loopback_auth::RouteAuth::Session) {
+        api.auth.authenticate_session(req.method(), req.headers())
+    } else {
+        api.auth.authenticate_for(
+            req.method(),
+            req.headers(),
+            route == Some(loopback_auth::RouteAuth::OwnerOrConsent),
+        )
+    };
+    match result {
         Ok(()) => next.run(req).await,
         Err(denied) => auth_denial(denied, req.headers()),
     }
@@ -1900,6 +1911,10 @@ mod tests {
         let allowed: &[((&str, &str), &str)] = &[
             (("post", "/shutdown"), "asks for the stop itself"),
             (("post", "/hub-status"), "maintenance display only"),
+            (
+                ("post", "/hub-status/confirm"),
+                "records the owner's approval without starting work",
+            ),
             (("post", "/scheduler/stop"), "stops the service"),
             (
                 ("post", "/member/run"),
@@ -2159,6 +2174,10 @@ mod tests {
             ),
             (("post", "/shutdown"), "server lifetime"),
             (("post", "/hub-status"), "device-local maintenance state"),
+            (
+                ("post", "/hub-status/confirm"),
+                "device-local manual update confirmation",
+            ),
             (("post", "/scheduler/start"), "service lifetime"),
             (("post", "/scheduler/stop"), "service lifetime"),
             (

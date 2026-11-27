@@ -1,7 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Anchor, Stack, Text } from "@mantine/core";
-import { HubVersionLabel, type HubStatus } from "./ui/HubStatus";
+import { Alert, Anchor, Button, List, Stack, Text } from "@mantine/core";
+import { HubVersionLabel, type HubStatus, type HubUpdate } from "./ui/HubStatus";
 import { request } from "./api/client";
 export const useHubStatus = () =>
   useQuery({
@@ -14,13 +14,15 @@ export function HubVersion() {
   const status = useHubStatus().data;
   const version = status?.current;
   const releases = status?.releases;
-  if (!version) return null;
+  if (!version && !status?.update) return null;
   return (
     <Stack gap={2}>
-      <Text>
-        {t("hub.version")}: <HubVersionLabel version={version} t={t} />
-        {releases?.running && ` · ${releases.running}`}
-      </Text>
+      {version && (
+        <Text>
+          {t("hub.version")}: <HubVersionLabel version={version} t={t} />
+          {releases?.running && ` · ${releases.running}`}
+        </Text>
+      )}
       {releases && (
         <Text size="sm" c="dimmed">
           {releases.pending.length > 0
@@ -33,6 +35,56 @@ export function HubVersion() {
           </Anchor>
         </Text>
       )}
+      {status?.update && <HubUpdateNotice key={status.update.sha} update={status.update} />}
     </Stack>
+  );
+}
+
+export function HubUpdateNotice({ update }: { update: HubUpdate }) {
+  const { t } = useTranslation();
+  const client = useQueryClient();
+  const confirm = useMutation({
+    mutationFn: () => request("/hub-status/confirm", { method: "POST", body: { sha: update.sha } }),
+    onSettled: () => client.invalidateQueries({ queryKey: ["hub-status"] }),
+  });
+  if (update.kind === "failed") {
+    const stage = t(`hub.stage.${update.stage}`, { defaultValue: t("hub.stage.unknown") });
+    return (
+      <Alert color="danger" title={t("hub.failed")}>
+        <Text size="sm">{t("hub.failureStage", { stage })}</Text>
+        <Text size="sm" fw={500}>
+          {t("hub.failureDetails")}
+        </Text>
+        <Text size="sm">{update.reason}</Text>
+        <Text size="sm">{t("hub.failureNext", { next: update.next })}</Text>
+      </Alert>
+    );
+  }
+  return (
+    <Alert color="warning" title={t("hub.manualRequired", { release: update.release })}>
+      <Stack gap="xs" align="flex-start">
+        <List size="sm">
+          {update.steps.map((step) => (
+            <List.Item key={step.version}>
+              <Anchor href={step.ticket}>{step.ticket}</Anchor>
+            </List.Item>
+          ))}
+        </List>
+        {update.confirmed || confirm.isSuccess ? (
+          <Text size="sm" role="status">
+            {t("hub.manualConfirmed")}
+          </Text>
+        ) : (
+          <Button size="xs" loading={confirm.isPending} onClick={() => confirm.mutate()}>
+            {t("hub.confirmManual")}
+          </Button>
+        )}
+        {confirm.error && (
+          <Text size="sm" role="alert">
+            {confirm.error.message}
+          </Text>
+        )}
+      </Stack>
+    </Alert>
   );
 }

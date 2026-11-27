@@ -5,7 +5,7 @@ import { TestMantineProvider } from "./test/TestMantineProvider";
 import i18n from "./i18n";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, waitFor } from "@testing-library/react";
-import { HubVersion } from "./HubStatus";
+import { HubUpdateNotice, HubVersion } from "./HubStatus";
 import { request } from "./api/client";
 vi.mock("./api/client", async (original) => ({
   ...(await original<typeof import("./api/client")>()),
@@ -171,3 +171,81 @@ it("polls Hub status slowly when idle and quickly only during maintenance", asyn
     vi.useRealTimers();
   }
 });
+
+it("links every manual step and records completion for the displayed release", async () => {
+  await i18n.changeLanguage("en");
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const update = {
+    kind: "manual",
+    sha: "b".repeat(40),
+    release: "release/2",
+    steps: [1, 2].map((version) => ({
+      version,
+      ticket: `https://hub.example/tickets/${version}`,
+    })),
+    confirmed: false,
+  } as const;
+  vi.mocked(request)
+    .mockReset()
+    .mockImplementation(async (_, options) => {
+      if (options?.method === "POST") return {};
+      return { ...status, update };
+    });
+  render(
+    <QueryClientProvider client={client}>
+      <TestMantineProvider>
+        <HubVersion />
+      </TestMantineProvider>
+    </QueryClientProvider>,
+  );
+  expect(await screen.findByText("Manual work is required for release/2")).toBeTruthy();
+  for (const { ticket } of update.steps) {
+    expect(screen.getByRole("link", { name: ticket }).getAttribute("href")).toBe(ticket);
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Manual work is complete. Update the Hub" }));
+  expect(await screen.findByRole("status")).toHaveTextContent("Completion recorded");
+  expect(request).toHaveBeenCalledWith("/hub-status/confirm", {
+    method: "POST",
+    body: { sha: update.sha },
+  });
+  client.clear();
+});
+
+it.each([
+  ["banner", "en", "update", "Automatic Hub update failed", "Stage: Applying the update"],
+  ["service", "ja", "update", "Hub の自動更新に失敗しました", "止まった段階：更新の適用"],
+  [
+    "service",
+    "ja",
+    "requirements",
+    "Hub の自動更新に失敗しました",
+    "止まった段階：保存形式と手作業の確認",
+  ],
+] as const)(
+  "shows the translated stage and log details for a failed update in the %s",
+  async (placement, language, stageCode, title, stage) => {
+    await i18n.changeLanguage(language);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const update = {
+      kind: "failed",
+      sha: "c".repeat(40),
+      stage: stageCode,
+      reason: "The new build did not start.",
+      next: "Run recover.",
+    } as const;
+    vi.mocked(request).mockResolvedValue({ ...status, operation: null, update });
+    render(
+      <QueryClientProvider client={client}>
+        <TestMantineProvider>
+          {placement === "banner" ? <HubUpdateNotice update={update} /> : <HubVersion />}
+        </TestMantineProvider>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(title)).toBeTruthy();
+    expect(screen.getByText(stage)).toBeTruthy();
+    expect(screen.getByText(update.reason)).toBeTruthy();
+    expect(screen.getByText(i18n.t("hub.failureNext", { next: update.next }))).toBeTruthy();
+    expect(screen.getByText(i18n.t("hub.failureDetails"))).toBeTruthy();
+    client.clear();
+  },
+);
