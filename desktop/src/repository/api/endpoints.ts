@@ -41,6 +41,7 @@ import type {
   Repository,
   Review,
   Session,
+  TestFailure,
   Thread,
   ThreadComment,
   Ticket,
@@ -301,6 +302,8 @@ export const pulls = {
 const jobPath = (repo: string, id: string) => `/repos/${enc(repo)}/jobs/${enc(id)}`;
 
 export const jobs = {
+  testFailures: (repo: string, name: string) =>
+    get<TestFailure[]>(`/repos/${enc(repo)}/test-failures`, { name }),
   get: (repo: string, id: string) => get<Job>(jobPath(repo, id)),
   log: (repo: string, id: string, tailBytes: number) =>
     get<JobLog>(`${jobPath(repo, id)}/log`, { tail_bytes: tailBytes }),

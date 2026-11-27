@@ -431,6 +431,7 @@ fn validate_job(j: JobSchema) -> Result<JobDef, String> {
         return Err(at(&format!("at most {MAX_ARTIFACTS} artifacts.")));
     }
     let mut names: Vec<String> = Vec::new();
+    let mut junit_declared = false;
     for a in &j.artifacts {
         if !valid_name(&a.name) {
             return Err(at(&format!("'{}' is not a valid artifact name.", a.name)));
@@ -447,6 +448,17 @@ fn validate_job(j: JobSchema) -> Result<JobDef, String> {
         }
         for p in &a.paths {
             check_relative(p).map_err(|m| at(&m))?;
+        }
+        if let Some(path) = &a.junit {
+            if junit_declared {
+                return Err(at("only one artifact can declare a JUnit report."));
+            }
+            if path.ends_with('/') || !a.paths.contains(path) {
+                return Err(at(
+                    "an artifact's junit must name a file explicitly listed in its paths.",
+                ));
+            }
+            junit_declared = true;
         }
     }
     if let Some(c) = &j.cache {
@@ -483,6 +495,27 @@ mod tests {
     use super::*;
 
     const DIGEST: &str = "sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8";
+
+    #[test]
+    fn junit_must_be_one_explicit_file_in_a_jobs_artifacts() {
+        let job = "[[jobs]]\nname='test'\nimage='alpine'\ncommands=['true']\n";
+        let report = "name='results', paths=['target/junit.xml'], junit='target/junit.xml'";
+        let jobs = parse(&format!("{job}artifacts=[{{{report}}}]")).unwrap();
+        assert_eq!(
+            jobs[0].artifacts[0].junit.as_deref(),
+            Some("target/junit.xml")
+        );
+        for artifacts in [
+            "{name='results', paths=['target/junit.xml'], junit='other.xml'}".into(),
+            "{name='results', paths=['target/'], junit='target/'}".into(),
+            format!("{{{report}}},{{{}}}", report.replace("results", "second")),
+        ] {
+            assert!(
+                parse(&format!("{job}artifacts=[{artifacts}]")).is_err(),
+                "{artifacts}"
+            );
+        }
+    }
 
     #[test]
     fn paths_are_optional_bounded_relative_git_globs_without_magic() {

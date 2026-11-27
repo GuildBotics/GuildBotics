@@ -1103,6 +1103,15 @@ with a pipeline, another commit's checks stay "not
 registered yet". `404 not_found` when `sha`
 is not the full sha of a commit of the repository.
 
+### Test failure history
+
+`GET /api/v1/repos/{repo}/test-failures?name={testcase_name}` returns an array of
+`{"attempt_id","job","sha","runner","finished_at","url"}` objects for the exact,
+case-sensitive JUnit testcase name. The 20 most recent failed attempts for
+that repository and name are kept, newest first. A name with no records
+returns an empty array. Results are independent of log and artifact retention.
+The endpoint uses the same repository access as CI attempts.
+
 ### CI attempts
 
 - `GET /api/v1/repos/{repo}/jobs/{attempt_id}` →

@@ -364,6 +364,13 @@ export const en = {
   "ci.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ci.remaining": "about {{time}} left",
   "ci.lastTime": "{{time}} last time",
+  "ci.testFailures": "Test failure history",
+  "ci.testName": "Exact test name",
+  "ci.testNameHint":
+    "Enter the JUnit testcase name. In nextest logs, use the part after the binary name, such as server::example_test.",
+  "ci.searchFailures": "Search",
+  "ci.noTestFailures": "No recorded failures for this test.",
+  "ci.failedAttempt": "Attempt",
   "ci.artifacts": "Artifacts",
   "ci.error.retry_pr_head_required":
     "Runner selection requires a current, unprotected pull request head.",

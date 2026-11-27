@@ -1467,6 +1467,7 @@ mod tests {
         let def = ArtifactDef {
             name: "report".into(),
             paths: vec!["out/".into(), "outside/secret.txt".into()],
+            junit: None,
         };
         let mut budget = 1 << 20;
         let mut notes = Vec::new();

@@ -119,6 +119,7 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
           if (!isRepo(q, path)) return false;
           const k = keyOf(q);
           const sha = (q.state.data as { sha?: string } | undefined)?.sha;
+          if (k[2] === "test-failures") return true;
           if (k[2] === "job") return id === "" || sha === id;
           // Before its first answer, a commit's checks are known by the sha in the key.
           if (k[2] === "commit" && k[4] === "checks") return id === "" || (sha ?? k[3]) === id;

@@ -215,9 +215,9 @@ new data directory; when the upgrade fails, the restored directory is left
 at the previous version, and `guildbotics server hub-data upgrade --data-dir <it>` finishes
 it once the cause is fixed).
 
-Version 49 → 50 (`src/upgrade.rs`): existing CI attempts gain an empty
-runner claim record, and existing resource deferrals gain an empty machine
-snapshot. Every upgrade also binds the GuildBotics workspaces' execution roots.
+Version 50 → 51 (`src/upgrade.rs`) adds an empty table for CI test failure
+history and preserves existing records, including runner evidence. Every
+upgrade also binds the GuildBotics workspaces' execution roots.
 
 ### The integrated Hub service
 

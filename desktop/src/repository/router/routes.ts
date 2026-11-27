@@ -6,6 +6,7 @@ export type Route =
   | { name: "ticket"; repo: string; key: string }
   | { name: "pull"; repo: string; number: number }
   | { name: "commit"; repo: string; sha: string }
+  | { name: "test_failures"; repo: string }
   | { name: "job"; repo: string; attemptId: string }
   | { name: "repo"; repo: string }
   | { name: "releases"; workspace: string; repo: string | null }
@@ -44,6 +45,7 @@ export function parseRoute(pathname: string): Route {
   if (segs.length === 4) return { name: "repo", repo: path };
   if (segs.length === 5 && kind === "settings")
     return { name: "settings", section: null, repo: path };
+  if (segs.length === 5 && kind === "test-failures") return { name: "test_failures", repo: path };
   if (segs.length === 5 && kind === "releases") return { name: "releases", workspace, repo: path };
   if (segs.length !== 6 || !id) return { name: "not_found", pathname };
   switch (kind) {
@@ -92,6 +94,7 @@ export const href = {
     `${href.pull(repo, number)}#${POST_MERGE_FRAGMENT}`,
   commit: (repo: string, sha: string) =>
     `${repositoryPath(repo)}/commits/${encodeURIComponent(sha)}`,
+  testFailures: (repo: string) => `${repositoryPath(repo)}/test-failures`,
   job: (repo: string, id: string) => `${repositoryPath(repo)}/jobs/${encodeURIComponent(id)}`,
   repo: repositoryPath,
 };

@@ -1,12 +1,11 @@
-//! 49 → 50: CI attempts record why a runner claimed or deferred them.
+//! 50 → 51: add an empty table for JUnit test failure history.
 //! Every upgrade also binds the GuildBotics workspaces' execution roots.
 use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::config::Layout;
-use crate::error::AppError;
 use crate::store::{self, Rd, Store, Upgraded, Upgrading, Wtx};
 
-pub const FROM: u64 = 49;
+pub const FROM: u64 = 50;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
@@ -26,20 +25,7 @@ pub(crate) fn upgrade_with_roots(
     };
     db.finish(|w| {
         execution_roots(w, roots)?;
-        for key in w.prefix_keys(store::CI_ATTEMPTS, &[])? {
-            let mut attempt: serde_json::Value = w
-                .get(store::CI_ATTEMPTS, &key)?
-                .ok_or_else(|| AppError::internal("CI attempt disappeared during upgrade"))?;
-            let deferrals = attempt["runner_deferrals"]
-                .as_object_mut()
-                .ok_or_else(|| AppError::internal("invalid CI runner deferrals"))?;
-            for deferral in deferrals.values_mut() {
-                deferral["machine"] = serde_json::Value::Null;
-            }
-            attempt["runner_claim"] = serde_json::Value::Null;
-            w.put(store::CI_ATTEMPTS, &key, &attempt)?;
-        }
-        Ok("added runner claim and deferral evidence to CI attempts".into())
+        Ok("added CI test failure history".into())
     })
     .map(Some)
 }
@@ -92,23 +78,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upgrade_adds_missing_runner_evidence_and_binds_execution_roots() {
-        use crate::model::Workspace;
+    fn upgrade_creates_empty_test_failure_history_and_binds_execution_roots() {
+        use redb::ReadableDatabase;
+
         let temporary = tempfile::tempdir().unwrap();
         let layout = Layout::new(temporary.path());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
+        let machine = serde_json::json!({
+            "logical_cpus": 4,
+            "total_memory_mib": 8192,
+            "available_memory_mib": 4096,
+            "commit_available_mib": null,
+        });
+        let attempt = serde_json::json!({
+            "runner_claim": {"machine": machine, "memory_samples": 0, "budget": null},
+            "runner_deferrals": {"small": {"machine": machine}},
+        });
         let workspace = db
             .write_sync(|w| {
                 let workspace = crate::domain::repos::insert_workspace(w, "acme".into(), None)?;
-                w.put(
-                    store::CI_ATTEMPTS,
-                    b"attempt",
-                    &serde_json::json!({"runner_deferrals": {
-                        "windows": {"at": "t0", "attempt_id": "att_1", "repo": "acme/demo",
-                            "job": "test", "cpu_shortfall": 0, "memory_shortfall_mib": 0,
-                            "commit_shortfall_mib": 1}
-                    }}),
-                )?;
+                w.put(store::CI_ATTEMPTS, b"attempt", &attempt)?;
                 w.put(
                     store::META,
                     &store::Key::new().s("schema_version").bytes(),
@@ -118,33 +107,39 @@ mod tests {
             })
             .unwrap();
         drop(db);
+        let db = redb::Database::open(layout.db()).unwrap();
+        let write = db.begin_write().unwrap();
+        assert!(write.delete_table(store::CI_TEST_FAILURES).unwrap());
+        write.commit().unwrap();
+        drop(db);
         assert!(store::check_version(&layout.db()).is_err());
         let root = temporary.path().join("execution");
         let done = upgrade_with_roots(&layout, [("acme".into(), root.clone())].into())
             .unwrap()
             .unwrap();
-        assert_eq!(
-            done.summary,
-            "added runner claim and deferral evidence to CI attempts"
-        );
+        assert_eq!(done.summary, "added CI test failure history");
         assert!(done.copy.is_file());
         assert!(upgrade(&layout).unwrap().is_none());
+        let db = redb::Database::open(layout.db()).unwrap();
+        assert!(
+            db.begin_read()
+                .unwrap()
+                .open_table(store::CI_TEST_FAILURES)
+                .is_ok()
+        );
+        drop(db);
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
-        let attempt: serde_json::Value = db
-            .read_sync(|r| r.get(store::CI_ATTEMPTS, b"attempt"))
-            .unwrap()
-            .unwrap();
-        assert_eq!(attempt.get("runner_claim"), Some(&serde_json::Value::Null));
-        let deferral: crate::ci::queue::ResourceDeferral =
-            serde_json::from_value(attempt["runner_deferrals"]["windows"].clone()).unwrap();
-        assert_eq!(deferral.at, "t0");
-        assert_eq!(deferral.wait.commit_shortfall_mib, 1);
-        assert_eq!(deferral.machine, None);
-        let record: Workspace = db
-            .read_sync(|r| r.get(store::WORKSPACES, &Workspace::key(&workspace)))
-            .unwrap()
-            .unwrap();
-        assert_eq!(record.execution_root, Some(root));
+        db.read_sync(|r| {
+            assert!(r.prefix_keys(store::CI_TEST_FAILURES, &[])?.is_empty());
+            let upgraded = r.get::<serde_json::Value>(store::CI_ATTEMPTS, b"attempt")?;
+            assert_eq!(upgraded.as_ref(), Some(&attempt));
+            let record: crate::model::Workspace = r
+                .get(store::WORKSPACES, &crate::model::Workspace::key(&workspace))?
+                .unwrap();
+            assert_eq!(record.execution_root, Some(root));
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

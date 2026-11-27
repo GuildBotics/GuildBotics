@@ -863,6 +863,7 @@ function JobDetails({
         </dd>
       </dl>
       {(retry.isError || cancel.isError) && <ErrorMessage error={retry.error ?? cancel.error} />}
+      <Link to={href.testFailures(repo)}>{t("ci.testFailures")}</Link>
       <LogViewer
         repo={repo}
         attemptId={attemptId}

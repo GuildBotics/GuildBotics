@@ -244,6 +244,15 @@ impl MemberApi {
         let _open = self.api.guard()?;
         crate::ci::api::data_job_log(&self.api.app, &self.caller().await?, repo, id, tail).await
     }
+    /// Recent failed CI attempts for the exact JUnit testcase name.
+    pub async fn test_failures(
+        &self,
+        repo: &str,
+        name: &str,
+    ) -> AppResult<Vec<crate::ci::api::TestFailureView>> {
+        let _open = self.api.guard()?;
+        crate::ci::api::data_test_failures(&self.api.app, &self.caller().await?, repo, name).await
+    }
     pub async fn artifact(
         &self,
         repo: &str,

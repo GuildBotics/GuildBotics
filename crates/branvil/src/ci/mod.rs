@@ -19,6 +19,7 @@ pub(crate) mod collection;
 pub mod config;
 pub mod files;
 pub mod images;
+mod junit;
 pub mod narrow;
 pub mod notify;
 mod order;
