@@ -5,6 +5,7 @@ import type { Card, TicketRef } from "../api/types";
 import { apiError, fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
 import { fill } from "../../test/fill";
 import { choose, pickFromMenu } from "../test/mantine";
+import { applyChange } from "../query/events";
 import { card } from "./fixtures";
 
 const WORKSPACE = { name: "acme", lanes: ["new", "ready", "in_progress", "done"] };
@@ -844,6 +845,339 @@ describe("relations", () => {
     expect(await screen.findByRole("article", { name: /^acme\/demo#9 / })).toBeInTheDocument();
     expect(window.localStorage.getItem("branvil.relations.includeClosed")).toBe("true");
     expect(window.localStorage.getItem("branvil.board.includeClosed")).toBeNull();
+  });
+});
+
+describe("relations: the selected ticket", () => {
+  // #8 waits for the closed #9 and has the closed child #6; #4 is closed and unrelated; #5 is open and unrelated.
+  const open = [
+    card("8", "ready", { blocked_by: [ref("9", "closed")], children: [ref("6", "closed")] }),
+    card("5", "ready"),
+  ];
+  const all = [
+    card("9", "done", { state: "closed", blocks: [ref("8")] }),
+    card("6", "done", { state: "closed", parent: ref("8") }),
+    card("4", "done", { state: "closed" }),
+    ...open,
+  ];
+  const drawerRoutes: Routes = {
+    "GET /api/v1/repos/acme/demo": json(200, {
+      path: "acme/demo",
+      default_branch: "main",
+      clone_url: "",
+      url: "",
+      protected_branches: [],
+      labels: [],
+      upstream: null,
+      revision: 1,
+    }),
+    "GET /api/v1/repos/acme/demo/tickets/9": json(200, all[0]),
+    "GET /api/v1/repos/acme/demo/tickets/9/comments": json(200, { items: [], next_cursor: null }),
+    "GET /api/v1/repos/acme/demo/tickets/9/pulls": json(200, { items: [], next_cursor: null }),
+  };
+  const isSelected = (key: string) => draggable(key).getAttribute("aria-current") === "true";
+  const allReads = (fake: ReturnType<typeof fakeApi>) =>
+    fake
+      .calls("GET", "/api/v1/workspaces/acme/board/cards")
+      .filter((r) => r.search.includes("state=all"));
+  const background = () => document.querySelector(".relations-content") as HTMLElement;
+
+  it("selects a card with a click, shows its closed direct relations faintly, and lets it go on the background", async () => {
+    const user = userEvent.setup();
+    const fake = fakeApi(routes({ open, all }));
+    renderApp("/workspaces/acme/task-flow");
+    await screen.findByRole("article", { name: /^acme\/demo#8 / });
+    expect(screen.queryByRole("article", { name: /^acme\/demo#9 / })).not.toBeInTheDocument();
+    expect(allReads(fake)).toHaveLength(0);
+    expect(isSelected("8")).toBe(false);
+
+    await user.click(article("8"));
+    expect(isSelected("8")).toBe(true);
+    expect(draggable("8")).toHaveClass("selected");
+    // Its closed blocker and child are read and shown, faint; an unrelated closed ticket is not.
+    expect(await screen.findByRole("article", { name: /^acme\/demo#9 / })).toHaveClass("closed");
+    expect(allReads(fake).length).toBeGreaterThan(0);
+    expect(edge("9", "8")).not.toBeNull();
+    expect(screen.queryByRole("article", { name: /^acme\/demo#4 / })).not.toBeInTheDocument();
+    expect(article("8")).not.toHaveClass("closed");
+    // Its frame opens by itself, so its closed child is seen with the click alone.
+    expect(await screen.findByRole("article", { name: /^acme\/demo#6 / })).toHaveClass("closed");
+
+    await user.click(background());
+    expect(isSelected("8")).toBe(false);
+    await waitFor(() =>
+      expect(screen.queryByRole("article", { name: /^acme\/demo#9 / })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("keeps a selected card in sight when its closed parent comes with it, opening the parent's frame only while it is selected", async () => {
+    const user = userEvent.setup();
+    // #3 waits for the closed #2, whose parent #1 is closed too.
+    const open = [card("3", "ready", { blocked_by: [ref("2", "closed")] })];
+    const all = [
+      card("1", "done", { state: "closed", children: [ref("2", "closed")] }),
+      card("2", "done", { state: "closed", parent: ref("1", "closed"), blocks: [ref("3")] }),
+      ...open,
+    ];
+    fakeApi(routes({ open, all }));
+    renderApp("/workspaces/acme/task-flow");
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#3 / }));
+    // #2 alone: its parent is related to #3 neither.
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#2 / }));
+    // Selecting #2 brings #1, whose frame opens around it: #2 stays in sight, selected.
+    expect(await screen.findByRole("article", { name: /^acme\/demo#1 / })).toBeInTheDocument();
+    expect(isSelected("2")).toBe(true);
+    expect(anchor("1")).toContainElement(article("2"));
+    // A frame closed by hand stays closed during the selection; nothing is kept in the browser.
+    await user.click(within(article("1")).getByRole("button", { name: "Close child tickets" }));
+    expect(screen.queryByRole("article", { name: /^acme\/demo#2 / })).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("branvil.relations.open.acme")).toBeNull();
+  });
+
+  it("keeps what was opened or closed by hand while filtering when a click selects nothing, and drops what was during a selection once it ends", async () => {
+    const user = userEvent.setup();
+    fakeApi(routes());
+    await shown();
+    // Filtering opens #1 around the match #2; closed by hand, it stays closed on a click on the background.
+    await user.type(screen.getByRole("textbox", { name: "Text" }), "Title of 2");
+    await screen.findByRole("article", { name: /^acme\/demo#2 / });
+    await user.click(within(article("1")).getByRole("button", { name: "Close child tickets" }));
+    await user.click(background());
+    expect(screen.queryByRole("article", { name: /^acme\/demo#2 / })).not.toBeInTheDocument();
+    await user.clear(screen.getByRole("textbox", { name: "Text" }));
+
+    // #1 kept open; closed by hand while #4 (which #2 waits for) is selected, it is open again once let go.
+    await openParent(user);
+    await user.click(article("4"));
+    await user.click(within(article("1")).getByRole("button", { name: "Close child tickets" }));
+    expect(screen.queryByRole("article", { name: /^acme\/demo#2 / })).not.toBeInTheDocument();
+    await user.click(background());
+    expect(await screen.findByRole("article", { name: /^acme\/demo#2 / })).toBeInTheDocument();
+  });
+
+  it("keeps the selected card, or the one let go, where it was on the screen while the figure is laid out again, until the viewer scrolls", async () => {
+    // jsdom does no layout: #8's card stands further right and down while #9 is shown, and further still with #4.
+    const shownNow = (key: string) => document.querySelector(`[data-ticket="acme/demo#${key}"]`);
+    const rect = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element,
+    ) {
+      if (this.closest("[data-ticket]")?.getAttribute("data-ticket") !== "acme/demo#8")
+        return new DOMRect(0, 0, 260, 100);
+      if (shownNow("4")) return new DOMRect(600, 120, 260, 100);
+      return shownNow("9") ? new DOMRect(300, 120, 260, 100) : new DOMRect(0, 0, 260, 100);
+    });
+    const user = userEvent.setup();
+    fakeApi(routes({ open, all }));
+    renderApp("/workspaces/acme/task-flow");
+    await screen.findByRole("article", { name: /^acme\/demo#8 / });
+    const scroll = document.querySelector(".relations-scroll") as HTMLElement;
+    const at = { left: 0, top: 0 };
+    Object.defineProperty(scroll, "scrollLeft", {
+      get: () => at.left,
+      set: (v: number) => (at.left = Math.max(0, v)),
+    });
+    Object.defineProperty(scroll, "scrollTop", {
+      get: () => at.top,
+      set: (v: number) => (at.top = Math.max(0, v)),
+    });
+
+    await user.click(article("8"));
+    await screen.findByRole("article", { name: /^acme\/demo#9 / });
+    await waitFor(() => expect(at).toEqual({ left: 300, top: 120 }));
+    // The figure can scroll that far even where the cards around end short of it.
+    const content = document.querySelector(".relations-content") as HTMLElement;
+    expect(content.style.minWidth).toBe("max(100%, 300px)");
+    expect(content.style.minHeight).toBe("max(100%, 120px)");
+    // Let go: #9 leaves, #8 goes back, and so does the figure.
+    await user.click(background());
+    await waitFor(() =>
+      expect(screen.queryByRole("article", { name: /^acme\/demo#9 / })).not.toBeInTheDocument(),
+    );
+    expect(at).toEqual({ left: 0, top: 0 });
+
+    // Once the viewer scrolls, the figure no longer follows the card.
+    await user.click(article("8"));
+    await waitFor(() => expect(at).toEqual({ left: 300, top: 120 }));
+    fireEvent.wheel(scroll);
+    await user.click(screen.getByRole("checkbox", { name: "Include closed tickets" }));
+    await screen.findByRole("article", { name: /^acme\/demo#4 / });
+    expect(at).toEqual({ left: 300, top: 120 });
+    rect.mockRestore();
+  });
+
+  it("keeps a selection when all tickets fail to be read again, and shows its relations once retried", async () => {
+    const user = userEvent.setup();
+    const made = card("12", "ready", { blocked_by: [ref("4", "closed")] });
+    let lists = { open, all };
+    let failing = false;
+    fakeApi(
+      routes(undefined, {
+        "GET /api/v1/workspaces/acme/board/cards": (req) =>
+          req.search.includes("state=all") && failing
+            ? apiError(400, "invalid", "refused")
+            : json(200, {
+                items: req.search.includes("state=all") ? lists.all : lists.open,
+                next_cursor: null,
+              }),
+      }),
+    );
+    const { client } = renderApp("/workspaces/acme/task-flow");
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#8 / }));
+    await screen.findByRole("article", { name: /^acme\/demo#9 / });
+    await user.click(background());
+    lists = {
+      open: [...open, made],
+      all: [...all.map((c) => (c.key === "4" ? { ...c, blocks: [ref("12")] } : c)), made],
+    };
+    failing = true;
+    act(() => applyChange({ kind: "ticket", path: "acme/demo", id: "12" }, client));
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#12 / }));
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    // Until they are read, the open ones stay shown: #12 with them, still selected.
+    expect(isSelected("12")).toBe(true);
+    failing = false;
+    await user.click(retry);
+    expect(await screen.findByRole("article", { name: /^acme\/demo#4 / })).toHaveClass("closed");
+    expect(isSelected("12")).toBe(true);
+  });
+
+  it("keeps showing a selected ticket closed meanwhile, reading the closed tickets for it", async () => {
+    const user = userEvent.setup();
+    let lists = { open, all };
+    fakeApi(
+      routes(undefined, {
+        "GET /api/v1/workspaces/acme/board/cards": (req) =>
+          json(200, {
+            items: req.search.includes("state=all") ? lists.all : lists.open,
+            next_cursor: null,
+          }),
+      }),
+    );
+    const { client } = renderApp("/workspaces/acme/task-flow");
+    // #5 has no relation: nothing closed is read for it.
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#5 / }));
+    const closed5 = { ...(open[1] as Card), state: "closed" as const, lane: "done" as const };
+    lists = {
+      open: open.filter((c) => c.key !== "5"),
+      all: [...all.filter((c) => c.key !== "5"), closed5],
+    };
+    act(() => applyChange({ kind: "ticket", path: "acme/demo", id: "5" }, client));
+    await waitFor(() => expect(article("5")).toHaveClass("closed"));
+    expect(isSelected("5")).toBe(true);
+  });
+
+  it("reads no closed tickets for a selected ticket once it is deleted", async () => {
+    const user = userEvent.setup();
+    let deleted = false;
+    const without8 = (cards: Card[]) => (deleted ? cards.filter((c) => c.key !== "8") : cards);
+    const fake = fakeApi(
+      routes(undefined, {
+        "GET /api/v1/workspaces/acme/board/cards": (req) =>
+          json(200, {
+            items: without8(req.search.includes("state=all") ? all : open),
+            next_cursor: null,
+          }),
+      }),
+    );
+    const { client } = renderApp("/workspaces/acme/task-flow");
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#8 / }));
+    await screen.findByRole("article", { name: /^acme\/demo#9 / });
+    deleted = true;
+    act(() => applyChange({ kind: "ticket", path: "acme/demo", id: "8" }, client));
+    await waitFor(() =>
+      expect(screen.queryByRole("article", { name: /^acme\/demo#8 / })).not.toBeInTheDocument(),
+    );
+    const reads = allReads(fake).length;
+    act(() => applyChange({ kind: "ticket", path: "acme/demo", id: "5" }, client));
+    await waitFor(() =>
+      expect(fake.calls("GET", "/api/v1/workspaces/acme/board/cards").at(-1)?.search).toContain(
+        "state=open",
+      ),
+    );
+    expect(allReads(fake)).toHaveLength(reads);
+    expect(screen.queryByRole("article", { name: /^acme\/demo#9 / })).not.toBeInTheDocument();
+  });
+
+  it("keeps a ticket made since the closed tickets were last read selected, shown, and reads them again", async () => {
+    const user = userEvent.setup();
+    // #12 is made later, waiting for the closed #4.
+    const made = card("12", "ready", { blocked_by: [ref("4", "closed")] });
+    let lists = { open, all };
+    /** Holds the next read of all tickets until released. */
+    let held: Promise<void> | null = null;
+    let release = () => {};
+    const fake = fakeApi(
+      routes(undefined, {
+        "GET /api/v1/workspaces/acme/board/cards": async (req) => {
+          const items = req.search.includes("state=all") ? lists.all : lists.open;
+          if (req.search.includes("state=all") && held) await held;
+          return json(200, { items, next_cursor: null });
+        },
+      }),
+    );
+    const { client } = renderApp("/workspaces/acme/task-flow");
+    // The closed tickets are read once for #8, then no longer shown.
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#8 / }));
+    await screen.findByRole("article", { name: /^acme\/demo#9 / });
+    await user.click(background());
+    lists = {
+      open: [...open, made],
+      all: [...all.map((c) => (c.key === "4" ? { ...c, blocks: [ref("12")] } : c)), made],
+    };
+    held = new Promise((resolve) => (release = resolve));
+    act(() => applyChange({ kind: "ticket", path: "acme/demo", id: "12" }, client));
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#12 / }));
+    // While all tickets are read again, the open ones are shown as read since: the older list lacking
+    // #12 neither hides nor lets go of it, and its closed relation #4 comes once they are read.
+    await waitFor(() => expect(allReads(fake)).toHaveLength(2));
+    expect(isSelected("12")).toBe(true);
+    expect(screen.queryByRole("article", { name: /^acme\/demo#4 / })).not.toBeInTheDocument();
+    // Closed meanwhile, #12 is in neither the open tickets nor the older list: not taken for deleted.
+    const closed = { ...made, state: "closed" as const, lane: "done" as const };
+    lists = { open, all: [...lists.all.filter((c) => c.key !== "12"), closed] };
+    act(() => applyChange({ kind: "ticket", path: "acme/demo", id: "12" }, client));
+    await waitFor(() =>
+      expect(screen.queryByRole("article", { name: /^acme\/demo#12 / })).not.toBeInTheDocument(),
+    );
+    release();
+    expect(await screen.findByRole("article", { name: /^acme\/demo#12 / })).toHaveClass("closed");
+    expect(isSelected("12")).toBe(true);
+    expect(edge("4", "12")).not.toBeNull();
+  });
+
+  it("keeps the selection while a ticket is opened in the drawer, and lets it go with Escape or a second click", async () => {
+    const user = userEvent.setup();
+    fakeApi(routes({ open, all }, drawerRoutes));
+    renderApp("/workspaces/acme/task-flow");
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#8 / }));
+    await screen.findByRole("article", { name: /^acme\/demo#9 / });
+
+    // A card's controls do what they do, and select nothing.
+    await user.click(within(article("5")).getByRole("button", { name: /^Assignee/ }));
+    expect(isSelected("8")).toBe(true);
+    expect(isSelected("5")).toBe(false);
+    await user.keyboard("{Escape}");
+
+    // Reading the closed blocker in the drawer keeps #8 selected, so #9 stays in the figure.
+    await user.click(screen.getByRole("link", { name: "Title of 9" }));
+    await screen.findByRole("dialog", { name: "Ticket" });
+    expect(isSelected("8")).toBe(true);
+    // Escape closes the drawer first; the selection stays.
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(isSelected("8")).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(isSelected("8")).toBe(false);
+
+    // Selecting the closed #9 keeps it shown with what it is related to; a second click lets it go.
+    await user.click(article("8"));
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#9 / }));
+    expect(isSelected("9")).toBe(true);
+    expect(article("8")).toBeInTheDocument();
+    await user.click(article("9"));
+    await waitFor(() =>
+      expect(screen.queryByRole("article", { name: /^acme\/demo#9 / })).not.toBeInTheDocument(),
+    );
   });
 });
 

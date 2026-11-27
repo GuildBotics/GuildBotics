@@ -289,6 +289,81 @@ describe("relations graph", () => {
     expect(lines(all)).toEqual(["X>A"]);
   });
 
+  it("shows the closed tickets it is asked to (a selected ticket's direct relations), within the filter", () => {
+    // A waits for the closed X and has the closed child C; Z (closed) and W (closed, waiting for A) are not asked for.
+    const cards = board({
+      A: { blockedBy: ["X"] },
+      X: { closed: true },
+      C: { parent: "A", closed: true },
+      W: { blockedBy: ["A"], closed: true },
+      Z: { closed: true },
+    });
+    const related = new Set(["A", "X", "C"].map((k) => `acme/demo#${k}`));
+    const asked = buildGraph(cards, {
+      includeClosed: false,
+      related,
+      open: new Set(["acme/demo#A"]),
+    });
+    expect(layout(asked.level)).toBe("X | A[C]");
+    expect(lines(asked)).toEqual(["X>A"]);
+    expect([...asked.shown].map(short).sort()).toEqual(["A", "C", "X"]);
+    // Without them, only the open ticket.
+    expect(layout(graph({ A: { blockedBy: ["X"] }, X: { closed: true } }).level)).toBe("A");
+    // The filter still decides what is shown among them.
+    expect(
+      layout(
+        buildGraph(cards, {
+          includeClosed: false,
+          related,
+          open: new Set(["acme/demo#A"]),
+          filter: textFilter("Title of X"),
+        }).level,
+      ),
+    ).toBe("X");
+  });
+
+  it("opens every frame around the selected ticket and its relations, and its own, unless opened or closed by hand", () => {
+    // A waits for the closed X, whose parent G is closed; B waits for the closed Y in the open P; nothing is opened.
+    const cards = board({
+      G: { closed: true },
+      X: { parent: "G", closed: true },
+      A: { blockedBy: ["X"] },
+      P: {},
+      Y: { parent: "P", closed: true },
+      B: { blockedBy: ["Y"] },
+    });
+    const selecting = (...keys: string[]) => ({
+      includeClosed: false,
+      related: new Set(keys.map((k) => `acme/demo#${k}`)),
+      open: new Set<string>(),
+    });
+    // X selected: the frame of its parent G, which comes with it, opens around it.
+    expect(layout(buildGraph(cards, selecting("X", "G", "A")).level)).toBe("G[X] P B | A");
+    // B selected: Y, which it waits for, is in P's frame, which opens.
+    expect(layout(buildGraph(cards, selecting("B", "Y")).level)).toBe("A P[Y] | B");
+    // P selected: its own frame opens on its closed child (which B waits for).
+    expect(layout(buildGraph(cards, selecting("P", "Y")).level)).toBe("A P[Y] | B");
+    // A frame closed by hand during the selection stays closed (B waits for what is inside it).
+    expect(
+      layout(
+        buildGraph(cards, {
+          ...selecting("P", "Y"),
+          openOverrides: new Map([["acme/demo#P", false]]),
+        }).level,
+      ),
+    ).toBe("A P | B");
+    // Without a selection, nothing opens and what was done by hand then counts no more.
+    expect(
+      layout(
+        buildGraph(cards, {
+          includeClosed: false,
+          open: new Set(),
+          openOverrides: new Map([["acme/demo#P", true]]),
+        }).level,
+      ),
+    ).toBe("A P B");
+  });
+
   it("gathers a closed parent's descendants' dependencies into one dashed line, solid winning over dashed", () => {
     const specs: Record<string, Spec> = {
       P: {},

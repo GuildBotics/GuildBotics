@@ -83,7 +83,13 @@ export const RelationCard = memo(function RelationCard({
       loadChecks={loadChecks}
       busy={busy}
       // A parent has the colour of the header it becomes once opened, also while none of its children is shown.
-      className={[card.children.length > 0 && "parent", dim && "dim", highlighted && "highlighted"]
+      // A closed ticket is faint, wherever it is shown.
+      className={[
+        card.children.length > 0 && "parent",
+        card.state === "closed" && "closed",
+        dim && "dim",
+        highlighted && "highlighted",
+      ]
         .filter(Boolean)
         .join(" ")}
       lane={

@@ -17,7 +17,7 @@ import { hasFilter, NO_FILTER, type CardFilter } from "./board/ordering";
 import { readied, type Change, type Edit } from "./relations/edits";
 import { Figure } from "./relations/Figure";
 import type { Addition, PickupTag } from "./relations/RelationCard";
-import { buildGraph, type Level } from "./relations/graph";
+import { buildGraph, directRelations, type Level } from "./relations/graph";
 import { pickupOrders, placements, reordered, restoring, type PickupRow } from "./relations/pickup";
 import { PickupPanel, reasonText, type Drop } from "./relations/PickupPanel";
 
@@ -103,13 +103,16 @@ export function RelationsView({ workspace }: { workspace: string }) {
   const [opened, keepOpened] = useStored(`branvil.relations.open.${workspace}`);
   const open = useMemo(() => openParents(opened), [opened]);
   const filtering = hasFilter(filter);
-  const [filteredExpansion, setFilteredExpansion] = useState<{
+  // While filtering or selecting, frames open by themselves (around matches, the selected ticket and
+  // its relations), and opening or closing one by hand lasts until the filter or the selection changes:
+  // neither changes what is kept in the browser.
+  const [expansion, setExpansion] = useState<{
     parents: Map<string, boolean>;
     fresh?: boolean;
   }>({ parents: new Map() });
   const onFilter = (next: CardFilter) => {
     setFilter(next);
-    setFilteredExpansion({ parents: new Map() });
+    setExpansion({ parents: new Map() });
   };
   const [notice, setNotice] = useState<Said | null>(null);
   /** The new ticket being made: unrelated, or related to a card. */
@@ -117,24 +120,70 @@ export function RelationsView({ workspace }: { workspace: string }) {
   const [reveal, setReveal] = useState<string | null>(null);
   const [freshOpen, setFreshOpen] = useState(false);
   const { query: repos, repos: wsRepos, repo, chooseRepo } = useTicketRepos(workspace);
+  /** The ticket selected in the figure: it and the tickets directly related to it are shown, closed or not. */
+  const [selected, setSelected] = useState<string | null>(null);
+  // Only a change of the selection ends what was opened or closed by hand: a click on the background
+  // with nothing selected keeps what was done while filtering.
+  const select = useCallback(
+    (ref: string | null) => {
+      if (ref === selected) return;
+      setSelected(ref);
+      setExpansion((prev) => ({ ...prev, parents: new Map() }));
+    },
+    [selected],
+  );
 
   // Closed tickets are read only when they are shown, or when one is the
   // parent of an open ticket (then it is shown too): an open ticket below a
-  // closed ancestor has a closed parent itself or below an open one.
+  // closed ancestor has a closed parent itself or below an open one. A
+  // selected ticket not among the open ones is closed, or has a closed relation.
   const openCards = useCards(workspace, "open");
+  const openItems = openCards.data?.items ?? [];
+  const lookUp = (items: Card[]) =>
+    selected ? items.find((c) => ticketRef(c) === selected) : undefined;
+  const selectedOpen = lookUp(openItems);
   const needAll =
-    includeClosed || (openCards.data?.items ?? []).some((c) => c.parent?.state === "closed");
+    includeClosed ||
+    openItems.some((c) => c.parent?.state === "closed") ||
+    (selected !== null &&
+      (!selectedOpen || directRelations(selectedOpen).some((r) => r.state === "closed")));
   const allCards = useCards(workspace, "all", needAll);
   // Relations change only once the cards they need are read; until then the
   // open ones are shown, and a failure to read them is shown with a retry.
+  // Tickets read earlier and needed again count only once read again: events
+  // only marked them old, and they may lack what was made or changed since.
+  const [wanted, setWanted] = useState({ needAll, since: 0, reading: false });
+  if (wanted.needAll !== needAll)
+    setWanted({
+      needAll,
+      since: allCards.dataUpdatedAt,
+      reading: needAll && (allCards.fetchStatus !== "idle" || allCards.data === undefined),
+    });
+  const reading = wanted.reading && allCards.dataUpdatedAt === wanted.since;
   const required = needAll ? allCards : openCards;
-  const shown = required.data ?? openCards.data;
-  const complete = required.data !== undefined;
+  const shown = (reading ? undefined : required.data) ?? openCards.data;
+  const complete = !reading && required.data !== undefined;
   const cards = useMemo(() => shown?.items ?? [], [shown]);
+  const selectedCard = lookUp(cards);
+  // A ticket deleted while selected is let go, so its closed tickets are not
+  // read on: told only by all tickets as read since it was needed.
+  if (selected && !selectedOpen && complete && !selectedCard) select(null);
+  const temporary = filtering || selectedCard !== undefined;
+  const related = useMemo(
+    () =>
+      new Set(selectedCard ? [selectedCard, ...directRelations(selectedCard)].map(ticketRef) : []),
+    [selectedCard],
+  );
   const graph = useMemo(
     () =>
-      buildGraph(cards, { includeClosed, open, filter, openOverrides: filteredExpansion.parents }),
-    [cards, includeClosed, open, filter, filteredExpansion.parents],
+      buildGraph(cards, {
+        includeClosed,
+        related,
+        open,
+        filter,
+        openOverrides: expansion.parents,
+      }),
+    [cards, includeClosed, related, open, filter, expansion.parents],
   );
   const lanes = useMemo(() => boardQuery.data?.lanes ?? [], [boardQuery.data]);
   const people = usePeople();
@@ -190,21 +239,24 @@ export function RelationsView({ workspace }: { workspace: string }) {
     [showPanel],
   );
   useEffect(() => {
-    if (!panel) return;
+    if (!panel && !selected) return;
     // Not an Escape that belongs elsewhere: a field typed in, an open dropdown, a drawer or modal.
+    // It closes the pickup order panel first, then lets the selected ticket go.
     const onKey = (e: KeyboardEvent) => {
       if (
         e.key !== "Escape" ||
         e.defaultPrevented ||
         e.isComposing ||
-        ownsEscape(e.target as HTMLElement)
+        ownsEscape(e.target as HTMLElement) ||
+        document.querySelector('[role="dialog"]')
       )
         return;
-      if (!document.querySelector('[role="dialog"]')) closePanel();
+      if (panel) closePanel();
+      else select(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [panel, closePanel]);
+  }, [panel, selected, closePanel, select]);
 
   // The figure changes once the service has the change: a refusal leaves it as it was.
   const relate = useMutation({
@@ -366,8 +418,8 @@ export function RelationsView({ workspace }: { workspace: string }) {
   };
   const onToggle = useCallback(
     (ref: string, show: boolean) => {
-      if (filtering) {
-        setFilteredExpansion((prev) => ({
+      if (temporary) {
+        setExpansion((prev) => ({
           ...prev,
           parents: new Map(prev.parents).set(ref, show),
         }));
@@ -378,11 +430,11 @@ export function RelationsView({ workspace }: { workspace: string }) {
       else next.delete(ref);
       keepOpened(JSON.stringify([...next]));
     },
-    [filtering, open, keepOpened],
+    [temporary, open, keepOpened],
   );
   const onFreshOpen = useCallback(
     (show: boolean) => {
-      if (filtering) setFilteredExpansion((prev) => ({ ...prev, fresh: show }));
+      if (filtering) setExpansion((prev) => ({ ...prev, fresh: show }));
       else setFreshOpen(show);
     },
     [filtering],
@@ -479,12 +531,14 @@ export function RelationsView({ workspace }: { workspace: string }) {
             onAdd={onAdd}
             reveal={reveal}
             onRevealed={onRevealed}
-            freshOpen={filtering ? (filteredExpansion.fresh ?? true) : freshOpen}
+            freshOpen={filtering ? (expansion.fresh ?? true) : freshOpen}
             onFreshOpen={onFreshOpen}
             tags={tags}
             onTag={onTag}
             highlight={highlight}
             point={point}
+            selected={selected}
+            onSelect={select}
           />
           {panel && orders && (
             <PickupPanel
