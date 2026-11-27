@@ -137,7 +137,6 @@ check did not change stored records or raise the version.
 | `ci_narrowings` | `(repo id, base sha, job name)` | failed SHA, first-parent history, observations and attempt IDs, pending probe, conclusion, boundary/reason, start and finish times | failed verification, check event, reconciler | repair hints |
 | `ci_runs` | `(repo id, sha)` | branches that want CI of the commit, tree (unset only for upgraded runs with missing commits), the commit's pipeline (absent / invalid + message / job definitions), cache scope, waiting, superseded by, protected-branch history, input digest of each job with `paths` (`inputs`: SHA-256 of `git diff-tree -r -z --no-renames --raw <empty tree> <sha> -- <the job's paths>`, replaced at every registration; kept without Git while the pipeline is the same) | ref recording (`Ci::on_ref_changes`), PR open/reopen, reconciler, queue admission | checks, claims, retries |
 | `ci_attempts` | `(attempt id)` | kind (`check`, `probe`, or `historical`), job definition (snapshot), image configuration digest, actual source attempt if reused, cache key of an actual execution, reuse permission (manual retries execute), number, queue sequence, status, conclusion, details, SHA-256 of the lease, lease expiry, cancel requested, runner, cache scope, network, times, interrupted/superseded flags, artifact names and sizes, files pruned, the run's input digest of the job when claimed (`inputs`, none for a job without `paths`) | registration, claim, heartbeat, finish, cancel, retry, sweeps | checks, job API, runner API, artifacts |
-| `ci_test_failures` | `(repo id, exact test name)` | latest 20 failed attempts from job-declared JUnit reports: attempt id, job, commit, runner, finish time | attempt finish | test failure history API |
 
 Each comment, review, and inline comment is its own record, so adding one never
 rewrites a history; a reaction rewrites only its target entry.
@@ -301,6 +300,10 @@ The 49 → 50 upgrade sets `runner_claim: null` on existing CI attempts and
 `machine: null` on their existing `runner_deferrals`.
 
 The 50 → 51 upgrade creates the empty `ci_test_failures` table.
+
+The 51 → 52 upgrade sets `resources: null` on existing CI attempts and clears
+`ix_ci_memory`. The index now stores guest memory peaks. Host RSS stays on
+the attempt for diagnostics.
 
 The 35 → 36 upgrade revokes the tokens GuildBotics kept: those labelled
 `guildbotics` and those labelled `app:<client>`.

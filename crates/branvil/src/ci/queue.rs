@@ -14,7 +14,7 @@
 //!   └─no runner───────▶ completed(startup_failure)  the runner stops and finishes)
 //! ```
 
-pub use gb_runner::ci::queue::{Basis, ResultInfo, Reuse};
+pub use gb_runner::ci::queue::{AttemptResources, Basis, ResultInfo, Reuse};
 use std::collections::{BTreeMap, BTreeSet};
 
 use gb_runner::ci::{api::Machine, config::JobLimits, pipeline::CacheOwner};
@@ -289,6 +289,7 @@ pub struct Attempt {
     pub allocation: Option<Allocation>,
     pub runner_claim: Option<RunnerClaim>,
     pub peak_memory_mib: Option<u64>,
+    pub resources: Option<AttemptResources>,
     /// The actual execution whose result this attempt reused, reported at finish.
     pub reused_from: Option<String>,
     /// The computed dependency-cache key of an execution.
@@ -540,8 +541,11 @@ pub fn attempt_index(a: &Attempt) -> Vec<IxEntry> {
     }
     if a.conclusion.as_deref() == Some("success")
         && a.reused_from.is_none()
-        && let (Some(allocation), Some(peak), Some(finished)) =
-            (a.allocation, a.peak_memory_mib, a.finished_at.as_deref())
+        && let (Some(allocation), Some(peak), Some(finished)) = (
+            a.allocation,
+            a.resources.and_then(|r| r.guest_peak_memory_mib),
+            a.finished_at.as_deref(),
+        )
         && let Ok(time) = chrono::DateTime::parse_from_rfc3339(finished)
         && let Ok(millis) = u64::try_from(time.timestamp_millis())
     {
@@ -873,6 +877,7 @@ fn new_job(
         allocation: None,
         runner_claim: None,
         peak_memory_mib: None,
+        resources: None,
         reused_from: None,
         cache_key: None,
         release_points: Vec::new(),
@@ -2262,6 +2267,17 @@ pub fn finish(
     }
     a.image_digest = info.image_digest;
     a.peak_memory_mib = info.peak_memory_mib.filter(|peak| *peak > 0);
+    a.resources = info
+        .resources
+        .filter(|_| info.reused_from.is_none())
+        .map(|mut resources| {
+            resources.guest_peak_memory_mib = resources.guest_peak_memory_mib.filter(|&peak| {
+                peak > 0
+                    && a.allocation
+                        .is_some_and(|allocation| peak <= allocation.vm_memory_mib)
+            });
+            resources
+        });
     a.cache_key = info.cache_key;
     if let Some(next) = rerun {
         conclude(
@@ -3525,6 +3541,7 @@ mod tests {
                 memory_reserve_percent: 0,
                 cpu_multiplier_percent: 100,
                 max_jobs: 2,
+                max_memory_mib: 8192,
                 ..limits()
             };
             let take = |runner, machine, now: &str| {
@@ -3538,7 +3555,13 @@ mod tests {
                     machine,
                 )
             };
-            for (name, peak) in [("heavy", 6000), ("light", 3000)] {
+            for (name, peak) in [
+                ("heavy", Some(6000)),
+                ("light", Some(3000)),
+                // A host-only sample from a runner without guest telemetry
+                // must leave the fallback at the configured VM allocation.
+                ("cold", None),
+            ] {
                 register(w, reg(name, "sample", &[name]), 10, T0)?;
                 let (claimed, _) = take("sampling", None, T0)?;
                 let claim = claimed.unwrap();
@@ -3549,7 +3572,11 @@ mod tests {
                     "success",
                     None,
                     ResultInfo {
-                        peak_memory_mib: Some(peak),
+                        peak_memory_mib: Some(8192),
+                        resources: Some(AttemptResources {
+                            guest_peak_memory_mib: peak,
+                            ..Default::default()
+                        }),
                         ..Default::default()
                     },
                     T1,
@@ -3638,7 +3665,7 @@ mod tests {
                 cold.runner_deferrals["small-machine"]
                     .wait
                     .memory_shortfall_mib,
-                596
+                limits.max_memory_mib - 3500
             );
             assert_eq!(
                 cold.allocation.unwrap().reserved_memory_mib,
@@ -4731,6 +4758,7 @@ mod tests {
                 reused_from: Some(second.id.clone()),
                 cache_key: None,
                 peak_memory_mib: None,
+                resources: None,
             };
             let mut invalid = info.clone();
             invalid.image_digest = None;
@@ -4789,6 +4817,7 @@ mod tests {
                     reused_from: Some(source.id.clone()),
                     cache_key: None,
                     peak_memory_mib: None,
+                    resources: None,
                 },
                 T1,
             )?;
@@ -4846,6 +4875,7 @@ mod tests {
                 reused_from: Some(source.id.clone()),
                 cache_key: None,
                 peak_memory_mib: None,
+                resources: None,
             };
             assert!(finish(w, &c.attempt.id, &c.lease, "success", None, info, T1).is_err());
             expire(w, T2)?;

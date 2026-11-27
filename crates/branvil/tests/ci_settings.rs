@@ -320,6 +320,14 @@ async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
         "/runner/attempts/{}/finish",
         claim["attempt_id"].as_str().unwrap()
     );
+    let phase = json!({
+        "disk_write_bytes": 0, "cpu_time_ms": 250,
+        "host_cpu_average_bps": 2000, "host_cpu_peak_bps": 3500,
+    });
+    let resources = json!({
+        "restore": phase, "commands": phase, "save": phase,
+        "guest_peak_memory_mib": 1700,
+    });
     let (status, result) = w
         .server
         .post(
@@ -329,6 +337,7 @@ async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
                 "lease": claim["lease"], "conclusion": "success", "details": "finished",
                 "image_digest": format!("sha256:{}", "a".repeat(64)),
                 "peak_memory_mib": 5000,
+                "resources": resources,
             }),
         )
         .await;
@@ -338,6 +347,14 @@ async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
         json!({"cpus": 6, "vm_memory_mib": 4096, "reserved_memory_mib": 4096})
     );
     assert_eq!(result["peak_memory_mib"], 5000);
+    assert_eq!(result["resources"], resources);
+    let route = format!(
+        "{}/jobs/{}",
+        w.repo_path(),
+        claim["attempt_id"].as_str().unwrap()
+    );
+    let saved = w.server.ok(&route, &w.aiko).await;
+    assert_eq!(saved["resources"], resources);
     assert_eq!(row(&settings(&w).await, "remote-runner")["running_jobs"], 0);
 
     isolate(&mut w);

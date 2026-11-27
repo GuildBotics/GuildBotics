@@ -644,23 +644,34 @@ async fn previous_schema_upgrade_preserves_records() {
     as_previous_schema(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
-    assert!(!before.contains_key("ci_test_failures"));
+    assert!(before.contains_key("ci_test_failures"));
     assert_eq!(before["ix_ci_memory"], indexed_memory);
     assert!(
         admin("check")
             .1
             .contains("guildbotics server hub-data upgrade")
     );
-    let repos = records(&db, "repos");
+    let mut attempts = records(&db, "ci_attempts");
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 50 to 51"), "{output}");
-    assert!(!repos.is_empty());
-    assert_eq!(records(&db, "repos"), repos);
+    assert!(
+        output.contains(&format!(
+            "from schema version {PREVIOUS_SCHEMA_VERSION} to {}",
+            PREVIOUS_SCHEMA_VERSION + 1
+        )),
+        "{output}"
+    );
+    // Old attempts gain an empty resource field without fabricating a report.
+    for a in &mut attempts {
+        a["resources"] = Value::Null;
+    }
+    assert!(!attempts.is_empty());
+    assert_eq!(records(&db, "ci_attempts"), attempts);
     let upgraded = tables(&db);
-    assert!(upgraded["ci_test_failures"].is_empty());
+    assert!(upgraded["ix_ci_memory"].is_empty());
     let unchanged = |mut snapshot: Tables| {
-        snapshot.retain(|name, _| name != "meta" && name != "ci_test_failures");
+        snapshot
+            .retain(|name, _| !matches!(name.as_str(), "meta" | "ci_attempts" | "ix_ci_memory"));
         snapshot
     };
     let after = unchanged(upgraded.clone());

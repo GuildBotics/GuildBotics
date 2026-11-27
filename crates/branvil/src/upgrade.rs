@@ -1,11 +1,12 @@
-//! 50 → 51: add an empty table for JUnit test failure history.
+//! 51 → 52: CI attempts record resources and estimate memory from guest samples.
 //! Every upgrade also binds the GuildBotics workspaces' execution roots.
 use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::config::Layout;
+use crate::error::AppError;
 use crate::store::{self, Rd, Store, Upgraded, Upgrading, Wtx};
 
-pub const FROM: u64 = 50;
+pub const FROM: u64 = 51;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
@@ -25,7 +26,19 @@ pub(crate) fn upgrade_with_roots(
     };
     db.finish(|w| {
         execution_roots(w, roots)?;
-        Ok("added CI test failure history".into())
+        // The old index contains host RSS and cannot seed guest memory estimates.
+        w.clear(store::IX_CI_MEMORY)?;
+        for key in w.prefix_keys(store::CI_ATTEMPTS, &[])? {
+            let mut attempt: serde_json::Value = w
+                .get(store::CI_ATTEMPTS, &key)?
+                .ok_or_else(|| AppError::internal("CI attempt disappeared during upgrade"))?;
+            let record = attempt
+                .as_object_mut()
+                .ok_or_else(|| AppError::internal("invalid CI attempt"))?;
+            record.insert("resources".into(), serde_json::Value::Null);
+            w.put(store::CI_ATTEMPTS, &key, &attempt)?;
+        }
+        Ok("initialized CI attempt resources and cleared host memory samples".into())
     })
     .map(Some)
 }
@@ -78,26 +91,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upgrade_creates_empty_test_failure_history_and_binds_execution_roots() {
-        use redb::ReadableDatabase;
-
+    fn upgrade_preserves_runner_evidence_and_junit_history_and_clears_host_samples() {
+        use crate::model::Workspace;
         let temporary = tempfile::tempdir().unwrap();
         let layout = Layout::new(temporary.path());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
-        let machine = serde_json::json!({
-            "logical_cpus": 4,
-            "total_memory_mib": 8192,
-            "available_memory_mib": 4096,
-            "commit_available_mib": null,
-        });
-        let attempt = serde_json::json!({
-            "runner_claim": {"machine": machine, "memory_samples": 0, "budget": null},
-            "runner_deferrals": {"small": {"machine": machine}},
-        });
+        let junit_key = store::Key::new().s("acme/demo").s("test::fails").bytes();
+        let junit_history = serde_json::json!([{
+            "attempt_id": "att_1",
+            "job": "test",
+            "sha": "a".repeat(40),
+            "runner": "linux",
+            "finished_at": "2026-11-26T10:00:00Z"
+        }]);
         let workspace = db
             .write_sync(|w| {
                 let workspace = crate::domain::repos::insert_workspace(w, "acme".into(), None)?;
-                w.put(store::CI_ATTEMPTS, b"attempt", &attempt)?;
+                w.put(
+                    store::CI_ATTEMPTS,
+                    b"attempt",
+                    &serde_json::json!({"peak_memory_mib": 8192, "runner_claim": {"memory_samples": 1}}),
+                )?;
+                w.put_raw(store::IX_CI_MEMORY, b"old", &8192_u64.to_be_bytes())?;
+                w.put(store::CI_TEST_FAILURES, &junit_key, &junit_history)?;
                 w.put(
                     store::META,
                     &store::Key::new().s("schema_version").bytes(),
@@ -107,39 +123,40 @@ mod tests {
             })
             .unwrap();
         drop(db);
-        let db = redb::Database::open(layout.db()).unwrap();
-        let write = db.begin_write().unwrap();
-        assert!(write.delete_table(store::CI_TEST_FAILURES).unwrap());
-        write.commit().unwrap();
-        drop(db);
         assert!(store::check_version(&layout.db()).is_err());
         let root = temporary.path().join("execution");
         let done = upgrade_with_roots(&layout, [("acme".into(), root.clone())].into())
             .unwrap()
             .unwrap();
-        assert_eq!(done.summary, "added CI test failure history");
+        assert_eq!(
+            done.summary,
+            "initialized CI attempt resources and cleared host memory samples"
+        );
         assert!(done.copy.is_file());
         assert!(upgrade(&layout).unwrap().is_none());
-        let db = redb::Database::open(layout.db()).unwrap();
-        assert!(
-            db.begin_read()
-                .unwrap()
-                .open_table(store::CI_TEST_FAILURES)
-                .is_ok()
-        );
-        drop(db);
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
-        db.read_sync(|r| {
-            assert!(r.prefix_keys(store::CI_TEST_FAILURES, &[])?.is_empty());
-            let upgraded = r.get::<serde_json::Value>(store::CI_ATTEMPTS, b"attempt")?;
-            assert_eq!(upgraded.as_ref(), Some(&attempt));
-            let record: crate::model::Workspace = r
-                .get(store::WORKSPACES, &crate::model::Workspace::key(&workspace))?
-                .unwrap();
-            assert_eq!(record.execution_root, Some(root));
-            Ok(())
-        })
-        .unwrap();
+        let attempt: serde_json::Value = db
+            .read_sync(|r| r.get(store::CI_ATTEMPTS, b"attempt"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(attempt.get("resources"), Some(&serde_json::Value::Null));
+        assert_eq!(attempt["peak_memory_mib"], 8192);
+        assert_eq!(attempt["runner_claim"]["memory_samples"], 1);
+        assert_eq!(
+            db.read_sync(|r| r.get(store::CI_TEST_FAILURES, &junit_key))
+                .unwrap(),
+            Some(junit_history)
+        );
+        assert!(
+            db.read_sync(|r| r.prefix_keys(store::IX_CI_MEMORY, &[]))
+                .unwrap()
+                .is_empty()
+        );
+        let record: Workspace = db
+            .read_sync(|r| r.get(store::WORKSPACES, &Workspace::key(&workspace)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.execution_root, Some(root));
     }
 
     #[test]

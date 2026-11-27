@@ -821,25 +821,19 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
     txn.commit().unwrap();
 }
 
-pub const PREVIOUS_SCHEMA_VERSION: u64 = 50;
+pub const PREVIOUS_SCHEMA_VERSION: u64 = 51;
 
-/// Makes the database look written by the version before test failure history.
+/// Makes the database look written by the previous schema version: its
+/// version, and attempts without the resource measurements it did not keep.
 pub fn as_previous_schema(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
             *v = json!(PREVIOUS_SCHEMA_VERSION);
         }
     });
-    let db = redb::Database::open(db).unwrap();
-    let write = db.begin_write().unwrap();
-    assert!(
-        write
-            .delete_table(redb::TableDefinition::<&[u8], &[u8]>::new(
-                "ci_test_failures"
-            ))
-            .unwrap()
-    );
-    write.commit().unwrap();
+    edit_records(db, "ci_attempts", |v| {
+        v.as_object_mut().unwrap().remove("resources");
+    });
 }
 
 pub fn previous_schema_backup(data: &Path) -> PathBuf {
