@@ -322,6 +322,8 @@ export const admin = {
     request<CiSettings>("PUT", `/admin/ci/runners/${encodeURIComponent(runner)}/limits`, {
       body: limits,
     }),
+  deleteRunner: (runner: string) =>
+    request<CiSettings>("DELETE", `/admin/ci/runners/${encodeURIComponent(runner)}`),
   /** Starts an image operation (one at a time); the answer's `operation` is running. */
   pullImage: (reference: string) =>
     request<CiSettings>("POST", "/admin/ci/images/pull", { body: { reference } }),

@@ -223,6 +223,17 @@ async fn put_runner_limits(
     Ok(axum::Json(view(&app).await?).into_response())
 }
 
+/// Deletes a stopped runner member (`Ci::delete_runner`).
+async fn delete_runner(
+    State(app): State<Shared>,
+    c: Caller,
+    RoutePath(name): RoutePath<String>,
+) -> AppResult<Response> {
+    c.require_owner()?;
+    app.ci.delete_runner(&name).await?;
+    Ok(axum::Json(view(&app).await?).into_response())
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PullInput {
@@ -468,6 +479,7 @@ loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
     ("/admin/ci", (get, get_settings, OwnerSession)),
     ("/admin/ci/runner", (put, put_runner, OwnerSession)),
     ("/admin/ci/limits", (put, put_limits, OwnerSession)),
+    ("/admin/ci/runners/{name}", (delete, delete_runner, OwnerSession)),
     ("/admin/ci/runners/{name}/limits", (put, put_runner_limits, OwnerSession)),
     ("/admin/ci/images/pull", (post, pull, OwnerSession)),
     ("/admin/ci/images/load", (post, load, OwnerSession)),

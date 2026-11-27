@@ -427,3 +427,136 @@ async fn image_operations_take_only_image_references_and_regular_files() {
     assert_eq!(op["state"], "failed", "{op}");
     assert!(op["detail"].as_str().is_some_and(|d| !d.is_empty()), "{op}");
 }
+
+/// A runner that is no longer used is deleted from Settings → CI once it
+/// has stopped: its token stops working, it leaves the list and
+/// `config.toml`, the jobs it ran keep its name, and it can join again.
+#[tokio::test]
+async fn the_owner_deletes_a_stopped_runner_and_it_can_join_again() {
+    let mut w = World::new().await;
+    std::fs::write(
+        w.server.data.join("config.toml"),
+        "# kept\n[limits]\ngit_concurrency = 8\n\n[ci]\nrunner_absent_secs = 2\nlease_secs = 600\n",
+    )
+    .unwrap();
+    isolate(&mut w);
+    let token = w.server.member(&w.owner, "old-runner", "runner").await;
+    let other = w.server.member(&w.owner, "kept-runner", "runner").await;
+    let runner = crate::ci::Runner::at(&w.server.url, &token);
+    let limits = json!({"max_cpus": 8, "max_memory_mib": 8192, "work_quota_mib": 32768, "max_timeout_secs": 5400, "cache_max_mib": 4096, "max_jobs": 3, "memory_reserve_percent": 15, "cpu_multiplier_percent": 125});
+    for name in ["old-runner", "kept-runner"] {
+        let path = format!("/admin/ci/runners/{name}/limits");
+        assert_eq!(
+            w.server.put(&path, &w.owner, limits.clone()).await.0,
+            StatusCode::OK
+        );
+    }
+    land_pipeline(&w).await;
+    let claim = runner.next_claim().await;
+    let path = "/admin/ci/runners/old-runner";
+
+    // Running: it reported a moment ago.
+    let (status, v) = w.server.delete(path, &w.owner).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{v}");
+    assert_eq!(v["error"]["code"], "runner_online");
+    // Stopped, but still holding the attempt it claimed.
+    eventually("the runner to go offline", || {
+        let w = &w;
+        async move { row(&settings(w).await, "old-runner")["connection"] == "offline" }
+    })
+    .await;
+    let (status, v) = w.server.delete(path, &w.owner).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{v}");
+    assert_eq!(v["error"]["code"], "runner_holds_attempts");
+    assert_eq!(
+        w.server.get("/runner/health", &token).await.0,
+        StatusCode::OK
+    );
+    assert!(config_text(&w).contains("old-runner"));
+    assert_eq!(runner.finish(&claim, "success").await.0, StatusCode::OK);
+
+    // Only the owner deletes, and only runners.
+    for caller in [&w.aiko, &token, &other] {
+        assert_eq!(w.server.delete(path, caller).await.0, StatusCode::FORBIDDEN);
+    }
+    for name in ["aiko", "missing"] {
+        let (status, _) = w
+            .server
+            .delete(&format!("/admin/ci/runners/{name}"), &w.owner)
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{name}");
+    }
+
+    let (status, v) = w.server.delete(path, &w.owner).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let names: Vec<_> = v["runner"]["runners"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["kept-runner"]);
+    assert_eq!(
+        w.server.get("/runner/health", &token).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let text = config_text(&w);
+    assert!(!text.contains("old-runner"), "{text}");
+    assert!(
+        text.contains("# kept") && text.contains("git_concurrency = 8"),
+        "{text}"
+    );
+    assert!(text.contains("[ci.runner_limits.kept-runner]"), "{text}");
+    assert_eq!(
+        w.server.delete(path, &w.owner).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    // The job it ran keeps its name, in the job and in the commit's checks.
+    let job = w
+        .server
+        .ok(
+            &format!(
+                "{}/jobs/{}",
+                w.repo_path(),
+                claim["attempt_id"].as_str().unwrap()
+            ),
+            &w.aiko,
+        )
+        .await;
+    assert_eq!(job["runner"], "old-runner", "{job}");
+    let checks = w
+        .server
+        .ok(
+            &format!(
+                "{}/commits/{}/checks",
+                w.repo_path(),
+                claim["sha"].as_str().unwrap()
+            ),
+            &w.aiko,
+        )
+        .await;
+    assert!(
+        checks["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["runner"] == "old-runner"),
+        "{checks}"
+    );
+
+    // The same name joins again, as a new runner with the Hub defaults; the
+    // old token stays revoked.
+    let joined = w.server.member(&w.owner, "old-runner", "runner").await;
+    assert_eq!(
+        w.server.get("/runner/health", &joined).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        w.server.get("/runner/health", &token).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let again = row(&settings(&w).await, "old-runner").clone();
+    assert_eq!(again["connection"], "never_seen");
+    assert_eq!(again["limits_source"], "default");
+}

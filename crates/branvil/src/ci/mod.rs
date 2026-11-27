@@ -1210,6 +1210,84 @@ impl Ci {
         }
     }
 
+    /// Deletes the runner member `name` that has stopped: its tokens, its
+    /// record (and so its row in the runner list), and its own job
+    /// resources in `config.toml`. Attempts and checks keep the name they
+    /// recorded. A runner that reported within `runner_absent_secs` or holds
+    /// an attempt is refused, so no running attempt loses its runner; a
+    /// claim checks the member in its write (`api::claim`), so none is given
+    /// out after the deletion either.
+    pub async fn delete_runner(&self, name: &str) -> AppResult<()> {
+        let (ci, owned) = (self.clone(), name.to_string());
+        self.inner
+            .store
+            .read(move |r| ci.deletable_runner(r, &owned))
+            .await?;
+        let removed = self.settings().remove_limits(name).await?;
+        let ci = self.clone();
+        let deleted = self
+            .inner
+            .store
+            .write({
+                let name = name.to_string();
+                move |w| {
+                    ci.deletable_runner(w, &name)?;
+                    crate::auth::revoke_all(w, &name, None)?;
+                    w.del(store::MEMBERS, &Member::key(&name))?;
+                    w.del(store::AVATARS, &Member::key(&name))?;
+                    Ok(())
+                }
+            })
+            .await;
+        match deleted {
+            Ok(()) => {
+                self.inner.runners.lock().unwrap().remove(&util::fold(name));
+                Ok(())
+            }
+            Err(e) => {
+                if let Some(limits) = removed
+                    && let Err(restore) = self.settings().set_limits(Some(name), limits).await
+                {
+                    tracing::warn!("restoring the job resources of {name} failed: {restore}");
+                }
+                Err(e)
+            }
+        }
+    }
+
+    fn deletable_runner(&self, r: &impl Rd, name: &str) -> AppResult<()> {
+        r.get::<Member>(store::MEMBERS, &Member::key(name))?
+            .filter(|m| m.kind == MemberKind::Runner)
+            .ok_or_else(|| AppError::not_found("Runner member not found."))?;
+        let absent = Duration::from_secs(self.inner.config.runner_absent_secs);
+        let key = util::fold(name);
+        if self
+            .inner
+            .runners
+            .lock()
+            .unwrap()
+            .get(&key)
+            .is_some_and(|seen| seen.online(absent))
+        {
+            return Err(AppError::conflict_code(
+                "runner_online",
+                format!(
+                    "{name} reported in the last {} s; stop it on its machine first.",
+                    absent.as_secs()
+                ),
+            ));
+        }
+        if queue::running_by_runner(r)?.contains_key(&key) {
+            return Err(AppError::conflict_code(
+                "runner_holds_attempts",
+                format!(
+                    "{name} holds attempts; stop it and let them finish or be queued again first."
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn reported_runners(&self, r: &impl Rd) -> AppResult<Vec<RunnerSeen>> {
         let reports = self.inner.runners.lock().unwrap().clone();
         let mut runners = Vec::new();

@@ -168,6 +168,7 @@ function Runner({
   const t = useT();
   const { runner } = settings;
   const setMode = useCiChange(api.admin.setRunner);
+  const remove = useCiChange(api.admin.deleteRunner);
   return (
     <Section title={t("ci.settings.runner")}>
       <Stack gap="md">
@@ -197,11 +198,20 @@ function Runner({
           <Radio.Group aria-label={t("ci.settings.runners")} value={selected} onChange={onSelect}>
             <Stack gap={6} role="list" aria-label={t("ci.settings.runners")}>
               {runner.runners.map((r) => (
-                <RunnerRow key={r.name} runner={r} />
+                <RunnerRow
+                  key={r.name}
+                  runner={r}
+                  deleting={remove.isPending}
+                  onDelete={() => {
+                    if (window.confirm(t("ci.settings.confirmDeleteRunner", { name: r.name })))
+                      remove.mutate(r.name);
+                  }}
+                />
               ))}
             </Stack>
           </Radio.Group>
         )}
+        {remove.isError && <ErrorMessage error={remove.error} />}
         <Text size="sm">
           <Anchor href={t("ci.settings.forwardingUrl")} target="_blank" rel="noreferrer">
             {t("ci.settings.forwarding")}
@@ -214,7 +224,15 @@ function Runner({
   );
 }
 
-function RunnerRow({ runner: r }: { runner: CiRunner }) {
+function RunnerRow({
+  runner: r,
+  deleting,
+  onDelete,
+}: {
+  runner: CiRunner;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
   const t = useT();
   const online = r.connection === "online";
   const reportTone = (ok: boolean): Tone => (online ? (ok ? "success" : "warning") : "neutral");
@@ -290,6 +308,16 @@ function RunnerRow({ runner: r }: { runner: CiRunner }) {
           </Stack>
         )}
       </Stack>
+      <Button
+        size="xs"
+        variant="light"
+        color="danger"
+        aria-label={t("ci.settings.deleteRunnerLabel", { name: r.name })}
+        disabled={deleting}
+        onClick={onDelete}
+      >
+        {t("ci.settings.deleteRunner")}
+      </Button>
     </div>
   );
 }

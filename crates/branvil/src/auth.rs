@@ -90,20 +90,26 @@ pub fn revoke(w: &Wtx, token: &Token) -> AppResult<()> {
     model::reindex(w, model::token_index(token), Vec::new())
 }
 
-/// Revokes every token of `member` with `label` and issues one in its place,
-/// in the same write, so a retry leaves exactly one token of that label.
-pub fn replace_token(w: &Wtx, member: &str, label: &str) -> AppResult<(Token, String)> {
+/// Revokes every token of `member`, or only those with `label`.
+pub fn revoke_all(w: &Wtx, member: &str, label: Option<&str>) -> AppResult<()> {
     let prefix = Key::new().s(&fold(member)).bytes();
     for k in w.prefix_keys(store::IX_MEMBER_TOKENS, &prefix)? {
         let Some(parts) = store::decode_key(&k, "ss") else {
             continue;
         };
         if let Some(t) = w.get::<Token>(store::TOKENS, &Token::key(parts[1].s()))?
-            && t.label == label
+            && label.is_none_or(|label| t.label == label)
         {
             revoke(w, &t)?;
         }
     }
+    Ok(())
+}
+
+/// Revokes every token of `member` with `label` and issues one in its place,
+/// in the same write, so a retry leaves exactly one token of that label.
+pub fn replace_token(w: &Wtx, member: &str, label: &str) -> AppResult<(Token, String)> {
+    revoke_all(w, member, Some(label))?;
     issue_token(w, member, label)
 }
 

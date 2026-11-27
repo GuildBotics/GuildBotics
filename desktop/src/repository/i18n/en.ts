@@ -369,6 +369,10 @@ export const en = {
     "Runner selection requires a current, unprotected pull request head.",
   "ci.error.retry_runner_ineligible": "Select a runner with the job's image and the Hub version.",
   "ci.error.retry_runner_excluded": "The selected runner is also excluded.",
+  "ci.error.runner_online":
+    "This runner is running (it reported recently). Stop it on its machine before deleting it.",
+  "ci.error.runner_holds_attempts":
+    "This runner still holds attempts. Stop it and let them finish or be queued again before deleting it.",
   "ci.retryRunner": "Select runner",
   "ci.excludeRunners": "Exclude runners",
   "ci.runnerDeferral": "Runner resource deferral",
@@ -727,6 +731,10 @@ export const en = {
     "The Hub starts the runner with the service. Switching it off interrupts the running job.",
   "ci.settings.runners": "Runners",
   "ci.settings.noRunners": "No runner members.",
+  "ci.settings.deleteRunner": "Delete",
+  "ci.settings.deleteRunnerLabel": "Delete runner {{name}}",
+  "ci.settings.confirmDeleteRunner":
+    "Delete the runner {{name}}? All its tokens are revoked, and it leaves the list and the job resource settings. Past jobs keep its name.",
   "ci.settings.connection.online": "Connected",
   "ci.settings.connection.offline": "Contact lost",
   "ci.settings.connection.never_seen": "No contact since the Hub started",

@@ -187,6 +187,30 @@ impl Control {
         Ok(())
     }
 
+    /// Removes the runner's own job resources (`[ci.runner_limits.<name>]`),
+    /// keeping every other setting, and returns them; `None` when it had none.
+    pub async fn remove_limits(&self, runner: &str) -> AppResult<Option<Limits>> {
+        let _w = self.writing.lock().await;
+        let name = util::fold(runner);
+        if !self.limits.lock().unwrap().1.contains_key(&name) {
+            return Ok(None);
+        }
+        self.persist(&["ci"], |ci| {
+            let emptied = ci
+                .get_mut("runner_limits")
+                .and_then(|t| t.as_table_like_mut())
+                .is_some_and(|limits| {
+                    limits.remove(&name);
+                    limits.is_empty()
+                });
+            if emptied {
+                ci.remove("runner_limits");
+            }
+        })
+        .await?;
+        Ok(self.limits.lock().unwrap().1.remove(&name))
+    }
+
     /// Edits the table at `path` of the configuration file, keeping comments
     /// and every other setting, and writes it back when it still reads as a
     /// configuration.
@@ -389,6 +413,57 @@ mod tests {
             .await
             .unwrap();
         assert!(!seen.has_changed().unwrap(), "a running job would stop");
+    }
+
+    /// A deleted runner's own job resources leave the file, and nothing else
+    /// does: the other runners' resources, the defaults, and the comments.
+    #[tokio::test]
+    async fn removing_a_runners_limits_keeps_the_rest_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        std::fs::write(
+            &file,
+            "# Branvil\n[ci]\n# who runs jobs\nrunner = \"off\"\n",
+        )
+        .unwrap();
+        let control = Control::new(file.clone(), &CiConfig::default());
+        control
+            .set_limits(Some("Old-Runner"), limits())
+            .await
+            .unwrap();
+        control.set_limits(Some("kept"), limits()).await.unwrap();
+        control.set_limits(None, limits()).await.unwrap();
+
+        assert_eq!(
+            control.remove_limits("old-runner").await.unwrap(),
+            Some(limits())
+        );
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            text.contains("# Branvil") && text.contains("# who runs jobs"),
+            "{text}"
+        );
+        let parsed: crate::config::ConfigFile = toml::from_str(&text).unwrap();
+        assert_eq!(parsed.ci.runner_limits.keys().collect::<Vec<_>>(), ["kept"]);
+        assert_eq!(parsed.ci.executor.max_cpus, 8);
+        assert!(matches!(
+            control.runner_limits("old-runner").1,
+            LimitsSource::Default
+        ));
+        assert!(matches!(
+            control.runner_limits("kept").1,
+            LimitsSource::Runner
+        ));
+
+        // A runner without resources of its own leaves the file as it is.
+        assert_eq!(control.remove_limits("old-runner").await.unwrap(), None);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+
+        // The last one takes the emptied table with it.
+        assert_eq!(control.remove_limits("kept").await.unwrap(), Some(limits()));
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(!text.contains("runner_limits"), "{text}");
+        assert!(text.contains("[ci.executor]"), "{text}");
     }
 
     #[tokio::test]
