@@ -103,13 +103,16 @@ export function RelationsView({ workspace }: { workspace: string }) {
   const [opened, keepOpened] = useStored(`branvil.relations.open.${workspace}`);
   const open = useMemo(() => openParents(opened), [opened]);
   const filtering = hasFilter(filter);
-  const [filteredExpansion, setFilteredExpansion] = useState<{
+  // While filtering or selecting, frames open by themselves (around matches, the selected ticket and
+  // its relations), and opening or closing one by hand lasts until the filter or the selection changes:
+  // neither changes what is kept in the browser.
+  const [expansion, setExpansion] = useState<{
     parents: Map<string, boolean>;
     fresh?: boolean;
   }>({ parents: new Map() });
   const onFilter = (next: CardFilter) => {
     setFilter(next);
-    setFilteredExpansion({ parents: new Map() });
+    setExpansion({ parents: new Map() });
   };
   const [notice, setNotice] = useState<Said | null>(null);
   /** The new ticket being made: unrelated, or related to a card. */
@@ -118,7 +121,17 @@ export function RelationsView({ workspace }: { workspace: string }) {
   const [freshOpen, setFreshOpen] = useState(false);
   const { query: repos, repos: wsRepos, repo, chooseRepo } = useTicketRepos(workspace);
   /** The ticket selected in the figure: it and the tickets directly related to it are shown, closed or not. */
-  const [selected, select] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  // Only a change of the selection ends what was opened or closed by hand: a click on the background
+  // with nothing selected keeps what was done while filtering.
+  const select = useCallback(
+    (ref: string | null) => {
+      if (ref === selected) return;
+      setSelected(ref);
+      setExpansion((prev) => ({ ...prev, parents: new Map() }));
+    },
+    [selected],
+  );
 
   // Closed tickets are read only when they are shown, or when one is the
   // parent of an open ticket (then it is shown too): an open ticket below a
@@ -142,6 +155,7 @@ export function RelationsView({ workspace }: { workspace: string }) {
   const selectedCard = selected ? cards.find((c) => ticketRef(c) === selected) : undefined;
   // A ticket deleted while selected is let go, so its closed tickets are not read on.
   if (complete && selected && !selectedCard) select(null);
+  const temporary = filtering || selectedCard !== undefined;
   const related = useMemo(
     () =>
       new Set(selectedCard ? [selectedCard, ...directRelations(selectedCard)].map(ticketRef) : []),
@@ -154,9 +168,9 @@ export function RelationsView({ workspace }: { workspace: string }) {
         related,
         open,
         filter,
-        openOverrides: filteredExpansion.parents,
+        openOverrides: expansion.parents,
       }),
-    [cards, includeClosed, related, open, filter, filteredExpansion.parents],
+    [cards, includeClosed, related, open, filter, expansion.parents],
   );
   const lanes = useMemo(() => boardQuery.data?.lanes ?? [], [boardQuery.data]);
   const people = usePeople();
@@ -229,7 +243,7 @@ export function RelationsView({ workspace }: { workspace: string }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [panel, selected, closePanel]);
+  }, [panel, selected, closePanel, select]);
 
   // The figure changes once the service has the change: a refusal leaves it as it was.
   const relate = useMutation({
@@ -391,8 +405,8 @@ export function RelationsView({ workspace }: { workspace: string }) {
   };
   const onToggle = useCallback(
     (ref: string, show: boolean) => {
-      if (filtering) {
-        setFilteredExpansion((prev) => ({
+      if (temporary) {
+        setExpansion((prev) => ({
           ...prev,
           parents: new Map(prev.parents).set(ref, show),
         }));
@@ -403,11 +417,11 @@ export function RelationsView({ workspace }: { workspace: string }) {
       else next.delete(ref);
       keepOpened(JSON.stringify([...next]));
     },
-    [filtering, open, keepOpened],
+    [temporary, open, keepOpened],
   );
   const onFreshOpen = useCallback(
     (show: boolean) => {
-      if (filtering) setFilteredExpansion((prev) => ({ ...prev, fresh: show }));
+      if (filtering) setExpansion((prev) => ({ ...prev, fresh: show }));
       else setFreshOpen(show);
     },
     [filtering],
@@ -504,7 +518,7 @@ export function RelationsView({ workspace }: { workspace: string }) {
             onAdd={onAdd}
             reveal={reveal}
             onRevealed={onRevealed}
-            freshOpen={filtering ? (filteredExpansion.fresh ?? true) : freshOpen}
+            freshOpen={filtering ? (expansion.fresh ?? true) : freshOpen}
             onFreshOpen={onFreshOpen}
             tags={tags}
             onTag={onTag}

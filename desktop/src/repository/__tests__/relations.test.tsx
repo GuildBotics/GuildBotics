@@ -900,7 +900,7 @@ describe("relations: the selected ticket", () => {
     expect(edge("9", "8")).not.toBeNull();
     expect(screen.queryByRole("article", { name: /^acme\/demo#4 / })).not.toBeInTheDocument();
     expect(article("8")).not.toHaveClass("closed");
-    await user.click(within(article("8")).getByRole("button", { name: "Open child tickets" }));
+    // Its frame opens by itself, so its closed child is seen with the click alone.
     expect(await screen.findByRole("article", { name: /^acme\/demo#6 / })).toHaveClass("closed");
 
     await user.click(background());
@@ -908,6 +908,51 @@ describe("relations: the selected ticket", () => {
     await waitFor(() =>
       expect(screen.queryByRole("article", { name: /^acme\/demo#9 / })).not.toBeInTheDocument(),
     );
+  });
+
+  it("keeps a selected card in sight when its closed parent comes with it, opening the parent's frame only while it is selected", async () => {
+    const user = userEvent.setup();
+    // #3 waits for the closed #2, whose parent #1 is closed too.
+    const open = [card("3", "ready", { blocked_by: [ref("2", "closed")] })];
+    const all = [
+      card("1", "done", { state: "closed", children: [ref("2", "closed")] }),
+      card("2", "done", { state: "closed", parent: ref("1", "closed"), blocks: [ref("3")] }),
+      ...open,
+    ];
+    fakeApi(routes({ open, all }));
+    renderApp("/workspaces/acme/task-flow");
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#3 / }));
+    // #2 alone: its parent is related to #3 neither.
+    await user.click(await screen.findByRole("article", { name: /^acme\/demo#2 / }));
+    // Selecting #2 brings #1, whose frame opens around it: #2 stays in sight, selected.
+    expect(await screen.findByRole("article", { name: /^acme\/demo#1 / })).toBeInTheDocument();
+    expect(isSelected("2")).toBe(true);
+    expect(anchor("1")).toContainElement(article("2"));
+    // A frame closed by hand stays closed during the selection; nothing is kept in the browser.
+    await user.click(within(article("1")).getByRole("button", { name: "Close child tickets" }));
+    expect(screen.queryByRole("article", { name: /^acme\/demo#2 / })).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("branvil.relations.open.acme")).toBeNull();
+  });
+
+  it("keeps what was opened or closed by hand while filtering when a click selects nothing, and drops what was during a selection once it ends", async () => {
+    const user = userEvent.setup();
+    fakeApi(routes());
+    await shown();
+    // Filtering opens #1 around the match #2; closed by hand, it stays closed on a click on the background.
+    await user.type(screen.getByRole("textbox", { name: "Text" }), "Title of 2");
+    await screen.findByRole("article", { name: /^acme\/demo#2 / });
+    await user.click(within(article("1")).getByRole("button", { name: "Close child tickets" }));
+    await user.click(background());
+    expect(screen.queryByRole("article", { name: /^acme\/demo#2 / })).not.toBeInTheDocument();
+    await user.clear(screen.getByRole("textbox", { name: "Text" }));
+
+    // #1 kept open; closed by hand while #4 (which #2 waits for) is selected, it is open again once let go.
+    await openParent(user);
+    await user.click(article("4"));
+    await user.click(within(article("1")).getByRole("button", { name: "Close child tickets" }));
+    expect(screen.queryByRole("article", { name: /^acme\/demo#2 / })).not.toBeInTheDocument();
+    await user.click(background());
+    expect(await screen.findByRole("article", { name: /^acme\/demo#2 / })).toBeInTheDocument();
   });
 
   it("keeps the selected card, or the one let go, where it was on the screen while the figure is laid out again, until the viewer scrolls", async () => {

@@ -322,6 +322,48 @@ describe("relations graph", () => {
     ).toBe("X");
   });
 
+  it("opens every frame around the selected ticket and its relations, and its own, unless opened or closed by hand", () => {
+    // A waits for the closed X, whose parent G is closed; B waits for the closed Y in the open P; nothing is opened.
+    const cards = board({
+      G: { closed: true },
+      X: { parent: "G", closed: true },
+      A: { blockedBy: ["X"] },
+      P: {},
+      Y: { parent: "P", closed: true },
+      B: { blockedBy: ["Y"] },
+    });
+    const selecting = (...keys: string[]) => ({
+      includeClosed: false,
+      related: new Set(keys.map((k) => `acme/demo#${k}`)),
+      open: new Set<string>(),
+    });
+    // X selected: the frame of its parent G, which comes with it, opens around it.
+    expect(layout(buildGraph(cards, selecting("X", "G", "A")).level)).toBe("G[X] P B | A");
+    // B selected: Y, which it waits for, is in P's frame, which opens.
+    expect(layout(buildGraph(cards, selecting("B", "Y")).level)).toBe("A P[Y] | B");
+    // P selected: its own frame opens on its closed child (which B waits for).
+    expect(layout(buildGraph(cards, selecting("P", "Y")).level)).toBe("A P[Y] | B");
+    // A frame closed by hand during the selection stays closed (B waits for what is inside it).
+    expect(
+      layout(
+        buildGraph(cards, {
+          ...selecting("P", "Y"),
+          openOverrides: new Map([["acme/demo#P", false]]),
+        }).level,
+      ),
+    ).toBe("A P | B");
+    // Without a selection, nothing opens and what was done by hand then counts no more.
+    expect(
+      layout(
+        buildGraph(cards, {
+          includeClosed: false,
+          open: new Set(),
+          openOverrides: new Map([["acme/demo#P", true]]),
+        }).level,
+      ),
+    ).toBe("A P B");
+  });
+
   it("gathers a closed parent's descendants' dependencies into one dashed line, solid winning over dashed", () => {
     const specs: Record<string, Spec> = {
       P: {},

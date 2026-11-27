@@ -60,7 +60,7 @@ export function buildGraph(
     related?: ReadonlySet<string>;
     open: ReadonlySet<string>;
     filter?: CardFilter;
-    /** Manual opening/closing during this filter; automatic expansion never changes saved preferences. */
+    /** Manual opening/closing during this filter or selection; automatic expansion never changes saved preferences. */
     openOverrides?: ReadonlyMap<string, boolean>;
   },
 ): Graph {
@@ -93,11 +93,15 @@ export function buildGraph(
   // Only matching tickets and the ancestors leading to them survive the filter.
   // Ancestors open automatically, so a match cannot be hidden in a folded frame.
   const ancestors = filtering ? ancestorsOf(matches) : new Set<string>();
+  // Nor can the selected ticket or one related to it: the frames around them open, and so does the
+  // selected ticket's own, its children being related to it.
+  const revealed = ancestorsOf(matches.filter((c) => options.related?.has(ticketRef(c))));
   const matched = new Set(matches.map(ticketRef));
   const shown = eligible.filter((c) => matched.has(ticketRef(c)) || ancestors.has(ticketRef(c)));
+  const temporary = filtering || (options.related?.size ?? 0) > 0;
   const isOpen = (ref: string) =>
-    (filtering ? options.openOverrides?.get(ref) : undefined) ??
-    (options.open.has(ref) || ancestors.has(ref));
+    (temporary ? options.openOverrides?.get(ref) : undefined) ??
+    (options.open.has(ref) || ancestors.has(ref) || revealed.has(ref));
   const byRef = new Map(shown.map((c) => [ticketRef(c), c]));
   const parentOf = (c: Card) => (c.parent ? byRef.get(ticketRef(c.parent)) : undefined);
 
