@@ -93,9 +93,10 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
     const names = codes.map((code) => words[`landing.blocker.${code}` as keyof typeof words]);
     const list = document.querySelector(".unmet-requirements");
     expect(list?.textContent).toBe(names.join(words["landing.badge.and"]));
-    // Each name is one unbreakable piece, so a line only breaks between names.
+    // Each name carries its separator mark, so a line breaks after the mark, never before it.
+    const mark = words["landing.badge.and"].trimEnd();
     expect([...list!.querySelectorAll(".unmet-requirement")].map((e) => e.textContent)).toEqual(
-      names,
+      names.map((name, i) => (i < names.length - 1 ? `${name}${mark}` : name)),
     );
     return conditionsBadge();
   };

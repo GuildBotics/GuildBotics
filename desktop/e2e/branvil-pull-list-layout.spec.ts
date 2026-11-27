@@ -14,9 +14,12 @@ const STATES = [
 ];
 const COUNTS = [0, 1, 4, 12, 4];
 // Rows whose requirements are unmet name every one of them, which must not widen the status column.
+// Together they name every blocker, including names longer than the list's width.
 const BLOCKERS = [
   ["draft", "conflict", "head_checks", "approvals"],
   ["head_checks", "approvals"],
+  ["held", "base_checks_failed", "publish_requirements", "required_removal", "host_failed", "already_in_base"],
+  ["unanswered", "checking"],
 ];
 const landing = (number: number, codes: string[] | undefined) =>
   codes && {
@@ -85,10 +88,23 @@ for (const locale of ["en-US", "ja-JP"]) {
             // Unmet requirements wrap within a bounded width instead of widening the status column.
             for (const list of cells[3].querySelectorAll<HTMLElement>(".unmet-requirements")) {
               const em = parseFloat(getComputedStyle(list).fontSize);
-              if (list.getBoundingClientRect().width > 10 * em + 1) issues.push(`wide requirements: ${list.textContent}`);
+              if (list.getBoundingClientRect().width > 12 * em + 1) issues.push(`wide requirements: ${list.textContent}`);
+              // Separator marks stay inside the names, so no line starts with one.
+              for (const node of list.childNodes) {
+                if (node.nodeType === Node.TEXT_NODE && node.textContent?.trim()) issues.push(`loose separator: ${node.textContent}`);
+              }
               if (list.scrollWidth > list.clientWidth + 1) issues.push(`clipped requirements: ${list.textContent}`);
-              for (const name of list.querySelectorAll(".unmet-requirement")) {
-                if (name.getClientRects().length !== 1) issues.push(`broken requirement: ${name.textContent}`);
+              const frame = list.getBoundingClientRect();
+              for (const name of list.querySelectorAll<HTMLElement>(".unmet-requirement")) {
+                const box = name.getBoundingClientRect();
+                if (box.left < frame.left - 1 || box.right > frame.right + 1 || name.scrollWidth > name.clientWidth + 1) issues.push(`clipped requirement: ${name.textContent}`);
+                // A name that fits the list's 12em with its separator stays on one line.
+                name.style.whiteSpace = "nowrap";
+                name.style.maxWidth = "none";
+                const line = name.getBoundingClientRect();
+                name.style.whiteSpace = "";
+                name.style.maxWidth = "";
+                if (line.width <= 12 * em && box.height > line.height + 1) issues.push(`broken requirement: ${name.textContent}`);
               }
             }
             for (const cell of [cells[3], cells[4]]) {

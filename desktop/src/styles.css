@@ -3757,12 +3757,14 @@ pre {
   }
 
   .unmet-requirements {
-    max-width: 10em;
+    max-width: 12em;
     white-space: normal;
   }
 
+  /* A name moves to the next line whole; only a name longer than the list wraps inside itself. */
   .unmet-requirement {
-    white-space: nowrap;
+    display: inline-block;
+    max-width: 100%;
   }
 
   .pull-list > .empty-row {

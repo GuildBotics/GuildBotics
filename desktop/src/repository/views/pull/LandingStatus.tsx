@@ -248,14 +248,20 @@ export function JourneyBadge({
   );
   if (!unmet.length) return badge;
   // The unmet requirements wrap under the state between names instead of widening the list's column.
+  // Each name keeps its separator mark so a line never starts with it; only spacing stays outside.
+  const and = t("landing.badge.and");
+  const separator = and.trimEnd();
   return (
     <Stack component="span" gap={2} align="flex-start">
       {badge}
       <Text span size="xs" c="dimmed" className="unmet-requirements" title={title}>
         {unmet.map((b, i) => (
           <Fragment key={b.code}>
-            {i > 0 && t("landing.badge.and")}
-            <span className="unmet-requirement">{t(blockerName(b.code))}</span>
+            {i > 0 && and.slice(separator.length)}
+            <span className="unmet-requirement">
+              {t(blockerName(b.code))}
+              {i < unmet.length - 1 && separator}
+            </span>
           </Fragment>
         ))}
       </Text>
