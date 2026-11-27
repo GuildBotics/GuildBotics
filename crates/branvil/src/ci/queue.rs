@@ -1713,21 +1713,21 @@ pub fn claim_images(
     let machine = runner.machine.as_ref().map(MachineSnapshot::from);
     for wait in &waits {
         let a = &ordered[wait.index].0;
-        let deferral = ResourceDeferral {
-            at: now.into(),
-            machine,
-            wait: wait.reason.clone(),
-        };
         if a.runner_deferrals
             .get(&runner.name)
-            .is_none_or(|previous| previous.at.as_str() <= now && previous != &deferral)
+            .is_none_or(|previous| previous.at.as_str() <= now && previous.wait != wait.reason)
         {
             // Do not persist the run-derived fields of the scheduling copy.
             let mut stored = get_attempt(w, &a.id)?
                 .ok_or_else(|| AppError::internal("pending attempt is missing"))?;
-            stored
-                .runner_deferrals
-                .insert(runner.name.clone(), deferral);
+            stored.runner_deferrals.insert(
+                runner.name.clone(),
+                ResourceDeferral {
+                    at: now.into(),
+                    machine,
+                    wait: wait.reason.clone(),
+                },
+            );
             w.put(store::CI_ATTEMPTS, &Attempt::key(&a.id), &stored)?;
         }
     }
@@ -3356,7 +3356,7 @@ mod tests {
                     ..limits()
                 };
                 let image = [held_image()];
-                let claim = |now: &str, available_mib, started_attempts| {
+                let claim = |now: &str, available_mib, available_memory_mib, started_attempts| {
                     claim_images(
                         w,
                         "windows",
@@ -3367,7 +3367,7 @@ mod tests {
                         Some(Machine {
                             logical_cpus: 16,
                             total_memory_mib: 32768,
-                            available_memory_mib: 24576,
+                            available_memory_mib,
                             commit: Some(CommitMemory {
                                 available_mib,
                                 started_attempts,
@@ -3376,7 +3376,7 @@ mod tests {
                     )
                 };
                 register(w, reg("sha", "main", &["first", "second"]), 10, T0)?;
-                let (unclaimed, wait) = claim(T0, 8191, vec![])?;
+                let (unclaimed, wait) = claim(T0, 8191, 24576, vec![])?;
                 assert!(unclaimed.is_none());
                 let wait = wait.unwrap();
                 assert_eq!(
@@ -3388,20 +3388,22 @@ mod tests {
                     (0, 0, 1)
                 );
 
-                let first = claim(T0, 12288, vec![])?.0.unwrap().attempt;
-                let (unclaimed, wait) = claim(T0, 12288, vec![])?;
+                let first = claim(T0, 12288, 24576, vec![])?.0.unwrap().attempt;
+                let (unclaimed, wait) = claim(T0, 12288, 24576, vec![])?;
                 assert!(unclaimed.is_none());
                 assert_eq!(wait.unwrap().commit_shortfall_mib, 4096);
 
-                let same = claim(&later(T0, 2), 12288, vec![])?.1.unwrap();
+                let same = claim(&later(T0, 2), 12288, 24000, vec![])?.1.unwrap();
                 let latest = get_attempt(w, &same.attempt_id)?.unwrap();
-                assert_eq!(latest.runner_deferrals["windows"].at, later(T0, 2));
+                let deferral = &latest.runner_deferrals["windows"];
+                assert_eq!(deferral.at, T0);
+                assert_eq!(deferral.machine.unwrap().available_memory_mib, 24576);
                 assert_eq!(same.commit_shortfall_mib, 4096);
 
                 let updated_at = later(T0, 4);
-                let changed = claim(&updated_at, 13312, vec![])?.1.unwrap();
+                let changed = claim(&updated_at, 13312, 23500, vec![])?.1.unwrap();
                 assert_eq!(changed.commit_shortfall_mib, 3072);
-                let second = claim(&later(T0, 6), 8192, vec![first.id])?
+                let second = claim(&later(T0, 6), 8192, 24576, vec![first.id])?
                     .0
                     .unwrap()
                     .attempt;
@@ -3409,6 +3411,7 @@ mod tests {
                 let deferral = &second.runner_deferrals["windows"];
                 assert_eq!(deferral.at, updated_at);
                 assert_eq!(deferral.wait.commit_shortfall_mib, 3072);
+                assert_eq!(deferral.machine.unwrap().available_memory_mib, 23500);
                 Ok(())
             })
             .unwrap();
@@ -3572,6 +3575,10 @@ mod tests {
                 ),
                 ("heavy", 0, 2500)
             );
+            let same = take("busy-small", machine(8500, 3500), T1)?.1.unwrap();
+            assert_eq!(same, reason);
+            let heavy = get_attempt(w, &same.attempt_id)?.unwrap();
+            assert_eq!(heavy.runner_deferrals["busy-small"].at, T0);
 
             let (temporarily_blocked, _) = take("busy-large", machine(9000, 3500), T0)?;
             assert!(
@@ -3611,6 +3618,12 @@ mod tests {
             assert_eq!(deferral.machine.unwrap().available_memory_mib, 4000);
             let (cold, _) = take("unknown", None, T2)?;
             let cold = cold.unwrap().attempt;
+            assert_eq!(
+                cold.runner_deferrals["small-machine"]
+                    .wait
+                    .memory_shortfall_mib,
+                596
+            );
             assert_eq!(
                 cold.allocation.unwrap().reserved_memory_mib,
                 limits.max_memory_mib

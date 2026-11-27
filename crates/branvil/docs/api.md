@@ -1143,8 +1143,10 @@ is not the full sha of a commit of the repository.
   fallback time `prefer_other_until` when applicable. For queued retries,
   `retry_wait` reports the runner wait reason. `runner_deferrals` maps each
   runner that polled and was found short on resources for this attempt to its
-  latest `at` timestamp, `machine` snapshot, and shortfalls
+  last recorded `at` timestamp, `machine` snapshot, and shortfalls
   (`cpu_shortfall`, `memory_shortfall_mib`, `commit_shortfall_mib`).
+  The entry is written on the first deferral and when the shortfalls change.
+  `at` and `machine` describe the poll that recorded those shortfalls.
   A deferral before the schema upgrade has a null `machine`. A successful retry on a
   different runner exposes `runner_recovery` with `failed_attempt`,
   `failed_runner`, and `successful_runner` on both job and check views.
