@@ -297,7 +297,10 @@ The 34 → 35 upgrade adds `hold_while_failing: false` to every repository.
 
 The 48 → 49 upgrade adds `review_rounds: 3` to every repository.
 
-The 49 → 50 upgrade creates the empty `ci_test_failures` table.
+The 49 → 50 upgrade sets `runner_claim: null` on existing CI attempts and
+`machine: null` on their existing `runner_deferrals`.
+
+The 50 → 51 upgrade creates the empty `ci_test_failures` table.
 
 The 35 → 36 upgrade revokes the tokens GuildBotics kept: those labelled
 `guildbotics` and those labelled `app:<client>`.

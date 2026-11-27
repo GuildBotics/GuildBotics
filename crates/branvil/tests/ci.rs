@@ -644,6 +644,7 @@ async fn previous_schema_upgrade_preserves_records() {
     as_previous_schema(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
+    assert!(!before.contains_key("ci_test_failures"));
     assert_eq!(before["ix_ci_memory"], indexed_memory);
     assert!(
         admin("check")
@@ -653,7 +654,7 @@ async fn previous_schema_upgrade_preserves_records() {
     let repos = records(&db, "repos");
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 49 to 50"), "{output}");
+    assert!(output.contains("from schema version 50 to 51"), "{output}");
     assert!(!repos.is_empty());
     assert_eq!(records(&db, "repos"), repos);
     let upgraded = tables(&db);

@@ -1,11 +1,11 @@
-//! 49 → 50: add an empty table for JUnit test failure history.
+//! 50 → 51: add an empty table for JUnit test failure history.
 //! Every upgrade also binds the GuildBotics workspaces' execution roots.
 use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::config::Layout;
 use crate::store::{self, Rd, Store, Upgraded, Upgrading, Wtx};
 
-pub const FROM: u64 = 49;
+pub const FROM: u64 = 50;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
@@ -79,12 +79,25 @@ mod tests {
 
     #[test]
     fn upgrade_creates_empty_test_failure_history_and_binds_execution_roots() {
+        use redb::ReadableDatabase;
+
         let temporary = tempfile::tempdir().unwrap();
         let layout = Layout::new(temporary.path());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
+        let machine = serde_json::json!({
+            "logical_cpus": 4,
+            "total_memory_mib": 8192,
+            "available_memory_mib": 4096,
+            "commit_available_mib": null,
+        });
+        let attempt = serde_json::json!({
+            "runner_claim": {"machine": machine, "memory_samples": 0, "budget": null},
+            "runner_deferrals": {"small": {"machine": machine}},
+        });
         let workspace = db
             .write_sync(|w| {
                 let workspace = crate::domain::repos::insert_workspace(w, "acme".into(), None)?;
+                w.put(store::CI_ATTEMPTS, b"attempt", &attempt)?;
                 w.put(
                     store::META,
                     &store::Key::new().s("schema_version").bytes(),
@@ -107,9 +120,19 @@ mod tests {
         assert_eq!(done.summary, "added CI test failure history");
         assert!(done.copy.is_file());
         assert!(upgrade(&layout).unwrap().is_none());
+        let db = redb::Database::open(layout.db()).unwrap();
+        assert!(
+            db.begin_read()
+                .unwrap()
+                .open_table(store::CI_TEST_FAILURES)
+                .is_ok()
+        );
+        drop(db);
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
         db.read_sync(|r| {
             assert!(r.prefix_keys(store::CI_TEST_FAILURES, &[])?.is_empty());
+            let upgraded = r.get::<serde_json::Value>(store::CI_ATTEMPTS, b"attempt")?;
+            assert_eq!(upgraded.as_ref(), Some(&attempt));
             let record: crate::model::Workspace = r
                 .get(store::WORKSPACES, &crate::model::Workspace::key(&workspace))?
                 .unwrap();

@@ -821,7 +821,7 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
     txn.commit().unwrap();
 }
 
-pub const PREVIOUS_SCHEMA_VERSION: u64 = 49;
+pub const PREVIOUS_SCHEMA_VERSION: u64 = 50;
 
 /// Makes the database look written by the version before test failure history.
 pub fn as_previous_schema(db: &Path) {

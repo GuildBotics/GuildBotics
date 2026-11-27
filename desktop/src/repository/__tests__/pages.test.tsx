@@ -680,7 +680,7 @@ describe("pages", () => {
       "windows で失敗し、linux で成功",
     ],
   ] as const)(
-    "shows current and recorded runner shortfalls and labels runner changes (%s)",
+    "shows assignment evidence, runner shortfalls, and runner changes (%s)",
     async (language, commit, cpu, change, recovery) => {
       const sha = "f".repeat(40);
       const job = {
@@ -723,7 +723,12 @@ describe("pages", () => {
             commit_shortfall_mib: 4096,
           },
           runner_deferrals: {
-            windows: { at: "2026-11-21T07:00:00Z", cpu_shortfall: 2, memory_shortfall_mib: 0 },
+            windows: {
+              at: "2026-11-21T07:00:00Z",
+              cpu_shortfall: 2,
+              memory_shortfall_mib: 0,
+              machine: { logical_cpus: 4, total_memory_mib: 9000, available_memory_mib: 7000 },
+            },
           },
         }),
         "GET /api/v1/repos/acme/demo/jobs/att_waiting/log": json(200, {
@@ -738,6 +743,12 @@ describe("pages", () => {
           status: "completed",
           conclusion: "success",
           runner: "linux",
+          allocation: { cpus: 4, vm_memory_mib: 6144, reserved_memory_mib: 5000 },
+          runner_claim: {
+            machine: { logical_cpus: 8, total_memory_mib: 10000, available_memory_mib: 8000 },
+            memory_samples: 3,
+            budget: { memory_reserve_mib: 1000, remaining_cpus: 4, remaining_memory_mib: 2000 },
+          },
           runner_recovery: {
             failed_attempt: "att_failed",
             failed_runner: "windows",
@@ -756,6 +767,13 @@ describe("pages", () => {
       expect(
         drawer.getByText((text, element) => element?.tagName === "DD" && text.endsWith(cpu)),
       ).toBeInTheDocument();
+      expect(
+        drawer.getByText(
+          language === "ja"
+            ? "論理 CPU 4、空きメモリ 7000 MiB / 全体 9000 MiB"
+            : "4 logical CPUs, 7000 of 9000 MiB memory available",
+        ),
+      ).toBeInTheDocument();
       await userEvent
         .setup()
         .click(
@@ -763,6 +781,20 @@ describe("pages", () => {
         );
       const passed = within(await screen.findByRole("dialog", { name: /test/ }));
       const label = await passed.findByText(change);
+      expect(
+        passed.getByText(
+          language === "ja"
+            ? "メモリ見積もり 5000 MiB（サンプル 3 件）"
+            : "Memory estimate 5000 MiB from 3 samples",
+        ),
+      ).toBeInTheDocument();
+      expect(
+        passed.getByText(
+          language === "ja"
+            ? "ホストの予備 1000 MiB。残り予算 vCPU 4、メモリ 2000 MiB"
+            : "Host reserve 1000 MiB. Remaining budget 4 vCPUs and 2000 MiB",
+        ),
+      ).toBeInTheDocument();
       expect(
         within(label.nextElementSibling as HTMLElement).getByRole("link", { name: recovery }),
       ).toHaveAttribute("href", "/workspaces/acme/repos/demo/jobs/att_failed");
@@ -796,6 +828,8 @@ describe("pages", () => {
           status: "completed",
           conclusion: "failure",
           runner: "cache-runner",
+          allocation: { cpus: 4, vm_memory_mib: 4096, reserved_memory_mib: 4096 },
+          runner_claim: { machine: null, memory_samples: 0, budget: null },
           details: "exit 1",
           artifact_names: [],
           reused_from: null,
@@ -812,6 +846,13 @@ describe("pages", () => {
         (await within(drawer).findByText(language === "ja" ? "ランナー" : "Runner"))
           .nextElementSibling,
       ).toHaveTextContent("cache-runner");
+      expect(
+        within(drawer).getByText(
+          language === "ja"
+            ? "メモリ見積もり 4096 MiB（サンプル 0 件のため VM サイズを使用）"
+            : "Memory estimate 4096 MiB from VM size (0 samples)",
+        ),
+      ).toBeInTheDocument();
       expect(
         within(drawer).getByRole("button", { name: language === "ja" ? "再実行" : "Retry" }),
       ).toBeDisabled();

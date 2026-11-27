@@ -537,11 +537,34 @@ export type TestFailure = {
   url: string;
 };
 
+export interface RunnerMachineSnapshot {
+  logical_cpus: number;
+  total_memory_mib: number;
+  available_memory_mib: number;
+  commit_available_mib: number | null;
+}
+
+interface RunnerClaim {
+  machine: RunnerMachineSnapshot | null;
+  memory_samples: number | null;
+  budget: {
+    memory_reserve_mib: number;
+    remaining_cpus: number;
+    remaining_memory_mib: number;
+    remaining_commit_mib: number | null;
+  } | null;
+}
+
 export interface Job {
   path_skip?: PathSkip | null;
   retry_supported: boolean;
   retry_runners?: string[];
-  runner_deferrals?: Record<string, ResourceShortfall & { at: string }>;
+  runner_deferrals?: Record<
+    string,
+    ResourceShortfall & { at: string; machine: RunnerMachineSnapshot | null }
+  >;
+  runner_claim?: RunnerClaim | null;
+  allocation?: { cpus: number; vm_memory_mib: number; reserved_memory_mib: number } | null;
   retry_decision?: RetryDecision | null;
   retry_wait?: RetryWait | null;
   runner_recovery?: RunnerRecovery | null;
