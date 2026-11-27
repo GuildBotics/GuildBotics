@@ -351,7 +351,7 @@ async fn the_runner_list_combines_members_reports_attempts_and_saved_limits() {
 }
 
 #[tokio::test]
-async fn job_details_keep_the_claim_and_the_other_runners_latest_shortfall() {
+async fn job_details_keep_the_claim_and_the_other_runners_shortfall() {
     let w = World::new().await;
     let small = w.server.member(&w.owner, "small", "runner").await;
     let large = w.server.member(&w.owner, "large", "runner").await;
@@ -362,16 +362,13 @@ async fn job_details_keep_the_claim_and_the_other_runners_latest_shortfall() {
         "images": [{"reference": IMAGE, "architecture": "amd64", "digest": format!("sha256:{}", "a".repeat(64))}],
         "machine": {"logical_cpus": 8, "total_memory_mib": 10000, "available_memory_mib": 3000}
     });
-    for available in [3000, 4000] {
-        report["machine"]["available_memory_mib"] = json!(available);
-        assert_eq!(
-            w.server
-                .post("/runner/claim", &small, report.clone())
-                .await
-                .0,
-            StatusCode::NO_CONTENT
-        );
-    }
+    assert_eq!(
+        w.server
+            .post("/runner/claim", &small, report.clone())
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
     report["machine"]["available_memory_mib"] = json!(8000);
     let (status, claim) = w.server.post("/runner/claim", &large, report).await;
     assert_eq!(status, StatusCode::OK, "{claim}");
@@ -396,8 +393,8 @@ async fn job_details_keep_the_claim_and_the_other_runners_latest_shortfall() {
     let wait = &deferrals["small"];
     assert_eq!(wait["attempt_id"], id);
     assert_eq!(wait["cpu_shortfall"], 0);
-    assert_eq!(wait["memory_shortfall_mib"], 1096);
-    assert_eq!(wait["machine"]["available_memory_mib"], 4000);
+    assert_eq!(wait["memory_shortfall_mib"], 2096);
+    assert_eq!(wait["machine"]["available_memory_mib"], 3000);
     assert!(wait["at"].is_string());
 }
 

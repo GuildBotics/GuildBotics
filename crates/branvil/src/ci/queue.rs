@@ -38,6 +38,8 @@ pub const CONCLUSIONS: [&str; 6] = [
 
 pub const MAX_AUTO_RETRIES: u64 = 3;
 const RUNNER_RETRY_GRACE_SECS: u64 = 30;
+// Bound writes while reported resources fluctuate between polls.
+const DEFERRAL_REFRESH_SECS: u64 = 60;
 
 const MAX_DETAILS: usize = 4 << 10;
 
@@ -1711,11 +1713,12 @@ pub fn claim_images(
     };
     let (choices, waits) = scan.choices(w, &runner)?;
     let machine = runner.machine.as_ref().map(MachineSnapshot::from);
+    let refresh_cutoff = earlier(now, DEFERRAL_REFRESH_SECS);
     for wait in &waits {
         let a = &ordered[wait.index].0;
         if a.runner_deferrals
             .get(&runner.name)
-            .is_none_or(|previous| previous.at.as_str() <= now && previous.wait != wait.reason)
+            .is_none_or(|previous| previous.at <= refresh_cutoff && previous.wait != wait.reason)
         {
             // Do not persist the run-derived fields of the scheduling copy.
             let mut stored = get_attempt(w, &a.id)?
@@ -3360,7 +3363,7 @@ mod tests {
                     claim_images(
                         w,
                         "windows",
-                        60,
+                        300,
                         now,
                         &image,
                         limits,
@@ -3388,22 +3391,27 @@ mod tests {
                     (0, 0, 1)
                 );
 
-                let first = claim(T0, 12288, 24576, vec![])?.0.unwrap().attempt;
-                let (unclaimed, wait) = claim(T0, 12288, 24576, vec![])?;
+                let first = claim(T2, 12288, 24576, vec![])?.0.unwrap().attempt;
+                let (unclaimed, wait) = claim(T2, 12288, 24576, vec![])?;
                 assert!(unclaimed.is_none());
                 assert_eq!(wait.unwrap().commit_shortfall_mib, 4096);
 
-                let same = claim(&later(T0, 2), 12288, 24000, vec![])?.1.unwrap();
+                let same = claim(&later(T2, 2), 12288, 24000, vec![])?.1.unwrap();
                 let latest = get_attempt(w, &same.attempt_id)?.unwrap();
                 let deferral = &latest.runner_deferrals["windows"];
-                assert_eq!(deferral.at, T0);
+                assert_eq!(deferral.at, T2);
                 assert_eq!(deferral.machine.unwrap().available_memory_mib, 24576);
                 assert_eq!(same.commit_shortfall_mib, 4096);
 
-                let updated_at = later(T0, 4);
+                let early = claim(&later(T2, 59), 13312, 23500, vec![])?.1.unwrap();
+                assert_eq!(early.commit_shortfall_mib, 3072);
+                let queued = get_attempt(w, &early.attempt_id)?.unwrap();
+                assert_eq!(&queued.runner_deferrals["windows"], deferral);
+
+                let updated_at = later(T2, 60);
                 let changed = claim(&updated_at, 13312, 23500, vec![])?.1.unwrap();
                 assert_eq!(changed.commit_shortfall_mib, 3072);
-                let second = claim(&later(T0, 6), 8192, 24576, vec![first.id])?
+                let second = claim(&later(T2, 62), 8192, 24576, vec![first.id])?
                     .0
                     .unwrap()
                     .attempt;
@@ -3519,7 +3527,7 @@ mod tests {
                 max_jobs: 2,
                 ..limits()
             };
-            let take = |runner, machine, now| {
+            let take = |runner, machine, now: &str| {
                 claim_images(
                     w,
                     runner,
@@ -3575,10 +3583,17 @@ mod tests {
                 ),
                 ("heavy", 0, 2500)
             );
-            let same = take("busy-small", machine(8500, 3500), T1)?.1.unwrap();
-            assert_eq!(same, reason);
-            let heavy = get_attempt(w, &same.attempt_id)?.unwrap();
-            assert_eq!(heavy.runner_deferrals["busy-small"].at, T0);
+            let first = get_attempt(w, &reason.attempt_id)?.unwrap();
+            let first_deferral = &first.runner_deferrals["busy-small"];
+            assert_eq!(first_deferral.at, T0);
+            for (seconds, available) in [(2, 3501), (59, 4000), (60, 3500)] {
+                let (blocked, live) =
+                    take("busy-small", machine(8500, available), &later(T0, seconds))?;
+                assert!(blocked.is_none());
+                assert_eq!(live.unwrap().memory_shortfall_mib, 6000 - available);
+                let heavy = get_attempt(w, &reason.attempt_id)?.unwrap();
+                assert_eq!(&heavy.runner_deferrals["busy-small"], first_deferral);
+            }
 
             let (temporarily_blocked, _) = take("busy-large", machine(9000, 3500), T0)?;
             assert!(
@@ -3586,7 +3601,8 @@ mod tests {
                 "starting light would consume the head's OS memory reserve"
             );
 
-            let (still_blocked, _) = take("busy-small", machine(8500, 4000), T1)?;
+            let updated_at = later(T0, 60);
+            let (still_blocked, _) = take("busy-small", machine(8500, 4000), &updated_at)?;
             assert!(still_blocked.is_none());
             let (older_report, _) = take("busy-small", machine(8500, 3500), T0)?;
             assert!(older_report.is_none());
@@ -3613,7 +3629,7 @@ mod tests {
             );
             let deferral = &heavy.runner_deferrals["busy-small"];
             assert_eq!(heavy.runner_deferrals.len(), 3);
-            assert_eq!(deferral.at, T1);
+            assert_eq!(deferral.at, updated_at);
             assert_eq!(deferral.wait.memory_shortfall_mib, 2000);
             assert_eq!(deferral.machine.unwrap().available_memory_mib, 4000);
             let (cold, _) = take("unknown", None, T2)?;
@@ -3669,10 +3685,21 @@ mod tests {
             let (blocked, reason) =
                 claim_images(w, "r", 60, T0, &image, explicit, machine.clone())?;
             assert!(blocked.is_none());
-            assert_eq!(reason.unwrap().cpu_shortfall, 1);
+            let reason = reason.unwrap();
+            assert_eq!(reason.cpu_shortfall, 1);
+            let wider = JobLimits {
+                max_cpus: 2,
+                ..explicit
+            };
+            let (blocked, live) = claim_images(w, "r", 60, T1, &image, wider, machine.clone())?;
+            assert!(blocked.is_none());
+            assert_eq!(live.unwrap().cpu_shortfall, 2);
             for name in ["b", "c"] {
-                let (cl, _) = claim_images(w, "r", 60, T0, &image, limits, machine.clone())?;
-                assert_eq!(cl.unwrap().attempt.job.name, name);
+                let (cl, _) = claim_images(w, "r", 60, T1, &image, limits, machine.clone())?;
+                let attempt = cl.unwrap().attempt;
+                assert_eq!(attempt.job.name, name);
+                assert_eq!(attempt.runner_deferrals["r"].at, T0);
+                assert_eq!(attempt.runner_deferrals["r"].wait.cpu_shortfall, 1);
             }
             Ok(())
         })

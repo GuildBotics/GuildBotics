@@ -1145,11 +1145,14 @@ is not the full sha of a commit of the repository.
   runner that polled and was found short on resources for this attempt to its
   last recorded `at` timestamp, `machine` snapshot, and shortfalls
   (`cpu_shortfall`, `memory_shortfall_mib`, `commit_shortfall_mib`).
-  The entry is written on the first deferral and when the shortfalls change.
-  `at` and `machine` describe the poll that recorded those shortfalls.
-  A deferral before the schema upgrade has a null `machine`. A successful retry on a
-  different runner exposes `runner_recovery` with `failed_attempt`,
-  `failed_runner`, and `successful_runner` on both job and check views.
+  The first deferral is recorded immediately. A later poll updates the entry
+  only if the shortfalls differ from the recorded values and at least 60
+  seconds have elapsed since `at`. The timestamp and machine snapshot are
+  from the same poll as the recorded shortfalls. Live resource waits use
+  the current poll's values. A deferral before the schema upgrade has a null
+  `machine`. A successful retry on a different runner exposes `runner_recovery`
+  with `failed_attempt`, `failed_runner`, and `successful_runner` on both job
+  and check views.
   Default-branch verification exposes these as `runner_recoveries` with
   each job's `name` for the current and most recently verified commits.
   Queued attempts in classes 4a/4b append `Deferred: <reason>.` and when they
