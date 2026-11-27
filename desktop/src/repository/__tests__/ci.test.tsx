@@ -607,6 +607,15 @@ describe("CI settings", () => {
         page([member(HUB_RUNNER.name, "Studio"), ...others]),
       ],
       [`PATCH /api/v1/members/${HUB_RUNNER.name}`]: json(200, member(HUB_RUNNER.name, "Studio")),
+      [`GET /api/v1/members/${HUB_RUNNER.name}/tokens`]: page([
+        {
+          id: "tok_1",
+          label: "runner-join",
+          created_at: "2026-11-20T00:00:00Z",
+          last_used_at: null,
+        },
+      ]),
+      [`GET /api/v1/members/${REMOTE_RUNNER.name}/tokens`]: page([]),
     });
     const user = userEvent.setup();
     renderApp("/settings/repositories/ci");
@@ -641,6 +650,13 @@ describe("CI settings", () => {
     });
     expect(await within(list).findByRole("radio", { name: "Studio (hub-runner)" })).toBeChecked();
     expect(within(naming).getByRole("textbox", { name: "Display name" })).toHaveValue("Studio");
+
+    // The selected runner's tokens are here too, and follow the selection.
+    const tokens = screen.getByRole("region", { name: "Tokens" });
+    expect(await within(tokens).findByText("runner-join")).toBeInTheDocument();
+    await user.click(within(list).getByRole("radio", { name: "Gaming PC (desktop-runner)" }));
+    expect(await within(tokens).findByText("No tokens.")).toBeInTheDocument();
+    expect(within(tokens).queryByText("runner-join")).not.toBeInTheDocument();
   });
 
   it("shows runner reports and saves the selected offline runner's resources without a global warning", async () => {
@@ -652,6 +668,8 @@ describe("CI settings", () => {
       ...SHELL,
       "GET /api/v1/admin/ci": json(200, { ...CI, runner }),
       "GET /api/v1/admin/diagnostics": json(200, { runner }),
+      "GET /api/v1/members/hub-runner/tokens": page([]),
+      "GET /api/v1/members/desktop-runner/tokens": page([]),
       [`PUT ${path}`]: json(200, {
         ...CI,
         runner: { ...runner, runners: [HUB_RUNNER, saved, NEW_RUNNER, offlineMatch] },

@@ -690,8 +690,7 @@ export const ja: Record<MessageKey, string> = {
   "settings.addBranch": "ブランチ名を追加",
   "settings.addLabel": "ラベルを追加",
   "settings.saved": "保存しました。",
-  "settings.membersHelp":
-    "オーナー、エージェント、ランナーと、コードホストのアカウントを管理します。",
+  "settings.membersHelp": "オーナーとエージェント、コードホストのアカウントを管理します。",
   "upstream.readerChoose": "メンバーを選ぶ…",
   "settings.tabCi": "CI",
   "settings.autoLand": "自動で取り込む",
@@ -729,6 +728,8 @@ export const ja: Record<MessageKey, string> = {
     "サービスと一緒にランナーを起動し、動かし続けます。止めると、実行中のジョブは中断されます。",
   "ci.settings.runners": "ランナー一覧",
   "ci.settings.noRunners": "ランナーのメンバーがいません。",
+  "ci.settings.tokensHelp":
+    "選んだランナーのトークンです。`guildbotics runner join` が発行します。そのマシンをランナーとして使わなくなったら、ここで失効させます。",
   "ci.settings.displayName": "表示名",
   "ci.settings.displayNameHelp":
     "チェックやジョブ、この画面でこのランナーを示す名前です。空にすると {{name}} と示します。",
