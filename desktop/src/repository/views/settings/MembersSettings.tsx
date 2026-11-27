@@ -6,7 +6,6 @@ import {
   Modal,
   PasswordInput,
   SegmentedControl,
-  Select,
   Stack,
   Tabs,
   Text,
@@ -17,13 +16,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useState } from "react";
 import * as api from "../../api/endpoints";
-import {
-  PROVIDERS,
-  type AccountCredential,
-  type IssuedToken,
-  type Member,
-  type MemberKind,
-} from "../../api/types";
+import { PROVIDERS, type AccountCredential, type IssuedToken, type Member } from "../../api/types";
 import {
   CopyButton,
   ErrorMessage,
@@ -39,9 +32,7 @@ import { useT } from "../../i18n";
 import { useMemberTokens, useMembers, usePeople } from "../../query/hooks";
 import { keys } from "../../query/keys";
 
-type NewKind = Exclude<MemberKind, "owner">;
-
-/** The owner, agents, and runners (their kind decides what they may do), as GuildBotics lists its members. */
+/** The owner and agents (their kind decides what they may do), as GuildBotics lists its members. CI runners are named and given tokens in Settings → CI. */
 export function MembersSettings() {
   const t = useT();
   const members = useMembers();
@@ -70,16 +61,17 @@ export function MembersSettings() {
         <ErrorMessage error={members.error} />
       ) : (
         <Stack gap={6} role="list" aria-label={t("settings.members")}>
-          {members.data.items.map((m) => (
-            <div key={m.name} role="listitem">
-              <div className="setting-row">
-                <MemberAvatar name={m.name} kind={m.kind} size={26} />
-                <Text span size="sm" className="setting-row-name">
-                  {m.display_name ? `${m.display_name} (${m.name})` : m.name}
-                </Text>
-                <StateBadge>{t(`member.kind.${m.kind}`)}</StateBadge>
-                {m.kind !== "runner" &&
-                  PROVIDERS.map((p) => {
+          {members.data.items
+            .filter((m) => m.kind !== "runner")
+            .map((m) => (
+              <div key={m.name} role="listitem">
+                <div className="setting-row">
+                  <MemberAvatar name={m.name} kind={m.kind} size={26} />
+                  <Text span size="sm" className="setting-row-name">
+                    {m.display_name ? `${m.display_name} (${m.name})` : m.name}
+                  </Text>
+                  <StateBadge>{t(`member.kind.${m.kind}`)}</StateBadge>
+                  {PROVIDERS.map((p) => {
                     const a = m.accounts.find((x) => x.provider === p.name);
                     return a ? (
                       <StateBadge key={p.name} tone="success">
@@ -89,18 +81,18 @@ export function MembersSettings() {
                       <StateBadge key={p.name}>{t("account.noneOn", { host: p.label })}</StateBadge>
                     );
                   })}
-                <Button
-                  size="xs"
-                  variant="default"
-                  onClick={() => setEditing(editing === m.name ? null : m.name)}
-                  aria-expanded={editing === m.name}
-                >
-                  {t("common.edit")}
-                </Button>
+                  <Button
+                    size="xs"
+                    variant="default"
+                    onClick={() => setEditing(editing === m.name ? null : m.name)}
+                    aria-expanded={editing === m.name}
+                  >
+                    {t("common.edit")}
+                  </Button>
+                </div>
+                {editing === m.name && <MemberEditor member={m} people={people} />}
               </div>
-              {editing === m.name && <MemberEditor member={m} people={people} />}
-            </div>
-          ))}
+            ))}
         </Stack>
       )}
       <NewMemberModal opened={adding} onClose={() => setAdding(false)} />
@@ -111,23 +103,20 @@ export function MembersSettings() {
 function NewMemberModal({ opened, onClose }: { opened: boolean; onClose: () => void }) {
   const t = useT();
   const client = useQueryClient();
-  const [form, setForm] = useState<{ name: string; display_name: string; kind: NewKind }>({
-    name: "",
-    display_name: "",
-    kind: "agent",
-  });
+  // Only agents are created here: there is one owner, and runners join from their machines.
+  const [form, setForm] = useState({ name: "", display_name: "" });
   const create = useMutation({
     mutationFn: () =>
       api.members.create({
-        ...form,
         name: form.name.trim(),
         display_name: form.display_name.trim(),
+        kind: "agent",
       }),
     onSuccess: () => close(),
     onSettled: () => void client.invalidateQueries({ queryKey: keys.members() }),
   });
   function close() {
-    setForm({ name: "", display_name: "", kind: "agent" });
+    setForm({ name: "", display_name: "" });
     create.reset();
     onClose();
   }
@@ -159,16 +148,6 @@ function NewMemberModal({ opened, onClose }: { opened: boolean; onClose: () => v
             value={form.display_name}
             onChange={(e) => setForm({ ...form, display_name: e.currentTarget.value })}
           />
-          <Select
-            label={t("member.kind")}
-            value={form.kind}
-            allowDeselect={false}
-            onChange={(v) => v && setForm({ ...form, kind: v as NewKind })}
-            data={[
-              { value: "agent", label: t("member.kind.agent") },
-              { value: "runner", label: t("member.kind.runner") },
-            ]}
-          />
           {create.isError && <ErrorMessage error={create.error} />}
           <Group justify="flex-end">
             <Button variant="default" onClick={close}>
@@ -197,10 +176,8 @@ function MemberEditor({ member, people }: { member: Member; people: Person[] }) 
       <Tabs defaultValue="basic">
         <Tabs.List>
           <Tabs.Tab value="basic">{t("settings.tabBasic")}</Tabs.Tab>
-          {member.kind !== "runner" && (
-            <Tabs.Tab value="reviewers">{t("member.reviewers")}</Tabs.Tab>
-          )}
-          {member.kind !== "runner" && <Tabs.Tab value="accounts">{t("account.title")}</Tabs.Tab>}
+          <Tabs.Tab value="reviewers">{t("member.reviewers")}</Tabs.Tab>
+          <Tabs.Tab value="accounts">{t("account.title")}</Tabs.Tab>
           <Tabs.Tab value="tokens">{t("token.title")}</Tabs.Tab>
         </Tabs.List>
         <Tabs.Panel value="basic" pt="md">
@@ -225,23 +202,19 @@ function MemberEditor({ member, people }: { member: Member; people: Person[] }) 
             {update.isError && <ErrorMessage error={update.error} />}
           </form>
         </Tabs.Panel>
-        {member.kind !== "runner" && (
-          <Tabs.Panel value="reviewers" pt="md">
-            <Reviewers member={member} people={people} />
-          </Tabs.Panel>
-        )}
-        {member.kind !== "runner" && (
-          <Tabs.Panel value="accounts" pt="md">
-            <Stack gap="md">
-              <Text size="sm" c="var(--color-text-subtle)">
-                {t(member.kind === "owner" ? "account.explainOwner" : "account.explainAgent")}
-              </Text>
-              {PROVIDERS.map((p) => (
-                <AccountRow key={p.name} member={member} provider={p.name} label={p.label} />
-              ))}
-            </Stack>
-          </Tabs.Panel>
-        )}
+        <Tabs.Panel value="reviewers" pt="md">
+          <Reviewers member={member} people={people} />
+        </Tabs.Panel>
+        <Tabs.Panel value="accounts" pt="md">
+          <Stack gap="md">
+            <Text size="sm" c="var(--color-text-subtle)">
+              {t(member.kind === "owner" ? "account.explainOwner" : "account.explainAgent")}
+            </Text>
+            {PROVIDERS.map((p) => (
+              <AccountRow key={p.name} member={member} provider={p.name} label={p.label} />
+            ))}
+          </Stack>
+        </Tabs.Panel>
         <Tabs.Panel value="tokens" pt="md">
           <Tokens name={member.name} />
         </Tabs.Panel>
@@ -503,7 +476,8 @@ function AccountRow({
   );
 }
 
-function Tokens({ name }: { name: string }) {
+/** A member's tokens (a runner's on Settings → CI): issued once, listed, revoked. */
+export function Tokens({ name }: { name: string }) {
   const t = useT();
   const client = useQueryClient();
   const tokens = useMemberTokens(name);

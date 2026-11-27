@@ -529,7 +529,9 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     let machine = report.machine.clone();
     let cache_groups = report.cache_groups.clone();
     let ram_unsupported_images = report.ram_unsupported_images.clone();
-    let reported_at = app.ci.report_runner(c.name(), report);
+    let reported_at = app
+        .ci
+        .report_runner(c.name(), &c.member.display_name, report);
     let Some(held) = held else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };

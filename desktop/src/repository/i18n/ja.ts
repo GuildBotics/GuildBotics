@@ -694,8 +694,7 @@ export const ja: Record<MessageKey, string> = {
   "settings.addBranch": "ブランチ名を追加",
   "settings.addLabel": "ラベルを追加",
   "settings.saved": "保存しました。",
-  "settings.membersHelp":
-    "オーナー、エージェント、ランナーと、コードホストのアカウントを管理します。",
+  "settings.membersHelp": "オーナーとエージェント、コードホストのアカウントを管理します。",
   "upstream.readerChoose": "メンバーを選ぶ…",
   "settings.tabCi": "CI",
   "settings.autoLand": "自動で取り込む",
@@ -737,6 +736,11 @@ export const ja: Record<MessageKey, string> = {
   "ci.settings.deleteRunnerLabel": "ランナー {{name}} を削除",
   "ci.settings.confirmDeleteRunner":
     "ランナー {{name}} を削除しますか？トークンはすべて失効し、一覧とジョブのリソースの設定から消えます。過去のジョブの記録には名前が残ります。",
+  "ci.settings.tokensHelp":
+    "選んだランナーのトークンです。`guildbotics runner join` が発行します。そのマシンを使わなくなったら、上の一覧からランナーを削除します。トークンも一緒に失効します。",
+  "ci.settings.displayName": "表示名",
+  "ci.settings.displayNameHelp":
+    "チェックやジョブ、この画面でこのランナーを示す名前です。空にすると {{name}} と示します。",
   "ci.settings.connection.online": "接続中",
   "ci.settings.connection.offline": "連絡途絶",
   "ci.settings.connection.never_seen": "Hub の起動のあと連絡なし",

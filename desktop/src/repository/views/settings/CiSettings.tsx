@@ -9,7 +9,9 @@ import {
   Stack,
   Switch,
   Text,
+  TextInput,
 } from "@mantine/core";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FolderGit2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import * as api from "../../api/endpoints";
@@ -25,10 +27,12 @@ import {
 import { Header } from "../../../ui/Header";
 import { useT, type MessageKey } from "../../i18n";
 import { resourceShortfallText } from "../../i18n/resourceShortfall";
-import { useCiChange, useCiSettings } from "../../query/hooks";
+import { useCiChange, useCiSettings, useMembers, useRunnerLabel } from "../../query/hooks";
+import { keys } from "../../query/keys";
 import { Link } from "../../router/Router";
 import { href, workspacePath } from "../../router/routes";
 import { IMAGE_SECTION_ID } from "../../../setup/EnvironmentImages";
+import { Tokens } from "./MembersSettings";
 
 const CONNECTION_TONE: Record<CiRunner["connection"], Tone> = {
   online: "success",
@@ -49,6 +53,9 @@ export function CiSettings({ workspace }: { workspace: string | null }) {
   const [selected, setSelected] = useState<string | null>(null);
   const runners = ci.data?.runner.runners ?? [];
   const runner = runners.find((r) => r.name === selected) ?? runners[0];
+  // The runner first shown stays selected: a runner joining at the top of the
+  // polled list must not move the name, tokens, and limits being edited to it.
+  if (runner && runner.name !== selected) setSelected(runner.name);
   const repositories = (ci.data?.repositories ?? []).filter(
     ({ path }) => workspace === null || path.startsWith(`${workspace}/`),
   );
@@ -81,6 +88,13 @@ export function CiSettings({ workspace }: { workspace: string | null }) {
               {t("ci.settings.manageImages")}
             </Anchor>
           </Section>
+          {runner && <RunnerName key={runner.name} name={runner.name} />}
+          {runner && (
+            <Section title={t("token.title")} description={t("ci.settings.tokensHelp")}>
+              <RunnerHeading name={runner.name} />
+              <Tokens key={runner.name} name={runner.name} />
+            </Section>
+          )}
           {runner && <Limits key={runner.name} runner={runner} />}
           <Section title={t("ci.settings.network")} description={t("ci.settings.networkHelp")}>
             {repositories.length === 0 ? (
@@ -113,6 +127,7 @@ export function CiSettings({ workspace }: { workspace: string | null }) {
 
 function ResourceQueue({ runners }: { runners: CiRunner[] }) {
   const t = useT();
+  const label = useRunnerLabel();
   const waiting = runners.flatMap((r) =>
     r.resource_wait ? [{ name: r.name, ...r.resource_wait }] : [],
   );
@@ -121,7 +136,7 @@ function ResourceQueue({ runners }: { runners: CiRunner[] }) {
     <Section title={t("ci.settings.resourceQueue")}>
       <Stack gap="xs">
         {waiting.map(({ name, repo, job, attempt_id, ...shortfall }) => {
-          const message = resourceShortfallText(t, name, shortfall);
+          const message = resourceShortfallText(t, label(name), shortfall);
           return (
             <Text size="sm" key={name}>
               <Link to={href.job(repo, attempt_id)}>
@@ -166,6 +181,7 @@ function Runner({
   onSelect: (name: string) => void;
 }) {
   const t = useT();
+  const label = useRunnerLabel();
   const { runner } = settings;
   const setMode = useCiChange(api.admin.setRunner);
   const remove = useCiChange(api.admin.deleteRunner);
@@ -178,7 +194,10 @@ function Runner({
           </StateBadge>
           <Text span size="sm">
             {runner.version_mismatch
-              ? t("ci.runnerVersionMismatch", runner.version_mismatch)
+              ? t("ci.runnerVersionMismatch", {
+                  ...runner.version_mismatch,
+                  name: label(runner.version_mismatch.name),
+                })
               : runner.detail}
           </Text>
         </Group>
@@ -203,7 +222,11 @@ function Runner({
                   runner={r}
                   deleting={remove.isPending}
                   onDelete={() => {
-                    if (window.confirm(t("ci.settings.confirmDeleteRunner", { name: r.name })))
+                    if (
+                      window.confirm(
+                        t("ci.settings.confirmDeleteRunner", { name: label(r.name, true) }),
+                      )
+                    )
                       remove.mutate(r.name);
                   }}
                 />
@@ -234,12 +257,13 @@ function RunnerRow({
   onDelete: () => void;
 }) {
   const t = useT();
+  const label = useRunnerLabel();
   const online = r.connection === "online";
   const reportTone = (ok: boolean): Tone => (online ? (ok ? "success" : "warning") : "neutral");
   return (
     <div role="listitem" className="setting-row">
       <Stack gap={4} className="setting-row-name">
-        <Radio value={r.name} label={r.name} />
+        <Radio value={r.name} label={label(r.name, true)} />
         <Group gap="xs">
           <StateBadge tone={CONNECTION_TONE[r.connection]}>
             {t(`ci.settings.connection.${r.connection}`)}
@@ -312,7 +336,7 @@ function RunnerRow({
         size="xs"
         variant="light"
         color="danger"
-        aria-label={t("ci.settings.deleteRunnerLabel", { name: r.name })}
+        aria-label={t("ci.settings.deleteRunnerLabel", { name: label(r.name, true) })}
         disabled={deleting}
         onClick={onDelete}
       >
@@ -335,8 +359,77 @@ const LIMIT_FIELDS: { key: keyof CiLimits; label: MessageKey; min: number; max: 
   { key: "cpu_multiplier_percent", label: "ci.settings.cpuMultiplier", min: 0, max: 6400 },
 ];
 
+/** Which runner a section acts on, as the list names it. */
+function RunnerHeading({ name }: { name: string }) {
+  const label = useRunnerLabel();
+  return (
+    <Text size="sm" fw={600} mb="sm">
+      {label(name, true)}
+    </Text>
+  );
+}
+
+/** The selected runner's display name, which the checks, jobs, and this page show in place of its name. */
+function RunnerName({ name }: { name: string }) {
+  const t = useT();
+  const members = useMembers();
+  const saved = members.data?.items.find((m) => m.name === name)?.display_name;
+  return (
+    <Section
+      title={t("ci.settings.displayName")}
+      description={t("ci.settings.displayNameHelp", { name })}
+    >
+      <RunnerHeading name={name} />
+      {members.isPending ? (
+        <Loading />
+      ) : members.isError ? (
+        <ErrorMessage error={members.error} />
+      ) : (
+        // A display name saved elsewhere (another tab) replaces the form's.
+        <RunnerNameForm key={saved} name={name} saved={saved ?? name} />
+      )}
+    </Section>
+  );
+}
+
+function RunnerNameForm({ name, saved }: { name: string; saved: string }) {
+  const t = useT();
+  const client = useQueryClient();
+  const [value, setValue] = useState(saved);
+  const save = useMutation({
+    mutationFn: () => api.members.update(name, { display_name: value.trim() }),
+    onSuccess: (member) => setValue(member.display_name),
+    onSettled: () => void client.invalidateQueries({ queryKey: keys.members() }),
+  });
+  return (
+    <form
+      aria-label={t("ci.settings.displayName")}
+      onSubmit={(e) => {
+        e.preventDefault();
+        save.mutate();
+      }}
+    >
+      <Stack gap="sm">
+        <Group align="flex-end" gap="sm">
+          <TextInput
+            label={t("ci.settings.displayName")}
+            value={value}
+            onChange={(e) => setValue(e.currentTarget.value)}
+            style={{ flex: 1 }}
+          />
+          <Button type="submit" disabled={save.isPending}>
+            {t("common.save")}
+          </Button>
+        </Group>
+        {save.isError && <ErrorMessage error={save.error} />}
+      </Stack>
+    </form>
+  );
+}
+
 function Limits({ runner }: { runner: CiRunner }) {
   const t = useT();
+  const label = useRunnerLabel();
   const { limits } = runner;
   const [form, setForm] = useState<LimitsForm>(limits);
   // Saved limits that change (another tab, a restart) replace the form's.
@@ -351,7 +444,7 @@ function Limits({ runner }: { runner: CiRunner }) {
     <Section title={t("ci.settings.limits")} description={t("ci.settings.limitsHelp")}>
       <Group gap="xs" mb="sm">
         <Text size="sm" fw={600}>
-          {runner.name}
+          {label(runner.name, true)}
         </Text>
         <Text size="xs" c="dimmed">
           {t(`ci.settings.limitsSource.${runner.limits_source}`)}

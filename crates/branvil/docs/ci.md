@@ -151,13 +151,17 @@ An optional `[release]` section gives the release rule ([Releases](#releases)).
   run for classes 4a/4b, after any automatic retry explanation. Waiting runs
   append the deferred reason to their queue-capacity message.
 
-  Claim order is 1, 2, 3, 4a, 4m, 4b. Within a class, attempts with an available
-  reusable successful result (of the same tree, or of the same contents of
-  paths; "Trust") come first, then registration sequence (`seq`);
-  without a reusable result, sequence decides. Reuse is assessed after taking
-  the run's current cache scope; retries with `allow_reuse = false` execute.
-  For checks of the same repository and commit in the same class and reuse
-  tier, a runner prefers jobs it can start with a [RAM workspace](#ram-workspace).
+  Claim order is 1, 2, 3, 4a, 4m, 4b. Within a class, a runner first takes
+  attempts whose latest reusable successful result (of the same tree, or
+  of the same contents of paths; "Trust") matches its job image digest.
+  Those claims reuse the result immediately without reserving VM resources.
+  An attempt whose candidate has a different image digest joins the ordinary
+  execution tier.
+  Registration sequence (`seq`) orders attempts within each tier.
+  Reuse is assessed after taking the run's current cache scope; retries with
+  `allow_reuse = false` execute. Among ordinary checks of the same repository
+  and commit in the same class, a runner prefers jobs it can start with a
+  [RAM workspace](#ram-workspace).
   It chooses the job that the fewest other online, accepting runners can run
   in RAM, with queue order breaking ties. This count uses their reported
   machine capacity, VM limits, cache inventory, and image support, including
@@ -1029,11 +1033,11 @@ job ran. The Hub uses the SDK's VM metrics. An external runner samples the
 
 A reused attempt instead logs `reused result of <attempt> (<commit>, the same
 tree), image <digest>` (`the same contents of paths` for the paths basis) and `job ended: success (reused)`. It has no `source fetched`, `sandbox started`, or
-`commands ran for` line. `reuse declined` identifies the source and reason
-(such as a digest mismatch)
-before normal execution; `reuse unavailable: no reuse offered` means the
-service supplied no source, including for manual retries and upgraded old
-attempts.
+`commands ran for` line. `reuse unavailable: no reuse offered` means the
+service supplied no source, including when the candidate's digest differs
+from the runner's inventory at claim time, for manual retries, and for
+upgraded old attempts. If the digest changes after a reuse-only claim, the
+runner logs `reuse deferred` and returns the attempt to the queue.
 
 At start it removes every sandbox labelled with its own name and every volume
 named `bv-tmp-<its name>-<attempt id>`, `bv-work-<its name>-<attempt id>`,

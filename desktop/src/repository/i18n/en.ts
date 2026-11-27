@@ -694,7 +694,7 @@ export const en = {
   "settings.addBranch": "Add a branch",
   "settings.addLabel": "Add a label",
   "settings.saved": "Saved.",
-  "settings.membersHelp": "The owner, agents, and runners, and their accounts on code hosts.",
+  "settings.membersHelp": "The owner and agents, and their accounts on code hosts.",
   "upstream.readerChoose": "Choose a member…",
   "settings.tabCi": "CI",
   "settings.autoLand": "Land automatically",
@@ -735,6 +735,11 @@ export const en = {
   "ci.settings.deleteRunnerLabel": "Delete runner {{name}}",
   "ci.settings.confirmDeleteRunner":
     "Delete the runner {{name}}? All its tokens are revoked, and it leaves the list and the job resource settings. Past jobs keep its name.",
+  "ci.settings.tokensHelp":
+    "The selected runner's tokens. `guildbotics runner join` issues one. When the machine is no longer used, delete the runner from the list above, which revokes its tokens too.",
+  "ci.settings.displayName": "Display name",
+  "ci.settings.displayNameHelp":
+    "The name the checks, jobs, and this page show for this runner. Leave it empty to show {{name}}.",
   "ci.settings.connection.online": "Connected",
   "ci.settings.connection.offline": "Contact lost",
   "ci.settings.connection.never_seen": "No contact since the Hub started",
