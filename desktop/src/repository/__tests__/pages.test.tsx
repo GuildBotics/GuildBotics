@@ -308,10 +308,12 @@ describe("pages", () => {
       "acme/demo !3 Fix login",
     ]);
     expect(rows[1]).toHaveAttribute("href", "/workspaces/acme/repos/demo/pulls/3");
-    expect(await within(rows[0] as HTMLElement).findByText("Draft")).toBeInTheDocument();
+    expect(
+      await within(rows[0] as HTMLElement).findByText("Requirements unmet: Draft"),
+    ).toBeInTheDocument();
     expect(
       within(rows[0] as HTMLElement).getByTitle("The pull request is a draft."),
-    ).toHaveTextContent("Draft");
+    ).toHaveTextContent("Requirements unmet: Draft");
     expect(within(table).getByRole("columnheader", { name: "Reviewers" })).toBeInTheDocument();
     for (const row of rows) {
       expect(
