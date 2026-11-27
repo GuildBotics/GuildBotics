@@ -20,7 +20,7 @@ use crate::app::Shared;
 use crate::auth::Caller;
 use crate::error::{AppError, AppResult};
 use crate::http::J;
-use crate::model::{Member, MemberKind, Repo};
+use crate::model::Repo;
 use crate::runner::executor::{ImageInfo, Microsandbox, Msb};
 use crate::store::{self, Rd};
 
@@ -209,16 +209,9 @@ async fn put_runner_limits(
     J(input): J<Limits>,
 ) -> AppResult<Response> {
     c.require_owner()?;
-    let member = app
-        .store
-        .read(move |r| r.get::<Member>(store::MEMBERS, &Member::key(&name)))
-        .await?;
-    let member = member
-        .filter(|m| m.kind == MemberKind::Runner)
-        .ok_or_else(|| AppError::not_found("Runner member not found."))?;
-    app.ci
-        .settings()
-        .set_limits(Some(&member.name), input)
+    // To its end, as the deletion it takes turns with: stopped between the
+    // file and the saved state, the deletion would not see what to remove.
+    app.finish(move |app| async move { app.ci.set_runner_limits(&name, input).await })
         .await?;
     Ok(axum::Json(view(&app).await?).into_response())
 }
@@ -230,7 +223,8 @@ async fn delete_runner(
     RoutePath(name): RoutePath<String>,
 ) -> AppResult<Response> {
     c.require_owner()?;
-    app.ci.delete_runner(&name).await?;
+    app.finish(move |app| async move { app.ci.delete_runner(&name).await })
+        .await?;
     Ok(axum::Json(view(&app).await?).into_response())
 }
 
