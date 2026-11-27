@@ -1412,8 +1412,8 @@ pub fn result_attempt(r: &impl Rd, a: &Attempt) -> AppResult<Attempt> {
     }
 }
 
-/// The current claim order, without changing any attempt or lease. Claims only
-/// inspect reuse within the best class; displays can request every class.
+/// The queue order before applying a runner's image inventory, without changing
+/// any attempt or lease. Callers can request just the best class or every class.
 pub fn scheduled(r: &impl Rd, first_only: bool) -> AppResult<Vec<(Attempt, Option<Reuse>)>> {
     Ok(scheduled_order(r, first_only)?
         .into_iter()
@@ -1701,13 +1701,17 @@ pub fn claim_images(
         first
     };
     let (a, reuse, _) = &ordered[chosen.index];
+    let reuse = reuse
+        .as_ref()
+        .filter(|_| chosen.allocation.is_none())
+        .cloned();
     let claim = claim_selected(
         w,
         &runner.name,
         lease_secs,
         now,
         a.clone(),
-        reuse.clone(),
+        reuse,
         chosen.allocation,
     )?;
     Ok((Some(claim), waiting))
@@ -1746,13 +1750,32 @@ impl ClaimScan<'_> {
         let mut reserve = Resources::default();
         let mut ram_memory = runner.ram_memory(&budget, reserve);
         let mut estimates = BTreeMap::new();
-        for (index, (a, reuse, class)) in self.ordered.iter().enumerate() {
+        // The queue view ranks any reuse candidate first. Claim order depends
+        // on the runner's image, including when comparing choices for a peer.
+        let mut images = BTreeMap::new();
+        let mut ordered: Vec<_> = self
+            .ordered
+            .iter()
+            .enumerate()
+            .map(|(index, (a, reuse, class))| {
+                let image = *images
+                    .entry(a.job.image.as_str())
+                    .or_insert_with(|| runner.images.iter().find(|i| i.supports(&a.job.image)));
+                let reuse_matches = reuse
+                    .as_ref()
+                    .zip(image)
+                    .is_some_and(|(source, image)| source.image_digest == image.digest);
+                ((*class, !reuse_matches, a.seq), index, image, reuse_matches)
+            })
+            .collect();
+        ordered.sort_by_key(|entry| entry.0);
+        for (_, index, image, reuse_matches) in ordered {
+            let (a, _, class) = &self.ordered[index];
             if let Some(first) = choices.first() {
-                let (head, head_reuse, head_class) = &self.ordered[first.index];
-                // RAM can change the job within this part of the queue,
-                // without moving it across a different group or reuse tier.
+                let (head, _, head_class) = &self.ordered[first.index];
+                // Immediate reuse ends the scan. RAM can only reorder ordinary
+                // checks of this class, repository, and commit.
                 if *class != *head_class
-                    || reuse.is_some() != head_reuse.is_some()
                     || a.purpose != Purpose::Check
                     || head.purpose != Purpose::Check
                     || a.repo != head.repo
@@ -1761,7 +1784,7 @@ impl ClaimScan<'_> {
                     break;
                 }
             }
-            let Some(image) = runner.images.iter().find(|i| i.supports(&a.job.image)) else {
+            let Some(image) = image else {
                 continue;
             };
             if let Some(retry) = &a.retry_decision {
@@ -1776,17 +1799,12 @@ impl ClaimScan<'_> {
                     continue;
                 }
             }
-            if reuse
-                .as_ref()
-                .is_some_and(|source| source.image_digest == image.digest)
-            {
-                if choices.is_empty() {
-                    choices.push(ClaimChoice {
-                        index,
-                        allocation: None,
-                        ram: false,
-                    });
-                }
+            if reuse_matches {
+                choices.push(ClaimChoice {
+                    index,
+                    allocation: None,
+                    ram: false,
+                });
                 break;
             }
             let key = (&a.repo, &a.job.name);
@@ -2770,16 +2788,20 @@ mod tests {
         let PipelineState::Jobs { jobs } = &mut registration.pipeline else {
             unreachable!();
         };
-        let ram = jobs.iter_mut().find(|job| job.name == "rust-test").unwrap();
-        ram.tmpfs_mib = Some(2048);
-        ram.ram_workspace = Some(RamWorkspace {
-            paths: vec!["target".into()],
-            max_mib: 4608,
-        });
-        ram.cache = Some(CacheDef {
-            paths: vec!["target".into()],
-            key_files: vec![],
-        });
+        for ram in jobs
+            .iter_mut()
+            .filter(|job| matches!(job.name.as_str(), "rust-test" | "rust-test-branvil"))
+        {
+            ram.tmpfs_mib = Some(2048);
+            ram.ram_workspace = Some(RamWorkspace {
+                paths: vec!["target".into()],
+                max_mib: 4608,
+            });
+            ram.cache = Some(CacheDef {
+                paths: vec!["target".into()],
+                key_files: vec![],
+            });
+        }
         registration
     }
 
@@ -3079,6 +3101,83 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn ram_preference_ignores_reuse_from_another_image() {
+        let (_dir, store) = store();
+        store
+            .write_sync(|w| {
+                let (hub, _) = register_main_with_arm_reuse(w)?;
+                for (name, expected) in [("windows", "rust-test"), ("linux", "rust-test-branvil")] {
+                    let runner = runner(name, 8192);
+                    let (claim, _) =
+                        super::claim_images(w, runner.clone(), 60, T0, || Ok(vec![hub.clone()]))?;
+                    let claim = claim.unwrap();
+                    assert_eq!(claim.attempt.job.name, expected);
+                    assert!(runner.ram_allows(&claim.attempt, runner.machine.as_ref()));
+                    assert!(claim.reuse.is_none());
+                }
+                // Once the RAM jobs are leased, the ordinary jobs follow seq.
+                let (claim, _) =
+                    super::claim_images(w, runner("third-x86", 8192), 60, T0, || Ok(vec![hub]))?;
+                assert_eq!(claim.unwrap().attempt.job.name, "test");
+                let (claim, _) =
+                    super::claim_images(w, runner("fourth-x86", 8192), 60, T0, || Ok(vec![]))?;
+                let claim = claim.unwrap();
+                assert_eq!(claim.attempt.job.name, "rust-clippy");
+                assert!(claim.attempt.allocation.is_some());
+                assert!(claim.reuse.is_none());
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn matching_image_reuses_first_without_allocating_a_vm() {
+        let (_dir, store) = store();
+        store
+            .write_sync(|w| {
+                let (mut hub, source) = register_main_with_arm_reuse(w)?;
+                hub.machine.as_mut().unwrap().available_memory_mib = 0;
+                let (claim, wait) = super::claim_images(w, hub, 60, T0, || Ok(vec![]))?;
+                let claim = claim.unwrap();
+                assert_eq!(claim.attempt.job.name, "rust-clippy");
+                assert_eq!(claim.reuse.unwrap().attempt_id, source);
+                assert!(claim.attempt.allocation.is_none());
+                assert!(wait.is_none());
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn register_main_with_arm_reuse(w: &Wtx) -> AppResult<(ClaimRunner, String)> {
+        let mut hub = runner("hub", 6144);
+        hub.images[0].architecture = "arm64".into();
+        hub.images[0].digest = format!("sha256:{}", "3".repeat(64));
+        register(w, reg("source", "feature", &["rust-clippy"]), 10, T0)?;
+        let (source, _) = super::claim_images(w, hub.clone(), 60, T0, || Ok(vec![]))?;
+        let source = source.unwrap();
+        finish(
+            w,
+            &source.attempt.id,
+            &source.lease,
+            "success",
+            None,
+            ResultInfo {
+                image_digest: Some(hub.images[0].digest.clone()),
+                ..Default::default()
+            },
+            T0,
+        )?;
+        let mut main = ram_registration(
+            "main-check",
+            "main",
+            &["test", "rust-clippy", "rust-test", "rust-test-branvil"],
+        );
+        main.tree = Some("tree-source".into());
+        register(w, main, 10, T0)?;
+        Ok((hub, source.attempt.id))
     }
 
     #[test]
