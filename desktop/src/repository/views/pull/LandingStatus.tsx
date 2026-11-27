@@ -222,14 +222,12 @@ export function JourneyBadge({
   const l = pull.landing;
   const details = useBlockerDetails(pull, load);
   const { at, mark } = whereabouts(pull, repo, false);
+  const unmet = l?.next === "conditions" ? l.blockers : [];
   const text =
     !l || l.next === "conditions"
-      ? l?.blockers.length
-        ? t("landing.badge.conditions", {
-            blockers: l.blockers.map((b) => t(blockerName(b.code))).join(t("landing.badge.and")),
-          })
-        : t("landing.missing")
+      ? t("landing.badge.conditions")
       : t(`landing.badge.${l.next}`, { host: repo.upstream?.host ?? "", base: pull.base });
+  const title = details.flat().join(" / ");
   const color =
     l?.next === "conditions" && l.blockers[0]?.code === "held"
       ? "warning"
@@ -242,16 +240,19 @@ export function JourneyBadge({
           : l && ["owner_merge_host", "owner_merge"].includes(l.next)
             ? "warning"
             : "neutral";
-  return (
-    <Badge
-      color={color}
-      variant="light"
-      size="sm"
-      title={details.flat().join(" / ")}
-      data-stop={at}
-      data-state={mark}
-    >
+  const badge = (
+    <Badge color={color} variant="light" size="sm" title={title} data-stop={at} data-state={mark}>
       {pull.base === repo.default_branch ? text : `${pull.base} · ${text}`}
     </Badge>
+  );
+  if (!unmet.length) return badge;
+  // The unmet requirements wrap under the state instead of widening the list's column.
+  return (
+    <Stack component="span" gap={2} align="flex-start">
+      {badge}
+      <Text span size="xs" c="dimmed" className="unmet-requirements" title={title}>
+        {unmet.map((b) => t(blockerName(b.code))).join(t("landing.badge.and"))}
+      </Text>
+    </Stack>
   );
 }

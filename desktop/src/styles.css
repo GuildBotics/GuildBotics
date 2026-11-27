@@ -3756,6 +3756,11 @@ pre {
     grid-template-columns: subgrid;
   }
 
+  .unmet-requirements {
+    max-width: 10em;
+    white-space: normal;
+  }
+
   .pull-list > .empty-row {
     grid-column: 1 / -1;
   }

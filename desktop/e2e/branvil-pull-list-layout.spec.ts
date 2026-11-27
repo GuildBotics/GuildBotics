@@ -13,6 +13,20 @@ const STATES = [
   { checks: [], checks_expected: false },
 ];
 const COUNTS = [0, 1, 4, 12, 4];
+// Rows whose requirements are unmet name every one of them, which must not widen the status column.
+const BLOCKERS = [
+  ["draft", "conflict", "head_checks", "approvals"],
+  ["head_checks", "approvals"],
+];
+const landing = (number: number, codes: string[] | undefined) =>
+  codes && {
+    repo: "repo_fixture", number, head_sha: SHA, base_sha: SHA, conflicts: [], required_jobs: [],
+    told: [], notified_at: null, error: null, next: "conditions", host_url: null, next_detail: null,
+    blockers: codes.map((code) => ({
+      code, message: code, jobs: code === "head_checks" ? ["test"] : [], files: [],
+      ...(code === "approvals" ? { count: 0, required: 1 } : {}),
+    })),
+  };
 const pulls = STATES.map((_, i) => ({
   number: 100000 + i, label: `!${100000 + i}`, repository: "acme/demo",
   url: `http://localhost/workspaces/acme/repos/demo/pulls/${100000 + i}`,
@@ -23,7 +37,7 @@ const pulls = STATES.map((_, i) => ({
     member: `review-bot-${n}`, requested: n % 4 === 3,
     verdict: ["approve", "request_changes", "comment", null][n % 4], outdated: n % 3 === 2,
   })), approvals: 0, tickets: [], labels: [], changed_files: 0,
-  created_at: AT, updated_at: AT, revision: 1, upstream: null,
+  created_at: AT, updated_at: AT, revision: 1, upstream: null, landing: landing(100000 + i, BLOCKERS[i]),
 }));
 const repo = { path: "acme/demo", default_branch: "main", required_checks: [], protected_branches: [], required_approvals: 0, autoland: "off", upstream: null };
 const pageOf = (items: unknown[]) => ({ items, next_cursor: null });
@@ -68,6 +82,12 @@ for (const locale of ["en-US", "ja-JP"]) {
             cells.forEach((cell, i) => {
               if (Math.abs(cell.getBoundingClientRect().x - header[i]) > 1) issues.push(`column ${i} is misaligned`);
             });
+            // Unmet requirements wrap within a bounded width instead of widening the status column.
+            for (const list of cells[3].querySelectorAll<HTMLElement>(".unmet-requirements")) {
+              const em = parseFloat(getComputedStyle(list).fontSize);
+              if (list.getBoundingClientRect().width > 10 * em + 1) issues.push(`wide requirements: ${list.textContent}`);
+              if (list.scrollWidth > list.clientWidth + 1) issues.push(`clipped requirements: ${list.textContent}`);
+            }
             for (const cell of [cells[3], cells[4]]) {
               for (const label of cell.querySelectorAll<HTMLElement>(".mantine-Badge-label")) {
                 if (label.scrollWidth > label.clientWidth + 1) issues.push(`clipped badge: ${label.textContent}`);
@@ -84,9 +104,11 @@ for (const locale of ["en-US", "ja-JP"]) {
             }
           }
           if (document.documentElement.scrollWidth > innerWidth + 1) issues.push("page overflows horizontally");
+          if (innerWidth >= 1600 && element.scrollWidth > element.clientWidth + 1) issues.push("list scrolls horizontally");
           return issues;
         });
         expect(issues).toEqual([]);
+        await expect(table.locator(".unmet-requirements")).toHaveCount(BLOCKERS.length);
         for (const [i, count] of COUNTS.entries()) {
           await expect(table.locator("a[role=row]").nth(i).locator(".review-mark-anchor")).toHaveCount(count);
         }
