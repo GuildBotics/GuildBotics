@@ -216,7 +216,7 @@ cargo clean --workspace --offline --locked
 python3 .cargo/ci-cache.py prune
 RUST_TEST
 ''']
-artifacts = [{ name = "rust-test-results", paths = ["target/nextest/ci/junit.xml", "target/nextest/ci/tmp-usage.json"] }]
+artifacts = [{ name = "rust-test-results", paths = ["target/nextest/ci/junit.xml", "target/nextest/ci/tmp-usage.json"], junit = "target/nextest/ci/junit.xml" }]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
 
@@ -245,7 +245,7 @@ python3 .cargo/ci-cache.py run cargo nextest run --locked --profile ci -p branvi
 cargo clean --workspace --offline --locked
 python3 .cargo/ci-cache.py prune
 ''']
-artifacts = [{ name = "test-results", paths = ["target/nextest/ci/junit.xml"] }]
+artifacts = [{ name = "test-results", paths = ["target/nextest/ci/junit.xml"], junit = "target/nextest/ci/junit.xml" }]
 timeout_secs = 1800
 cache = { paths = [".ci/cargo-home/registry", "target"], key_files = ["Cargo.lock"] }
 
