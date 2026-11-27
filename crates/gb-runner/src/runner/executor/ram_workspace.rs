@@ -657,6 +657,7 @@ with patch("time.monotonic", side_effect=[0, 60]), patch("__main__.run") as moun
                     JobRun {
                         attempt_id: case,
                         peak_memory_mib: &mut None,
+                        resources: &mut AttemptResources::default(),
                         job: &job,
                         image_lock: ImageLock::default(),
                         cpus: 1,

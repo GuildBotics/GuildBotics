@@ -744,6 +744,28 @@ describe("pages", () => {
           conclusion: "success",
           runner: "linux",
           allocation: { cpus: 4, vm_memory_mib: 6144, reserved_memory_mib: 5000 },
+          peak_memory_mib: 6100,
+          resources: {
+            restore: {
+              disk_write_bytes: 0,
+              cpu_time_ms: null,
+              host_cpu_average_bps: null,
+              host_cpu_peak_bps: null,
+            },
+            commands: {
+              disk_write_bytes: 4_294_967_296,
+              cpu_time_ms: 1_234_567,
+              host_cpu_average_bps: 1525,
+              host_cpu_peak_bps: 3210,
+            },
+            save: {
+              disk_write_bytes: 789,
+              cpu_time_ms: 456,
+              host_cpu_average_bps: null,
+              host_cpu_peak_bps: null,
+            },
+            guest_peak_memory_mib: 3000,
+          },
           runner_claim: {
             machine: { logical_cpus: 8, total_memory_mib: 10000, available_memory_mib: 8000 },
             memory_samples: 3,
@@ -781,6 +803,23 @@ describe("pages", () => {
         );
       const passed = within(await screen.findByRole("dialog", { name: /test/ }));
       const label = await passed.findByText(change);
+      expect(passed.getByText(/3000 MiB/)).toBeInTheDocument();
+      expect(passed.getByText(/6100 MiB/)).toBeInTheDocument();
+      const command = within(passed.getByRole("row", { name: /Commands|コマンド/ }));
+      expect(command.getByText("4.0 GiB")).toHaveAttribute(
+        "title",
+        language === "ja" ? "4,294,967,296 バイト" : "4,294,967,296 bytes",
+      );
+      expect(command.getByTitle("1,234,567 ms")).toHaveTextContent(
+        language === "ja" ? "20分34秒" : "20m 34s",
+      );
+      const save = within(passed.getByRole("row", { name: /Save|保存/ }));
+      expect(save.getByText("789 B")).toBeInTheDocument();
+      expect(save.getByText("456 ms")).toBeInTheDocument();
+      expect(command.getByText("15.25% / 32.1%")).toBeInTheDocument();
+      const restore = within(passed.getByRole("row", { name: /Restore|復元/ }));
+      expect(restore.getByText("0 B")).toBeInTheDocument();
+      expect(restore.getAllByText("—")).toHaveLength(2);
       expect(
         passed.getByText(
           language === "ja"

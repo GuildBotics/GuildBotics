@@ -73,6 +73,7 @@ pub struct AttemptView {
     pub allocation: Option<queue::Allocation>,
     pub runner_claim: Option<queue::RunnerClaim>,
     pub peak_memory_mib: Option<u64>,
+    pub resources: Option<queue::AttemptResources>,
     pub reused_from: Option<super::ReusedFrom>,
     pub status: String,
     pub conclusion: Option<String>,
@@ -133,6 +134,7 @@ pub(crate) async fn view(app: &Shared, a: &Attempt) -> AppResult<AttemptView> {
         allocation: a.allocation,
         runner_claim: a.runner_claim,
         peak_memory_mib: a.peak_memory_mib,
+        resources: a.resources,
         reused_from: app.ci.reused_from(a, &source),
         status: a.status.clone(),
         conclusion: a.conclusion.clone(),
@@ -958,6 +960,7 @@ struct FinishInput {
     #[serde(default)]
     image_digest: Option<String>,
     peak_memory_mib: Option<u64>,
+    resources: Option<queue::AttemptResources>,
     reused_from: Option<String>,
     cache_key: Option<String>,
     #[serde(default)]
@@ -998,6 +1001,7 @@ async fn finish(
                         queue::ResultInfo {
                             image_digest: input.image_digest,
                             peak_memory_mib: input.peak_memory_mib,
+                            resources: input.resources,
                             reused_from: input.reused_from,
                             cache_key: input.cache_key,
                         },

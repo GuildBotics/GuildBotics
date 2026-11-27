@@ -6,6 +6,9 @@
 mod ram_workspace;
 #[cfg(feature = "host")]
 mod sdk;
+
+use super::resources;
+use crate::ci::queue::{AttemptResources, PhaseResources};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -107,6 +110,7 @@ pub struct Health {
 pub struct JobRun<'a> {
     pub attempt_id: &'a str,
     pub peak_memory_mib: &'a mut Option<u64>,
+    pub resources: &'a mut AttemptResources,
     /// Run by its `image`, the tag `Executor::resolve_image` checked.
     pub job: &'a JobDef,
     /// The lock that came with the image's check, held until the VM has
@@ -734,7 +738,7 @@ impl Microsandbox {
     /// failed, or `None` when it was stopped.
     async fn helper(
         &self,
-        job: &JobRun<'_>,
+        job: &mut JobRun<'_>,
         what: &str,
         quota_mib: u64,
         disks: HelperDisks<'_>,
@@ -771,10 +775,18 @@ impl Microsandbox {
             .spawn()
             .map_err(|e| Some(format!("cannot start msb: {e}")))?;
         // Dropping the child on a stop kills `msb run`, which stops its VM.
-        let ended = tokio::select! {
-            out = child.wait_with_output() => Some(out),
-            Ok(_) = cancel.wait_for(|stop| *stop) => None,
-        };
+        let pid = child.id();
+        let ended = resources::observe_phase(
+            async {
+                tokio::select! {
+                    out = child.wait_with_output() => Some(out),
+                    Ok(_) = cancel.wait_for(|stop| *stop) => None,
+                }
+            },
+            || tree_resources(pid),
+            helper_phase(job.resources, what),
+        )
+        .await;
         self.clean("the job's sandbox", &["remove", "--force", "-q", &name])
             .await;
         match ended {
@@ -990,6 +1002,14 @@ struct Restore {
 /// no entry ([`super::workspace::Tree::link_on`]). Otherwise it hands `work`
 /// to the job's user, and flushes: microsandbox stops the VM when its
 /// command ends, and what the guest has not written to the disk can be lost.
+fn helper_phase<'a>(resources: &'a mut AttemptResources, what: &str) -> &'a mut PhaseResources {
+    if what == "collect" {
+        &mut resources.save
+    } else {
+        &mut resources.restore
+    }
+}
+
 fn prepare_script(work: &str, io: &str, restore: Option<&Restore>) -> String {
     let unpack = format!("tar -xf {io}/{CHECKOUT} -C {work}");
     let mut s = String::from("set -e\n");
@@ -1461,12 +1481,19 @@ impl Executor for Microsandbox {
                 let mib = work_disk_mib(quota, checkout, data)
                     .max(len.div_ceil(1 << 20).next_multiple_of(GROUP_MIB));
                 super::workspace::list_members(&archive, &members)?;
-                super::disk::create_work_overlay(&overlay, mib << 20)?;
-                Ok((mib, fs, data))
+                let (created, mut usage) = resources::cache_operation(|| {
+                    super::disk::create_work_overlay(&overlay, mib << 20)
+                });
+                let written = created?;
+                usage.write_bytes = usage.write_bytes.or(Some(written));
+                Ok((mib, fs, data, usage))
             })
             .await
             {
-                Ok((mib, fs, data)) => {
+                Ok((mib, fs, data, usage)) => {
+                    job.resources
+                        .restore
+                        .add_usage(usage.write_bytes, usage.cpu_ms);
                     disk_mib = mib;
                     restore = Some(Restore {
                         grow: fs < mib << 20,
@@ -1506,7 +1533,7 @@ impl Executor for Microsandbox {
         }
         let mut prepared = self
             .helper(
-                &job,
+                &mut job,
                 "prep",
                 // It writes no more than a mark.
                 1,
@@ -1548,7 +1575,7 @@ impl Executor for Microsandbox {
                     };
                     // A sandbox of its own name too.
                     self.helper(
-                        &job,
+                        &mut job,
                         "prep-new",
                         1,
                         HelperDisks {
@@ -1736,7 +1763,7 @@ impl Executor for Microsandbox {
             let collected = match locked {
                 Ok(_lock) => {
                     self.helper(
-                        &job,
+                        &mut job,
                         "collect",
                         collect_mib,
                         HelperDisks {
@@ -1831,17 +1858,14 @@ impl Executor for Microsandbox {
             }
             // Off the async threads, where the other jobs' heartbeats run.
             let work = job.work.to_path_buf();
-            let unpacked = super::blocking(move || {
-                std::fs::remove_dir_all(&work)
-                    .and_then(|_| std::fs::create_dir(&work))
-                    .and_then(|_| {
-                        crate::runner::workspace::unpack_returned(
-                            &returned,
-                            collect_mib << 20,
-                            &work,
-                        )
-                    })
-            })
+            let unpacked = resources::measure_filesystem(
+                move || {
+                    std::fs::remove_dir_all(&work)?;
+                    std::fs::create_dir(&work)?;
+                    crate::runner::workspace::unpack_returned(&returned, collect_mib << 20, &work)
+                },
+                &mut job.resources.save,
+            )
             .await;
             match unpacked {
                 Ok(notes) => {
@@ -1982,12 +2006,10 @@ impl Microsandbox {
         let deadline = tokio::time::sleep(Duration::from_secs(job.timeout_secs));
         tokio::pin!(deadline);
         let mut tail = tokio::time::interval(Duration::from_millis(50));
-        // The host memory of `msb run` and its VM, sampled every second:
-        // the VM's grows with what the guest touches and does not shrink,
-        // so the last samples hold the peak.
-        let mut memory = tokio::time::interval(Duration::from_secs(1));
+        let mut interval = tokio::time::interval(resources::INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let pid = child.id();
-        let mut peak_kib = 0;
+        let mut meter = resources::CommandMeter::start();
         let mut out_open = true;
         let mut err_open = true;
         let mut stop: Option<Outcome> = None;
@@ -1999,14 +2021,21 @@ impl Microsandbox {
                     // The commands run in the VM: msb has picked the image.
                     if job_log.started.is_some() && let Some(lock) = image_lock.take() {
                         drop(lock);
+                        interval.reset_immediately();
                         if cfg!(windows) {
                             self.started.lock().unwrap().insert(job.attempt_id.into());
                         }
                     }
                 }
-                _ = memory.tick() => {
-                    if let Some(kib) = tree_rss_kib(pid).await {
-                        peak_kib = peak_kib.max(kib);
+                _ = interval.tick() => {
+                    meter.sample(tree_resources(pid).await, ram.is_some_and(|r| r.exit_code().is_some()));
+                    if job_log.started.is_some() {
+                        let sample = self.output_within(
+                            &["exec", &name, "--", "/bin/sh", "-c", GUEST_MEMORY],
+                            resources::INTERVAL / 2,
+                        ).await.ok().filter(|out| out.status.success());
+                        let peak = sample.and_then(|out| guest_memory_mib(&out.stdout));
+                        job.resources.guest_peak_memory_mib = job.resources.guest_peak_memory_mib.max(peak);
                     }
                 }
                 // msb's own words (the job's output is in the log file).
@@ -2038,6 +2067,10 @@ impl Microsandbox {
                 }
             }
         }
+        meter.sample(
+            tree_resources(pid).await,
+            ram.is_some_and(|r| r.exit_code().is_some()),
+        );
         // Reserve the allocation again before stopping this VM or preparing
         // the next helper VM, which has not committed its memory yet.
         if cfg!(windows) {
@@ -2116,7 +2149,8 @@ impl Microsandbox {
             );
             let _ = log.send(note.into_bytes()).await;
         }
-        *job.peak_memory_mib = log_peak_memory(log, peak_kib).await;
+        let peak_kib = meter.finish(job.resources);
+        *job.peak_memory_mib = log_peak_memory(log, peak_kib.unwrap_or_default()).await;
         outcome
     }
 }
@@ -2130,42 +2164,69 @@ async fn log_peak_memory(log: &mpsc::Sender<Vec<u8>>, peak_kib: u64) -> Option<u
     Some(mib)
 }
 
-/// The resident memory of process `pid` and all its descendants, in KiB,
-/// or none when the process has exited or the OS will not report it.
-#[cfg(not(windows))]
-async fn tree_rss_kib(pid: Option<u32>) -> Option<u64> {
-    let out = tokio::process::Command::new("ps")
-        .args(["-A", "-o", "pid=,ppid=,rss="])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .await
-        .ok()?;
-    out.status.success().then_some(())?;
-    tree_rss(&String::from_utf8_lossy(&out.stdout), pid?)
+// The Linux guest's MemAvailable includes reclaimable page cache. Read
+// through the runtime's exec channel, separate from job output.
+const GUEST_MEMORY: &str = r#"
+total= available=
+while read -r key value unit rest; do
+    case "$key" in
+        MemTotal:) total=$value ;;
+        MemAvailable:) available=$value; break ;;
+    esac
+done </proc/meminfo
+[ -n "$total" ] && [ -n "$available" ] && printf '%s %s\n' "$total" "$available"
+"#;
+
+fn guest_memory_mib(bytes: &[u8]) -> Option<u64> {
+    let mut fields = std::str::from_utf8(bytes).ok()?.split_whitespace();
+    let total = fields.next()?.parse::<u64>().ok()?;
+    let available = fields.next()?.parse::<u64>().ok()?;
+    let used = total.checked_sub(available)?;
+    (used > 0 && fields.next().is_none()).then(|| used.div_ceil(1024))
+}
+
+async fn tree_resources(pid: Option<u32>) -> resources::Process {
+    let Some(pid) = pid else {
+        return resources::Process::default();
+    };
+    #[cfg(windows)]
+    {
+        tokio::task::spawn_blocking(move || windows_tree_resources(pid))
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    }
+    #[cfg(not(windows))]
+    {
+        let out = tokio::process::Command::new("ps")
+            .args(["-A", "-o", "pid=,ppid=,rss="])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .output()
+            .await;
+        out.ok()
+            .filter(|out| out.status.success())
+            .and_then(|out| {
+                unix_tree_resources(
+                    &String::from_utf8_lossy(&out.stdout),
+                    pid,
+                    resources::process,
+                )
+            })
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(windows)]
-async fn tree_rss_kib(pid: Option<u32>) -> Option<u64> {
-    let root = pid?;
-    tokio::task::spawn_blocking(move || windows_tree_rss(root))
-        .await
-        .ok()
-        .flatten()
-}
-
-#[cfg(windows)]
-fn windows_tree_rss(root: u32) -> Option<u64> {
+fn windows_tree_resources(root: u32) -> Option<resources::Process> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::{
         Foundation::INVALID_HANDLE_VALUE,
-        System::{
-            Diagnostics::ToolHelp::{
-                CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
-                TH32CS_SNAPPROCESS,
-            },
-            ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
-            Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+        System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+            TH32CS_SNAPPROCESS,
         },
     };
 
@@ -2185,30 +2246,20 @@ fn windows_tree_rss(root: u32) -> Option<u64> {
         processes.push((entry.th32ProcessID, entry.th32ParentProcessID));
         has_row = unsafe { Process32NextW(snapshot.as_raw_handle(), &mut entry) };
     }
-    let mut total = 0;
+    let mut total = resources::Process::default();
     for pid in process_tree(&processes, root)? {
-        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-        if handle.is_null() {
-            return None;
-        }
-        let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
-        let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
-        let mut counters = PROCESS_MEMORY_COUNTERS {
-            cb: size,
-            ..Default::default()
-        };
-        if unsafe { K32GetProcessMemoryInfo(handle.as_raw_handle(), &mut counters, size) } == 0 {
-            return None;
-        }
-        total += (counters.WorkingSetSize as u64).div_ceil(1024);
+        total.add(resources::process(pid));
     }
     Some(total)
 }
 
-/// Sums the `rss` of `root` and its descendants in `pid ppid rss` lines;
-/// none when `root` is not listed.
+/// Samples the tree described by `pid ppid rss` lines, if it still exists.
 #[cfg(any(not(windows), test))]
-fn tree_rss(ps: &str, root: u32) -> Option<u64> {
+fn unix_tree_resources(
+    ps: &str,
+    root: u32,
+    sample: impl Fn(u32) -> resources::Process,
+) -> Option<resources::Process> {
     let procs: Vec<(u32, u32, u64)> = ps
         .lines()
         .filter_map(|l| {
@@ -2225,13 +2276,19 @@ fn tree_rss(ps: &str, root: u32) -> Option<u64> {
         .map(|&(pid, parent, _)| (pid, parent))
         .collect::<Vec<_>>();
     let tree = process_tree(&parents, root)?;
-    Some(
-        procs
-            .iter()
-            .filter(|(id, _, _)| tree.contains(id))
-            .map(|&(_, _, rss)| rss)
-            .sum(),
-    )
+    let mut total = resources::Process::default();
+    for &(pid, _, rss) in procs.iter().filter(|(id, _, _)| tree.contains(id)) {
+        total.add(resources::Process {
+            rss_kib: Some(rss),
+            ..sample(pid)
+        });
+    }
+    Some(total)
+}
+
+#[cfg(test)]
+fn tree_rss(ps: &str, root: u32) -> Option<u64> {
+    unix_tree_resources(ps, root, |_| resources::Process::default())?.rss_kib
 }
 
 fn process_tree(processes: &[(u32, u32)], root: u32) -> Option<Vec<u32>> {
@@ -2258,6 +2315,20 @@ fn tail(bytes: &[u8], n: usize) -> String {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn guest_memory_uses_available_pages_and_rejects_missing_values() {
+        assert_eq!(guest_memory_mib(b"6291456 4194304\n"), Some(2048));
+        assert_eq!(guest_memory_mib(b"2048 2047\n"), Some(1));
+        for sample in [
+            b"1024 2048".as_slice(),
+            b"1024",
+            b"1024 1024",
+            b"1024 1 extra",
+        ] {
+            assert_eq!(guest_memory_mib(sample), None);
+        }
+    }
+
     #[tokio::test]
     async fn an_exited_job_s_output_is_read_to_its_last_release_point() {
         use super::Outcome;
@@ -2534,6 +2605,9 @@ run)
 remove)
   echo "$*" >> "$state/removed" ;;
 exec)
+  case "$*" in
+    */proc/meminfo*) printf '262144 196608\n'; exit 0 ;;
+  esac
   [ ! -e "$state/exec-fails" ] || exit 1
   kill -0 "$(cat "$state/pid-$2")" 2>/dev/null || exit 1
   echo "$*" >> "$state/removed"
@@ -2635,6 +2709,7 @@ esac
             let job = JobRun {
                 attempt_id: "a1",
                 peak_memory_mib: &mut None,
+                resources: &mut AttemptResources::default(),
                 job: &job,
                 image_lock,
                 cpus: 1,
@@ -2964,6 +3039,7 @@ esac
                     cache
                         .stage("seed", key, &owner, (&seed, 1024), max)
                         .unwrap()
+                        .0
                 );
                 if ending != "pending-only" {
                     cache
@@ -3059,11 +3135,13 @@ esac
             let base = restored.as_ref().map(|_| cache_base.clone());
             let running = async move {
                 let mut kept = None;
+                let mut measurements = AttemptResources::default();
                 let outcome = runner
                     .run(
                         JobRun {
                             attempt_id: "a1",
                             peak_memory_mib: &mut None,
+                            resources: &mut measurements,
                             job,
                             image_lock: ImageLock::default(),
                             cpus: 1,
@@ -3094,7 +3172,7 @@ esac
                         cancel,
                     )
                     .await;
-                (outcome, kept)
+                (outcome, kept, measurements)
             };
             let removed_file = state.join("removed");
             let stopping = async {
@@ -3127,7 +3205,11 @@ esac
                 }
             };
             let started = Instant::now();
-            let ((outcome, kept_data), ()) = tokio::join!(running, stopping);
+            let ((outcome, kept_data, measurements), ()) = tokio::join!(running, stopping);
+            if ending == "timeout" {
+                assert_eq!(measurements.guest_peak_memory_mib, Some(64));
+                assert!(measurements.commands.cpu_time_ms.is_some());
+            }
             drop(load);
             let _ = std::fs::remove_file(state.join("exec-hangs"));
             assert_eq!(
@@ -3231,6 +3313,7 @@ esac
                     cache
                         .stage("a1", "requested", &owner, (&cache_disk, data), max)
                         .unwrap()
+                        .0
                 );
                 cache
                     .settle("a1", Some(std::time::SystemTime::now()), max)
@@ -3398,6 +3481,7 @@ esac
                     JobRun {
                         attempt_id: "a1",
                         peak_memory_mib: &mut None,
+                        resources: &mut AttemptResources::default(),
                         job: &job,
                         image_lock: ImageLock::default(),
                         cpus: 1,
@@ -3622,6 +3706,7 @@ esac
                     JobRun {
                         attempt_id: "a1",
                         peak_memory_mib: &mut None,
+                        resources: &mut AttemptResources::default(),
                         job: &job,
                         image_lock: ImageLock::default(),
                         cpus: 1,

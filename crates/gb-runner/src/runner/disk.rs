@@ -65,8 +65,9 @@ pub const CACHE_BASE: &str = "cache-base.raw";
 
 /// Creates an empty qcow2 v3 overlay on the raw image beside it. All guest
 /// writes go to the overlay. The backing format is explicit so a raw image
-/// whose contents resemble a qcow2 header is still opened as raw.
-pub fn create_work_overlay(path: &Path, size: u64) -> io::Result<()> {
+/// whose contents resemble a qcow2 header is still opened as raw. Returns
+/// the bytes written to the new header and refcount metadata.
+pub fn create_work_overlay(path: &Path, size: u64) -> io::Result<u64> {
     const HEADER_LEN: usize = 104;
     // L2 entries are 8 bytes; each maps one data cluster.
     const L1_COVERAGE: u64 = (CLUSTER as u64 / 8) * CLUSTER as u64;
@@ -117,7 +118,7 @@ pub fn create_work_overlay(path: &Path, size: u64) -> io::Result<()> {
     if result.is_err() {
         let _ = fs::remove_file(path);
     }
-    result
+    result.map(|()| metadata.len() as u64)
 }
 
 #[cfg(test)]
