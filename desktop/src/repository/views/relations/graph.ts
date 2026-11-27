@@ -42,6 +42,8 @@ export interface Graph {
   edges: GraphEdge[];
   /** The tickets the filter leaves in the figure, also those inside a closed parent. */
   shown: ReadonlySet<string>;
+  /** Those of them that do not match the filter, shown faint for the matches' sake. */
+  faint: ReadonlySet<string>;
 }
 
 /** Whether a ticket has a parent, a child, or a dependency, shown or not: only one without is new. */
@@ -103,15 +105,14 @@ export function buildGraph(
           (neighbours.has(ticketRef(c)) || !!options.related?.has(ticketRef(c))),
       )
     : [];
-  // Only these and the ancestors leading to them survive the filter. Ancestors
-  // open automatically, so none of them can be hidden in a folded frame.
-  const ancestors = filtering ? ancestorsOf([...matches, ...context]) : new Set<string>();
-  const survivors = new Set([...matched, ...ancestors]);
-  const beside = new Set(context.map(ticketRef));
-  const allowed = new Set(eligible);
-  const shown = cards.filter(
-    (c) => beside.has(ticketRef(c)) || (allowed.has(c) && survivors.has(ticketRef(c))),
-  );
+  // Only these survive the filter. A ticket shown is drawn in the frames of its
+  // ancestors, closed or not, so it stands where it belongs; while filtering,
+  // those frames open automatically, so none of them can hide it.
+  const members = filtering ? [...matches, ...context] : eligible;
+  const framing = ancestorsOf(members);
+  const ancestors = filtering ? framing : new Set<string>();
+  const survivors = new Set([...members.map(ticketRef), ...framing]);
+  const shown = cards.filter((c) => survivors.has(ticketRef(c)));
   // Nor can the selected ticket or one related to it: the frames around them open, and so does the
   // selected ticket's own, its children being related to it.
   const revealed = ancestorsOf(shown.filter((c) => options.related?.has(ticketRef(c))));
@@ -194,6 +195,7 @@ export function buildGraph(
     level: levelOf(shown.filter((c) => !parentOf(c))),
     edges: [...edges.values()],
     shown: new Set(byRef.keys()),
+    faint: new Set(filtering ? [...byRef.keys()].filter((ref) => !matched.has(ref)) : []),
   };
 }
 

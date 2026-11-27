@@ -956,7 +956,7 @@ describe("relations: the selected ticket", () => {
     );
   });
 
-  it("keeps a selected card in sight when its closed parent comes with it, opening the parent's frame only while it is selected", async () => {
+  it("keeps a selected card in sight in its closed parent's frame, opening the frame only while it is selected", async () => {
     const user = userEvent.setup();
     // #3 waits for the closed #2, whose parent #1 is closed too.
     const open = [card("3", "ready", { blocked_by: [ref("2", "closed")] })];
@@ -968,10 +968,12 @@ describe("relations: the selected ticket", () => {
     fakeApi(routes({ open, all }));
     renderApp("/workspaces/acme/task-flow");
     await user.click(await screen.findByRole("article", { name: /^acme\/demo#3 / }));
-    // #2 alone: its parent is related to #3 neither.
-    await user.click(await screen.findByRole("article", { name: /^acme\/demo#2 / }));
-    // Selecting #2 brings #1, whose frame opens around it: #2 stays in sight, selected.
-    expect(await screen.findByRole("article", { name: /^acme\/demo#1 / })).toBeInTheDocument();
+    // #2 stands in the frame of its closed parent #1, which opens, though #1 is not related to #3.
+    expect(anchor("1")).toContainElement(
+      await screen.findByRole("article", { name: /^acme\/demo#2 / }),
+    );
+    await user.click(article("2"));
+    // Selected, #2 stays in sight in #1's frame, which stays open.
     expect(isSelected("2")).toBe(true);
     expect(anchor("1")).toContainElement(article("2"));
     // A frame closed by hand stays closed during the selection; nothing is kept in the browser.

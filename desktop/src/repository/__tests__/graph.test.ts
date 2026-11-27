@@ -98,6 +98,46 @@ describe("relations graph", () => {
       filter: textFilter("Title of R"),
     });
     expect(layout(closed.level)).toBe("B | R | X");
+    // A ticket shown stands in the frames of its ancestors, closed or not: the closed B, which the
+    // matching A waits for, in its closed parent P, which opens; so too when A is selected.
+    const nested = board({
+      P: { closed: true },
+      B: { parent: "P", closed: true },
+      A: { blockedBy: ["B"] },
+    });
+    expect(
+      layout(
+        buildGraph(nested, {
+          includeClosed: false,
+          open: new Set(),
+          filter: textFilter("Title of A"),
+        }).level,
+      ),
+    ).toBe("P[B] | A");
+    expect(
+      layout(
+        buildGraph(nested, {
+          includeClosed: false,
+          related: new Set(["acme/demo#A", "acme/demo#B"]),
+          open: new Set(),
+        }).level,
+      ),
+    ).toBe("P[B] | A");
+    // Through every closed ancestor; one shown only as a frame is faint though its text matches.
+    const deeper = board({
+      G: { closed: true },
+      P: { parent: "G", closed: true },
+      B: { parent: "P", closed: true },
+      A: { blockedBy: ["B"] },
+    });
+    for (const c of deeper) c.title = c.key === "B" ? "Title of B" : "Deploy";
+    const deep = buildGraph(deeper, {
+      includeClosed: false,
+      open: new Set(),
+      filter: textFilter("Deploy"),
+    });
+    expect(layout(deep.level)).toBe("G[P[B]] | A");
+    expect([...deep.faint].map(short).sort()).toEqual(["B", "G", "P"]);
     expect(at(at(at(g.level, 1, 0).inner!, 0, 0).inner!, 0, 0)).toMatchObject({
       hasChildren: false,
     });

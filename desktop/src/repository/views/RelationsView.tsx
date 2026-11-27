@@ -528,7 +528,6 @@ export function RelationsView({ workspace }: { workspace: string }) {
             lanes={lanes}
             people={people}
             loadChecks={ciUrls}
-            filter={filter}
             moving={move.isPending && move.variables ? ticketRef(move.variables.card) : null}
             editable={complete && !relate.isPending && !reorder.isPending}
             onToggle={onToggle}
