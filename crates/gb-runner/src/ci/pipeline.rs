@@ -104,6 +104,9 @@ pub struct ArtifactDef {
     pub name: String,
     /// Files or directories, relative to the work directory.
     pub paths: Vec<String>,
+    /// A JUnit report to index on the hub, relative to the work directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub junit: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

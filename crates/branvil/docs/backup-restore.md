@@ -215,8 +215,8 @@ new data directory; when the upgrade fails, the restored directory is left
 at the previous version, and `guildbotics server hub-data upgrade --data-dir <it>` finishes
 it once the cause is fixed).
 
-Version 48 → 49 (`src/upgrade.rs`): every repository gets `review_rounds`
-3, the automatic re-review limit every repository had before. Every upgrade
+Version 49 → 50 (`src/upgrade.rs`) adds an empty table for CI test failure
+history. Existing repositories and attempts keep their records. Every upgrade
 also binds the GuildBotics workspaces' execution roots.
 
 ### The integrated Hub service

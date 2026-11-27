@@ -29,6 +29,60 @@ const SHELL = {
   "GET /api/v1/members": page([]),
 };
 
+it("finds test failures by exact name and links to each recorded attempt", async () => {
+  const path = "/api/v1/repos/acme/demo/test-failures";
+  const name = "suite::case[1] & more";
+  const sha = "d".repeat(40);
+  const attempt = "/workspaces/acme/repos/demo/jobs/att_failed";
+  const api = fakeApi({
+    ...SHELL,
+    "GET /api/v1/repos": page([repo("acme/demo")]),
+    "GET /api/v1/repos/acme/demo/pulls": page([]),
+    [`GET ${path}`]: ({ search }) =>
+      json(
+        200,
+        new URLSearchParams(search).get("name") === name
+          ? [
+              {
+                attempt_id: "att_failed",
+                job: "rust-test",
+                runner: "runner-linux",
+                sha,
+                finished_at: "2026-11-27T13:00:00Z",
+                url: attempt,
+              },
+            ]
+          : [],
+      ),
+  });
+  const user = userEvent.setup();
+  renderApp("/workspaces/acme/repos/demo");
+  await user.click(await screen.findByRole("link", { name: "Test failure history" }));
+  const input = screen.getByRole("textbox", { name: "Exact test name" });
+  expect(api.calls("GET", path)).toHaveLength(0);
+  await user.click(input);
+  await user.paste(name);
+  await user.click(screen.getByRole("button", { name: "Search" }));
+  const results = await screen.findByRole("table", { name });
+  expect(within(results).getByRole("link", { name: "rust-test" })).toHaveAttribute("href", attempt);
+  expect(within(results).getByRole("cell", { name: "runner-linux" })).toBeVisible();
+  expect(within(results).getByRole("link", { name: sha.slice(0, 10) })).toHaveAttribute(
+    "href",
+    `/workspaces/acme/repos/demo/commits/${sha}`,
+  );
+  expect(within(results).getByText((_, element) => element?.tagName === "TIME")).toHaveAttribute(
+    "datetime",
+    "2026-11-27T13:00:00Z",
+  );
+  await user.clear(input);
+  await user.type(input, "Suite::case");
+  await user.click(screen.getByRole("button", { name: "Search" }));
+  expect(await screen.findByText("No recorded failures for this test.")).toBeVisible();
+  expect(
+    api.calls("GET", path).map(({ search }) => new URLSearchParams(search).get("name")),
+  ).toEqual([name, "Suite::case"]);
+});
+
 it.each([
   ["en", "paths"],
   ["ja", "paths"],

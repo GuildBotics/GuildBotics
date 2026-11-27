@@ -364,6 +364,11 @@ export const en = {
   "ci.minutesSeconds": "{{minutes}}m {{seconds}}s",
   "ci.remaining": "about {{time}} left",
   "ci.lastTime": "{{time}} last time",
+  "ci.testFailures": "Test failure history",
+  "ci.testName": "Exact test name",
+  "ci.searchFailures": "Search",
+  "ci.noTestFailures": "No recorded failures for this test.",
+  "ci.failedAttempt": "Attempt",
   "ci.artifacts": "Artifacts",
   "ci.error.retry_pr_head_required":
     "Runner selection requires a current, unprotected pull request head.",

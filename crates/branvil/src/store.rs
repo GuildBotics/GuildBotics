@@ -24,7 +24,7 @@ pub type Tbl = TableDefinition<'static, &'static [u8], &'static [u8]>;
 /// The schema version this build reads and writes. A database of any other
 /// version is refused instead of being misread; one of the previous version
 /// is upgraded by `upgrade` (`guildbotics server hub-data upgrade` and `restore`).
-pub const SCHEMA_VERSION: u64 = 49;
+pub const SCHEMA_VERSION: u64 = 50;
 
 pub const META: Tbl = TableDefinition::new("meta");
 pub const COUNTERS: Tbl = TableDefinition::new("counters");
@@ -59,6 +59,8 @@ pub const CI_RELEASES: Tbl = TableDefinition::new("ci_releases");
 pub const CI_RELEASE_POINTS: Tbl = TableDefinition::new("ci_release_points");
 pub const CI_RUNS: Tbl = TableDefinition::new("ci_runs");
 pub const CI_ATTEMPTS: Tbl = TableDefinition::new("ci_attempts");
+/// (Repository id, test name) → bounded recent failures, independent of artifact retention.
+pub const CI_TEST_FAILURES: Tbl = TableDefinition::new("ci_test_failures");
 
 // Derived indexes: rebuilt from the tables above by `guildbotics server hub-data reindex`.
 pub const IX_MEMBER_TOKENS: Tbl = TableDefinition::new("ix_member_tokens");
@@ -116,6 +118,7 @@ pub const PRIMARY_TABLES: &[Tbl] = &[
     REPAIR_PENDING,
     CI_RUNS,
     CI_ATTEMPTS,
+    CI_TEST_FAILURES,
 ];
 
 pub const INDEX_TABLES: &[Tbl] = &[

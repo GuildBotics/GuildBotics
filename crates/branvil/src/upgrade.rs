@@ -1,12 +1,11 @@
-//! 48 → 49: repositories have `review_rounds`, the heads a member reviews
-//! before its automatic re-review stops (3, the limit every repository had).
+//! 49 → 50: add an empty table for JUnit test failure history.
 //! Every upgrade also binds the GuildBotics workspaces' execution roots.
 use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::config::Layout;
 use crate::store::{self, Rd, Store, Upgraded, Upgrading, Wtx};
 
-pub const FROM: u64 = 48;
+pub const FROM: u64 = 49;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
@@ -26,12 +25,7 @@ pub(crate) fn upgrade_with_roots(
     };
     db.finish(|w| {
         execution_roots(w, roots)?;
-        for key in w.prefix_keys(store::REPOS, &[])? {
-            let mut repo: serde_json::Value = w.get(store::REPOS, &key)?.unwrap();
-            repo["review_rounds"] = 3.into();
-            w.put(store::REPOS, &key, &repo)?;
-        }
-        Ok("added review_rounds=3 to repositories".into())
+        Ok("added CI test failure history".into())
     })
     .map(Some)
 }
@@ -84,24 +78,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upgrade_gives_every_repository_three_review_rounds_and_binds_execution_roots() {
-        use crate::model::{Repo, Workspace};
+    fn upgrade_creates_empty_test_failure_history_and_binds_execution_roots() {
         let temporary = tempfile::tempdir().unwrap();
         let layout = Layout::new(temporary.path());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
         let workspace = db
             .write_sync(|w| {
                 let workspace = crate::domain::repos::insert_workspace(w, "acme".into(), None)?;
-                for (id, path) in [("repo_1", "acme/one"), ("repo_2", "acme/two")] {
-                    w.put(
-                        store::REPOS,
-                        &Repo::key(id),
-                        &serde_json::json!({"id":id,"path":path,"workspace":workspace.id,
-                            "default_branch":"main","protected_branches":[],"required_approvals":1,
-                            "auto_land":false,"hold_while_failing":false,"ci_network":false,
-                            "responder":null,"labels":[],"upstream":null,"revision":1,"created_at":"0"}),
-                    )?;
-                }
                 w.put(
                     store::META,
                     &store::Key::new().s("schema_version").bytes(),
@@ -111,23 +94,29 @@ mod tests {
             })
             .unwrap();
         drop(db);
+        let db = redb::Database::open(layout.db()).unwrap();
+        let write = db.begin_write().unwrap();
+        assert!(write.delete_table(store::CI_TEST_FAILURES).unwrap());
+        write.commit().unwrap();
+        drop(db);
         assert!(store::check_version(&layout.db()).is_err());
         let root = temporary.path().join("execution");
         let done = upgrade_with_roots(&layout, [("acme".into(), root.clone())].into())
             .unwrap()
             .unwrap();
-        assert_eq!(done.summary, "added review_rounds=3 to repositories");
+        assert_eq!(done.summary, "added CI test failure history");
         assert!(done.copy.is_file());
         assert!(upgrade(&layout).unwrap().is_none());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
-        let repos: Vec<Repo> = db.read_sync(|r| r.prefix_all(store::REPOS, &[])).unwrap();
-        assert_eq!(repos.len(), 2);
-        assert!(repos.iter().all(|r| r.review_rounds == 3));
-        let record: Workspace = db
-            .read_sync(|r| r.get(store::WORKSPACES, &Workspace::key(&workspace)))
-            .unwrap()
-            .unwrap();
-        assert_eq!(record.execution_root, Some(root));
+        db.read_sync(|r| {
+            assert!(r.prefix_keys(store::CI_TEST_FAILURES, &[])?.is_empty());
+            let record: crate::model::Workspace = r
+                .get(store::WORKSPACES, &crate::model::Workspace::key(&workspace))?
+                .unwrap();
+            assert_eq!(record.execution_root, Some(root));
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

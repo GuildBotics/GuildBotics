@@ -363,6 +363,11 @@ export const ja: Record<MessageKey, string> = {
   "ci.minutesSeconds": "{{minutes}}分{{seconds}}秒",
   "ci.remaining": "残り約 {{time}}",
   "ci.lastTime": "前回 {{time}}",
+  "ci.testFailures": "テストの失敗履歴",
+  "ci.testName": "テスト名（完全一致）",
+  "ci.searchFailures": "検索",
+  "ci.noTestFailures": "このテストの失敗は記録されていません。",
+  "ci.failedAttempt": "試行",
   "ci.artifacts": "成果物",
   "ci.error.retry_pr_head_required":
     "ランナーを指定できるのは、保護ブランチではない現在のプルリクエストの head です。",

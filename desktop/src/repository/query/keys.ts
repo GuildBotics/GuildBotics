@@ -27,6 +27,7 @@ export const keys = {
     number: number,
     part: "activity" | "threads" | "commits" | "files" | "checks" | "publish",
   ) => ["repo", repo, "pull", number, part] as const,
+  testFailures: (repo: string, name: string) => ["repo", repo, "test-failures", name] as const,
   job: (repo: string, id: string) => ["repo", repo, "job", id] as const,
   jobLog: (repo: string, id: string, tail: number) =>
     ["repo", repo, "job", id, "log", tail] as const,

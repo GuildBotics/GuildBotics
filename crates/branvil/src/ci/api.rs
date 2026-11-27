@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
 use super::files::{artifact_attempt, valid_attempt_id};
+use super::junit;
+pub use super::junit::Failure as TestFailure;
 use super::pipeline::JobDef;
 use super::queue::{self, ArtifactMeta, Attempt, RunnerSelection};
 use crate::app::Shared;
@@ -182,6 +184,42 @@ async fn job_get(
 ) -> R {
     let (_, a) = attempt_of(&app, &c, &repo, &id).await?;
     Ok(ok(view(&app, &a).await?))
+}
+
+#[derive(Serialize)]
+pub struct TestFailureView {
+    #[serde(flatten)]
+    pub failure: TestFailure,
+    pub url: String,
+}
+
+async fn test_failures(State(app): State<Shared>, c: Caller, Path(repo): Path<String>, q: Q) -> R {
+    let name = q.0.get("name").map_or("", String::as_str);
+    Ok(ok(data_test_failures(&app, &c, &repo, name).await?))
+}
+
+pub(crate) async fn data_test_failures(
+    app: &Shared,
+    caller: &Caller,
+    path: &str,
+    name: &str,
+) -> AppResult<Vec<TestFailureView>> {
+    let repo = crate::domain::repos::visible(app, caller, path).await?;
+    if !junit::valid_test_name(name) {
+        return Ok(Vec::new());
+    }
+    let name = name.to_owned();
+    let failures = app
+        .store
+        .read(move |r| junit::history(r, &repo.id, &name))
+        .await?;
+    Ok(failures
+        .into_iter()
+        .map(|failure| TestFailureView {
+            url: util::item_url(&app.base_url, &repo.path, "jobs", &failure.attempt_id),
+            failure,
+        })
+        .collect())
 }
 
 async fn job_log(
@@ -593,6 +631,11 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
     let a = &cl.attempt;
+    let mut job = a.job.clone();
+    // Report indexing is hub-side, and runners do not need a new wire field.
+    for artifact in &mut job.artifacts {
+        artifact.junit = None;
+    }
     Ok(ok(ClaimView {
         execution: gb_runner::ci::api::ExecutionLimits {
             limits,
@@ -606,7 +649,7 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
         repo: a.repo_path.clone(),
         sha: a.sha.clone(),
         attempt: a.number,
-        job: a.job.clone(),
+        job,
         verified_sha: a.verified_sha.clone(),
         cache_write,
         network: a.network,
@@ -932,9 +975,15 @@ async fn finish(
             "No current lease for attempt {id}."
         )));
     }
-    let now = util::now();
     let a = app
         .finish(move |app| async move {
+            let failed_names = if input.reused_from.is_none() && input.conclusion != "deferred" {
+                let leased = leased(&app, &id, &input.lease).await?;
+                junit::read_attempt(&app, &leased).await
+            } else {
+                Default::default()
+            };
+            let now = util::now();
             let attempt = app
                 .store
                 .write(move |w| {
@@ -952,6 +1001,7 @@ async fn finish(
                         },
                         &now,
                     )?;
+                    junit::record_attempt(w, &a, failed_names)?;
                     if input.release_points.is_empty() {
                         Ok(a)
                     } else {
@@ -970,6 +1020,7 @@ async fn finish(
 
 // The CI routes, merged into `/api/v1`.
 loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
+    ("/repos/{repo}/test-failures", (get, test_failures, MemberSession)),
     ("/repos/{repo}/jobs/{id}", (get, job_get, MemberSession)),
     ("/repos/{repo}/jobs/{id}/log", (get, job_log, MemberSession)),
     ("/repos/{repo}/jobs/{id}/retry", (post, job_retry, MemberSession)),

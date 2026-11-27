@@ -528,6 +528,15 @@ export interface Branch {
   sha: string;
 }
 
+export type TestFailure = {
+  attempt_id: string;
+  job: string;
+  runner: string;
+  sha: string;
+  finished_at: string;
+  url: string;
+};
+
 export interface Job {
   path_skip?: PathSkip | null;
   retry_supported: boolean;

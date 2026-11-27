@@ -335,6 +335,7 @@ fn artifact_jobs_cannot_reuse_another_commits_embedded_identity() {
             jobs[0].artifacts = vec![super::super::pipeline::ArtifactDef {
                 name: "client".into(),
                 paths: vec!["client.exe".into()],
+                junit: None,
             }];
         }
         r
