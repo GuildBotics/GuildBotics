@@ -134,13 +134,12 @@ describe("settings", () => {
     },
   );
 
-  it("lists the owner and agents, not runners, and creates agents", async () => {
+  it("lists the owner, agents, and runners and creates agents or runners", async () => {
     const aiko = { name: "aiko", display_name: "Aiko", kind: "agent", accounts: [], reviewers: [] };
-    const ci = { name: "ci", display_name: "CI", kind: "runner", accounts: [], reviewers: [] };
     const fake = fakeApi({
       ...SHELL,
-      "GET /api/v1/members": page([ME, aiko, ci]),
-      "POST /api/v1/members": json(201, { name: "rin", display_name: "rin", kind: "agent" }),
+      "GET /api/v1/members": page([ME, aiko]),
+      "POST /api/v1/members": json(201, { name: "rin", display_name: "rin", kind: "runner" }),
     });
     const user = userEvent.setup();
     renderApp("/settings/repositories/members");
@@ -154,14 +153,19 @@ describe("settings", () => {
     await user.click(screen.getByRole("button", { name: "Create member" }));
     const form = await screen.findByRole("form", { name: "Create member" });
     await fill(user, within(form).getByRole("textbox", { name: "Name" }), "rin");
-    // Only agents are created here: there is one owner, and runners join from their machines.
-    expect(within(form).queryByRole("combobox", { name: "Kind" })).not.toBeInTheDocument();
+    // Only agents and runners can be created: there is one owner.
+    await user.click(within(form).getByRole("combobox", { name: "Kind" }));
+    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual([
+      "agent",
+      "runner",
+    ]);
+    await user.click(screen.getByRole("option", { name: "runner" }));
     await user.click(within(form).getByRole("button", { name: "Add" }));
     await waitFor(() => expect(fake.calls("POST", "/api/v1/members")).toHaveLength(1));
     expect(fake.calls("POST", "/api/v1/members")[0]?.body).toEqual({
       name: "rin",
       display_name: "",
-      kind: "agent",
+      kind: "runner",
     });
   });
 
@@ -644,8 +648,10 @@ describe("settings", () => {
     );
     expect(await within(row).findByText("No one is asked yet.")).toBeInTheDocument();
 
-    // A runner is not a member of this list: it is on Settings → CI.
-    expect(screen.queryByText("CI (ci)")).not.toBeInTheDocument();
+    // A runner opens no pull requests: it has no reviewers.
+    const runner = screen.getByText("CI (ci)").closest("[role=listitem]") as HTMLElement;
+    await user.click(within(runner).getByRole("button", { name: "Edit" }));
+    expect(within(runner).queryByRole("tab", { name: "Reviewers" })).not.toBeInTheDocument();
   });
 
   it("switches an account between a token and a GitHub App and sends each form's credential", async () => {

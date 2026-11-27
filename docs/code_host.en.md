@@ -373,9 +373,8 @@ forwarded port to check the service. Rejoining revokes that device's previous
 runner token. The runtime is downloaded from the pinned microsandbox release
 and verified with SHA-256 and `msb --version`.
 
-A joined runner is named `runner-<device ID>`. Runners are not listed in
-Settings → Members; Settings → CI handles them. To tell runners apart, select a
-runner there and give it a display name. The same page lists and revokes that
-runner's tokens. The CI settings, checks,
+A joined runner becomes a runner member named `runner-<device ID>` (its
+tokens are in Settings → Members). To tell runners apart, select
+a runner in Settings → CI and give it a display name. The CI settings, checks,
 and job pages show the display name; job details and the CI settings add the
 name that `--runner` and the logs use in parentheses.

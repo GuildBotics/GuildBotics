@@ -32,7 +32,6 @@ import { keys } from "../../query/keys";
 import { Link } from "../../router/Router";
 import { href, workspacePath } from "../../router/routes";
 import { IMAGE_SECTION_ID } from "../../../setup/EnvironmentImages";
-import { Tokens } from "./MembersSettings";
 
 const CONNECTION_TONE: Record<CiRunner["connection"], Tone> = {
   online: "success",
@@ -86,11 +85,6 @@ export function CiSettings({ workspace }: { workspace: string | null }) {
             </Anchor>
           </Section>
           {runner && <RunnerName key={runner.name} name={runner.name} />}
-          {runner && (
-            <Section title={t("token.title")} description={t("ci.settings.tokensHelp")}>
-              <Tokens key={runner.name} name={runner.name} />
-            </Section>
-          )}
           {runner && <Limits key={runner.name} runner={runner} />}
           <Section title={t("ci.settings.network")} description={t("ci.settings.networkHelp")}>
             {repositories.length === 0 ? (
