@@ -289,6 +289,39 @@ describe("relations graph", () => {
     expect(lines(all)).toEqual(["X>A"]);
   });
 
+  it("shows the closed tickets it is asked to (a selected ticket's direct relations), within the filter", () => {
+    // A waits for the closed X and has the closed child C; Z (closed) and W (closed, waiting for A) are not asked for.
+    const cards = board({
+      A: { blockedBy: ["X"] },
+      X: { closed: true },
+      C: { parent: "A", closed: true },
+      W: { blockedBy: ["A"], closed: true },
+      Z: { closed: true },
+    });
+    const related = new Set(["A", "X", "C"].map((k) => `acme/demo#${k}`));
+    const asked = buildGraph(cards, {
+      includeClosed: false,
+      related,
+      open: new Set(["acme/demo#A"]),
+    });
+    expect(layout(asked.level)).toBe("X | A[C]");
+    expect(lines(asked)).toEqual(["X>A"]);
+    expect([...asked.shown].map(short).sort()).toEqual(["A", "C", "X"]);
+    // Without them, only the open ticket.
+    expect(layout(graph({ A: { blockedBy: ["X"] }, X: { closed: true } }).level)).toBe("A");
+    // The filter still decides what is shown among them.
+    expect(
+      layout(
+        buildGraph(cards, {
+          includeClosed: false,
+          related,
+          open: new Set(["acme/demo#A"]),
+          filter: textFilter("Title of X"),
+        }).level,
+      ),
+    ).toBe("X");
+  });
+
   it("gathers a closed parent's descendants' dependencies into one dashed line, solid winning over dashed", () => {
     const specs: Record<string, Spec> = {
       P: {},

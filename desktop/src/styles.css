@@ -3230,6 +3230,11 @@ pre {
     opacity: 0.6;
   }
 
+  /* A closed ticket: faint, but less than an ancestor the filter keeps only for its descendants. */
+  .card.closed {
+    opacity: 0.55;
+  }
+
   .card.dim {
     opacity: 0.4;
   }
@@ -3591,6 +3596,13 @@ pre {
   .pickup-tag[aria-expanded="true"] {
     outline: 2px solid var(--color-brand);
     outline-offset: 1px;
+  }
+
+  /* The selected ticket: a ring around its card's box, so a faint (closed) card's ring is not faint. */
+  .rel-card.selected {
+    box-shadow:
+      0 0 0 3px var(--color-brand),
+      0 4px 14px color-mix(in srgb, var(--color-brand) 35%, transparent);
   }
 
   /* A card a row of the pickup order points at. */

@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type MouseEvent,
   type PointerEvent,
   type RefObject,
 } from "react";
@@ -73,6 +74,10 @@ interface Props {
   highlight: string | null;
   /** A ticket to scroll to (a new object each time), as `highlight` finds it; the frames stay as they are. */
   point: { ref: string } | null;
+  /** The selected ticket: its card is marked. */
+  selected: string | null;
+  /** Selects a ticket, or (null) lets the selected one go. */
+  onSelect: (ref: string | null) => void;
 }
 
 const edgeKey = (e: GraphEdge) => `${e.from}>${e.to}`;
@@ -99,6 +104,8 @@ export function Figure({
   onTag,
   highlight,
   point,
+  selected,
+  onSelect,
 }: Props) {
   const t = useT();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -177,10 +184,43 @@ export function Figure({
     return () => clearTimeout(timer);
   }, [dragging, target]);
 
-  const onLinkStart = useCallback(
-    (card: Card, e: PointerEvent<HTMLElement>) => startLinkRef.current(card, e),
-    [],
-  );
+  // A line drawn from a handle ends in a click on what both ends share: not a selection.
+  const linkedRef = useRef(false);
+  const onLinkStart = useCallback((card: Card, e: PointerEvent<HTMLElement>) => {
+    linkedRef.current = true;
+    startLinkRef.current(card, e);
+  }, []);
+  // A click on a card selects it (again: lets it go), one on the background lets it go;
+  // one on a control of a card or a line does what the control does.
+  const onClick = (e: MouseEvent) => {
+    if (linkedRef.current) return;
+    const el = e.target instanceof Element ? e.target : null;
+    // Not one in what a card opens over the page (its menus), nor on a control.
+    if (
+      !el ||
+      !contentRef.current?.contains(el) ||
+      el.closest("a, button, input, svg, .rel-handle")
+    )
+      return;
+    const card = el.closest(".rel-card")?.closest("[data-ticket]")?.getAttribute("data-ticket");
+    if (card === FRESH) return;
+    onSelect(card && card !== selected ? card : null);
+  };
+
+  // The selected ticket, or the one just let go, stays where it is on the screen while the figure is
+  // laid out again around it (its closed relations come and go): the figure scrolls as far as its
+  // card moves, until the viewer scrolls or presses in the figure. Places are the cards' in the
+  // figure, so scrolling does not change them.
+  const keptRef = useRef<string | null>(null);
+  const lastSelectedRef = useRef<string | null>(null);
+  const placesRef = useRef(new Map<string, { left: number; top: number }>());
+  useLayoutEffect(() => {
+    keptRef.current = selected ?? lastSelectedRef.current;
+    lastSelectedRef.current = selected;
+  }, [selected]);
+  const letGo = () => {
+    keptRef.current = null;
+  };
 
   // Cards are put level with what they wait for, and lines follow the cards:
   // done once the layout is and whenever a card or the figure changes size.
@@ -228,6 +268,25 @@ export function Figure({
         const remove = g.querySelector("foreignObject");
         remove?.setAttribute("x", String(x2 - 38));
         remove?.setAttribute("y", String(y2 - 12));
+      }
+      const places = new Map(
+        [...rects].map(([ref, r]) => [
+          ref,
+          { left: r.left - origin.left, top: r.top - origin.top },
+        ]),
+      );
+      const kept = keptRef.current;
+      const was = kept ? placesRef.current.get(kept) : undefined;
+      const now = kept ? places.get(kept) : undefined;
+      placesRef.current = places;
+      if (was && now) {
+        // The figure is made large enough to scroll that far: the cards around may end short of it.
+        const left = Math.max(0, scroll.scrollLeft + now.left - was.left);
+        const top = Math.max(0, scroll.scrollTop + now.top - was.top);
+        content.style.minWidth = `max(100%, ${left + scroll.clientWidth}px)`;
+        content.style.minHeight = `max(100%, ${top + scroll.clientHeight}px)`;
+        scroll.scrollLeft = left;
+        scroll.scrollTop = top;
       }
     };
     draw();
@@ -371,7 +430,11 @@ export function Figure({
         className={anchorClass(inner ? "rel-frame" : "rel-node", ref)}
         data-ticket={ref}
       >
-        <div className="rel-card" {...dragProps(card)}>
+        <div
+          className={`rel-card${selected === ref ? " selected" : ""}`}
+          aria-current={selected === ref || undefined}
+          {...dragProps(card)}
+        >
           {node(card, isOpen)}
         </div>
         {target?.ref === ref && target.refused && (
@@ -426,12 +489,16 @@ export function Figure({
   );
 
   return (
-    <div className="relations-scroll" ref={scrollRef}>
+    <div className="relations-scroll" ref={scrollRef} onPointerDown={letGo} onWheel={letGo}>
       <div
         ref={contentRef}
         className={`relations-content${dragging ? " relating" : ""}`}
         onDragOver={onDragOver}
         onDrop={onDrop}
+        onPointerDownCapture={() => {
+          linkedRef.current = false;
+        }}
+        onClick={onClick}
       >
         <div
           ref={canvasRef}

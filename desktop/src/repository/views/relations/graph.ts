@@ -1,6 +1,6 @@
 // Pure layout logic of the relations graph (unit tested).
 
-import { ticketRef, type Card, type Lane } from "../../api/types";
+import { ticketRef, type Card, type Lane, type TicketRef } from "../../api/types";
 import { hasFilter, matchesFilter, type CardFilter } from "../board/ordering";
 
 // Cards are identified by their ticketRef and arrive in board order (lane order, then rank).
@@ -48,10 +48,16 @@ export interface Graph {
 export const hasRelations = (c: Card) =>
   !!c.parent || c.children.length + c.blocked_by.length + c.blocks.length > 0;
 
+/** The tickets a ticket is directly related to: its parent, its children, what it waits for, and what waits for it. */
+export const directRelations = (c: Card): TicketRef[] =>
+  [c.parent, ...c.children, ...c.blocked_by, ...c.blocks].filter((r) => r !== null);
+
 export function buildGraph(
   board: Card[],
   options: {
     includeClosed: boolean;
+    /** Tickets shown even when closed: the selected ticket and those directly related to it. */
+    related?: ReadonlySet<string>;
     open: ReadonlySet<string>;
     filter?: CardFilter;
     /** Manual opening/closing during this filter; automatic expansion never changes saved preferences. */
@@ -75,7 +81,11 @@ export function buildGraph(
   // A closed ticket with an open descendant stays shown.
   const kept = ancestorsOf(cards.filter((c) => c.state === "open"));
   const eligible = cards.filter(
-    (c) => options.includeClosed || c.state === "open" || kept.has(ticketRef(c)),
+    (c) =>
+      options.includeClosed ||
+      c.state === "open" ||
+      kept.has(ticketRef(c)) ||
+      !!options.related?.has(ticketRef(c)),
   );
   const filter = options.filter;
   const filtering = filter !== undefined && hasFilter(filter);

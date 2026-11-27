@@ -17,7 +17,7 @@ import { hasFilter, NO_FILTER, type CardFilter } from "./board/ordering";
 import { readied, type Change, type Edit } from "./relations/edits";
 import { Figure } from "./relations/Figure";
 import type { Addition, PickupTag } from "./relations/RelationCard";
-import { buildGraph, type Level } from "./relations/graph";
+import { buildGraph, directRelations, type Level } from "./relations/graph";
 import { pickupOrders, placements, reordered, restoring, type PickupRow } from "./relations/pickup";
 import { PickupPanel, reasonText, type Drop } from "./relations/PickupPanel";
 
@@ -117,13 +117,21 @@ export function RelationsView({ workspace }: { workspace: string }) {
   const [reveal, setReveal] = useState<string | null>(null);
   const [freshOpen, setFreshOpen] = useState(false);
   const { query: repos, repos: wsRepos, repo, chooseRepo } = useTicketRepos(workspace);
+  /** The ticket selected in the figure: it and the tickets directly related to it are shown, closed or not. */
+  const [selected, select] = useState<string | null>(null);
 
   // Closed tickets are read only when they are shown, or when one is the
   // parent of an open ticket (then it is shown too): an open ticket below a
-  // closed ancestor has a closed parent itself or below an open one.
+  // closed ancestor has a closed parent itself or below an open one. A
+  // selected ticket not among the open ones is closed, or has a closed relation.
   const openCards = useCards(workspace, "open");
+  const openItems = openCards.data?.items ?? [];
+  const selectedOpen = selected ? openItems.find((c) => ticketRef(c) === selected) : undefined;
   const needAll =
-    includeClosed || (openCards.data?.items ?? []).some((c) => c.parent?.state === "closed");
+    includeClosed ||
+    openItems.some((c) => c.parent?.state === "closed") ||
+    (selected !== null &&
+      (!selectedOpen || directRelations(selectedOpen).some((r) => r.state === "closed")));
   const allCards = useCards(workspace, "all", needAll);
   // Relations change only once the cards they need are read; until then the
   // open ones are shown, and a failure to read them is shown with a retry.
@@ -131,10 +139,24 @@ export function RelationsView({ workspace }: { workspace: string }) {
   const shown = required.data ?? openCards.data;
   const complete = required.data !== undefined;
   const cards = useMemo(() => shown?.items ?? [], [shown]);
+  const selectedCard = selected ? cards.find((c) => ticketRef(c) === selected) : undefined;
+  // A ticket deleted while selected is let go, so its closed tickets are not read on.
+  if (complete && selected && !selectedCard) select(null);
+  const related = useMemo(
+    () =>
+      new Set(selectedCard ? [selectedCard, ...directRelations(selectedCard)].map(ticketRef) : []),
+    [selectedCard],
+  );
   const graph = useMemo(
     () =>
-      buildGraph(cards, { includeClosed, open, filter, openOverrides: filteredExpansion.parents }),
-    [cards, includeClosed, open, filter, filteredExpansion.parents],
+      buildGraph(cards, {
+        includeClosed,
+        related,
+        open,
+        filter,
+        openOverrides: filteredExpansion.parents,
+      }),
+    [cards, includeClosed, related, open, filter, filteredExpansion.parents],
   );
   const lanes = useMemo(() => boardQuery.data?.lanes ?? [], [boardQuery.data]);
   const people = usePeople();
@@ -190,21 +212,24 @@ export function RelationsView({ workspace }: { workspace: string }) {
     [showPanel],
   );
   useEffect(() => {
-    if (!panel) return;
+    if (!panel && !selected) return;
     // Not an Escape that belongs elsewhere: a field typed in, an open dropdown, a drawer or modal.
+    // It closes the pickup order panel first, then lets the selected ticket go.
     const onKey = (e: KeyboardEvent) => {
       if (
         e.key !== "Escape" ||
         e.defaultPrevented ||
         e.isComposing ||
-        ownsEscape(e.target as HTMLElement)
+        ownsEscape(e.target as HTMLElement) ||
+        document.querySelector('[role="dialog"]')
       )
         return;
-      if (!document.querySelector('[role="dialog"]')) closePanel();
+      if (panel) closePanel();
+      else select(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [panel, closePanel]);
+  }, [panel, selected, closePanel]);
 
   // The figure changes once the service has the change: a refusal leaves it as it was.
   const relate = useMutation({
@@ -485,6 +510,8 @@ export function RelationsView({ workspace }: { workspace: string }) {
             onTag={onTag}
             highlight={highlight}
             point={point}
+            selected={selected}
+            onSelect={select}
           />
           {panel && orders && (
             <PickupPanel
