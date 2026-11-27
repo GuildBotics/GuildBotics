@@ -13,7 +13,7 @@ import {
 } from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FolderGit2 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import * as api from "../../api/endpoints";
 import type { CiLimits, CiRunner, CiSettings as Settings } from "../../api/types";
 import {
@@ -88,14 +88,18 @@ export function CiSettings({ workspace }: { workspace: string | null }) {
               {t("ci.settings.manageImages")}
             </Anchor>
           </Section>
-          {runner && <RunnerName key={runner.name} name={runner.name} />}
           {runner && (
-            <Section title={t("token.title")} description={t("ci.settings.tokensHelp")}>
-              <RunnerHeading name={runner.name} />
-              <Tokens key={runner.name} name={runner.name} />
-            </Section>
+            // One key for the selected runner's panels: they are replaced
+            // together when another runner is selected or this one is deleted.
+            <Fragment key={runner.name}>
+              <RunnerName name={runner.name} />
+              <Section title={t("token.title")} description={t("ci.settings.tokensHelp")}>
+                <RunnerHeading name={runner.name} />
+                <Tokens name={runner.name} />
+              </Section>
+              <Limits runner={runner} />
+            </Fragment>
           )}
-          {runner && <Limits key={runner.name} runner={runner} />}
           <Section title={t("ci.settings.network")} description={t("ci.settings.networkHelp")}>
             {repositories.length === 0 ? (
               <Text size="sm" c="dimmed">

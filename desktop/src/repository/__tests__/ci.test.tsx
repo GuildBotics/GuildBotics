@@ -655,8 +655,10 @@ describe("CI settings", () => {
     const tokens = screen.getByRole("region", { name: "Tokens" });
     expect(await within(tokens).findByText("runner-join")).toBeInTheDocument();
     await user.click(within(list).getByRole("radio", { name: "Gaming PC (desktop-runner)" }));
-    expect(await within(tokens).findByText("No tokens.")).toBeInTheDocument();
-    expect(within(tokens).queryByText("runner-join")).not.toBeInTheDocument();
+    // The selected runner's panels are replaced together.
+    const replaced = screen.getByRole("region", { name: "Tokens" });
+    expect(await within(replaced).findByText("No tokens.")).toBeInTheDocument();
+    expect(within(replaced).queryByText("runner-join")).not.toBeInTheDocument();
   });
 
   it("keeps the runner first shown selected when another joins at the top of the polled list", async () => {
@@ -783,6 +785,7 @@ describe("CI settings", () => {
         },
       ]),
       [`GET /api/v1/members/${HUB_RUNNER.name}/tokens`]: page([]),
+      [`GET /api/v1/members/${REMOTE_RUNNER.name}/tokens`]: page([]),
       [`DELETE ${path("hub-runner")}`]: apiError(409, "runner_online", "hub-runner reported."),
       [`DELETE ${path("new-runner")}`]: apiError(
         409,
@@ -819,6 +822,10 @@ describe("CI settings", () => {
     );
     expect(within(list).getAllByRole("radio")).toHaveLength(3);
 
+    // The selected runner: its panels go with it, and the next runner's
+    // take their place.
+    await user.click(within(list).getByRole("radio", { name: "Gaming PC (desktop-runner)" }));
+    expect(screen.getByRole("textbox", { name: "Display name" })).toHaveValue("Gaming PC");
     await remove("Gaming PC (desktop-runner)");
     await waitFor(() =>
       expect(
@@ -826,6 +833,10 @@ describe("CI settings", () => {
       ).not.toBeInTheDocument(),
     );
     expect(fake.calls("DELETE", path("desktop-runner"))).toHaveLength(1);
+    for (const panel of ["Display name", "Tokens", "Job resources"]) {
+      expect(screen.getAllByRole("region", { name: panel })).toHaveLength(1);
+    }
+    expect(screen.getByRole("textbox", { name: "Display name" })).toHaveValue("hub-runner");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     confirm.mockRestore();
   });
