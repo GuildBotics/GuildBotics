@@ -45,7 +45,7 @@ const pageOf = (items: unknown[]) => ({ items, next_cursor: null });
 for (const locale of ["en-US", "ja-JP"]) {
   test.describe(locale, () => {
     test.use({ locale });
-    for (const width of [800, 1280, 1600]) {
+    for (const width of [800, 1024, 1280, 1600]) {
       test(`keeps every status and review mark readable at ${width}px`, async ({ page }, info) => {
         await page.setViewportSize({ width, height: 1000 });
         await page.route("**/api/v1/**", async (route) => {
@@ -87,6 +87,9 @@ for (const locale of ["en-US", "ja-JP"]) {
               const em = parseFloat(getComputedStyle(list).fontSize);
               if (list.getBoundingClientRect().width > 10 * em + 1) issues.push(`wide requirements: ${list.textContent}`);
               if (list.scrollWidth > list.clientWidth + 1) issues.push(`clipped requirements: ${list.textContent}`);
+              for (const name of list.querySelectorAll(".unmet-requirement")) {
+                if (name.getClientRects().length !== 1) issues.push(`broken requirement: ${name.textContent}`);
+              }
             }
             for (const cell of [cells[3], cells[4]]) {
               for (const label of cell.querySelectorAll<HTMLElement>(".mantine-Badge-label")) {

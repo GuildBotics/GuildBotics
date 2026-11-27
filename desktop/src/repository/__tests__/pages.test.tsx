@@ -308,10 +308,9 @@ describe("pages", () => {
       "acme/demo !3 Fix login",
     ]);
     expect(rows[1]).toHaveAttribute("href", "/workspaces/acme/repos/demo/pulls/3");
-    expect(await within(rows[0] as HTMLElement).findByText("Draft")).toHaveAttribute(
-      "title",
-      "The pull request is a draft.",
-    );
+    expect(
+      (await within(rows[0] as HTMLElement).findByText("Draft")).closest(".unmet-requirements"),
+    ).toHaveAttribute("title", "The pull request is a draft.");
     expect(
       within(rows[0] as HTMLElement)
         .getByText("Requirements unmet")

@@ -1,4 +1,5 @@
 import { href } from "../../router/routes";
+import { Fragment } from "react";
 import { Anchor, Badge, Card, Group, Stack, Text } from "@mantine/core";
 import { Check, Cloud, GitBranch, GitMerge, ListChecks, X } from "lucide-react";
 import type { PullRequest, Repository } from "../../api/types";
@@ -246,12 +247,17 @@ export function JourneyBadge({
     </Badge>
   );
   if (!unmet.length) return badge;
-  // The unmet requirements wrap under the state instead of widening the list's column.
+  // The unmet requirements wrap under the state between names instead of widening the list's column.
   return (
     <Stack component="span" gap={2} align="flex-start">
       {badge}
       <Text span size="xs" c="dimmed" className="unmet-requirements" title={title}>
-        {unmet.map((b) => t(blockerName(b.code))).join(t("landing.badge.and"))}
+        {unmet.map((b, i) => (
+          <Fragment key={b.code}>
+            {i > 0 && t("landing.badge.and")}
+            <span className="unmet-requirement">{t(blockerName(b.code))}</span>
+          </Fragment>
+        ))}
       </Text>
     </Stack>
   );
