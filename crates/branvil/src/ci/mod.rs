@@ -1245,36 +1245,17 @@ impl Ci {
             .store
             .read(move |r| ci.deletable_runner(r, &owned))
             .await?;
-        let removed = self.settings().remove_limits(name).await?;
-        let ci = self.clone();
-        let deleted = self
-            .inner
-            .store
-            .write({
-                let name = name.to_string();
-                move |w| {
-                    ci.deletable_runner(w, &name)?;
-                    crate::auth::revoke_all(w, &name, None)?;
-                    w.del(store::MEMBERS, &Member::key(&name))?;
-                    w.del(store::AVATARS, &Member::key(&name))?;
-                    Ok(())
-                }
-            })
-            .await;
-        match deleted {
-            Ok(()) => {
-                self.inner.runners.lock().unwrap().remove(&util::fold(name));
-                Ok(())
-            }
-            Err(e) => {
-                if let Some(limits) = removed
-                    && let Err(restore) = self.settings().set_limits(Some(name), limits).await
-                {
-                    tracing::warn!("restoring the job resources of {name} failed: {restore}");
-                }
-                Err(e)
-            }
-        }
+        let (ci, owned) = (self.clone(), name.to_string());
+        let delete = self.inner.store.write(move |w| {
+            ci.deletable_runner(w, &owned)?;
+            crate::auth::revoke_all(w, &owned, None)?;
+            w.del(store::MEMBERS, &Member::key(&owned))?;
+            w.del(store::AVATARS, &Member::key(&owned))?;
+            Ok(())
+        });
+        self.settings().remove_limits(name, delete).await?;
+        self.inner.runners.lock().unwrap().remove(&util::fold(name));
+        Ok(())
     }
 
     fn deletable_runner(&self, r: &impl Rd, name: &str) -> AppResult<()> {
