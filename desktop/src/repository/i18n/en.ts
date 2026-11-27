@@ -211,6 +211,8 @@ export const en = {
   "landing.badge.owner_fix_auto": "Repair automatic operation",
   "landing.badge.auto_merge": "Merging into {{base}}",
   "landing.badge.owner_merge": "Please merge",
+  "landing.badge.conditions": "Requirements unmet: {{blockers}}",
+  "landing.badge.and": ", ",
   "landing.next.publishing": "Sending the head or opening a pull request on {{host}}",
   "landing.next.owner_publish": "Your turn: publish to {{host}} from the pull request",
   "landing.next.host_checks": "Waiting for checks on {{host}}",

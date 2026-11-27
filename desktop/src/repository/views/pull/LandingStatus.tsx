@@ -225,7 +225,9 @@ export function JourneyBadge({
   const text =
     !l || l.next === "conditions"
       ? l?.blockers.length
-        ? `${t(blockerName(l.blockers[0]!.code))}${l.blockers.length > 1 ? ` +${l.blockers.length - 1}` : ""}`
+        ? t("landing.badge.conditions", {
+            blockers: l.blockers.map((b) => t(blockerName(b.code))).join(t("landing.badge.and")),
+          })
         : t("landing.missing")
       : t(`landing.badge.${l.next}`, { host: repo.upstream?.host ?? "", base: pull.base });
   const color =

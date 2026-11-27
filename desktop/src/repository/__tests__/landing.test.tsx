@@ -86,6 +86,13 @@ function routes(l: Landing | null, extra: Parameters<typeof fakeApi>[0] = {}) {
 
 describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
   const words = dictionaries[lang];
+  const unmet = (...codes: string[]) =>
+    words["landing.badge.conditions"].replace(
+      "{{blockers}}",
+      codes
+        .map((code) => words[`landing.blocker.${code}` as keyof typeof words])
+        .join(words["landing.badge.and"]),
+    );
   function component(
     next: LandingNext,
     blockers: Landing["blockers"] = [],
@@ -167,15 +174,16 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
           ? "保留中：main の確認が失敗しています（修復 #42、担当なし）。main の確認が通ると、保留が解けます。"
           : "Held: main verification is failing (repair #42, unassigned). The hold lifts when main verification passes.";
       expect(screen.getByText(notice)).toBeInTheDocument();
-      expect(
-        screen.getAllByText(words["landing.blocker.held"])[1]!.closest(".mantine-Badge-root"),
-      ).toHaveAttribute("title", detail);
+      expect(screen.getByText(unmet("held")).closest(".mantine-Badge-root")).toHaveAttribute(
+        "title",
+        detail,
+      );
       expect(screen.queryByText(blockers[0]!.message)).not.toBeInTheDocument();
       const caution = words["landing.heldPublished"].replace("{{host}}", "GitHub");
       expect(screen.queryByText(caution) !== null).toBe(published);
-      expect(
-        screen.getAllByText(words["landing.blocker.held"])[1]!.closest(".mantine-Badge-root"),
-      ).toHaveStyle({ "--badge-color": "var(--color-warning-text)" });
+      expect(screen.getByText(unmet("held")).closest(".mantine-Badge-root")).toHaveStyle({
+        "--badge-color": "var(--color-warning-text)",
+      });
     },
   );
   it("marks a failed local automatic merge at the merge step", () => {
@@ -269,7 +277,7 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
     journey.unmount();
     component("conditions", blockers);
     expect(
-      screen.getByText(`${words["landing.blocker.head_checks"]} +9`).closest(".mantine-Badge-root"),
+      screen.getByText(unmet(...blockers.map((b) => b.code))).closest(".mantine-Badge-root"),
     ).toHaveAttribute("title", expected.join(" / "));
   });
   it.each([true, false])(
@@ -311,7 +319,7 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
         }
       } else {
         expect(
-          screen.getByText(words["landing.blocker.head_checks"]).closest(".mantine-Badge-root"),
+          screen.getByText(unmet("head_checks")).closest(".mantine-Badge-root"),
         ).toHaveAttribute("title", expected.join(" / "));
       }
     },
@@ -351,7 +359,7 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
     component("conditions", [
       { code, message: "Server detail", count: 0, required: 1, jobs: [], files: [] },
     ]);
-    const badge = screen.getByText(words[`landing.blocker.${code}`]).closest(".mantine-Badge-root");
+    const badge = screen.getByText(unmet(code)).closest(".mantine-Badge-root");
     expect(badge?.getAttribute("title")).not.toContain("Server detail");
     expect(badge?.getAttribute("title")).not.toContain("landing.");
     expect(badge).toHaveStyle({
@@ -360,14 +368,12 @@ describe.each(["en", "ja"] as const)("independent landing (%s)", (lang) => {
         : "var(--color-text-subtle)",
     });
   });
-  it("summarizes blockers while keeping every detail in the title", () => {
+  it("names every unmet condition in the badge and keeps every detail in the title", () => {
     component("conditions", [
       { code: "approvals", count: 0, required: 1, message: "Needs approval", jobs: [], files: [] },
       { code: "conflict", message: "Resolve conflict", jobs: [], files: [] },
     ]);
-    const badge = screen
-      .getByText(`${words["landing.blocker.approvals"]} +1`)
-      .closest(".mantine-Badge-root");
+    const badge = screen.getByText(unmet("approvals", "conflict")).closest(".mantine-Badge-root");
     expect(badge).toHaveAttribute(
       "title",
       `${lang === "ja" ? "承認：0 / 1" : "Approvals: 0 / 1"} / ${words["landing.detail.conflict"].replace("{{files}}", "")}`,

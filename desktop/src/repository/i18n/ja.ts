@@ -211,6 +211,8 @@ export const ja: Record<MessageKey, string> = {
   "landing.badge.owner_fix_auto": "自動処理の失敗を解消してください",
   "landing.badge.auto_merge": "{{base}}へマージ中",
   "landing.badge.owner_merge": "マージしてください",
+  "landing.badge.conditions": "条件待ち：{{blockers}}",
+  "landing.badge.and": "、",
   "landing.next.publishing": "{{host}}へ送信・PR作成を進めています",
   "landing.next.owner_publish": "オーナーの番：PR画面から{{host}}へ公開してください",
   "landing.next.host_checks": "{{host}}のチェックを待っています",
