@@ -1308,6 +1308,8 @@ async fn collecting_branch_failure_runs_repair_and_holds_only_its_children() {
     let attempt = report["base_failure"]["failed_jobs"][0]["attempt_id"]
         .as_str()
         .unwrap();
+    let repository_url = repair.rsplit_once("/tickets/").unwrap().0;
+    let first_attempt_url = format!("{repository_url}/jobs/{attempt}");
     let retry = owner
         .job_retry(REPO, attempt, Default::default())
         .await
@@ -1325,6 +1327,14 @@ async fn collecting_branch_failure_runs_repair_and_holds_only_its_children() {
                 let body = comment["body"].as_str().unwrap();
                 assert!(body.contains("Still failing at this commit"), "{body}");
                 assert!(body.contains(&retry.id), "{body}");
+                assert!(
+                    body.contains("Other attempts of this job at the same commit"),
+                    "{body}"
+                );
+                assert!(
+                    body.contains(&format!("]({first_attempt_url}): failure,")),
+                    "{body}"
+                );
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(30)).await;
