@@ -12,7 +12,7 @@ import { useStored } from "../../ui/storage";
 import { CardFilters } from "./board/CardFilters";
 import { ciUrlsOf, moveRefusal, type Notice } from "./board/CardView";
 import { NewTicketModal, useTicketRepos } from "./board/NewTicket";
-import { ownsEscape } from "./ticket/TicketDrawer";
+import { ownsEscape } from "../../ui/escape";
 import { hasFilter, matchesFilter, NO_FILTER, type CardFilter } from "./board/ordering";
 import { readied, type Change, type Edit } from "./relations/edits";
 import { Figure } from "./relations/Figure";

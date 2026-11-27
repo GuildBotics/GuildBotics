@@ -1,7 +1,7 @@
 import { useHubStatus, HubVersion, HubUpdateNotice } from "./HubStatus";
 import { RunFiles } from "./commands/RunFiles";
 import { HubStatusBand } from "./ui/HubStatus";
-import { AppShell } from "./ui/AppShell";
+import { AppShell, useSidebarCompact } from "./ui/AppShell";
 import {
   ActionIcon,
   Alert,
@@ -229,6 +229,8 @@ export function App() {
   };
   return (
     <AppShell
+      collapseLabel={repositoryT("nav.collapse")}
+      expandLabel={repositoryT("nav.expand")}
       sidebar={
         <WorkspaceSelect
           current={{ ...current, name: visibleWorkspace }}
@@ -237,57 +239,65 @@ export function App() {
         >
           <nav className="nav" aria-label={repositoryT("nav.main")}>
             {configured || visibleWorkspace ? (
-              <GuardedNavLink to={scope + "/activity"}>
-                <RotateCcwClock size={18} /> {t("app.nav.activity")}
-              </GuardedNavLink>
+              <GuardedNavLink
+                to={scope + "/activity"}
+                icon={<RotateCcwClock size={18} />}
+                label={t("app.nav.activity")}
+              />
             ) : null}
             {visibleWorkspace && hosted && (
               <>
                 <GuardedNavLink
                   to={href.workspace(visibleWorkspace)}
                   active={route.name === "ticket"}
-                >
-                  <Workflow size={18} /> {repositoryT("nav.relations")}
-                </GuardedNavLink>
+                  icon={<Workflow size={18} />}
+                  label={repositoryT("nav.relations")}
+                />
                 <GuardedNavLink
                   to={href.pulls(visibleWorkspace)}
                   active={["repo", "pull", "commit", "job", "test_failures"].includes(route.name)}
-                >
-                  <GitPullRequest size={18} /> {repositoryT("nav.pulls")}
-                </GuardedNavLink>
+                  icon={<GitPullRequest size={18} />}
+                  label={repositoryT("nav.pulls")}
+                />
                 <GuardedNavLink
                   to={href.releases(visibleWorkspace)}
                   active={route.name === "releases"}
-                >
-                  <Tag size={18} /> {repositoryT("nav.releases")}
-                </GuardedNavLink>
+                  icon={<Tag size={18} />}
+                  label={repositoryT("nav.releases")}
+                />
               </>
             )}
-            <GuardedNavLink to={scope + "/service"}>
-              <Activity size={18} />
-              <span className="nav-item-label">{t("app.nav.service")}</span>
+            <GuardedNavLink
+              to={scope + "/service"}
+              icon={<Activity size={18} />}
+              label={t("app.nav.service")}
+            >
               <NavStatusIndicator
                 label={t(`app.navStatus.service.${serviceNavState}`)}
                 state={serviceNavState}
               />
             </GuardedNavLink>
-            <GuardedNavLink to={scope + "/commands"}>
-              <Terminal size={18} />
-              <span className="nav-item-label">{t("app.nav.commands")}</span>
+            <GuardedNavLink
+              to={scope + "/commands"}
+              icon={<Terminal size={18} />}
+              label={t("app.nav.commands")}
+            >
               <NavStatusIndicator
                 label={t(`app.navStatus.commands.${commandNavState}`)}
                 state={commandNavState}
               />
             </GuardedNavLink>
-            <GuardedNavLink to={scope + "/diagnostics"}>
-              <TriangleAlert size={18} /> {t("app.nav.diagnostics")}
-            </GuardedNavLink>
+            <GuardedNavLink
+              to={scope + "/diagnostics"}
+              icon={<TriangleAlert size={18} />}
+              label={t("app.nav.diagnostics")}
+            />
             <GuardedNavLink
               to={scope + "/setup"}
               active={route.name === "settings" || page === "/setup"}
-            >
-              <Settings size={18} /> {t("app.nav.setup")}
-            </GuardedNavLink>
+              icon={<Settings size={18} />}
+              label={t("app.nav.setup")}
+            />
           </nav>
         </WorkspaceSelect>
       }
@@ -561,29 +571,44 @@ export function systemAlertSetupTarget(alert: SystemAlert): string {
 function GuardedNavLink({
   to,
   active,
+  icon,
+  label,
   children,
 }: {
   to: string;
   active?: boolean;
-  children: ReactNode;
+  icon: ReactNode;
+  label: string;
+  children?: ReactNode;
 }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const compact = useSidebarCompact();
   const isActive = active || pathname === to;
   return (
-    <Link
-      to={to}
-      aria-current={isActive ? "page" : undefined}
-      className={isActive ? "nav-item active" : "nav-item"}
-      onClick={(event) => {
-        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
-          return;
-        event.preventDefault();
-        requestNavigation(() => navigate(to));
-      }}
-    >
-      {children}
-    </Link>
+    <Tooltip label={label} position="right" disabled={!compact}>
+      <Link
+        to={to}
+        aria-current={isActive ? "page" : undefined}
+        className={isActive ? "nav-item active" : "nav-item"}
+        onClick={(event) => {
+          if (
+            event.button !== 0 ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.shiftKey ||
+            event.altKey
+          )
+            return;
+          event.preventDefault();
+          requestNavigation(() => navigate(to));
+        }}
+      >
+        {icon}
+        <span className="nav-item-label">{label}</span>
+        {children}
+      </Link>
+    </Tooltip>
   );
 }
 

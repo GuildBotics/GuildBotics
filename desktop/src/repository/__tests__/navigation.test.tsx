@@ -2,7 +2,8 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { fakeApi, json, renderApp, SESSION } from "../test/fakeApi";
-import { choose } from "../test/mantine";
+import { choose, pickFromMenu } from "../test/mantine";
+import { workspaceInitials } from "../components/Sidebar";
 import { card } from "./fixtures";
 
 const page = (items: unknown[]) => json(200, { items, next_cursor: null });
@@ -337,5 +338,84 @@ describe("shared navigation", () => {
     await choose(userEvent.setup(), "Display language", "日本語");
     expect(localStorage.getItem("guildbotics.appLanguage")).toBe("ja");
     expect(screen.getByRole("navigation", { name: "メイン" })).toBeVisible();
+  });
+});
+
+it.each([
+  ["demo", "DE"],
+  ["GuildBotics", "GB"],
+  ["my-team", "MT"],
+  ["acme_web.app", "AW"],
+  ["x", "X"],
+  ["開発チーム", "開発"],
+  ["", ""],
+])("names the workspace %j by the initials %j on the icon rail", (name, initials) => {
+  expect(workspaceInitials(name)).toBe(initials);
+});
+
+describe("collapsible sidebar", () => {
+  it("collapses to icons on a wide screen, remembers it, and keeps every control usable", async () => {
+    setup();
+    const user = userEvent.setup();
+    const view = renderApp("/workspaces/acme/task-flow");
+    await expectStart("acme");
+    await user.click(screen.getByRole("button", { name: "Collapse the menu", expanded: true }));
+    expect(window.localStorage.getItem("guildbotics.sidebar")).toBe("collapsed");
+    expect(screen.getByRole("button", { name: "Expand the menu", expanded: false })).toBeVisible();
+    expect(screen.queryByRole("combobox", { name: "Workspace" })).not.toBeInTheDocument();
+    const nav = screen.getByRole("navigation", { name: "Main" });
+    const link = within(nav).getByRole("link", { name: "Pull requests" });
+    await user.hover(link);
+    expect(await screen.findByRole("tooltip", { name: "Pull requests" })).toBeVisible();
+
+    expect(screen.getByRole("button", { name: "Workspace: acme" })).toHaveTextContent("AC");
+    await pickFromMenu(user, "Workspace: acme", "beta");
+    await expectStart("beta");
+    await pickFromMenu(user, "Display language", "日本語");
+    expect(localStorage.getItem("guildbotics.appLanguage")).toBe("ja");
+    expect(await screen.findByRole("button", { name: "メニューを開く" })).toBeVisible();
+
+    view.unmount();
+    renderApp("/workspaces/beta/task-flow", "ja");
+    await user.click(await screen.findByRole("button", { name: "メニューを開く" }));
+    expect(window.localStorage.getItem("guildbotics.sidebar")).toBe("expanded");
+    expect(await screen.findByRole("combobox", { name: "ワークスペース" })).toHaveValue("beta");
+  });
+
+  it("stays a rail on a narrow screen and opens the menu over the page until the next move", async () => {
+    const media = vi.spyOn(window, "matchMedia").mockImplementation((query: string) => ({
+      matches: query === "(max-width: 900px)" || query === "(prefers-reduced-motion: reduce)",
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    try {
+      setup();
+      window.localStorage.setItem("guildbotics.sidebar", "expanded");
+      const user = userEvent.setup();
+      renderApp("/workspaces/acme/task-flow");
+      await expectStart("acme");
+      const expand = () => screen.getByRole("button", { name: "Expand the menu", expanded: false });
+      expect(screen.queryByRole("combobox", { name: "Workspace" })).not.toBeInTheDocument();
+
+      await user.click(expand());
+      expect(await screen.findByRole("combobox", { name: "Workspace" })).toHaveValue("acme");
+      const nav = screen.getByRole("navigation", { name: "Main" });
+      await user.click(within(nav).getByRole("link", { name: "Releases" }));
+      await waitFor(() => expect(window.location.pathname).toBe("/workspaces/acme/releases"));
+      expect(expand()).toBeVisible();
+      expect(screen.queryByRole("combobox", { name: "Workspace" })).not.toBeInTheDocument();
+
+      await user.click(expand());
+      await user.keyboard("{Escape}");
+      expect(expand()).toBeVisible();
+      expect(window.localStorage.getItem("guildbotics.sidebar")).toBe("expanded");
+    } finally {
+      media.mockRestore();
+    }
   });
 });

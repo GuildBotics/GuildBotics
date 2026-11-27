@@ -1,21 +1,10 @@
 import { Drawer } from "@mantine/core";
 import { useWindowEvent } from "@mantine/hooks";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { ownsEscape } from "../../../ui/escape";
 import { useT } from "../../i18n";
 import { TicketView } from "../TicketView";
 import { TicketOpener } from "./TicketLink";
-
-/**
- * Whether Escape belongs to where it is pressed: a field being typed in (a
- * title's edit cancels itself), or what Mantine marks as its own (an open
- * dropdown). Closing the drawer there would lose what was typed. Of inputs,
- * only those typed in have a selection (not a checkbox's chip).
- */
-export const ownsEscape = (el: HTMLElement) =>
-  ((el instanceof HTMLTextAreaElement ||
-    (el instanceof HTMLInputElement && el.selectionStart !== null)) &&
-    !el.readOnly) ||
-  el.dataset.mantineStopPropagation === "true";
 
 /**
  * A page whose ticket links open the ticket in a drawer over it, as a check
