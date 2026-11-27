@@ -212,17 +212,24 @@ it("links every manual step and records completion for the displayed release", a
 });
 
 it.each([
-  ["banner", "en", "Automatic Hub update failed", "Stage: Applying the update"],
-  ["service", "ja", "Hub の自動更新に失敗しました", "止まった段階：更新の適用"],
+  ["banner", "en", "update", "Automatic Hub update failed", "Stage: Applying the update"],
+  ["service", "ja", "update", "Hub の自動更新に失敗しました", "止まった段階：更新の適用"],
+  [
+    "service",
+    "ja",
+    "requirements",
+    "Hub の自動更新に失敗しました",
+    "止まった段階：保存形式と手作業の確認",
+  ],
 ] as const)(
   "shows the translated stage and log details for a failed update in the %s",
-  async (placement, language, title, stage) => {
+  async (placement, language, stageCode, title, stage) => {
     await i18n.changeLanguage(language);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const update = {
       kind: "failed",
       sha: "c".repeat(40),
-      stage: "update",
+      stage: stageCode,
       reason: "The new build did not start.",
       next: "Run recover.",
     } as const;

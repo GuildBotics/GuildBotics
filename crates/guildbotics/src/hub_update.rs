@@ -302,9 +302,15 @@ impl Hub {
     }
 
     fn fail(&mut self, sha: &str, stage: &str, reason: &str, next: &str, key: Option<String>) {
+        // Keep the existing notification and blocker keys while naming the stage for the screen.
+        let display_stage = if stage == "migration" {
+            "requirements"
+        } else {
+            stage
+        };
         if let Err(error) = self.set_status(Some(Status::Failed(Failure {
             sha: sha.into(),
-            stage: stage.into(),
+            stage: display_stage.into(),
             reason: reason.into(),
             next: next.into(),
         }))) {

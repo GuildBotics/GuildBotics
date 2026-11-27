@@ -2211,7 +2211,7 @@ fn a_manual_update_past_an_attempt_clears_failure_without_reporting_an_interrupt
             let notices = hub.lines("notifications");
             assert!(!notices.contains("Previous automatic attempt"), "{notices}");
             if newer_release_pending {
-                assert_eq!(hub.auto_state()["status"]["stage"], "migration");
+                assert_eq!(hub.auto_state()["status"]["stage"], "requirements");
             }
         }
     }
