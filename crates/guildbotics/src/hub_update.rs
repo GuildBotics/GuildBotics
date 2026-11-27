@@ -459,7 +459,10 @@ impl Hub {
         if required <= installed {
             return Ok(None);
         }
-        self.git(&["merge-base", "--is-ancestor", running, sha])?;
+        anyhow::ensure!(
+            self.includes_commit(sha, running)?,
+            "Running build is outside the release history"
+        );
         let commits = self.git(&[
             "log",
             "--first-parent",
@@ -600,6 +603,55 @@ impl Hub {
         Ok(())
     }
 
+    fn includes_commit(&mut self, revision: &str, commit: &str) -> anyhow::Result<bool> {
+        // No commit is reachable from the second revision alone if it was applied.
+        Ok(self
+            .git(&["rev-list", "--max-count=1", commit, "--not", revision])?
+            .is_empty())
+    }
+
+    /// Reconcile an earlier attempt against the active build. Return an interruption
+    /// only when the recorded commit is still known and has not been applied.
+    fn reconcile_attempt(&mut self, running: &str) -> anyhow::Result<Option<String>> {
+        let result = self.state.get("result").and_then(Value::as_str);
+        let interrupted = result == Some("updating");
+        if !interrupted && result != Some("failed") {
+            return Ok(None);
+        }
+        let Some(attempt) = self
+            .state
+            .get("attempt")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            return Ok(None);
+        };
+        let object_type = self.run(
+            Path::new("git"),
+            &["cat-file", "--batch-check=%(objecttype)"],
+            Some(&format!("{attempt}\n")),
+            None,
+        )?;
+        let known = object_type == "commit";
+        if known && !self.includes_commit(running, &attempt)? {
+            return Ok(interrupted.then_some(attempt));
+        }
+
+        let mut state = self.state.clone();
+        if known {
+            state.remove("attempt");
+            state.remove("result");
+        }
+        // An unknown revision can still be in the history of a shallow checkout.
+        // Stop showing it as pending recovery and keep the guard against retrying it.
+        state.remove(FAILURE_KEY);
+        if state != self.state {
+            self.save_state(&state)?;
+            self.state = state;
+        }
+        Ok(None)
+    }
+
     fn report_interrupted(&mut self, sha: &str) {
         let next = format!(
             "inspect the Hub log; run {} recover if needed, or update manually",
@@ -703,41 +755,16 @@ impl Hub {
             return Ok(());
         }
         self.clear_blocker(stage);
-        let releases = history["releases"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("Invalid release history"))?;
         let running = Path::new(&source)
             .file_name()
             .and_then(|v| v.to_str())
             .ok_or_else(|| anyhow::anyhow!("Invalid running build source"))?;
-        if releases.is_empty() {
-            self.clear_blocker("migration");
-            let result = self.state.get("result").and_then(Value::as_str);
-            let interrupted = self
-                .state
-                .get("attempt")
-                .and_then(Value::as_str)
-                .filter(|commit| *commit != running && result == Some("updating"))
-                .map(str::to_owned);
-            if let Some(commit) = interrupted {
-                self.report_interrupted(&commit);
-            } else {
-                if self
-                    .state
-                    .get(FAILURE_KEY)
-                    .is_some_and(|failure| failure["sha"] == running)
-                {
-                    self.state.remove(FAILURE_KEY);
-                    self.save()?;
-                }
-                self.set_status(None)?;
-            }
-            return Ok(());
-        }
-        *stage = "migration";
-        let version = self.schema_version(running)?;
-        let mut candidate = None;
-        for release in releases {
+        let interrupted_attempt = self.reconcile_attempt(running)?;
+        let mut releases = Vec::new();
+        for release in history["releases"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("Invalid release history"))?
+        {
             let commit = release["sha"]
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Invalid release SHA"))?;
@@ -745,6 +772,25 @@ impl Hub {
                 commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()),
                 "Invalid release SHA"
             );
+            // A manual update in another checkout can leave this HEAD behind.
+            if running != head && self.includes_commit(running, commit)? {
+                continue;
+            }
+            releases.push((commit, release));
+        }
+        if releases.is_empty() {
+            self.clear_blocker("migration");
+            if let Some(commit) = interrupted_attempt {
+                self.report_interrupted(&commit);
+            } else {
+                self.set_status(None)?;
+            }
+            return Ok(());
+        }
+        *stage = "migration";
+        let version = self.schema_version(running)?;
+        let mut candidate = None;
+        for (commit, release) in releases {
             let target_version = self.schema_version(commit)?;
             if candidate.is_none() && target_version <= version.saturating_add(1) {
                 let name = release["name"]
@@ -765,16 +811,13 @@ impl Hub {
             return Ok(());
         };
         *sha = candidate;
-        let result = self
-            .state
-            .get("result")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
         if self.state.get("attempt").and_then(Value::as_str) == Some(sha.as_str())
-            && ["failed", "updating"].contains(&result.as_str())
+            && matches!(
+                self.state.get("result").and_then(Value::as_str),
+                Some("failed" | "updating")
+            )
         {
-            if result == "updating" {
+            if interrupted_attempt.as_deref() == Some(sha.as_str()) {
                 self.report_interrupted(sha);
             }
             return Ok(());

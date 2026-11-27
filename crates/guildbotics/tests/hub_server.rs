@@ -1147,6 +1147,14 @@ impl Hub {
         self.git(&["reset", "--hard", "HEAD^"]);
     }
 
+    fn record_interrupted_update(&self, attempted: &str) {
+        fs::write(
+            self.builds().parent().unwrap().join("auto-update.json"),
+            serde_json::json!({"attempt": attempted, "result": "updating"}).to_string(),
+        )
+        .unwrap();
+    }
+
     fn auto_state(&self) -> serde_json::Value {
         serde_json::from_str(
             &fs::read_to_string(self.builds().parent().unwrap().join("auto-update.json")).unwrap(),
@@ -2165,6 +2173,172 @@ fn auto_failed_update_notification_contains_its_stage_and_recovery_requirement()
             .contains("activating the new build")
     );
     assert!(status["next"].as_str().unwrap().contains("recover"));
+}
+
+#[test]
+fn a_manual_update_past_an_attempt_clears_failure_without_reporting_an_interruption() {
+    for result in ["failed", "updating"] {
+        for newer_release_pending in [false, true] {
+            let hub = Hub::new();
+            hub.install();
+            hub.auto_candidate();
+            if result == "failed" {
+                hub.mark("fail-build");
+                hub.run("auto-once", None, true);
+                fs::remove_file(hub.root().join("fail-build")).unwrap();
+                assert_eq!(hub.auto_state()["update_failure"]["stage"], "update");
+            } else {
+                hub.git(&["merge", "--ff-only", "origin/main"]);
+                hub.record_interrupted_update(&hub.sha());
+                fs::write(hub.root().join("notifications"), "").unwrap();
+            }
+            assert_eq!(hub.auto_state()["result"], result);
+            hub.commit("manual-recovery");
+            hub.git(&["push", "origin", "main"]);
+            hub.run("update", None, true);
+            hub.assert_runs_signed("manual-recovery");
+
+            if newer_release_pending {
+                // A newer release exists, but cannot be installed until the next schema step.
+                hub.schema(12);
+                hub.commit("incompatible-release");
+                hub.git(&["push", "origin", "main"]);
+                hub.git(&["reset", "--hard", "HEAD^"]);
+            }
+
+            hub.run("auto-once", None, true);
+            assert!(hub.auto_state()["update_failure"].is_null(), "{result}");
+            let notices = hub.lines("notifications");
+            assert!(!notices.contains("Previous automatic attempt"), "{notices}");
+            if newer_release_pending {
+                assert_eq!(hub.auto_state()["status"]["stage"], "migration");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_lagging_update_checkout_skips_releases_already_in_the_running_build() {
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    let checkout_head = hub.sha();
+    hub.git(&["merge", "--ff-only", "origin/main"]);
+    let attempted = hub.sha();
+    hub.record_interrupted_update(&attempted);
+
+    hub.commit("manual-recovery");
+    hub.git(&["push", "origin", "main"]);
+    let manual = hub.root().join("manual-checkout");
+    hub.git(&[
+        "worktree",
+        "add",
+        "--detach",
+        manual.to_str().unwrap(),
+        "HEAD",
+    ]);
+    hub.git(&["reset", "--hard", &checkout_head]);
+    let updated = hub
+        .command("sh")
+        .current_dir(&manual)
+        .args(["scripts/hub-server.sh", "update"])
+        .output()
+        .unwrap();
+    assert!(updated.status.success(), "{}", text(&updated));
+    hub.assert_runs_signed("manual-recovery");
+
+    hub.releases(&[&attempted]);
+    hub.run("auto-once", None, true);
+    hub.assert_runs_signed("manual-recovery");
+    assert_eq!(hub.sha(), checkout_head);
+    assert!(hub.auto_state()["update_failure"].is_null());
+
+    hub.git(&["merge", "--ff-only", "origin/main"]);
+    hub.commit("next-release");
+    let next = hub.sha();
+    hub.git(&["push", "origin", "main"]);
+    hub.git(&["reset", "--hard", &checkout_head]);
+    hub.releases(&[&next, &attempted]);
+    hub.run("auto-once", None, true);
+    hub.assert_runs_signed("next-release");
+}
+
+#[test]
+fn a_missing_historical_attempt_does_not_stay_visible_or_block_a_new_release() {
+    for result in ["failed", "updating"] {
+        let hub = Hub::new();
+        hub.install();
+        hub.auto_candidate();
+        if result == "failed" {
+            hub.mark("fail-build");
+            hub.run("auto-once", None, true);
+            fs::remove_file(hub.root().join("fail-build")).unwrap();
+        } else {
+            hub.git(&["merge", "--ff-only", "origin/main"]);
+            hub.record_interrupted_update(&hub.sha());
+            fs::write(hub.root().join("notifications"), "").unwrap();
+        }
+        let attempted = hub.sha();
+        assert_eq!(hub.auto_state()["attempt"], attempted);
+        let notices = hub.lines("notifications");
+
+        hub.commit("manual-recovery");
+        hub.git(&["push", "origin", "main"]);
+        hub.run("update", None, true);
+        hub.assert_runs_signed("manual-recovery");
+
+        let remote = format!("file://{}", hub.root().join("origin.git").display());
+        fs::rename(&hub.repo, hub.root().join("full-checkout")).unwrap();
+        let shallow = hub
+            .command("git")
+            .current_dir(hub.root())
+            .args(["clone", "--depth", "1", &remote])
+            .arg(&hub.repo)
+            .output()
+            .unwrap();
+        assert!(shallow.status.success(), "{}", text(&shallow));
+        assert!(
+            !hub.command("git")
+                .args(["cat-file", "-e", &attempted])
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+
+        hub.run("auto-once", None, true);
+        assert!(hub.auto_state()["update_failure"].is_null(), "{result}");
+        assert_eq!(hub.auto_state()["attempt"], attempted);
+        assert_eq!(hub.lines("notifications"), notices);
+
+        hub.commit("next-release");
+        hub.git(&["push", "origin", "main"]);
+        hub.git(&["reset", "--hard", "HEAD^"]);
+        hub.run("auto-once", None, true);
+        hub.assert_runs_signed("next-release");
+    }
+}
+
+#[test]
+fn an_interrupted_attempt_still_reports_failure_while_the_old_build_is_running() {
+    let hub = Hub::new();
+    hub.install();
+    hub.auto_candidate();
+    hub.git(&["merge", "--ff-only", "origin/main"]);
+    let attempted = hub.sha();
+    hub.record_interrupted_update(&attempted);
+
+    for _ in 0..2 {
+        hub.run("auto-once", None, true);
+    }
+    hub.assert_runs_signed("old");
+    assert_eq!(hub.auto_state()["update_failure"]["sha"], attempted);
+    assert_eq!(
+        hub.lines("notifications")
+            .matches("Previous automatic attempt ended without an outcome")
+            .count(),
+        1
+    );
 }
 
 #[test]

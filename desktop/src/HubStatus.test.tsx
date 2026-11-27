@@ -211,10 +211,13 @@ it("links every manual step and records completion for the displayed release", a
   client.clear();
 });
 
-it.each(["banner", "service"] as const)(
-  "shows the stage, reason, and next action for a failed update in the %s",
-  async (placement) => {
-    await i18n.changeLanguage("en");
+it.each([
+  ["banner", "en", "Automatic Hub update failed", "Stage: Applying the update"],
+  ["service", "ja", "Hub の自動更新に失敗しました", "止まった段階：更新の適用"],
+] as const)(
+  "shows the translated stage and log details for a failed update in the %s",
+  async (placement, language, title, stage) => {
+    await i18n.changeLanguage(language);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const update = {
       kind: "failed",
@@ -231,10 +234,11 @@ it.each(["banner", "service"] as const)(
         </TestMantineProvider>
       </QueryClientProvider>,
     );
-    expect(await screen.findByText("Automatic Hub update failed")).toBeTruthy();
-    expect(screen.getByText("Stage: update")).toBeTruthy();
+    expect(await screen.findByText(title)).toBeTruthy();
+    expect(screen.getByText(stage)).toBeTruthy();
     expect(screen.getByText(update.reason)).toBeTruthy();
-    expect(screen.getByText(`Next: ${update.next}`)).toBeTruthy();
+    expect(screen.getByText(i18n.t("hub.failureNext", { next: update.next }))).toBeTruthy();
+    expect(screen.getByText(i18n.t("hub.failureDetails"))).toBeTruthy();
     client.clear();
   },
 );

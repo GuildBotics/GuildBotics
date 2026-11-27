@@ -48,9 +48,13 @@ export function HubUpdateNotice({ update }: { update: HubUpdate }) {
     onSettled: () => client.invalidateQueries({ queryKey: ["hub-status"] }),
   });
   if (update.kind === "failed") {
+    const stage = t(`hub.stage.${update.stage}`, { defaultValue: t("hub.stage.unknown") });
     return (
       <Alert color="danger" title={t("hub.failed")}>
-        <Text size="sm">{t("hub.failureStage", { stage: update.stage })}</Text>
+        <Text size="sm">{t("hub.failureStage", { stage })}</Text>
+        <Text size="sm" fw={500}>
+          {t("hub.failureDetails")}
+        </Text>
         <Text size="sm">{update.reason}</Text>
         <Text size="sm">{t("hub.failureNext", { next: update.next })}</Text>
       </Alert>
