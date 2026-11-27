@@ -66,7 +66,7 @@ const lines = (g: Graph) =>
 describe("relations graph", () => {
   const textFilter = (text: string): CardFilter => ({ ...NO_FILTER, text });
 
-  it("filters before layout, opens all ancestors of matches, and removes unrelated branches and dependencies", () => {
+  it("filters before layout, opens all ancestors of matches, keeps what they wait for and what waits for them, and removes unrelated branches", () => {
     const cards = board({
       P: {},
       Q: { parent: "P" },
@@ -74,15 +74,71 @@ describe("relations graph", () => {
       S: { parent: "P" },
       B: {},
       X: { blockedBy: ["R"] },
+      Y: { blockedBy: ["X"] },
     });
     const g = buildGraph(cards, {
       includeClosed: false,
       open: new Set(),
       filter: textFilter("Title of R"),
     });
-    expect(layout(g.level)).toBe("P[Q[R]]");
-    expect(g.edges).toEqual([]);
-    expect(at(at(at(g.level, 0, 0).inner!, 0, 0).inner!, 0, 0)).toMatchObject({
+    // B, which R waits for, and X, which waits for R, stay beside it; Y, a step further, and S do not.
+    expect(layout(g.level)).toBe("B | P[Q[R]] | X");
+    expect(lines(g)).toEqual(["B>R", "R>X"]);
+    // So do closed ones, while other closed tickets stay hidden.
+    const withClosed = board({
+      R: { blockedBy: ["B"] },
+      B: { closed: true },
+      X: { blockedBy: ["R"], closed: true },
+      C: { parent: "R", closed: true },
+      Z: { closed: true },
+    });
+    const closed = buildGraph(withClosed, {
+      includeClosed: false,
+      open: new Set(),
+      filter: textFilter("Title of R"),
+    });
+    expect(layout(closed.level)).toBe("B | R | X");
+    // A ticket shown stands in the frames of its ancestors, closed or not: the closed B, which the
+    // matching A waits for, in its closed parent P, which opens; so too when A is selected.
+    const nested = board({
+      P: { closed: true },
+      B: { parent: "P", closed: true },
+      A: { blockedBy: ["B"] },
+    });
+    expect(
+      layout(
+        buildGraph(nested, {
+          includeClosed: false,
+          open: new Set(),
+          filter: textFilter("Title of A"),
+        }).level,
+      ),
+    ).toBe("P[B] | A");
+    expect(
+      layout(
+        buildGraph(nested, {
+          includeClosed: false,
+          related: new Set(["acme/demo#A", "acme/demo#B"]),
+          open: new Set(),
+        }).level,
+      ),
+    ).toBe("P[B] | A");
+    // Through every closed ancestor; one shown only as a frame is faint though its text matches.
+    const deeper = board({
+      G: { closed: true },
+      P: { parent: "G", closed: true },
+      B: { parent: "P", closed: true },
+      A: { blockedBy: ["B"] },
+    });
+    for (const c of deeper) c.title = c.key === "B" ? "Title of B" : "Deploy";
+    const deep = buildGraph(deeper, {
+      includeClosed: false,
+      open: new Set(),
+      filter: textFilter("Deploy"),
+    });
+    expect(layout(deep.level)).toBe("G[P[B]] | A");
+    expect([...deep.faint].map(short).sort()).toEqual(["B", "G", "P"]);
+    expect(at(at(at(g.level, 1, 0).inner!, 0, 0).inner!, 0, 0)).toMatchObject({
       hasChildren: false,
     });
   });
@@ -98,11 +154,13 @@ describe("relations graph", () => {
   });
 
   it.each([
-    { ...NO_FILTER, assignee: "agent-one" },
+    { ...NO_FILTER, assignees: ["agent-one"] },
+    { ...NO_FILTER, assignees: ["agent-two", "agent-one"] },
+    { ...NO_FILTER, interactive: true },
     { ...NO_FILTER, label: "bug" },
     { ...NO_FILTER, text: "  NEEDLE  " },
     { ...NO_FILTER, text: "acme/demo#R" },
-    { ...NO_FILTER, assignee: "agent-one", label: "bug", text: "needle" },
+    { ...NO_FILTER, assignees: ["agent-one"], interactive: true, label: "bug", text: "needle" },
   ])("uses the board's filter semantics to find descendants: %j", (filter) => {
     const cards = board({ P: {}, Q: { parent: "P" }, R: { parent: "Q" }, S: { parent: "P" } });
     Object.assign(
@@ -111,6 +169,7 @@ describe("relations graph", () => {
         assignee: { name: "agent-one", assigned_at: "2026-10-14T10:00:00Z" },
         labels: ["bug"],
         body: "Needle in the body",
+        interactive: true,
       } satisfies Partial<Card>,
     );
     const g = buildGraph(cards, { includeClosed: false, open: new Set(), filter });
@@ -289,7 +348,7 @@ describe("relations graph", () => {
     expect(lines(all)).toEqual(["X>A"]);
   });
 
-  it("shows the closed tickets it is asked to (a selected ticket's direct relations), within the filter", () => {
+  it("shows the closed tickets it is asked to (a selected ticket's direct relations), also while filtering", () => {
     // A waits for the closed X and has the closed child C; Z (closed) and W (closed, waiting for A) are not asked for.
     const cards = board({
       A: { blockedBy: ["X"] },
@@ -309,17 +368,17 @@ describe("relations graph", () => {
     expect([...asked.shown].map(short).sort()).toEqual(["A", "C", "X"]);
     // Without them, only the open ticket.
     expect(layout(graph({ A: { blockedBy: ["X"] }, X: { closed: true } }).level)).toBe("A");
-    // The filter still decides what is shown among them.
+    // While filtering, they stay as context of the selection, matching nothing or not.
     expect(
       layout(
         buildGraph(cards, {
           includeClosed: false,
           related,
           open: new Set(["acme/demo#A"]),
-          filter: textFilter("Title of X"),
+          filter: textFilter("Title of W"),
         }).level,
       ),
-    ).toBe("X");
+    ).toBe("X | A[C]");
   });
 
   it("opens every frame around the selected ticket and its relations, and its own, unless opened or closed by hand", () => {

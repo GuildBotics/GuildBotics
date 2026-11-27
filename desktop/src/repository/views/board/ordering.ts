@@ -28,7 +28,9 @@ export function rollup(checks: CheckSet): CiRollup {
 }
 
 export interface CardFilter {
-  assignee: string; // "" any, "-" unassigned, otherwise a member name
+  assignees: string[]; // [] any; each a member name, or "-" for unassigned
+  /** Only tickets worked on interactively: their own setting or an ancestor's. */
+  interactive: boolean;
   lane: Lane | ""; // "" any
   label: string; // "" any
   repository: string; // "" any, otherwise a repository path
@@ -36,7 +38,8 @@ export interface CardFilter {
 }
 
 export const NO_FILTER: CardFilter = {
-  assignee: "",
+  assignees: [],
+  interactive: false,
   lane: "",
   label: "",
   repository: "",
@@ -44,10 +47,11 @@ export const NO_FILTER: CardFilter = {
 };
 
 export const hasFilter = (f: CardFilter): boolean =>
-  !!(f.assignee || f.lane || f.label || f.repository || f.text.trim());
+  !!(f.assignees.length > 0 || f.interactive || f.lane || f.label || f.repository || f.text.trim());
 
 export function matchesFilter(card: Card, f: CardFilter): boolean {
-  if (f.assignee && (card.assignee?.name ?? "-") !== f.assignee) return false;
+  if (f.assignees.length > 0 && !f.assignees.includes(card.assignee?.name ?? "-")) return false;
+  if (f.interactive && !card.interactive && !card.interactive_ancestor) return false;
   if (f.lane && card.lane !== f.lane) return false;
   if (f.label && !card.labels.includes(f.label)) return false;
   if (f.repository && card.repository !== f.repository) return false;

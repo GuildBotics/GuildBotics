@@ -42,6 +42,8 @@ export interface Graph {
   edges: GraphEdge[];
   /** The tickets the filter leaves in the figure, also those inside a closed parent. */
   shown: ReadonlySet<string>;
+  /** Those of them that do not match the filter, shown faint for the matches' sake. */
+  faint: ReadonlySet<string>;
 }
 
 /** Whether a ticket has a parent, a child, or a dependency, shown or not: only one without is new. */
@@ -90,14 +92,30 @@ export function buildGraph(
   const filter = options.filter;
   const filtering = filter !== undefined && hasFilter(filter);
   const matches = eligible.filter((c) => !filtering || matchesFilter(c, filter));
-  // Only matching tickets and the ancestors leading to them survive the filter.
-  // Ancestors open automatically, so a match cannot be hidden in a folded frame.
-  const ancestors = filtering ? ancestorsOf(matches) : new Set<string>();
+  const matched = new Set(matches.map(ticketRef));
+  // Beside the matches stay, as context, the tickets they wait for and that wait for them (closed
+  // too, as a selected ticket's relations), and the selected ticket's relations, matching or not.
+  const neighbours = new Set(
+    matches.flatMap((c) => [...c.blocked_by, ...c.blocks]).map((r) => ticketRef(r)),
+  );
+  const context = filtering
+    ? cards.filter(
+        (c) =>
+          !matched.has(ticketRef(c)) &&
+          (neighbours.has(ticketRef(c)) || !!options.related?.has(ticketRef(c))),
+      )
+    : [];
+  // Only these survive the filter. A ticket shown is drawn in the frames of its
+  // ancestors, closed or not, so it stands where it belongs; while filtering,
+  // those frames open automatically, so none of them can hide it.
+  const members = filtering ? [...matches, ...context] : eligible;
+  const framing = ancestorsOf(members);
+  const ancestors = filtering ? framing : new Set<string>();
+  const survivors = new Set([...members.map(ticketRef), ...framing]);
+  const shown = cards.filter((c) => survivors.has(ticketRef(c)));
   // Nor can the selected ticket or one related to it: the frames around them open, and so does the
   // selected ticket's own, its children being related to it.
-  const revealed = ancestorsOf(matches.filter((c) => options.related?.has(ticketRef(c))));
-  const matched = new Set(matches.map(ticketRef));
-  const shown = eligible.filter((c) => matched.has(ticketRef(c)) || ancestors.has(ticketRef(c)));
+  const revealed = ancestorsOf(shown.filter((c) => options.related?.has(ticketRef(c))));
   const temporary = filtering || (options.related?.size ?? 0) > 0;
   const isOpen = (ref: string) =>
     (temporary ? options.openOverrides?.get(ref) : undefined) ??
@@ -177,6 +195,7 @@ export function buildGraph(
     level: levelOf(shown.filter((c) => !parentOf(c))),
     edges: [...edges.values()],
     shown: new Set(byRef.keys()),
+    faint: new Set(filtering ? [...byRef.keys()].filter((ref) => !matched.has(ref)) : []),
   };
 }
 

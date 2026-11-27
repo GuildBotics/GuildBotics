@@ -17,7 +17,6 @@ import { ticketRef, type Card, type Lane } from "../../api/types";
 import type { Person } from "../../components/PeoplePicker";
 import { useT } from "../../i18n";
 import { ChildrenToggle } from "../board/CardView";
-import { matchesFilter, type CardFilter } from "../board/ordering";
 import { linkEdit, parentEdit, unlinkEdit, type Edit } from "./edits";
 import { hasRelations, type Graph, type GraphEdge, type Level } from "./graph";
 import { RelationCard, type Addition, type PickupTag } from "./RelationCard";
@@ -51,7 +50,6 @@ interface Props {
   lanes: Lane[];
   people: Person[];
   loadChecks: Set<string>;
-  filter: CardFilter;
   /** The ticket whose lane is being changed. */
   moving: string | null;
   /** Whether relations may be changed (false while the tickets shown are incomplete or a change is being written). */
@@ -88,7 +86,6 @@ export function Figure({
   lanes,
   people,
   loadChecks,
-  filter,
   moving,
   editable,
   onToggle,
@@ -401,7 +398,7 @@ export function Figure({
       people={people}
       loadChecks={loadChecks}
       open={isOpen}
-      dim={!matchesFilter(card, filter)}
+      dim={graph.faint.has(ticketRef(card))}
       tag={tags?.get(ticketRef(card))}
       highlighted={lit === ticketRef(card)}
       onTag={onTag}

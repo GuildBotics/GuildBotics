@@ -603,14 +603,16 @@ describe("relations", () => {
     );
   });
 
-  it("hides unrelated tickets and lines, shows no matches, and restores the figure after clearing the filter", async () => {
+  it("hides unrelated tickets, keeps what the matches wait for or what waits for them faintly, shows no matches, and restores the figure after clearing the filter", async () => {
     const user = userEvent.setup();
     fakeApi(routes());
     await shown();
     await fill(user, screen.getByRole("textbox", { name: "Text" }), "Title of 4");
-    expect(screen.getAllByRole("article")).toEqual([article("4")]);
+    // #2, which waits for #4, stays faint in its parent #1, which opens; #3 and #5 go.
+    expect(screen.getAllByRole("article")).toEqual([article("4"), article("1"), article("2")]);
     expect(article("4")).not.toHaveClass("dim");
-    expect(edge("4", "1")).toBeNull();
+    expect(article("2")).toHaveClass("dim");
+    expect(edge("4", "2")).not.toBeNull();
     const input = screen.getByRole("textbox", { name: "Text" });
     await user.type(input, " absent");
     expect(screen.queryByRole("article")).not.toBeInTheDocument();
@@ -695,11 +697,48 @@ describe("relations", () => {
     );
     await shown();
     await choose(user, "Assignee", "owner");
-    expect(screen.getAllByRole("article")).toEqual([article("1"), article("2")]);
+    // #4, which #2 waits for, stays faint beside it.
+    expect(screen.getAllByRole("article")).toEqual([article("4"), article("1"), article("2")]);
+    expect(article("4")).toHaveClass("dim");
     await choose(user, "Label", "bug");
     expect(article("2")).toBeInTheDocument();
     await fill(user, screen.getByRole("textbox", { name: "Text" }), "Title of 3");
     expect(screen.queryByRole("article")).not.toBeInTheDocument();
+  });
+
+  it("filters by several assignees and by interactive tickets, and keeps a selected ticket's relations faintly whatever the filter", async () => {
+    const user = userEvent.setup();
+    const assigned = (name: string) => ({ name, assigned_at: "2026-10-14T10:00:00Z" });
+    fakeApi(
+      routes({
+        open: CARDS.map((c) =>
+          c.key === "2"
+            ? { ...c, assignee: assigned("owner") }
+            : c.key === "5"
+              ? { ...c, assignee: assigned("aiko"), interactive: true }
+              : c,
+        ),
+      }),
+    );
+    await shown();
+    await choose(user, "Assignee", "owner");
+    // The list stays open for another assignee.
+    await user.click(await screen.findByRole("option", { name: "aiko" }));
+    expect(screen.getAllByRole("article")).toEqual([
+      article("4"),
+      article("5"),
+      article("1"),
+      article("2"),
+    ]);
+    // #3 matches neither, but is a child of the selected #1: it is shown, faint.
+    expect(screen.queryByRole("article", { name: /^acme\/demo#3 / })).not.toBeInTheDocument();
+    await user.click(article("1"));
+    expect(await screen.findByRole("article", { name: /^acme\/demo#3 / })).toHaveClass("dim");
+    await user.click(document.querySelector(".relations-content") as HTMLElement);
+    expect(screen.queryByRole("article", { name: /^acme\/demo#3 / })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("checkbox", { name: "Interactive tickets only" }));
+    expect(screen.getAllByRole("article")).toEqual([article("5")]);
   });
 
   it("filters by each status between assignee and label and keeps matching descendants visible", async () => {
@@ -715,10 +754,17 @@ describe("relations", () => {
       within(filters).getByRole("combobox", { name: "Label" }),
     ]);
     await choose(user, "Status", "New");
-    expect(screen.getAllByRole("article")).toEqual([article("1"), article("4")]);
+    expect(screen.getAllByRole("article")).toEqual([article("4"), article("1"), article("2")]);
+    expect(article("2")).toHaveClass("dim");
     await choose(user, "Status", "Ready");
-    expect(screen.getAllByRole("article")).toEqual([article("1"), article("2"), article("3")]);
+    expect(screen.getAllByRole("article")).toEqual([
+      article("4"),
+      article("1"),
+      article("2"),
+      article("3"),
+    ]);
     expect(article("1")).toHaveClass("dim");
+    expect(article("4")).toHaveClass("dim");
 
     await choose(user, "Status", "Done");
     await screen.findByRole("article", { name: /^acme\/demo#7 / });
@@ -910,7 +956,7 @@ describe("relations: the selected ticket", () => {
     );
   });
 
-  it("keeps a selected card in sight when its closed parent comes with it, opening the parent's frame only while it is selected", async () => {
+  it("keeps a selected card in sight in its closed parent's frame, opening the frame only while it is selected", async () => {
     const user = userEvent.setup();
     // #3 waits for the closed #2, whose parent #1 is closed too.
     const open = [card("3", "ready", { blocked_by: [ref("2", "closed")] })];
@@ -922,10 +968,12 @@ describe("relations: the selected ticket", () => {
     fakeApi(routes({ open, all }));
     renderApp("/workspaces/acme/task-flow");
     await user.click(await screen.findByRole("article", { name: /^acme\/demo#3 / }));
-    // #2 alone: its parent is related to #3 neither.
-    await user.click(await screen.findByRole("article", { name: /^acme\/demo#2 / }));
-    // Selecting #2 brings #1, whose frame opens around it: #2 stays in sight, selected.
-    expect(await screen.findByRole("article", { name: /^acme\/demo#1 / })).toBeInTheDocument();
+    // #2 stands in the frame of its closed parent #1, which opens, though #1 is not related to #3.
+    expect(anchor("1")).toContainElement(
+      await screen.findByRole("article", { name: /^acme\/demo#2 / }),
+    );
+    await user.click(article("2"));
+    // Selected, #2 stays in sight in #1's frame, which stays open.
     expect(isSelected("2")).toBe(true);
     expect(anchor("1")).toContainElement(article("2"));
     // A frame closed by hand stays closed during the selection; nothing is kept in the browser.
@@ -1064,6 +1112,20 @@ describe("relations: the selected ticket", () => {
     act(() => applyChange({ kind: "ticket", path: "acme/demo", id: "5" }, client));
     await waitFor(() => expect(article("5")).toHaveClass("closed"));
     expect(isSelected("5")).toBe(true);
+  });
+
+  it("shows faintly the closed tickets a matching ticket waits for while filtering, without a click", async () => {
+    const user = userEvent.setup();
+    const fake = fakeApi(routes({ open, all }));
+    renderApp("/workspaces/acme/task-flow");
+    await screen.findByRole("article", { name: /^acme\/demo#8 / });
+    expect(allReads(fake)).toHaveLength(0);
+    await fill(user, screen.getByRole("textbox", { name: "Text" }), "Title of 8");
+    // #9, which #8 waits for, is read and shown faint; its closed child #6 is not (it is not before or after it).
+    expect(await screen.findByRole("article", { name: /^acme\/demo#9 / })).toHaveClass("dim");
+    expect(allReads(fake).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("article", { name: /^acme\/demo#6 / })).not.toBeInTheDocument();
+    expect(screen.queryByRole("article", { name: /^acme\/demo#5 / })).not.toBeInTheDocument();
   });
 
   it("reads no closed tickets for a selected ticket once it is deleted", async () => {
@@ -1451,7 +1513,10 @@ describe("relations: order and new tickets", () => {
 
       expect(await screen.findByRole("article", { name: /^acme\/demo#9 / })).toBeInTheDocument();
       expect(screen.getByRole("textbox", { name: "Text" })).toHaveValue("");
-      expect(screen.getByRole("combobox", { name: "Assignee" })).toHaveValue("Assignee: Any");
+      expect(screen.getByRole("combobox", { name: "Assignee" })).toHaveAttribute(
+        "placeholder",
+        "Assignee: Any",
+      );
       expect(screen.getByRole("combobox", { name: "Label" })).toHaveValue("Label: Any");
       // The reveal is consumed once at its final location, not left pending until filters change.
       await waitFor(() =>

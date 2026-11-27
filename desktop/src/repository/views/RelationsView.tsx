@@ -13,7 +13,7 @@ import { CardFilters } from "./board/CardFilters";
 import { ciUrlsOf, moveRefusal, type Notice } from "./board/CardView";
 import { NewTicketModal, useTicketRepos } from "./board/NewTicket";
 import { ownsEscape } from "./ticket/TicketDrawer";
-import { hasFilter, NO_FILTER, type CardFilter } from "./board/ordering";
+import { hasFilter, matchesFilter, NO_FILTER, type CardFilter } from "./board/ordering";
 import { readied, type Change, type Edit } from "./relations/edits";
 import { Figure } from "./relations/Figure";
 import type { Addition, PickupTag } from "./relations/RelationCard";
@@ -145,6 +145,13 @@ export function RelationsView({ workspace }: { workspace: string }) {
   const needAll =
     includeClosed ||
     openItems.some((c) => c.parent?.state === "closed") ||
+    // While filtering, the closed tickets matching ones wait for or that wait for them are shown.
+    (filtering &&
+      openItems.some(
+        (c) =>
+          matchesFilter(c, filter) &&
+          [...c.blocked_by, ...c.blocks].some((r) => r.state === "closed"),
+      )) ||
     (selected !== null &&
       (!selectedOpen || directRelations(selectedOpen).some((r) => r.state === "closed")));
   const allCards = useCards(workspace, "all", needAll);
@@ -521,7 +528,6 @@ export function RelationsView({ workspace }: { workspace: string }) {
             lanes={lanes}
             people={people}
             loadChecks={ciUrls}
-            filter={filter}
             moving={move.isPending && move.variables ? ticketRef(move.variables.card) : null}
             editable={complete && !relate.isPending && !reorder.isPending}
             onToggle={onToggle}

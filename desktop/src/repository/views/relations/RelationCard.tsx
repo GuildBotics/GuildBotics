@@ -60,7 +60,7 @@ export const RelationCard = memo(function RelationCard({
   loadChecks: Set<string>;
   /** Whether its children are shown; undefined for a card without children in the figure. */
   open: boolean | undefined;
-  /** A nonmatching ancestor kept as context for a matching descendant. */
+  /** Kept as context for the tickets the filter matches: an ancestor of one, or before or after one. */
   dim: boolean;
   /** Its lane is being changed. */
   busy: boolean;
