@@ -855,9 +855,9 @@ At each claim the runner reports its logical CPUs, physical memory, and memory
 the OS can make available now. An unknown sample leaves resource selection
 unrestricted and is shown in Settings → CI. An actual execution records the
 VM allocation at claim and its measured peak memory at finish. The estimate
-is the nearest-rank 90th percentile of up to 20 recent successful samples for
-the same repository, job and VM allocation, or the VM's memory without a
-sample. A reusable result on a matching image needs no VM.
+is the nearest-rank 90th percentile of up to 20 recent successful guest memory
+peaks for the same repository, job and VM allocation, or the VM's memory
+without a sample. Guest measurements exclude reclaimable page cache. A reusable result on a matching image needs no VM.
 
 The Hub subtracts a physical-memory reserve (default 10%) and the estimates of
 held attempts from the machine's capacity. The next attempt must also fit in
@@ -1027,9 +1027,20 @@ to the start of the guest command), `commands ran for … ms`, `/work
 collected in … ms` (a job whose artifacts or cache are collected),
 `sandbox removed in … ms` (from the job's end, the collecting included),
 `artifacts handled in … ms` (a job that declares artifacts), and `cache staged
-in … ms` (with the bytes of data in the image). `peak memory: … MiB` is the highest resident memory sample recorded while the
-job ran. The Hub uses the SDK's VM metrics. An external runner samples the
-`msb run` process tree. A short job can finish before there is a sample.
+in … ms` (with the bytes of data in the image). `peak memory: … MiB` is the
+highest host RSS sample while the job ran.
+
+Job details show process write bytes, CPU time and host-wide CPU utilization
+for workspace preparation (restore), command execution, and collection (save).
+The Hub samples each SDK-owned VM and external runners sample the `msb run`
+process tree. Runner-side measurements cover the downloaded bundle, the
+checkout archive, cache filesystem work, and artifact unpacking. Linux reads
+per-thread I/O during blocking filesystem operations. Other platforms count
+the payload written by those operations. Restore hard-links the backing
+image, and save renames the staged image. On RAM workspaces the first sample after command exit sets
+the boundary for collection. A process can finish between samples, so short
+jobs may have missing or partial measurements. Host CPU load includes other
+activity on the machine.
 
 A reused attempt instead logs `reused result of <attempt> (<commit>, the same
 tree), image <digest>` (`the same contents of paths` for the paths basis) and `job ended: success (reused)`. It has no `source fetched`, `sandbox started`, or

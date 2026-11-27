@@ -18,11 +18,49 @@ pub enum Basis {
     Paths,
 }
 
+/// Observations from the three intervals of one execution.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AttemptResources {
+    pub restore: PhaseResources,
+    pub commands: PhaseResources,
+    pub save: PhaseResources,
+    pub guest_peak_memory_mib: Option<u64>,
+}
+
+/// Sampled process usage and system-wide CPU load, in basis points.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PhaseResources {
+    pub disk_write_bytes: Option<u64>,
+    pub cpu_time_ms: Option<u64>,
+    pub host_cpu_average_bps: Option<u32>,
+    pub host_cpu_peak_bps: Option<u32>,
+    #[serde(skip)]
+    pub(crate) host_cpu_busy_ticks: u64,
+    #[serde(skip)]
+    pub(crate) host_cpu_total_ticks: u64,
+}
+
+impl PhaseResources {
+    pub(crate) fn add_usage(&mut self, writes: Option<u64>, cpu: Option<u64>) {
+        for (total, observed) in [
+            (&mut self.disk_write_bytes, writes),
+            (&mut self.cpu_time_ms, cpu),
+        ] {
+            if let Some(observed) = observed {
+                *total = Some(total.unwrap_or_default().saturating_add(observed));
+            }
+        }
+    }
+}
+
 /// The execution metadata reported by the runner at finish.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct ResultInfo {
     pub image_digest: Option<String>,
     pub peak_memory_mib: Option<u64>,
+    pub resources: Option<AttemptResources>,
     pub reused_from: Option<String>,
     pub cache_key: Option<String>,
 }

@@ -586,13 +586,10 @@ async fn previous_schema_upgrade_preserves_records() {
     let mut attempts = records(&db, "ci_attempts");
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
-    assert!(output.contains("from schema version 49 to 50"), "{output}");
-    // Old attempts gain empty evidence fields without fabricating a report.
+    assert!(output.contains("from schema version 50 to 51"), "{output}");
+    // Old attempts gain an empty resource field without fabricating a report.
     for a in &mut attempts {
-        a["runner_claim"] = Value::Null;
-        for deferral in a["runner_deferrals"].as_object_mut().unwrap().values_mut() {
-            deferral["machine"] = Value::Null;
-        }
+        a["resources"] = Value::Null;
     }
     assert!(!attempts.is_empty());
     assert_eq!(records(&db, "ci_attempts"), attempts);

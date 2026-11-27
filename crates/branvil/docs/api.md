@@ -1106,19 +1106,23 @@ is not the full sha of a commit of the repository.
 ### CI attempts
 
 - `GET /api/v1/repos/{repo}/jobs/{attempt_id}` →
-  `{"id","retry_supported","url","repository","job","attempt","runner","allocation","runner_claim","runner_deferrals","peak_memory_mib","sha","image_digest","reused_from","status","conclusion","path_skip","details","cancel_requested","created_at","started_at","finished_at","artifact_names","log_bytes"}`.
+  `{"id","retry_supported","url","repository","job","attempt","runner","allocation","runner_claim","runner_deferrals","peak_memory_mib","resources","sha","image_digest","reused_from","status","conclusion","path_skip","details","cancel_requested","created_at","started_at","finished_at","artifact_names","log_bytes"}`.
   `path_skip` has the same shape as on checks and is `null` for an attempt
   that was not skipped by the service's path selection.
   `runner` is the member name of the runner that claimed this attempt, or
   `null` if it was never claimed. Each retry has its own runner.
   `allocation` records `cpus`, `vm_memory_mib`, and `reserved_memory_mib` at
-  claim. `peak_memory_mib` is the measured host memory at finish. Both
-  resource fields may be `null`.
+  claim. `peak_memory_mib` is the measured peak host RSS. `resources` holds
+  `restore`, `commands`, `save`, and `guest_peak_memory_mib`. Each phase
+  includes `disk_write_bytes`, `cpu_time_ms`, `host_cpu_average_bps`, and
+  `host_cpu_peak_bps` (10,000 basis points is 100% across all host CPUs).
+  Unavailable measurements are `null`. Reused and older attempts have no
+  resource report.
   `runner_claim` records the claim's `machine`, `memory_samples`, and `budget`.
   A machine snapshot has `logical_cpus`, `total_memory_mib`,
   `available_memory_mib`, and `commit_available_mib` (where reported).
   The memory estimate is `allocation.reserved_memory_mib`. It uses the 90th
-  percentile of up to 20 samples for that repository, job and VM size, or the
+  percentile of up to 20 successful guest peak samples for that repository, job and VM allocation, or the
   VM memory size if `memory_samples` is zero. The budget has
   `memory_reserve_mib` for the host, `remaining_cpus`, `remaining_memory_mib`,
   and `remaining_commit_mib` (where reported), after accounting for active
@@ -1277,7 +1281,7 @@ attempts are not interrupted by changes in class.
 - `PUT /attempts/{id}/artifacts/{name}` zip bytes → `{"name","bytes"}`. The name
   must be one the job declares; `400 invalid` for anything not starting like a
   zip archive, `413 too_large` above `ci.artifact_max_mib`.
-- `POST /attempts/{id}/finish` `{"lease","conclusion","details"?,"image_digest"?,"peak_memory_mib"?,"reused_from"?,"cache_key"?,"release_points"?}`
+- `POST /attempts/{id}/finish` `{"lease","conclusion","details"?,"image_digest"?,"peak_memory_mib"?,"resources"?,"reused_from"?,"cache_key"?,"release_points"?}`
   → the attempt. `release_points` are the messages of the job's output lines
   that start with `::release-point::` ([Release points](ci.md#release-points)),
   at most 10 of 200 characters kept. `image_digest` is the configuration digest of the image the

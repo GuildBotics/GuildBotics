@@ -8,6 +8,7 @@
 mod disk;
 pub mod executor;
 mod machine;
+mod resources;
 pub mod workspace;
 pub mod zip;
 
@@ -552,6 +553,7 @@ impl Api {
             .json(
                 &serde_json::json!({"lease": c.lease, "conclusion": conclusion, "details": details,
                 "image_digest": info.image_digest, "peak_memory_mib": info.peak_memory_mib,
+                "resources": info.resources,
                 "reused_from": info.reused_from, "cache_key": info.cache_key,
                 "release_points": release_points}),
             )
@@ -1224,6 +1226,7 @@ impl Runner {
             say("reuse unavailable: no reuse offered; executing the job".into()).await;
         }
         // The job's own steps; a `return` in the block ends them.
+        let mut measurements = crate::ci::queue::AttemptResources::default();
         let (conclusion, details) = async {
             // The work directory as the VM will see it: canonical (the runner's
             // directory may sit behind system links such as macOS's /var),
@@ -1262,24 +1265,34 @@ impl Runner {
             let bundle = dir.join("source.bundle");
             let tree: workspace::Tree;
             let fetching = Instant::now();
-            match self.api.source(c, &bundle).await {
+            let source =
+                resources::observe_host(self.api.source(c, &bundle), &mut measurements.restore)
+                    .await;
+            match source {
                 Ok(bytes) => {
+                    measurements.restore.add_usage(Some(bytes), None);
                     say(format!(
                         "source fetched in {} ({bytes} bytes)",
                         ms(fetching)
                     ))
                     .await;
                     let checking_out = Instant::now();
-                    let checked_out = workspace::checkout(
-                        &bundle,
-                        &work,
-                        &dir.join("gitconfig"),
-                        &io.join(executor::CHECKOUT),
+                    let checked_out = resources::observe_host(
+                        workspace::checkout(
+                            &bundle,
+                            &work,
+                            &dir.join("gitconfig"),
+                            &io.join(executor::CHECKOUT),
+                        ),
+                        &mut measurements.restore,
                     )
                     .await;
                     let _ = std::fs::remove_file(&bundle);
                     match checked_out {
-                        Ok((_, checked)) => tree = checked,
+                        Ok((archive_bytes, checked)) => {
+                            measurements.restore.add_usage(Some(archive_bytes), None);
+                            tree = checked;
+                        }
                         Err(e) => {
                             return (
                                 "startup_failure",
@@ -1334,7 +1347,17 @@ impl Runner {
                     key.clone(),
                     owner.clone(),
                 );
-                match blocking(move || store.restore_generation(&lookup, &owner, &into)).await {
+                let restored = resources::measure_filesystem(
+                    // Restoring the backing image uses a hard link and writes no payload.
+                    move || {
+                        store
+                            .restore_generation(&lookup, &owner, &into)
+                            .map(|entry| (entry, 0))
+                    },
+                    &mut measurements.restore,
+                )
+                .await;
+                match restored {
                     Ok(Some((generation, bytes))) => {
                         cache_data = Some(bytes);
                         exact_cache = &generation == key;
@@ -1365,6 +1388,7 @@ impl Runner {
                     JobRun {
                         attempt_id: &c.attempt_id,
                         peak_memory_mib: &mut info.peak_memory_mib,
+                        resources: &mut measurements,
                         job,
                         image_lock,
                         cpus,
@@ -1454,11 +1478,12 @@ impl Runner {
                 let saving = Instant::now();
                 let (store, attempt) = (self.cache.clone(), c.attempt_id.clone());
                 let max = limits.cache_max_mib << 20;
-                match blocking(move || {
-                    store.stage(&attempt, &key, &owner, (&cache_disk, data), max)
-                })
-                .await
-                {
+                let staged = resources::measure_filesystem(
+                    move || store.stage(&attempt, &key, &owner, (&cache_disk, data), max),
+                    &mut measurements.save,
+                )
+                .await;
+                match staged {
                     Ok(true) => say(format!("cache staged in {} ({data} bytes)", ms(saving))).await,
                     Ok(false) => {
                         say("cache not staged: pending cache budget exhausted".into()).await
@@ -1469,6 +1494,9 @@ impl Runner {
             (conclusion, details)
         }
         .await;
+        if measurements != Default::default() {
+            info.resources = Some(measurements);
+        }
         (conclusion, details, info)
     }
 }

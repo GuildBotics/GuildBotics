@@ -262,12 +262,13 @@ pub fn open_returned(path: &Path, max: u64) -> io::Result<Option<io::Take<fs::Fi
 /// there for a later entry to go through. The job's modes are not kept (an
 /// artifact is zipped as a readable file): directories get 0755 and files
 /// 0644, so that nothing stops their unpacking, reading, or removal. Returns
-/// the notes for the log.
-pub fn unpack_returned(tar: &Path, max: u64, into: &Path) -> io::Result<Vec<String>> {
+/// the notes for the log and bytes written to regular files.
+pub fn unpack_returned(tar: &Path, max: u64, into: &Path) -> io::Result<(Vec<String>, u64)> {
     use tar::EntryType as T;
     let mut notes = Vec::new();
+    let mut bytes = 0;
     let Some(file) = open_returned(tar, max)? else {
-        return Ok(notes);
+        return Ok((notes, bytes));
     };
     let mut archive = tar::Archive::new(io::BufReader::new(file));
     for entry in archive.entries()? {
@@ -290,6 +291,9 @@ pub fn unpack_returned(tar: &Path, max: u64, into: &Path) -> io::Result<Vec<Stri
         }
         match entry.unpack_in(into) {
             Ok(true) => {
+                if kind == T::Regular {
+                    bytes += entry.size();
+                }
                 // Where `unpack_in` put it: a root or `.` component is
                 // dropped (one with `..` is refused), and a name of nothing
                 // else is `into` itself, which it leaves alone.
@@ -311,7 +315,7 @@ pub fn unpack_returned(tar: &Path, max: u64, into: &Path) -> io::Result<Vec<Stri
             Err(e) => notes.push(format!("{name}: {e}; skipped")),
         }
     }
-    Ok(notes)
+    Ok((notes, bytes))
 }
 
 /// Fails when any component of `path` below `root` is a symbolic link or is
@@ -580,7 +584,8 @@ impl Cache {
     }
 
     /// Put aside a successful execution before reporting it to the Hub.
-    /// Staging can reclaim superseded and pending images.
+    /// Staging can reclaim superseded and pending images. Returns whether
+    /// the entry was kept and the bytes written to its metadata files.
     pub fn stage(
         &self,
         attempt: &str,
@@ -588,23 +593,23 @@ impl Cache {
         owner: &CacheOwner,
         (image, data): (&Path, u64),
         max_bytes: u64,
-    ) -> io::Result<bool> {
+    ) -> io::Result<(bool, u64)> {
         if data > max_bytes {
-            return Ok(false);
+            return Ok((false, 0));
         }
         let pending = self.root.join(PENDING);
         fs::create_dir_all(&pending)?;
         let tmp = tempfile::Builder::new()
             .prefix(".stage-")
             .tempdir_in(&self.root)?;
-        write_entry(tmp.path(), owner, image, data)?;
+        let metadata_bytes = write_entry(tmp.path(), owner, image, data)?;
         fs::write(tmp.path().join(KEY), key)?;
         record_use(tmp.path(), SystemTime::now())?;
         let _writing = self.lock.write().unwrap_or_else(|e| e.into_inner());
         let entry = pending.join(attempt);
         fs::rename(tmp.path(), &entry)?;
         evict(&self.root, max_bytes, None)?;
-        Ok(entry.is_dir())
+        Ok((entry.is_dir(), metadata_bytes + key.len() as u64))
     }
 
     pub fn pending(&self) -> io::Result<Vec<String>> {
@@ -718,7 +723,7 @@ fn dirs(root: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(dirs)
 }
 
-fn write_entry(entry: &Path, owner: &CacheOwner, image: &Path, data: u64) -> io::Result<()> {
+fn write_entry(entry: &Path, owner: &CacheOwner, image: &Path, data: u64) -> io::Result<u64> {
     if !fs::symlink_metadata(image).is_ok_and(|m| m.is_file()) {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -728,8 +733,11 @@ fn write_entry(entry: &Path, owner: &CacheOwner, image: &Path, data: u64) -> io:
     // The attempt image and cache are under the same runner work directory.
     // Staging must not fall back to copying the entire image.
     fs::rename(image, entry.join(IMAGE))?;
-    fs::write(entry.join(DATA), data.to_string())?;
-    fs::write(entry.join(OWNER), serde_json::to_vec(owner)?)
+    let data = data.to_string();
+    let owner = serde_json::to_vec(owner)?;
+    fs::write(entry.join(DATA), &data)?;
+    fs::write(entry.join(OWNER), &owner)?;
+    Ok((data.len() + owner.len()) as u64)
 }
 
 fn entry_owner(entry: &Path) -> Option<CacheOwner> {
@@ -849,7 +857,7 @@ mod tests {
         let second = owner("repo", "second");
         for (key, elapsed) in [("previous", 1), ("current", 2)] {
             let image = packed(dir.path(), key.as_bytes());
-            assert!(cache.stage(key, key, &first, (&image, 30), 100).unwrap());
+            assert!(cache.stage(key, key, &first, (&image, 30), 100).unwrap().0);
             let at = SystemTime::UNIX_EPOCH + Duration::from_secs(elapsed);
             cache.settle(key, Some(at), 100).unwrap();
         }
@@ -867,6 +875,7 @@ mod tests {
             cache
                 .stage("next", "next", &second, (&image, 50), 100)
                 .unwrap()
+                .0
         );
         assert_eq!(cache.pending().unwrap(), ["next"]);
         assert!(!cache.root.join("previous").exists());
@@ -896,6 +905,7 @@ mod tests {
             cache
                 .stage("first", "key", &owner, (&original, 20), 100)
                 .unwrap()
+                .0
         );
         cache.settle("first", Some(at), 100).unwrap();
         // A lowered budget may already be smaller than the published image.
@@ -903,11 +913,13 @@ mod tests {
             !cache
                 .stage("small", "key", &owner, (&small, 5), 15)
                 .unwrap()
+                .0
         );
         assert!(
             cache
                 .stage("second", "key", &owner, (&newer, 70), 100)
                 .unwrap()
+                .0
         );
         cache
             .settle("second", Some(at + Duration::from_secs(1)), 50)
@@ -969,6 +981,7 @@ mod tests {
                 cache
                     .stage(attempt, key, &owner, (&image, 10), 100)
                     .unwrap()
+                    .0
             );
             cache
                 .settle(attempt, (at != 3).then(|| time(at)), 100)
@@ -1398,7 +1411,8 @@ mod tests {
         fs::write(&archive, tar.into_inner().unwrap()).unwrap();
         let into = d.join("work");
         fs::create_dir(&into).unwrap();
-        let notes = unpack_returned(&archive, 1 << 20, &into).unwrap();
+        let (notes, bytes) = unpack_returned(&archive, 1 << 20, &into).unwrap();
+        assert!(bytes > 0);
         assert_eq!(fs::read(into.join("out/a.txt")).unwrap(), b"a");
         assert_eq!(fs::read(into.join("out/b.txt")).unwrap(), b"a");
         assert!(!d.join("escape.txt").exists());
@@ -1444,7 +1458,7 @@ mod tests {
         fs::create_dir(&into).unwrap();
         assert_eq!(
             unpack_returned(&archive, 1 << 20, &into).unwrap(),
-            Vec::<String>::new()
+            (Vec::<String>::new(), 1)
         );
         assert_eq!(fs::read(into.join("ro/f")).unwrap(), b"f");
         fs::remove_dir_all(&into).unwrap();

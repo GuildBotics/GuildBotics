@@ -12,6 +12,7 @@ import {
   MultiSelect,
   Select,
   Stack,
+  Table,
   Text,
 } from "@mantine/core";
 import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
@@ -753,6 +754,58 @@ function RunnerClaimDetails({ job }: { job: Job }) {
   );
 }
 
+function JobResources({ job }: { job: Job }) {
+  const t = useT();
+  const { resources, peak_memory_mib: host } = job;
+  const guest = resources?.guest_peak_memory_mib;
+  if (!resources && host == null) return null;
+  return (
+    <>
+      <dt>{t("ci.attemptResources")}</dt>
+      <dd>
+        {guest != null && <div>{t("ci.guestPeakMemory", { memory: guest })}</div>}
+        {host != null && <div>{t("ci.hostPeakMemory", { memory: host })}</div>}
+        {resources && (
+          <Table.ScrollContainer minWidth={390}>
+            <Table>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th scope="col">{t("ci.resourcePhase")}</Table.Th>
+                  <Table.Th scope="col">{t("ci.resourceWrites")}</Table.Th>
+                  <Table.Th scope="col">{t("ci.resourceCpuTime")}</Table.Th>
+                  <Table.Th scope="col">{t("ci.resourceHostCpu")}</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {(["restore", "commands", "save"] as const).map((phase) => {
+                  const {
+                    disk_write_bytes: bytes,
+                    cpu_time_ms: time,
+                    host_cpu_average_bps: average,
+                    host_cpu_peak_bps: peak,
+                  } = resources[phase];
+                  return (
+                    <Table.Tr key={phase}>
+                      <Table.Th scope="row">{t(`ci.resourcePhase.${phase}`)}</Table.Th>
+                      <Table.Td>{bytes == null ? "—" : bytes.toLocaleString()}</Table.Td>
+                      <Table.Td>{time == null ? "—" : time.toLocaleString()}</Table.Td>
+                      <Table.Td>
+                        {average == null || peak == null
+                          ? "—"
+                          : `${average / 100}% / ${peak / 100}%`}
+                      </Table.Td>
+                    </Table.Tr>
+                  );
+                })}
+              </Table.Tbody>
+            </Table>
+          </Table.ScrollContainer>
+        )}
+      </dd>
+    </>
+  );
+}
+
 /** One attempt of a Branvil job: status, commit, times, reason, artifacts, retry/cancel, log. */
 function JobDetails({
   repo,
@@ -802,6 +855,7 @@ function JobDetails({
           </>
         )}
         <RunnerClaimDetails job={j} />
+        <JobResources job={j} />
         <dt>{t("ci.started")}</dt>
         <dd>{j.started_at ? <Time value={j.started_at} /> : "—"}</dd>
         <dt>{t("ci.finished")}</dt>

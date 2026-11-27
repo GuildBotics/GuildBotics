@@ -299,5 +299,9 @@ The 48 → 49 upgrade adds `review_rounds: 3` to every repository.
 The 49 → 50 upgrade sets `runner_claim: null` on existing CI attempts and
 `machine: null` on their existing `runner_deferrals`.
 
+The 50 → 51 upgrade sets `resources: null` on existing CI attempts and clears
+`ix_ci_memory`. The index now stores guest memory peaks. Host RSS stays on
+the attempt for diagnostics.
+
 The 35 → 36 upgrade revokes the tokens GuildBotics kept: those labelled
 `guildbotics` and those labelled `app:<client>`.

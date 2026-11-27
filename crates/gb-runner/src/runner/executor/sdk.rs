@@ -130,7 +130,7 @@ impl Microsandbox {
 
     pub(super) async fn sdk_helper(
         &self,
-        job: &JobRun<'_>,
+        job: &mut JobRun<'_>,
         what: &str,
         quota_mib: u64,
         disks: HelperDisks<'_>,
@@ -150,18 +150,30 @@ impl Microsandbox {
         let vm = OwnedVm::start(builder, ())
             .await
             .map_err(|error| Some(error.to_string()))?;
-        let result = tokio::select! {
-            biased;
-            _ = cancel.wait_for(|stop| *stop) => Err(None),
-            result = vm.exec("/bin/sh", ["-c", script]) => {
-                match result {
-                    Ok(output) if output.status().success => Ok(()),
-                    Ok(output) => Err(Some(format!("{}: {}", output.status().code,
-                        output.stderr().unwrap_or_default()))),
-                    Err(error) => Err(Some(error.to_string())),
+        let pid = vm_pid(&vm).await;
+        let sample = || pid.map_or_else(resources::Process::default, resources::process);
+        let mut meter = resources::Meter::start();
+        let result = resources::observe(
+            async {
+                tokio::select! {
+                    biased;
+                    _ = cancel.wait_for(|stop| *stop) => Err(None),
+                    result = vm.exec("/bin/sh", ["-c", script]) => {
+                        match result {
+                            Ok(output) if output.status().success => Ok(()),
+                            Ok(output) => Err(Some(format!("{}: {}", output.status().code,
+                                output.stderr().unwrap_or_default()))),
+                            Err(error) => Err(Some(error.to_string())),
+                        }
+                    }
                 }
-            }
-        };
+            },
+            || std::future::ready(sample()),
+            |process| meter.sample(process),
+        )
+        .await;
+        meter.sample(sample());
+        meter.finish(helper_phase(job.resources, what));
         vm.close().await;
         result
     }
@@ -184,6 +196,7 @@ impl Microsandbox {
             .attach_to_sdk(builder, "/work")
             .cpus(job.cpus as u8)
             .memory(job.memory_mib as u32)
+            .metrics_sample_interval(resources::INTERVAL)
             .workdir("/work")
             .max_duration(ram_workspace::vm_timeout_secs(job.timeout_secs, ram));
         let builder = if let Some(ram) = ram {
@@ -218,7 +231,13 @@ impl Microsandbox {
         };
         let deadline = tokio::time::Instant::now()
             + Duration::from_secs(job.timeout_secs).saturating_sub(started.elapsed());
-        let outcome = {
+        let pid = vm_pid(&vm).await;
+        let mut meter = resources::CommandMeter::start();
+        let sample = || {
+            let process = pid.map_or_else(resources::Process::default, resources::process);
+            (process, ram.is_some_and(|r| r.exit_code().is_some()))
+        };
+        let outcome = resources::observe(async {
             let has_artifacts = !job.job.artifacts.is_empty();
             let stream = stream_job(&vm, job, ram, log, started);
             tokio::pin!(stream);
@@ -259,9 +278,36 @@ impl Microsandbox {
                 outcome = Outcome::Exited(code);
             }
             outcome
-        };
+        }, || std::future::ready(sample()),
+            |(process, collecting)| meter.sample(process, collecting),
+        ).await;
+        let (process, collecting) = sample();
+        meter.sample(process, collecting);
+        let host = meter.finish(job.resources).map(|kib| kib.div_ceil(1024));
+        *job.peak_memory_mib = (*job.peak_memory_mib).max(host);
+        sample_guest(&vm, job).await;
         vm.close().await;
+        *job.peak_memory_mib =
+            log_peak_memory(log, job.peak_memory_mib.unwrap_or_default() * 1024).await;
         outcome
+    }
+}
+
+async fn vm_pid(vm: &Sandbox) -> Option<u32> {
+    Some(vm.local()?.handle.as_ref()?.lock().await.pid())
+}
+
+async fn sample_guest(vm: &Sandbox, job: &mut JobRun<'_>) {
+    if let Ok(sample) = vm.metrics().await {
+        let host = sample
+            .memory_host_resident_bytes
+            .map(|bytes| bytes.div_ceil(1 << 20));
+        *job.peak_memory_mib = (*job.peak_memory_mib).max(host);
+        if sample.memory_available_bytes.is_some() && sample.memory_bytes > 0 {
+            let guest = sample.memory_bytes.div_ceil(1 << 20);
+            job.resources.guest_peak_memory_mib =
+                job.resources.guest_peak_memory_mib.max(Some(guest));
+        }
     }
 }
 
@@ -285,19 +331,12 @@ async fn stream_job(
         Ok(exec) => exec,
         Err(error) => return Outcome::StartupFailure(error.to_string()),
     };
-    let mut memory = tokio::time::interval(Duration::from_secs(1));
+    let mut memory = tokio::time::interval(resources::INTERVAL);
+    memory.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut started = None;
-    let mut peak_kib = 0;
     let outcome = loop {
         tokio::select! {
-            _ = memory.tick() => {
-                if let Ok(sample) = vm.metrics().await {
-                    peak_kib = peak_kib.max(sample.memory_host_resident_bytes.unwrap_or(sample.memory_bytes) / 1024);
-                }
-                if peak_kib > 0 {
-                    *job.peak_memory_mib = Some(peak_kib.div_ceil(1024));
-                }
-            }
+            _ = memory.tick() => sample_guest(vm, job).await,
             event = exec.recv() => match event {
                 Some(ExecEvent::Started {..}) => {
                     started = Some(Instant::now());
@@ -324,7 +363,6 @@ async fn stream_job(
             )
             .await;
     }
-    *job.peak_memory_mib = log_peak_memory(log, peak_kib).await;
     outcome
 }
 

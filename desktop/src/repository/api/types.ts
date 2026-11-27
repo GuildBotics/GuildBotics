@@ -546,7 +546,21 @@ interface RunnerClaim {
   } | null;
 }
 
+interface PhaseResources {
+  disk_write_bytes: number | null;
+  cpu_time_ms: number | null;
+  host_cpu_average_bps: number | null;
+  host_cpu_peak_bps: number | null;
+}
+
 export interface Job {
+  peak_memory_mib?: number | null;
+  resources?: {
+    restore: PhaseResources;
+    commands: PhaseResources;
+    save: PhaseResources;
+    guest_peak_memory_mib: number | null;
+  } | null;
   path_skip?: PathSkip | null;
   retry_supported: boolean;
   retry_runners?: string[];

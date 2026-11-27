@@ -1,4 +1,4 @@
-//! 49 → 50: CI attempts record why a runner claimed or deferred them.
+//! 50 → 51: CI attempts record resources and estimate memory from guest samples.
 //! Every upgrade also binds the GuildBotics workspaces' execution roots.
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -6,7 +6,7 @@ use crate::config::Layout;
 use crate::error::AppError;
 use crate::store::{self, Rd, Store, Upgraded, Upgrading, Wtx};
 
-pub const FROM: u64 = 49;
+pub const FROM: u64 = 50;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
@@ -26,20 +26,19 @@ pub(crate) fn upgrade_with_roots(
     };
     db.finish(|w| {
         execution_roots(w, roots)?;
+        // The old index contains host RSS and cannot seed guest memory estimates.
+        w.clear(store::IX_CI_MEMORY)?;
         for key in w.prefix_keys(store::CI_ATTEMPTS, &[])? {
             let mut attempt: serde_json::Value = w
                 .get(store::CI_ATTEMPTS, &key)?
                 .ok_or_else(|| AppError::internal("CI attempt disappeared during upgrade"))?;
-            let deferrals = attempt["runner_deferrals"]
+            let record = attempt
                 .as_object_mut()
-                .ok_or_else(|| AppError::internal("invalid CI runner deferrals"))?;
-            for deferral in deferrals.values_mut() {
-                deferral["machine"] = serde_json::Value::Null;
-            }
-            attempt["runner_claim"] = serde_json::Value::Null;
+                .ok_or_else(|| AppError::internal("invalid CI attempt"))?;
+            record.insert("resources".into(), serde_json::Value::Null);
             w.put(store::CI_ATTEMPTS, &key, &attempt)?;
         }
-        Ok("added runner claim and deferral evidence to CI attempts".into())
+        Ok("initialized CI attempt resources and cleared host memory samples".into())
     })
     .map(Some)
 }
@@ -92,7 +91,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upgrade_adds_missing_runner_evidence_and_binds_execution_roots() {
+    fn upgrade_preserves_host_rss_clears_its_index_and_binds_execution_roots() {
         use crate::model::Workspace;
         let temporary = tempfile::tempdir().unwrap();
         let layout = Layout::new(temporary.path());
@@ -103,12 +102,9 @@ mod tests {
                 w.put(
                     store::CI_ATTEMPTS,
                     b"attempt",
-                    &serde_json::json!({"runner_deferrals": {
-                        "windows": {"at": "t0", "attempt_id": "att_1", "repo": "acme/demo",
-                            "job": "test", "cpu_shortfall": 0, "memory_shortfall_mib": 0,
-                            "commit_shortfall_mib": 1}
-                    }}),
+                    &serde_json::json!({"peak_memory_mib": 8192, "runner_claim": {"memory_samples": 1}}),
                 )?;
+                w.put_raw(store::IX_CI_MEMORY, b"old", &8192_u64.to_be_bytes())?;
                 w.put(
                     store::META,
                     &store::Key::new().s("schema_version").bytes(),
@@ -125,7 +121,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             done.summary,
-            "added runner claim and deferral evidence to CI attempts"
+            "initialized CI attempt resources and cleared host memory samples"
         );
         assert!(done.copy.is_file());
         assert!(upgrade(&layout).unwrap().is_none());
@@ -134,12 +130,14 @@ mod tests {
             .read_sync(|r| r.get(store::CI_ATTEMPTS, b"attempt"))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt.get("runner_claim"), Some(&serde_json::Value::Null));
-        let deferral: crate::ci::queue::ResourceDeferral =
-            serde_json::from_value(attempt["runner_deferrals"]["windows"].clone()).unwrap();
-        assert_eq!(deferral.at, "t0");
-        assert_eq!(deferral.wait.commit_shortfall_mib, 1);
-        assert_eq!(deferral.machine, None);
+        assert_eq!(attempt["resources"], serde_json::Value::Null);
+        assert_eq!(attempt["peak_memory_mib"], 8192);
+        assert_eq!(attempt["runner_claim"]["memory_samples"], 1);
+        assert!(
+            db.read_sync(|r| r.prefix_keys(store::IX_CI_MEMORY, &[]))
+                .unwrap()
+                .is_empty()
+        );
         let record: Workspace = db
             .read_sync(|r| r.get(store::WORKSPACES, &Workspace::key(&workspace)))
             .unwrap()

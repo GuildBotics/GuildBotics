@@ -666,6 +666,28 @@ describe("pages", () => {
           conclusion: "success",
           runner: "linux",
           allocation: { cpus: 4, vm_memory_mib: 6144, reserved_memory_mib: 5000 },
+          peak_memory_mib: 6100,
+          resources: {
+            restore: {
+              disk_write_bytes: 0,
+              cpu_time_ms: null,
+              host_cpu_average_bps: null,
+              host_cpu_peak_bps: null,
+            },
+            commands: {
+              disk_write_bytes: 123,
+              cpu_time_ms: 456,
+              host_cpu_average_bps: 1525,
+              host_cpu_peak_bps: 3210,
+            },
+            save: {
+              disk_write_bytes: 789,
+              cpu_time_ms: null,
+              host_cpu_average_bps: null,
+              host_cpu_peak_bps: null,
+            },
+            guest_peak_memory_mib: 3000,
+          },
           runner_claim: {
             machine: { logical_cpus: 8, total_memory_mib: 10000, available_memory_mib: 8000 },
             memory_samples: 3,
@@ -703,6 +725,15 @@ describe("pages", () => {
         );
       const passed = within(await screen.findByRole("dialog", { name: /test/ }));
       const label = await passed.findByText(change);
+      expect(passed.getByText(/3000 MiB/)).toBeInTheDocument();
+      expect(passed.getByText(/6100 MiB/)).toBeInTheDocument();
+      const command = within(passed.getByRole("row", { name: /Commands|コマンド/ }));
+      expect(command.getByText("123")).toBeInTheDocument();
+      expect(command.getByText("456")).toBeInTheDocument();
+      expect(command.getByText("15.25% / 32.1%")).toBeInTheDocument();
+      const restore = within(passed.getByRole("row", { name: /Restore|復元/ }));
+      expect(restore.getByText("0")).toBeInTheDocument();
+      expect(restore.getAllByText("—")).toHaveLength(2);
       expect(
         passed.getByText(
           language === "ja"
