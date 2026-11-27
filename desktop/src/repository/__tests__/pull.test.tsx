@@ -1853,6 +1853,48 @@ describe("pull request review", () => {
     },
   );
 
+  it("reads a job's attempts again when a check changes while their first answer is on its way", async () => {
+    const attempt = (n: number, status: string, conclusion: string | null) => ({
+      id: `att_${n}`,
+      attempt: n,
+      runner: null,
+      status,
+      conclusion,
+      started_at: null,
+      finished_at: null,
+      url: "",
+    });
+    const first = [attempt(1, "completed", "failure")];
+    let answer!: (value: ReturnType<typeof json>) => void;
+    let calls = 0;
+    fakeApi(
+      pullRoutes({
+        "GET /api/v1/repos/acme/demo/jobs/att_1/attempts": () => {
+          calls += 1;
+          return calls === 1
+            ? new Promise<ReturnType<typeof json>>((resolve) => {
+                answer = resolve;
+              })
+            : json(200, [...first, attempt(2, "queued", null)]);
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    const { client } = renderApp("/workspaces/acme/repos/demo/pulls/3");
+    await user.click(await screen.findByRole("button", { name: "Open check test" }));
+    const drawer = await screen.findByRole("dialog", { name: /test/ });
+    await waitFor(() => expect(answer).toBeTypeOf("function"));
+    // A retry queued elsewhere is announced before the first answer, which predates it.
+    act(() => applyChange({ kind: "check", path: "acme/demo", id: HEAD }, client));
+    await act(async () => answer(json(200, first)));
+    expect(await within(drawer).findByRole("link", { name: "#2" })).toHaveAttribute(
+      "href",
+      "/workspaces/acme/repos/demo/jobs/att_2",
+    );
+    expect(within(drawer).getByText("Attempt 1 of 2")).toBeInTheDocument();
+    expect(calls).toBe(2);
+  });
+
   it("shows a job's details when its attempts cannot be read", async () => {
     fakeApi(
       pullRoutes({

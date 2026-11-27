@@ -4,7 +4,7 @@
 // `invalidateQueries` refetches only queries that are shown (active) and marks
 // the others stale, so an event never fans out into fetching hidden data.
 
-import type { Query, QueryClient } from "@tanstack/react-query";
+import type { InvalidateQueryFilters, Query, QueryClient } from "@tanstack/react-query";
 import { createContext, useEffect, useState } from "react";
 import type { Card, ChangeEvent, Checks, PullRequest } from "../api/types";
 import { routeOfUrl } from "../router/routes";
@@ -19,8 +19,13 @@ const isCards = (q: Query) => keyOf(q)[0] === "board" && keyOf(q)[2] === "cards"
 const samePath = (key: unknown, path: string) =>
   typeof key === "string" && key.toLowerCase() === path.toLowerCase();
 
+/** A query whose first answer is on its way: what it will show is not known yet. */
+const unanswered = (q: Query) => q.state.data === undefined && q.state.fetchStatus !== "idle";
+
 function boardCardsWhere(test: (cards: Card[]) => boolean): Predicate {
-  return (q) => isCards(q) && test((q.state.data as { items: Card[] } | undefined)?.items ?? []);
+  return (q) =>
+    isCards(q) &&
+    (unanswered(q) || test((q.state.data as { items: Card[] } | undefined)?.items ?? []));
 }
 
 const isRepo = (q: Query, repo: string) => keyOf(q)[0] === "repo" && samePath(keyOf(q)[1], repo);
@@ -63,6 +68,7 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
           if (keyOf(q)[2] !== "pull" || keyOf(q).length !== 4) return false;
           const pull = q.state.data as PullRequest | undefined;
           return (
+            unanswered(q) ||
             (pull?.tickets?.length ?? 0) > 0 ||
             (isRepo(q, path) &&
               pull?.landing?.blockers.some((b) => b.code === "base_checks_failed") === true)
@@ -112,7 +118,7 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
             isRepo(q, path) &&
             keyOf(q)[2] === "pull" &&
             keyOf(q).length === 4 &&
-            (id === "" || pull?.head_sha === id || pull?.base_sha === id)
+            (id === "" || unanswered(q) || pull?.head_sha === id || pull?.base_sha === id)
           );
         },
         (q) => {
@@ -126,14 +132,15 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
               id === "" ||
               client.getQueryData<{ sha: string }>(["repo", k[1], "job", k[3]])?.sha === id
             );
-          if (k[2] === "job") return id === "" || sha === id;
+          // Before its first answer, a job's commit is not known.
+          if (k[2] === "job") return id === "" || (k.length === 4 && unanswered(q)) || sha === id;
           // Before its first answer, a commit's checks are known by the sha in the key.
           if (k[2] === "commit" && k[4] === "checks") return id === "" || (sha ?? k[3]) === id;
           if (k[2] !== "pull" || k[4] !== "checks") return false;
           if (id === "") return true;
           const checks = q.state.data as Checks | undefined;
           const pull = client.getQueryData<PullRequest>(["repo", k[1], "pull", k[3]]);
-          return checks?.head_sha === id || pull?.head_sha === id;
+          return (!pull && unanswered(q)) || checks?.head_sha === id || pull?.head_sha === id;
         },
       ];
     case "repo":
@@ -170,18 +177,41 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
   }
 }
 
+/**
+ * Refetches the shown queries `filters` match and marks the others stale.
+ *
+ * A fetch already running when the change arrives may answer with what was
+ * there before, and `invalidateQueries` does not replace it everywhere: it
+ * joins a query's first fetch instead of starting another, and a hidden
+ * query's running fetch clears the stale mark when it succeeds. Those queries
+ * are refreshed again once that fetch has settled.
+ */
+export function refresh(client: QueryClient, filters: InvalidateQueryFilters = {}): void {
+  const running = client
+    .getQueryCache()
+    .findAll(filters)
+    .filter((q) => q.state.fetchStatus !== "idle" && (q.state.data === undefined || !q.isActive()))
+    .map((q) => [q.queryKey, q.promise] as const);
+  void client.invalidateQueries(filters);
+  for (const [queryKey, promise] of running) {
+    void promise
+      ?.catch(() => undefined)
+      .then(() => client.invalidateQueries({ queryKey, exact: true }));
+  }
+}
+
 export function applyChange(event: ChangeEvent, client: QueryClient): void {
   // References may point across repositories, or to an item created since
   // the last render. Refresh active Markdown when targets can have changed.
   if (["ticket", "pull", "repo", "upstream"].includes(event.kind)) {
-    void client.invalidateQueries({ queryKey: ["markdown"] });
+    refresh(client, { queryKey: ["markdown"] });
   }
   const predicates = predicatesFor(event, client);
   if (predicates === null) {
-    void client.invalidateQueries();
+    refresh(client);
     return;
   }
-  void client.invalidateQueries({ predicate: (q) => predicates.some((p) => p(q)) });
+  refresh(client, { predicate: (q) => predicates.some((p) => p(q)) });
 }
 
 /** How long the stream may be down before the GUI warns: a moment's drop (waking from sleep, a restart of the service) is not worth one. */
@@ -206,6 +236,7 @@ export function useChangeStream(
     let connected = false;
     let unsubscribe: (() => void) | undefined;
 
+    // Not `refresh`: first loads of the page are still running when the stream joins.
     const refetchShown = () => void client.invalidateQueries();
 
     const start = () => {
