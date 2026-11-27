@@ -64,30 +64,28 @@ fn read_report(archive: &Path, entry: &str) -> anyhow::Result<BTreeSet<String>> 
     Ok(failed_names(&xml)?)
 }
 
-pub(super) async fn read_attempt(app: &App, attempt: &Attempt) -> BTreeSet<String> {
-    let Some((artifact, report)) = attempt.job.artifacts.iter().find_map(|artifact| {
+pub(super) async fn read_attempt(app: &App, attempt: &Attempt) -> Option<BTreeSet<String>> {
+    let (artifact, report) = attempt.job.artifacts.iter().find_map(|artifact| {
         artifact
             .junit
             .as_ref()
             .map(|report| (&artifact.name, report))
-    }) else {
-        return BTreeSet::new();
-    };
-    if !attempt.artifacts.iter().any(|a| &a.name == artifact) {
-        return BTreeSet::new();
+    })?;
+    if attempt.files_pruned || !attempt.artifacts.iter().any(|a| &a.name == artifact) {
+        return None;
     }
     let archive = app.ci.artifact_path(&attempt.id, artifact);
     let report = report.clone();
     match tokio::task::spawn_blocking(move || read_report(&archive, &report)).await {
-        Ok(Ok(names)) => names,
+        Ok(Ok(names)) => Some(names),
         _ => {
             tracing::warn!(attempt = %attempt.id, "Could not read the declared JUnit report");
-            BTreeSet::new()
+            None
         }
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Failure {
     pub attempt_id: String,
     pub job: String,
@@ -121,7 +119,7 @@ fn record(w: &Wtx, repo: &str, name: &str, failure: &Failure) -> AppResult<()> {
     )
 }
 
-pub(super) fn record_attempt(w: &Wtx, a: &Attempt, names: BTreeSet<String>) -> AppResult<()> {
+pub(super) fn record_attempt(w: &Wtx, a: &Attempt, names: &BTreeSet<String>) -> AppResult<()> {
     let (Some(runner), Some(finished_at)) = (&a.runner, &a.finished_at) else {
         return Ok(());
     };
@@ -133,7 +131,7 @@ pub(super) fn record_attempt(w: &Wtx, a: &Attempt, names: BTreeSet<String>) -> A
         finished_at: finished_at.clone(),
     };
     for name in names {
-        record(w, &a.repo, &name, &row)?;
+        record(w, &a.repo, name, &row)?;
     }
     Ok(())
 }

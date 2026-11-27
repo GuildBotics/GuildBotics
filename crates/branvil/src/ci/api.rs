@@ -1036,7 +1036,7 @@ async fn finish(
                 let leased = leased(&app, &id, &input.lease).await?;
                 junit::read_attempt(&app, &leased).await
             } else {
-                Default::default()
+                None
             };
             let now = util::now();
             let attempt = app
@@ -1057,12 +1057,10 @@ async fn finish(
                         },
                         &now,
                     )?;
-                    junit::record_attempt(w, &a, failed_names)?;
-                    if input.release_points.is_empty() {
-                        Ok(a)
-                    } else {
-                        queue::record_release_points(w, &a, input.release_points)
+                    if let Some(names) = &failed_names {
+                        junit::record_attempt(w, &a, names)?;
                     }
+                    queue::record_report_results(w, a, input.release_points, failed_names)
                 })
                 .await?;
             app.ci.attempt_ended();

@@ -57,6 +57,10 @@ pub struct FailedLog {
     pub log_bytes: i64,
     pub tail_limit_bytes: i64,
     pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) evidence: Option<crate::ci::diagnostics::JobEvidence>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) evidence_truncated: bool,
 }
 
 /// One remark on a pull request, by its opaque id and when it was made.
