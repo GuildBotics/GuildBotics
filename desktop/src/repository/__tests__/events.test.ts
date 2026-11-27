@@ -1,6 +1,6 @@
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import { predicatesFor, refresh } from "../query/events";
+import { applyChange, predicatesFor, refresh } from "../query/events";
 import { keys } from "../query/keys";
 
 function stale(client: QueryClient, event: Parameters<typeof predicatesFor>[0]) {
@@ -274,16 +274,25 @@ describe("refresh", () => {
     return { release: (v: string) => release(v), calls: () => calls, stop };
   }
 
-  it("asks a shown query again once its first answer, which may predate the change, has come", async () => {
-    const client = new QueryClient();
-    const query = held(client, { shown: true });
-    await vi.waitFor(() => expect(query.calls()).toBe(1));
-    refresh(client, { queryKey: ["held"] });
-    query.release("before the change");
-    await vi.waitFor(() => expect(client.getQueryData(["held"])).toBe("answer 2"));
-    expect(query.calls()).toBe(2);
-    query.stop();
-  });
+  it.each([
+    ["first fetch", undefined],
+    ["refetch", "earlier"],
+  ])(
+    "asks a shown query once more after its running %s, which may predate the changes, however many arrived",
+    async (_, data) => {
+      const client = new QueryClient();
+      const query = held(client, { shown: true, data });
+      await vi.waitFor(() => expect(query.calls()).toBe(1));
+      for (let i = 0; i < 3; i++) refresh(client, { queryKey: ["held"] });
+      // The running fetch is not replaced: its request would go on anyway.
+      expect(query.calls()).toBe(1);
+      query.release("before the changes");
+      await vi.waitFor(() => expect(client.getQueryData(["held"])).toBe("answer 2"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(query.calls()).toBe(2);
+      query.stop();
+    },
+  );
 
   it("keeps an awaited refetch of that query waiting for its answer", async () => {
     const client = new QueryClient();
@@ -317,4 +326,44 @@ describe("refresh", () => {
       expect(query.calls()).toBe(1);
     },
   );
+});
+
+describe("refresh after the fetch it waited for", () => {
+  it("leaves the next read to whoever cancelled that fetch, so an optimistic change stays", async () => {
+    let calls = 0;
+    const client = new QueryClient();
+    client.setQueryData(["settings"], "saved", { updatedAt: 0 });
+    const stop = new QueryObserver(client, {
+      queryKey: ["settings"],
+      queryFn: () => {
+        calls += 1;
+        return new Promise<string>(() => {});
+      },
+    }).subscribe(() => {});
+    await vi.waitFor(() => expect(calls).toBe(1));
+    refresh(client, { queryKey: ["settings"] });
+    // A save cancels the running read and shows its change before it is sent.
+    void client.cancelQueries({ queryKey: ["settings"] });
+    client.setQueryData(["settings"], "changed");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(client.getQueryData(["settings"])).toBe("changed");
+    expect(client.getQueryState(["settings"])?.isInvalidated).toBe(true);
+    expect(calls).toBe(1);
+    stop();
+  });
+
+  it("reads Markdown once for an event that refreshes everything", async () => {
+    let calls = 0;
+    const client = new QueryClient();
+    const stop = new QueryObserver(client, {
+      queryKey: ["markdown", "x"],
+      queryFn: () => Promise.resolve(++calls),
+    }).subscribe(() => {});
+    await vi.waitFor(() => expect(calls).toBe(1));
+    applyChange({ kind: "ticket" }, client);
+    await vi.waitFor(() => expect(calls).toBe(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(calls).toBe(2);
+    stop();
+  });
 });

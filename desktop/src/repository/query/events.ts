@@ -4,7 +4,12 @@
 // `invalidateQueries` refetches only queries that are shown (active) and marks
 // the others stale, so an event never fans out into fetching hidden data.
 
-import type { InvalidateQueryFilters, Query, QueryClient } from "@tanstack/react-query";
+import {
+  isCancelledError,
+  type InvalidateQueryFilters,
+  type Query,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { createContext, useEffect, useState } from "react";
 import type { Card, ChangeEvent, Checks, PullRequest } from "../api/types";
 import { routeOfUrl } from "../router/routes";
@@ -181,35 +186,44 @@ export function predicatesFor(event: ChangeEvent, client: QueryClient): Predicat
  * Refetches the shown queries `filters` match and marks the others stale.
  *
  * A fetch already running when the change arrives may answer with what was
- * there before, and `invalidateQueries` does not replace it everywhere: it
- * joins a query's first fetch instead of starting another, and a hidden
- * query's running fetch clears the stale mark when it succeeds. Those queries
- * are refreshed again once that fetch has settled.
+ * there before, so the query is refreshed once more after it has settled.
+ * Running fetches are never replaced, as queries do not abort their requests:
+ * the re-reads of the changes that arrived during one fetch join one fetch.
+ * (A hidden query's fetch also clears the stale mark when it succeeds.) A
+ * cancelled fetch only leaves the stale mark: whoever cancelled it reads next.
  */
 export function refresh(client: QueryClient, filters: InvalidateQueryFilters = {}): void {
   const running = client
     .getQueryCache()
     .findAll(filters)
-    .filter((q) => q.state.fetchStatus !== "idle" && (q.state.data === undefined || !q.isActive()))
+    .filter((q) => q.state.fetchStatus !== "idle")
     .map((q) => [q.queryKey, q.promise] as const);
-  void client.invalidateQueries(filters);
+  void client.invalidateQueries(filters, { cancelRefetch: false });
   for (const [queryKey, promise] of running) {
     void promise
-      ?.catch(() => undefined)
-      .then(() => client.invalidateQueries({ queryKey, exact: true }));
+      ?.then(
+        () => true,
+        (error: unknown) => !isCancelledError(error),
+      )
+      .then((read) =>
+        client.invalidateQueries(
+          { queryKey, exact: true, refetchType: read ? "active" : "none" },
+          { cancelRefetch: false },
+        ),
+      );
   }
 }
 
 export function applyChange(event: ChangeEvent, client: QueryClient): void {
-  // References may point across repositories, or to an item created since
-  // the last render. Refresh active Markdown when targets can have changed.
-  if (["ticket", "pull", "repo", "upstream"].includes(event.kind)) {
-    refresh(client, { queryKey: ["markdown"] });
-  }
   const predicates = predicatesFor(event, client);
   if (predicates === null) {
     refresh(client);
     return;
+  }
+  // References may point across repositories, or to an item created since
+  // the last render. Refresh active Markdown when targets can have changed.
+  if (["ticket", "pull", "repo", "upstream"].includes(event.kind)) {
+    refresh(client, { queryKey: ["markdown"] });
   }
   refresh(client, { predicate: (q) => predicates.some((p) => p(q)) });
 }

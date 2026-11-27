@@ -1853,7 +1853,7 @@ describe("pull request review", () => {
     },
   );
 
-  it("reads a job's attempts again when a check changes while their first answer is on its way", async () => {
+  it("reads a job's attempts once more when checks change while their first answer is on its way", async () => {
     const attempt = (n: number, status: string, conclusion: string | null) => ({
       id: `att_${n}`,
       attempt: n,
@@ -1884,14 +1884,20 @@ describe("pull request review", () => {
     await user.click(await screen.findByRole("button", { name: "Open check test" }));
     const drawer = await screen.findByRole("dialog", { name: /test/ });
     await waitFor(() => expect(answer).toBeTypeOf("function"));
-    // A retry queued elsewhere is announced before the first answer, which predates it.
-    act(() => applyChange({ kind: "check", path: "acme/demo", id: HEAD }, client));
+    // A retry queued elsewhere, and the jobs it starts, are announced before the first answer,
+    // which predates them: they make one more read once that answer has come.
+    act(() => {
+      for (let i = 0; i < 3; i++)
+        applyChange({ kind: "check", path: "acme/demo", id: HEAD }, client);
+    });
     await act(async () => answer(json(200, first)));
     expect(await within(drawer).findByRole("link", { name: "#2" })).toHaveAttribute(
       "href",
       "/workspaces/acme/repos/demo/jobs/att_2",
     );
     expect(within(drawer).getByText("Attempt 1 of 2")).toBeInTheDocument();
+    // No further reads follow, one per change.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
     expect(calls).toBe(2);
   });
 
