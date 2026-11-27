@@ -181,16 +181,30 @@ pub struct Checks {
 #[derive(Clone, Debug)]
 struct RunnerSeen {
     name: String,
+    display_name: String,
     last_seen_at: String,
     report: RunnerReport,
     resource_wait: Option<queue::ResourceWait>,
     seen: Instant,
-    stopped: bool,
+    /// A timeout has been logged or the supervisor stopped the runner.
+    disconnected: bool,
 }
 
 impl RunnerSeen {
     fn online(&self, absent: Duration) -> bool {
-        !self.stopped && self.seen.elapsed() <= absent
+        !self.disconnected && self.seen.elapsed() <= absent
+    }
+
+    fn mark_absent(&mut self, absent: Duration) {
+        if !self.disconnected && !self.online(absent) {
+            self.disconnected = true;
+            tracing::info!(
+                runner = ?self.display_name,
+                runner_id = %self.name,
+                last_seen_at = %self.last_seen_at,
+                "CI: runner disconnected"
+            );
+        }
     }
 }
 
@@ -1064,8 +1078,8 @@ impl Ci {
         }
     }
 
-    /// One pass of the periodic work: expired leases, queued work nobody
-    /// takes, waiting runs.
+    /// One pass of the periodic work: expired leases and runner reports,
+    /// queued work nobody takes, and waiting runs.
     pub async fn sweep(&self) -> AppResult<()> {
         let now = util::now();
         let changed = self
@@ -1075,8 +1089,12 @@ impl Ci {
             .await?;
         self.publish(&changed);
         let absent = self.inner.config.runner_absent_secs;
+        let absent_duration = Duration::from_secs(absent);
         let (last_contact, last_text) = {
-            let runners = self.inner.runners.lock().unwrap();
+            let mut runners = self.inner.runners.lock().unwrap();
+            for runner in runners.values_mut() {
+                runner.mark_absent(absent_duration);
+            }
             (
                 runners
                     .values()
@@ -1087,7 +1105,7 @@ impl Ci {
                 runners.values().map(|r| r.last_seen_at.clone()).max(),
             )
         };
-        if last_contact.elapsed() >= Duration::from_secs(absent) {
+        if last_contact.elapsed() >= absent_duration {
             let details = format!(
                 "No CI runner has contacted the server for {absent} s (last contact: {}). Start `guildbotics runner` (docs/ci.md)",
                 last_text.unwrap_or_else(|| "none since GuildBotics started".into())
@@ -1108,14 +1126,14 @@ impl Ci {
                 .await?;
             self.publish(&changed);
         }
-        if self.inner.started.elapsed() >= Duration::from_secs(absent) {
+        if self.inner.started.elapsed() >= absent_duration {
             let live: Vec<RunnerSeen> = self
                 .inner
                 .runners
                 .lock()
                 .unwrap()
                 .values()
-                .filter(|r| r.online(Duration::from_secs(absent)))
+                .filter(|r| r.online(absent_duration))
                 .cloned()
                 .collect();
             let available = live
@@ -1206,7 +1224,8 @@ impl Ci {
             .unwrap()
             .get_mut(&util::fold(name))
         {
-            runner.stopped = true;
+            runner.mark_absent(Duration::from_secs(self.inner.config.runner_absent_secs));
+            runner.disconnected = true;
         }
     }
 
@@ -1300,17 +1319,51 @@ impl Ci {
             })
     }
 
-    pub fn report_runner(&self, name: &str, report: RunnerReport) -> Instant {
+    pub fn report_runner(&self, name: &str, display_name: &str, report: RunnerReport) -> Instant {
+        let display_name = if display_name.trim().is_empty() {
+            name
+        } else {
+            display_name
+        };
+        let mut runners = self.inner.runners.lock().unwrap();
         let seen = Instant::now();
-        self.inner.runners.lock().unwrap().insert(
-            util::fold(name),
+        let last_seen_at = util::now();
+        let key = util::fold(name);
+        // Account for a timeout that happened between sweeps before replacing the report.
+        let previous = runners.get_mut(&key).map(|previous| {
+            previous.mark_absent(Duration::from_secs(self.inner.config.runner_absent_secs));
+            &*previous
+        });
+        if previous.is_none_or(|previous| previous.disconnected) {
+            tracing::info!(
+                runner = ?display_name,
+                runner_id = %name,
+                version = ?report.version,
+                version_matches = report.matches_hub_version(),
+                "CI: runner connected"
+            );
+        }
+        if let Some(previous) = previous
+            && previous.report.version != report.version
+        {
+            tracing::info!(
+                runner = ?display_name,
+                runner_id = %name,
+                previous_version = ?previous.report.version,
+                version = ?report.version,
+                "CI: runner version changed"
+            );
+        }
+        runners.insert(
+            key,
             RunnerSeen {
                 name: name.to_string(),
-                last_seen_at: util::now(),
+                display_name: display_name.to_string(),
+                last_seen_at,
                 report,
                 resource_wait: None,
                 seen,
-                stopped: false,
+                disconnected: false,
             },
         );
         seen
@@ -1748,6 +1801,92 @@ mod tests {
         }
     }
 
+    fn runner_report() -> RunnerReport {
+        RunnerReport {
+            executor: "fixture".into(),
+            executor_state: ExecutorState::Ready,
+            executor_detail: None,
+            architecture: "arm64".into(),
+            images: Vec::new(),
+            version: gb_base::BUILD_VERSION.into(),
+            max_jobs: 2,
+            accept: true,
+            running_jobs: 0,
+            machine: None,
+            cache_groups: None,
+            ram_unsupported_images: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn runner_logs_record_only_connection_and_version_transitions() {
+        let (dir, ci, _) = setup();
+        let log_path = dir.path().join("runner.log");
+        let _guard = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .without_time()
+                .with_target(false)
+                .with_level(false)
+                .with_ansi(false)
+                .with_writer(std::fs::File::create(&log_path).unwrap())
+                .finish(),
+        );
+        let report = runner_report();
+        let old = RunnerReport {
+            version: "older\nbuild".into(),
+            ..report.clone()
+        };
+        let mark_stale = |last_seen_at: &str| {
+            let mut runners = ci.inner.runners.lock().unwrap();
+            let runner = runners.get_mut("runner-1").unwrap();
+            runner.seen -= Duration::from_secs(ci.config().runner_absent_secs + 1);
+            runner.last_seen_at = last_seen_at.into();
+        };
+        ci.report_runner("runner-1", "Linux CI", old.clone());
+        ci.report_runner("runner-1", "Linux CI", old.clone());
+        ci.sweep().await.unwrap();
+        ci.report_runner("runner-1", "Linux CI", report.clone());
+        ci.report_runner(
+            "runner-1",
+            "Linux CI",
+            RunnerReport {
+                running_jobs: 1,
+                ..report.clone()
+            },
+        );
+        mark_stale("2026-01-01T00:00:00.000Z");
+        ci.sweep().await.unwrap();
+        ci.sweep().await.unwrap();
+        ci.report_runner("runner-1", "Linux CI", report);
+
+        // A report can arrive after the timeout but before the next sweep.
+        mark_stale("2026-01-01T00:03:00.000Z");
+        ci.report_runner("runner-1", "", old.clone());
+        ci.sweep().await.unwrap();
+
+        // A supervised stop before the timeout does not become a timeout later.
+        ci.runner_stopped("runner-1");
+        mark_stale("2026-01-01T00:06:00.000Z");
+        ci.sweep().await.unwrap();
+        ci.report_runner("runner-1", "", old);
+
+        let version = gb_base::BUILD_VERSION;
+        assert_eq!(
+            std::fs::read_to_string(log_path).unwrap(),
+            format!(
+                r#"CI: runner connected runner="Linux CI" runner_id=runner-1 version="older\nbuild" version_matches=false
+CI: runner version changed runner="Linux CI" runner_id=runner-1 previous_version="older\nbuild" version={version:?}
+CI: runner disconnected runner="Linux CI" runner_id=runner-1 last_seen_at=2026-01-01T00:00:00.000Z
+CI: runner connected runner="Linux CI" runner_id=runner-1 version={version:?} version_matches=true
+CI: runner disconnected runner="Linux CI" runner_id=runner-1 last_seen_at=2026-01-01T00:03:00.000Z
+CI: runner connected runner="runner-1" runner_id=runner-1 version="older\nbuild" version_matches=false
+CI: runner version changed runner="runner-1" runner_id=runner-1 previous_version={version:?} version="older\nbuild"
+CI: runner connected runner="runner-1" runner_id=runner-1 version="older\nbuild" version_matches=false
+"#
+            ),
+        );
+    }
+
     #[tokio::test]
     async fn expired_runner_reports_stay_in_the_list_without_affecting_readiness() {
         let (_dir, ci, _) = setup();
@@ -1769,21 +1908,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let report = RunnerReport {
-            executor: "fixture".into(),
-            executor_state: ExecutorState::Ready,
-            executor_detail: None,
-            architecture: "arm64".into(),
-            images: Vec::new(),
-            version: gb_base::BUILD_VERSION.into(),
-            max_jobs: 2,
-            accept: true,
-            running_jobs: 0,
-            machine: None,
-            cache_groups: None,
-            ram_unsupported_images: Default::default(),
-        };
-        ci.report_runner("expired", report.clone());
+        let report = runner_report();
+        ci.report_runner("expired", "", report.clone());
         ci.inner
             .runners
             .lock()
@@ -1796,7 +1922,7 @@ mod tests {
         assert_eq!(view["runners"][0]["name"], "expired");
         assert_eq!(view["runners"][0]["connection"], "offline");
         assert!(view["runners"][0]["last_seen_at"].is_string());
-        ci.report_runner("ready", report.clone());
+        ci.report_runner("ready", "", report.clone());
         ci.inner
             .runners
             .lock()
@@ -1822,6 +1948,7 @@ mod tests {
 
         ci.report_runner(
             "ready",
+            "",
             RunnerReport {
                 running_jobs: ci.settings().runner_limits("ready").0.max_jobs as usize,
                 ..report
@@ -1874,6 +2001,7 @@ mod tests {
                 .unwrap();
             ci.report_runner(
                 "r",
+                "",
                 RunnerReport {
                     executor: "test".into(),
                     executor_state: if case == "unavailable" {
