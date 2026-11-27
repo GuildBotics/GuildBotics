@@ -53,6 +53,9 @@ export function CiSettings({ workspace }: { workspace: string | null }) {
   const [selected, setSelected] = useState<string | null>(null);
   const runners = ci.data?.runner.runners ?? [];
   const runner = runners.find((r) => r.name === selected) ?? runners[0];
+  // The runner first shown stays selected: a runner joining at the top of the
+  // polled list must not move the name, tokens, and limits being edited to it.
+  if (runner && runner.name !== selected) setSelected(runner.name);
   const repositories = (ci.data?.repositories ?? []).filter(
     ({ path }) => workspace === null || path.startsWith(`${workspace}/`),
   );
@@ -88,6 +91,7 @@ export function CiSettings({ workspace }: { workspace: string | null }) {
           {runner && <RunnerName key={runner.name} name={runner.name} />}
           {runner && (
             <Section title={t("token.title")} description={t("ci.settings.tokensHelp")}>
+              <RunnerHeading name={runner.name} />
               <Tokens key={runner.name} name={runner.name} />
             </Section>
           )}
@@ -323,6 +327,16 @@ const LIMIT_FIELDS: { key: keyof CiLimits; label: MessageKey; min: number; max: 
   { key: "cpu_multiplier_percent", label: "ci.settings.cpuMultiplier", min: 0, max: 6400 },
 ];
 
+/** Which runner a section acts on, as the list names it. */
+function RunnerHeading({ name }: { name: string }) {
+  const label = useRunnerLabel();
+  return (
+    <Text size="sm" fw={600} mb="sm">
+      {label(name, true)}
+    </Text>
+  );
+}
+
 /** The selected runner's display name, which the checks, jobs, and this page show in place of its name. */
 function RunnerName({ name }: { name: string }) {
   const t = useT();
@@ -333,9 +347,7 @@ function RunnerName({ name }: { name: string }) {
       title={t("ci.settings.displayName")}
       description={t("ci.settings.displayNameHelp", { name })}
     >
-      <Text size="sm" fw={600} mb="sm">
-        {name}
-      </Text>
+      <RunnerHeading name={name} />
       {members.isPending ? (
         <Loading />
       ) : members.isError ? (

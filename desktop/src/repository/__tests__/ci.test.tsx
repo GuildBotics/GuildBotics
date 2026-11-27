@@ -659,6 +659,46 @@ describe("CI settings", () => {
     expect(within(tokens).queryByText("runner-join")).not.toBeInTheDocument();
   });
 
+  it("keeps the runner first shown selected when another joins at the top of the polled list", async () => {
+    // Without a runner reporting, the page polls the settings every 3 seconds.
+    const waiting = { ...CI.runner, state: "no_runner", detail: "No runner." };
+    const before = { ...CI, runner: { ...waiting, runners: [REMOTE_RUNNER] } };
+    const after = { ...CI, runner: { ...waiting, runners: [HUB_RUNNER, REMOTE_RUNNER] } };
+    const tokens = `/api/v1/members/${REMOTE_RUNNER.name}/tokens`;
+    fakeApi({
+      ...SHELL,
+      "GET /api/v1/admin/ci": [json(200, before), json(200, after)],
+      [`GET ${tokens}`]: page([]),
+      [`POST ${tokens}`]: json(201, {
+        id: "tok_new",
+        label: "spare",
+        token: "fixture-token-value",
+        created_at: "2026-11-27T00:00:00Z",
+      }),
+      [`GET /api/v1/members/${HUB_RUNNER.name}/tokens`]: page([]),
+    });
+    const user = userEvent.setup();
+    renderApp("/settings/repositories/ci");
+    const section = await screen.findByRole("region", { name: "Tokens" });
+    // The section says which runner its tokens are.
+    expect(within(section).getByText(REMOTE_RUNNER.name)).toBeInTheDocument();
+    await user.type(within(section).getByRole("textbox", { name: "Label" }), "spare");
+    await user.click(within(section).getByRole("button", { name: "Issue token" }));
+    expect(await within(section).findByText("fixture-token-value")).toBeInTheDocument();
+
+    const list = screen.getByRole("list", { name: "Runners" });
+    await waitFor(
+      () => expect(within(list).getByRole("radio", { name: HUB_RUNNER.name })).toBeInTheDocument(),
+      { timeout: 10_000 },
+    );
+    expect(within(list).getByRole("radio", { name: REMOTE_RUNNER.name })).toBeChecked();
+    expect(within(section).getByText(REMOTE_RUNNER.name)).toBeInTheDocument();
+    expect(within(section).getByText("fixture-token-value")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Display name" })).getByText(REMOTE_RUNNER.name),
+    ).toBeInTheDocument();
+  });
+
   it("shows runner reports and saves the selected offline runner's resources without a global warning", async () => {
     const offlineMatch = { ...HUB_RUNNER, name: "stopped-runner", connection: "offline" };
     const runner = { ...CI.runner, runners: [HUB_RUNNER, REMOTE_RUNNER, NEW_RUNNER, offlineMatch] };
