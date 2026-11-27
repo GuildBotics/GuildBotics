@@ -59,6 +59,8 @@ export const en = {
   "nav.main": "Main",
   "nav.home": "Home",
   "nav.settings": "Settings",
+  "nav.collapse": "Collapse the menu",
+  "nav.expand": "Expand the menu",
   "notFound.title": "Page not found",
 
   "lane.new": "New",
@@ -610,6 +612,7 @@ export const en = {
   "board.assignee": "Assignee of {{key}}: {{name}} — click to change",
   "workspace.listFailed": "Could not load workspaces.",
   "workspace.label": "Workspace",
+  "workspace.current": "Workspace: {{name}}",
   "workspace.new": "New workspace",
   "workspace.newMenu": "+ New workspace…",
   "workspace.name": "Name",

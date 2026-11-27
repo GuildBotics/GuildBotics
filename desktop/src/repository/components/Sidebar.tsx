@@ -1,12 +1,77 @@
-import { Button, Select, Stack, Text } from "@mantine/core";
+import { ActionIcon, Button, Menu, Select, Stack, Text, Tooltip } from "@mantine/core";
+import { Check, Languages } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { normalizeLanguage, setAppLanguage } from "../../i18n";
+import { useSidebarCompact } from "../../ui/AppShell";
 import { useT } from "../i18n";
 import type { CurrentWorkspace } from "../workspace";
 import { NewWorkspaceModal } from "./NewWorkspace";
 
 const NEW_WORKSPACE = "\u0000new";
+const LANGUAGES = [
+  { value: "ja", label: "日本語" },
+  { value: "en", label: "English" },
+];
+
+/**
+ * Up to two letters naming a workspace on the icon rail: the first letters of
+ * its first two words (split at separators and capitals), or else its first two
+ * characters.
+ */
+export function workspaceInitials(name: string): string {
+  const words = name
+    .split(/[\s._-]+/)
+    .flatMap((part) => part.match(/[A-Z]?[^A-Z]*/g)?.filter(Boolean) ?? []);
+  const letters =
+    words.length > 1
+      ? words.slice(0, 2).map((word) => Array.from(word)[0])
+      : Array.from(words[0] ?? "").slice(0, 2);
+  return letters.join("").toUpperCase();
+}
+
+/** A rail button that opens a menu of choices, naming itself in a tooltip. */
+function RailMenu({
+  label,
+  target,
+  items,
+  current,
+  onChoose,
+  extra,
+  className,
+}: {
+  label: string;
+  target: ReactNode;
+  items: { value: string; label: string }[];
+  current: string | null | undefined;
+  onChoose: (value: string) => void;
+  extra?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <Menu position="right-start">
+      <Tooltip label={label} position="right">
+        <Menu.Target>
+          <ActionIcon variant="light" size="lg" aria-label={label} className={className}>
+            {target}
+          </ActionIcon>
+        </Menu.Target>
+      </Tooltip>
+      <Menu.Dropdown>
+        {items.map((item) => (
+          <Menu.Item
+            key={item.value}
+            onClick={() => onChoose(item.value)}
+            rightSection={item.value === current ? <Check size={14} aria-hidden /> : null}
+          >
+            {item.label}
+          </Menu.Item>
+        ))}
+        {extra}
+      </Menu.Dropdown>
+    </Menu>
+  );
+}
 
 export function WorkspaceSelect({
   current,
@@ -25,9 +90,44 @@ export function WorkspaceSelect({
   const { name, names, query } = current;
   const options = [...(names ?? [])];
   if (name && !options.includes(name)) options.unshift(name);
+  const compact = useSidebarCompact();
+  const language = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
+  const chooseWorkspace = (next: string | null) => {
+    if (next === NEW_WORKSPACE) setCreating(true);
+    else if (next && next !== name) onWorkspaceChange(next);
+  };
+  const chooseLanguage = (value: string | null) => {
+    if (value === "en" || value === "ja") void setAppLanguage(value);
+  };
   return (
     <>
-      {available && (
+      {available && compact && (
+        <RailMenu
+          label={name ? t("workspace.current", { name }) : t("workspace.label")}
+          target={
+            <Text span fz={12} fw={700}>
+              {name ? workspaceInitials(name) : "…"}
+            </Text>
+          }
+          items={query.isError ? [] : options.map((option) => ({ value: option, label: option }))}
+          current={name}
+          onChoose={chooseWorkspace}
+          extra={
+            query.isError ? (
+              <>
+                <Menu.Label>{t("workspace.listFailed")}</Menu.Label>
+                <Menu.Item onClick={() => void query.refetch()}>{appT("common.retry")}</Menu.Item>
+              </>
+            ) : (
+              <>
+                <Menu.Divider />
+                <Menu.Item onClick={() => setCreating(true)}>{t("workspace.newMenu")}</Menu.Item>
+              </>
+            )
+          }
+        />
+      )}
+      {available && !compact && (
         <Stack gap={6}>
           <Text component="label" htmlFor="workspace-switch" className="sidebar-field-label">
             {t("workspace.label")}
@@ -42,10 +142,7 @@ export function WorkspaceSelect({
               ...options,
               { group: " ", items: [{ value: NEW_WORKSPACE, label: t("workspace.newMenu") }] },
             ]}
-            onChange={(next) => {
-              if (next === NEW_WORKSPACE) setCreating(true);
-              else if (next && next !== name) onWorkspaceChange(next);
-            }}
+            onChange={chooseWorkspace}
             allowDeselect={false}
           />
           {query.isError && (
@@ -66,24 +163,30 @@ export function WorkspaceSelect({
         </Stack>
       )}
       {children}
-      <Stack gap={6} className="sidebar-language">
-        <Text component="label" htmlFor="language-switch" className="sidebar-field-label">
-          {t("app.language.label")}
-        </Text>
-        <Select
-          id="language-switch"
-          classNames={{ input: "sidebar-input" }}
-          value={normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en"}
-          data={[
-            { value: "ja", label: "日本語" },
-            { value: "en", label: "English" },
-          ]}
-          onChange={(value) => {
-            if (value === "en" || value === "ja") void setAppLanguage(value);
-          }}
-          allowDeselect={false}
+      {compact ? (
+        <RailMenu
+          label={t("app.language.label")}
+          target={<Languages size={18} />}
+          items={LANGUAGES}
+          current={language}
+          onChoose={chooseLanguage}
+          className="sidebar-language"
         />
-      </Stack>
+      ) : (
+        <Stack gap={6} className="sidebar-language">
+          <Text component="label" htmlFor="language-switch" className="sidebar-field-label">
+            {t("app.language.label")}
+          </Text>
+          <Select
+            id="language-switch"
+            classNames={{ input: "sidebar-input" }}
+            value={language}
+            data={LANGUAGES}
+            onChange={chooseLanguage}
+            allowDeselect={false}
+          />
+        </Stack>
+      )}
       <NewWorkspaceModal opened={creating} onClose={() => setCreating(false)} />
     </>
   );

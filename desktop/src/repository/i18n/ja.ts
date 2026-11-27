@@ -59,6 +59,8 @@ export const ja: Record<MessageKey, string> = {
   "nav.main": "メイン",
   "nav.home": "ホーム",
   "nav.settings": "設定",
+  "nav.collapse": "メニューを折りたたむ",
+  "nav.expand": "メニューを開く",
   "notFound.title": "ページが見つかりません",
 
   "lane.new": "新規",
@@ -611,6 +613,7 @@ export const ja: Record<MessageKey, string> = {
   "board.assignee": "{{key}} の担当者: {{name}} — クリックで変更",
   "workspace.listFailed": "ワークスペースを取得できませんでした。",
   "workspace.label": "ワークスペース",
+  "workspace.current": "ワークスペース: {{name}}",
   "workspace.new": "新しいワークスペース",
   "workspace.newMenu": "＋ 新しいワークスペース…",
   "workspace.name": "名前",
