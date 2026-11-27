@@ -59,11 +59,13 @@ it("finds test failures by exact name and links to each recorded attempt", async
   renderApp("/workspaces/acme/repos/demo");
   await user.click(await screen.findByRole("link", { name: "Test failure history" }));
   const input = screen.getByRole("textbox", { name: "Exact test name" });
+  expect(input).toHaveAccessibleDescription(/In nextest logs, use the part after the binary name/);
   expect(api.calls("GET", path)).toHaveLength(0);
   await user.click(input);
   await user.paste(name);
   await user.click(screen.getByRole("button", { name: "Search" }));
   const results = await screen.findByRole("table", { name });
+  expect(new URLSearchParams(window.location.search).get("name")).toBe(name);
   expect(within(results).getByRole("link", { name: "rust-test" })).toHaveAttribute("href", attempt);
   expect(within(results).getByRole("cell", { name: "runner-linux" })).toBeVisible();
   expect(within(results).getByRole("link", { name: sha.slice(0, 10) })).toHaveAttribute(
@@ -81,6 +83,28 @@ it("finds test failures by exact name and links to each recorded attempt", async
   expect(
     api.calls("GET", path).map(({ search }) => new URLSearchParams(search).get("name")),
   ).toEqual([name, "Suite::case"]);
+  expect(new URLSearchParams(window.location.search).get("name")).toBe("Suite::case");
+  act(() => window.history.back());
+  expect(await screen.findByRole("table", { name })).toBeVisible();
+  expect(input).toHaveValue(name);
+});
+
+it("opens a shared test failure search and displays the Japanese input hint", async () => {
+  const path = "/api/v1/repos/acme/demo/test-failures";
+  const name = "suite::日本語 + &";
+  const params = new URLSearchParams({ name });
+  const api = fakeApi({ ...SHELL, [`GET ${path}`]: json(200, []) });
+
+  renderApp(`/workspaces/acme/repos/demo/test-failures?${params}`, "ja");
+  const input = await screen.findByRole("textbox", { name: "テスト名（完全一致）" });
+  expect(input).toHaveValue(name);
+  expect(input).toHaveAccessibleDescription(
+    /nextest のログでは、バイナリ名に続くテスト名を使います/,
+  );
+  expect(await screen.findByText("このテストの失敗は記録されていません。")).toBeVisible();
+  expect(
+    api.calls("GET", path).map(({ search }) => new URLSearchParams(search).get("name")),
+  ).toEqual([name]);
 });
 
 it.each([

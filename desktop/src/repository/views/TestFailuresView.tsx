@@ -1,6 +1,7 @@
 import { Button, Card, Group, Stack, Table, Text, TextInput } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { useSearchParams } from "react-router";
 import { Header } from "../../ui/Header";
 import { jobs } from "../api/endpoints";
 import { ErrorMessage, Loading, Sha, Time } from "../components/common";
@@ -13,8 +14,11 @@ import { href } from "../router/routes";
 export function TestFailuresView({ repo }: { repo: string }) {
   const t = useT();
   const runnerLabel = useRunnerLabel();
-  const [input, setInput] = useState("");
-  const [name, setName] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const name = searchParams.get("name") ?? "";
+  const [draft, setDraft] = useState({ name, value: name });
+  if (draft.name !== name) setDraft({ name, value: name });
+  const input = draft.value;
   const history = useQuery({
     queryKey: keys.testFailures(repo, name),
     queryFn: () => jobs.testFailures(repo, name),
@@ -30,14 +34,19 @@ export function TestFailuresView({ repo }: { repo: string }) {
               event.preventDefault();
               if (!input.trim()) return;
               if (input === name) void history.refetch();
-              else setName(input);
+              else {
+                const next = new URLSearchParams(searchParams);
+                next.set("name", input);
+                setSearchParams(next);
+              }
             }}
           >
             <Group align="end" gap="sm">
               <TextInput
                 label={t("ci.testName")}
+                description={t("ci.testNameHint")}
                 value={input}
-                onChange={(event) => setInput(event.currentTarget.value)}
+                onChange={(event) => setDraft({ name, value: event.currentTarget.value })}
                 style={{ flex: "1 1 260px", maxWidth: 640 }}
               />
               <Button type="submit" disabled={!input.trim()}>

@@ -365,6 +365,8 @@ export const ja: Record<MessageKey, string> = {
   "ci.lastTime": "前回 {{time}}",
   "ci.testFailures": "テストの失敗履歴",
   "ci.testName": "テスト名（完全一致）",
+  "ci.testNameHint":
+    "JUnit の testcase 名を入力してください。nextest のログでは、バイナリ名に続くテスト名を使います（例 server::example_test）。",
   "ci.searchFailures": "検索",
   "ci.noTestFailures": "このテストの失敗は記録されていません。",
   "ci.failedAttempt": "試行",

@@ -366,6 +366,8 @@ export const en = {
   "ci.lastTime": "{{time}} last time",
   "ci.testFailures": "Test failure history",
   "ci.testName": "Exact test name",
+  "ci.testNameHint":
+    "Enter the JUnit testcase name. In nextest logs, use the part after the binary name, such as server::example_test.",
   "ci.searchFailures": "Search",
   "ci.noTestFailures": "No recorded failures for this test.",
   "ci.failedAttempt": "Attempt",
