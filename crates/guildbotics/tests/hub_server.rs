@@ -2710,9 +2710,17 @@ fn automatic_and_manual_updates_wait_for_client_artifacts() {
 fn maintenance_reason_reaches_the_old_build_without_new_stop_arguments() {
     let hub = Hub::new();
     hub.install();
+    let build = hub.installed_build();
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&fs::read(build.with_file_name("hub-build.json")).unwrap()).unwrap();
+    assert!(metadata["tag"].is_null());
     hub.run("restart", None, true);
     assert_eq!(hub.lines("stop-reasons"), "restart\n");
     hub.auto_candidate();
+    let tag = "release/2026-11-27-1";
+    hub.git(&["tag", "-a", tag, "-m", "Published release", "origin/main"]);
+    hub.git(&["push", "origin", tag]);
+    hub.git(&["tag", "-d", tag]);
     hub.mark("fail-hub-phase");
     hub.run("auto-once", None, true);
     assert_eq!(hub.auto_state()["result"], "success");
@@ -2727,5 +2735,6 @@ fn maintenance_reason_reaches_the_old_build_without_new_stop_arguments() {
     let metadata: serde_json::Value =
         serde_json::from_slice(&fs::read(source.join("hub-build.json")).unwrap()).unwrap();
     assert_eq!(metadata["sha"], sha);
-    assert!(metadata["subject"].is_string());
+    assert_eq!(metadata["subject"], "new");
+    assert_eq!(metadata["tag"], tag);
 }
