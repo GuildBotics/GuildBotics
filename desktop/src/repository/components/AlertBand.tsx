@@ -33,8 +33,7 @@ export function AlertBand({ hubOperating }: { hubOperating: boolean }) {
     runner &&
     (runner.state === "stopping"
       ? !hubOperating
-      : runner.state !== "ready" &&
-        (runner.mode !== "off" || runner.state === "executor_unavailable"));
+      : runner.state === "no_runner" || runner.state === "executor_unavailable");
   if (runner && showRunner) {
     const detail = runner.version_mismatch
       ? t("ci.runnerVersionMismatch", {

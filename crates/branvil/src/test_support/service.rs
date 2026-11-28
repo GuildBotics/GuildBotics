@@ -174,6 +174,9 @@ pub async fn serve(
     .await?;
     let _ = prepared.app.host.set(Arc::new(TestHost));
     let app = prepared.app.clone();
+    if std::env::var_os("GUILDBOTICS_TEST_SUPERVISE_RUNNER").is_some() {
+        crate::ci::supervise::start(app.clone(), base_url.clone());
+    }
     let router = crate::http::router_with(app.clone(), super::routes::routes());
     if let Some(ready) = ready {
         let _ = ready.send(prepared.data_api());

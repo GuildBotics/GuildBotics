@@ -41,6 +41,10 @@ async fn settings(w: &World) -> Value {
 /// Restarts the service with a home of its own: the supervised runner and
 /// the image cache stay out of the user's machine root, and no msb is found.
 fn isolate(w: &mut World) {
+    isolate_with(w, &[]);
+}
+
+fn isolate_with(w: &mut World, extra_env: &[(&str, &str)]) {
     let home = w.dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
     // Stopped as a signal stops it, so its supervised runner stops with it
@@ -48,27 +52,32 @@ fn isolate(w: &mut World) {
     #[cfg(unix)]
     w.server.terminate(std::time::Duration::from_secs(10));
     let root = home.join(".guildbotics");
-    w.restart(&[
+    let mut env = vec![
         ("HOME", home.to_str().unwrap()),
         ("GUILDBOTICS_HOME", root.to_str().unwrap()),
-    ]);
+    ];
+    env.extend_from_slice(extra_env);
+    w.restart(&env);
 }
 
 #[tokio::test]
 async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
     let mut w = World::new().await;
+    let supervised = [("GUILDBOTICS_TEST_SUPERVISE_RUNNER", "1")];
+    let hub_switch = "/admin/ci/runners/hub-runner/ci";
     // A setting of the file before the owner changes any.
     std::fs::write(
         w.server.data.join("config.toml"),
-        "# kept\n[limits]\ngit_concurrency = 8\n",
+        "# kept\n[limits]\ngit_concurrency = 8\n\n[ci]\nrunner = \"off\"\n",
     )
     .unwrap();
-    isolate(&mut w);
+    isolate_with(&mut w, &supervised);
+    runner_connected(&w).await;
     land_pipeline(&w).await;
 
     for (method, path, body) in [
         ("GET", "/admin/ci", json!(null)),
-        ("PUT", "/admin/ci/runner", json!({"mode": "auto"})),
+        ("PUT", hub_switch, json!({"enabled": true})),
         ("POST", "/admin/ci/images/pull", json!({"reference": IMAGE})),
     ] {
         let (st, v) = match method {
@@ -80,7 +89,7 @@ async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
     }
 
     let v = settings(&w).await;
-    assert_eq!(v["runner"]["mode"], "off");
+    assert_eq!(row(&v, "hub-runner")["ci_state"], "disabled");
     assert_eq!(
         v["limits"],
         json!({"max_cpus": 4, "max_memory_mib": 4096, "work_quota_mib": 16384, "max_timeout_secs": 3600, "cache_max_mib": 16384, "max_jobs": 1, "memory_reserve_percent": 10, "cpu_multiplier_percent": 0})
@@ -99,12 +108,12 @@ async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
 
     let (st, v) = w
         .server
-        .put("/admin/ci/runner", &w.owner, json!({"mode": "auto"}))
+        .put(hub_switch, &w.owner, json!({"enabled": true}))
         .await;
     assert_eq!(st, StatusCode::OK, "{v}");
-    assert_eq!(v["runner"]["mode"], "auto");
+    assert_eq!(row(&v, "hub-runner")["ci_state"], "enabled");
     assert!(
-        config_text(&w).contains("runner = \"auto\""),
+        config_text(&w).contains("ci_enabled = true"),
         "{}",
         config_text(&w)
     );
@@ -139,30 +148,108 @@ async fn the_owner_changes_the_runner_and_limits_and_they_survive_a_restart() {
         text.contains("# kept") && text.contains("[limits]"),
         "{text}"
     );
-    isolate(&mut w);
-    let v = settings(&w).await;
-    assert_eq!(v["runner"]["mode"], "auto");
-    assert_eq!(v["limits"], limits);
-    // The saved mode started the runner with the service.
+    isolate_with(&mut w, &supervised);
     runner_connected(&w).await;
+    let v = settings(&w).await;
+    assert_eq!(row(&v, "hub-runner")["ci_state"], "enabled");
+    assert_eq!(v["limits"], limits);
 
     let (st, v) = w
         .server
-        .put("/admin/ci/runner", &w.owner, json!({"mode": "off"}))
+        .put(hub_switch, &w.owner, json!({"enabled": false}))
         .await;
     assert_eq!(st, StatusCode::OK, "{v}");
-    assert_eq!(v["runner"]["mode"], "off");
-    // The supervisor stops it asynchronously. Its last report stays in the list.
-    eventually("runner stopped", || {
-        let w = &w;
-        async move {
-            let v = settings(w).await;
-            v["runner"]["state"] == "no_runner" && row(&v, "hub-runner")["connection"] == "offline"
-        }
-    })
-    .await;
+    assert_eq!(row(&v, "hub-runner")["ci_state"], "disabled");
+    assert_eq!(row(&v, "hub-runner")["connection"], "online");
     let diagnostics = w.server.ok("/admin/diagnostics", &w.owner).await;
-    assert_eq!(diagnostics["runner"]["mode"], "off");
+    assert_eq!(row(&diagnostics, "hub-runner")["ci_state"], "disabled");
+    let (status, v) = w
+        .server
+        .delete("/admin/ci/runners/hub-runner", &w.owner)
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(v["error"]["code"], "runner_builtin");
+}
+
+#[tokio::test]
+async fn disabled_runner_keeps_its_lease_and_fails_new_pr_attempts_until_enabled() {
+    use crate::ci::{Runner, land};
+
+    let w = World::new().await;
+    let runner = Runner::new(&w, "worker").await;
+    assert_eq!(row(&settings(&w).await, "worker")["ci_state"], "enabled");
+    let pipeline =
+        format!("[[jobs]]\nname = \"test\"\nimage = \"{IMAGE}\"\ncommands = [\"true\"]\n");
+    land(&w, "setup", &[(".guildbotics-ci.toml", &pipeline)], None).await;
+    let held = runner.next_claim().await;
+
+    let path = "/admin/ci/runners/worker/ci";
+    let (status, view) = w
+        .server
+        .put(path, &w.owner, json!({"enabled": false}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(row(&view, "worker")["ci_state"], "draining");
+    assert_eq!(row(&view, "worker")["connection"], "online");
+
+    let head = w.push_change("feature", "feature.txt", "changed\n");
+    w.open_pull("feature", json!([])).await;
+    let checks = format!("{}/commits/{head}/checks", w.repo_path());
+    assert!(runner.claim().await.is_none());
+    assert_eq!(
+        runner
+            .post(&held, "heartbeat", json!({"lease": held["lease"]}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(runner.finish(&held, "success").await.0, StatusCode::OK);
+    let view = settings(&w).await;
+    assert_eq!(row(&view, "worker")["ci_state"], "disabled");
+    assert_eq!(row(&view, "worker")["connection"], "online");
+
+    // The polling limit is shorter than the default 120-second absence timeout.
+    eventually("explicit CI shutdown failure", || {
+        let (w, checks) = (&w, &checks);
+        async move {
+            w.server.ok(checks, &w.aiko).await["checks"][0]["conclusion"] == "startup_failure"
+        }
+    }).await;
+    let failed = w.server.ok(&checks, &w.aiko).await["checks"][0].clone();
+    assert_eq!(failed["ci_disabled_runners"], json!(["worker"]));
+    assert!(
+        failed["details"]
+            .as_str()
+            .unwrap()
+            .contains("Settings → CI"),
+        "{failed}"
+    );
+
+    assert_eq!(
+        w.server
+            .put(path, &w.owner, json!({"enabled": true}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert!(
+        runner.claim().await.is_none(),
+        "PR heads require a manual retry"
+    );
+    let id = failed["attempt_id"].as_str().unwrap();
+    let job = format!("{}/jobs/{id}", w.repo_path());
+    assert_eq!(
+        w.server.ok(&job, &w.aiko).await["ci_disabled_runners"],
+        json!(["worker"])
+    );
+    let (status, attempt) = w
+        .server
+        .post(&format!("{job}/retry"), &w.aiko, json!({}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{attempt}");
+    let retry = runner.claim_head(&head).await;
+    assert_eq!(retry["attempt"], 2);
+    assert_eq!(runner.finish(&retry, "success").await.0, StatusCode::OK);
 }
 
 fn row<'a>(view: &'a Value, name: &str) -> &'a Value {

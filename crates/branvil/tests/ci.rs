@@ -611,7 +611,7 @@ async fn previous_schema_upgrade_preserves_records() {
     w.push_change("docs-upgrade", "notes.md", "documentation");
     w.open_pull("docs-upgrade", json!([])).await;
     let merge_checks = checks(&w, 1).await["merge_checks"].clone();
-    // A ticket whose work started before the upgrade.
+    // The upgrade preserves the start time of existing tickets.
     let started = w.ticket("Started").await;
     let board = format!(
         "{}/tickets/{}/board",
@@ -662,8 +662,7 @@ async fn previous_schema_upgrade_preserves_records() {
             .1
             .contains("guildbotics server hub-data upgrade")
     );
-    let mut tickets = records(&db, "tickets");
-    let mut runs_before = records(&db, "ci_runs");
+    let mut attempts = records(&db, "ci_attempts");
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
     assert!(
@@ -673,33 +672,15 @@ async fn previous_schema_upgrade_preserves_records() {
         )),
         "{output}"
     );
-    // Old tickets gain an unknown start, even one already in progress:
-    // nothing invents when its work started.
-    for t in &mut tickets {
-        t["started_at"] = Value::Null;
+    assert!(!attempts.is_empty());
+    for attempt in &mut attempts {
+        attempt["ci_disabled_runners"] = json!([]);
     }
-    assert!(!tickets.is_empty());
-    assert_eq!(records(&db, "tickets"), tickets);
-    // Old runs keep the pull requests their selection names, and nothing else.
-    for run in &mut runs_before {
-        let mut pulls: Vec<u64> = run["selection"]["bases"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|base| base["pull"].as_u64())
-            .collect();
-        pulls.sort_unstable();
-        pulls.dedup();
-        run["pulls"] = json!(pulls);
-    }
-    assert!(runs_before.iter().any(|r| r["pulls"] != json!([])));
-    assert_eq!(records(&db, "ci_runs"), runs_before);
+    assert_eq!(records(&db, "ci_attempts"), attempts);
     let upgraded = tables(&db);
     assert!(!upgraded["ix_ci_pull"].is_empty());
     let unchanged = |mut snapshot: Tables| {
-        snapshot.retain(|name, _| {
-            !matches!(name.as_str(), "meta" | "tickets" | "ci_runs" | "ix_ci_pull")
-        });
+        snapshot.retain(|name, _| !matches!(name.as_str(), "meta" | "ci_attempts"));
         snapshot
     };
     let after = unchanged(upgraded.clone());
@@ -3677,6 +3658,7 @@ async fn the_automatic_runner_starting_again_queues_the_jobs_its_predecessor_hel
     w.restart(&[
         ("HOME", home.to_str().unwrap()),
         ("GUILDBOTICS_HOME", root.to_str().unwrap()),
+        ("GUILDBOTICS_TEST_SUPERVISE_RUNNER", "1"),
     ]);
     let url = format!(
         "{}/jobs/{}",

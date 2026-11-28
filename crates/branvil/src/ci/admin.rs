@@ -12,7 +12,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
-use super::config::{JobLimits as Limits, RunnerMode};
+use super::config::JobLimits as Limits;
 use super::pipeline::valid_image;
 use super::settings::Loaded;
 use super::supervise::AUTO_RUNNER;
@@ -178,17 +178,19 @@ pub(crate) async fn data_settings(app: &Shared, c: &Caller) -> AppResult<serde_j
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RunnerInput {
-    mode: RunnerMode,
+struct RunnerCiInput {
+    enabled: bool,
 }
 
-async fn put_runner(
+async fn put_runner_ci(
     State(app): State<Shared>,
     c: Caller,
-    J(input): J<RunnerInput>,
+    RoutePath(name): RoutePath<String>,
+    J(input): J<RunnerCiInput>,
 ) -> AppResult<Response> {
     c.require_owner()?;
-    app.ci.settings().set_mode(input.mode).await?;
+    app.finish(move |app| async move { app.ci.set_runner_ci(&name, input.enabled).await })
+        .await?;
     Ok(axum::Json(view(&app).await?).into_response())
 }
 
@@ -471,7 +473,7 @@ fn archive_references(path: &Path) -> std::io::Result<(Vec<String>, usize)> {
 
 loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
     ("/admin/ci", (get, get_settings, OwnerSession)),
-    ("/admin/ci/runner", (put, put_runner, OwnerSession)),
+    ("/admin/ci/runners/{name}/ci", (put, put_runner_ci, OwnerSession)),
     ("/admin/ci/limits", (put, put_limits, OwnerSession)),
     ("/admin/ci/runners/{name}", (delete, delete_runner, OwnerSession)),
     ("/admin/ci/runners/{name}/limits", (put, put_runner_limits, OwnerSession)),

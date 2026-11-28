@@ -2,6 +2,8 @@
 
 import type { MessageKey } from "./en";
 
+import ciMessages from "../../../../guildbotics/templates/locales/integrations/branvil/ci.json";
+
 export const ja: Record<MessageKey, string> = {
   "verification.verified": "確認済み",
   "verification.verifying": "確認中",
@@ -374,6 +376,7 @@ export const ja: Record<MessageKey, string> = {
   "ci.error.retry_runner_ineligible":
     "ジョブのイメージを持ち、Hub と同じ版のランナーを選んでください。",
   "ci.error.retry_runner_excluded": "指定したランナーが除外にも含まれています。",
+  "ci.error.runner_builtin": ciMessages.ja.runner_builtin,
   "ci.error.runner_online":
     "このランナーは動いています（最近報告がありました）。先にそのマシンでランナーを止めてから削除してください。",
   "ci.error.runner_holds_attempts":
@@ -751,9 +754,18 @@ export const ja: Record<MessageKey, string> = {
   "ci.settings.state.no_runner": "ランナーなし",
   "ci.settings.state.executor_unavailable": "実行環境を使えません",
   "ci.settings.state.stopping": "停止待ち",
-  "ci.settings.runHere": "Hub でランナーを動かす",
-  "ci.settings.runHereHelp":
-    "サービスと一緒にランナーを起動し、動かし続けます。止めると、実行中のジョブは中断されます。",
+  "ci.settings.state.disabled": "CI 停止中",
+  "ci.settings.runnerConfiguration": "{{name}} の設定",
+  "ci.settings.ciSwitch": "CI",
+  "ci.settings.ciSwitchHelp": "OFF にすると、新しい試行を取らず、実行中の試行は完了まで続けます。",
+  "ci.settings.ciState.draining": "停止待ち",
+  "ci.settings.ciState.disabled": "CI 停止中",
+  "ci.settings.machineLimits": "マシン全体",
+  "ci.settings.machineLimitsHelp": "このランナーで動く CI ジョブ全体の上限です。",
+  "ci.settings.jobLimits": "CI のジョブ 1 本",
+  "ci.settings.jobLimitsHelp": "新しく始める CI ジョブごとの VM リソースと上限です。",
+  "ci.settings.connectedRunnersDisabled": ciMessages.ja.connected_runners_disabled,
+  "ci.runnersDisabled": ciMessages.ja.runners_disabled,
   "ci.settings.runners": "ランナー一覧",
   "ci.settings.noRunners": "ランナーのメンバーがいません。",
   "ci.settings.deleteRunner": "削除",
@@ -785,8 +797,6 @@ export const ja: Record<MessageKey, string> = {
   "ci.settings.limits": "ジョブのリソース",
   "ci.settings.limitsSource.default": "Hub の既定値",
   "ci.settings.limitsSource.runner": "このランナー用に保存済み",
-  "ci.settings.limitsHelp":
-    "すべてのジョブは、この CPU 数とメモリで、それぞれの microVM で動きます。同時に動くジョブは最大で同時実行数までで、そのぶん CPU とメモリも同時に使います。作業ディレクトリの容量は、チェックアウトと復元したキャッシュに加えて、ジョブが /work に書き込める量です。制限時間は、パイプラインの timeout_secs の上限で、timeout_secs を書かないジョブの制限時間です。保存した値は、ランナーが次に始めるジョブから使います（実行中のジョブはそのまま続きます）。",
   "ci.settings.maxCpus": "CPU 数",
   "ci.settings.maxMemory": "メモリ（MiB）",
   "ci.settings.workQuota": "作業ディレクトリの容量（MiB）",

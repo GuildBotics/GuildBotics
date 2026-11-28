@@ -70,15 +70,17 @@ pub(crate) async fn prepare(
     active_agents: crate::agent::ActiveAgents,
 ) -> anyhow::Result<Embedded> {
     let store = open_service(&config).await?;
-    recover(
+    let embedded = recover(
         config,
         vault,
         base_url,
-        hook_url,
+        hook_url.clone(),
         store,
         Some(active_agents),
     )
-    .await
+    .await?;
+    crate::ci::supervise::start(embedded.app.clone(), hook_url);
+    Ok(embedded)
 }
 
 pub(crate) async fn open_service(config: &Config) -> anyhow::Result<Store> {
@@ -123,7 +125,6 @@ pub(crate) async fn recover(
     store: Store,
     active_agents: Option<crate::agent::ActiveAgents>,
 ) -> anyhow::Result<Embedded> {
-    let hook_base = hook_url.clone();
     let app = App::new(config, base_url, store, vault, hook_url);
     if let Some(roster) = active_agents {
         let _ = app.active_agents.set(roster);
@@ -154,7 +155,6 @@ pub(crate) async fn recover(
     );
 
     crate::ci::Ci::start(app.clone());
-    crate::ci::supervise::start(app.clone(), hook_base);
     crate::upstream::start(app.clone());
     crate::autoland::start(app.clone());
     crate::domain::attachments::start(app.clone());

@@ -12,7 +12,7 @@ it.each([true, false])(
       "GET /api/v1/workspaces": json(200, { items: [], next_cursor: null }),
       "GET /api/v1/members": json(200, { items: [], next_cursor: null }),
       "GET /api/v1/admin/diagnostics": json(200, {
-        runner: { state: "stopping", mode: "auto", detail: "" },
+        runner: { state: "stopping", detail: "" },
       }),
       "GET /-/guildbotics/api/hub-status": json(200, {
         current: {

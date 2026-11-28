@@ -1,0 +1,12 @@
+{
+  "en": {
+    "runners_disabled": "CI is off on every runner that can take this job ({{names}}). Turn CI on in Settings → CI, then retry.",
+    "connected_runners_disabled": "CI is off on all connected runners.",
+    "runner_builtin": "The built-in Hub runner cannot be deleted."
+  },
+  "ja": {
+    "runners_disabled": "このジョブを取れるランナー（{{names}}）はすべて CI が OFF です。設定 → CI で ON にしてから、やり直してください。",
+    "connected_runners_disabled": "接続中のランナーはすべて CI が OFF です。",
+    "runner_builtin": "Hub に組み込まれたランナーは削除できません。"
+  }
+}

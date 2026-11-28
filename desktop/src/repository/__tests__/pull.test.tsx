@@ -870,6 +870,52 @@ describe("pull request review", () => {
   });
 
   it.each([
+    [
+      "en",
+      "CI is off on every runner that can take this job (worker). Turn CI on in Settings → CI, then retry.",
+    ],
+    [
+      "ja",
+      "このジョブを取れるランナー（worker）はすべて CI が OFF です。設定 → CI で ON にしてから、やり直してください。",
+    ],
+  ] as const)("shows the disabled runner and recovery action in %s", async (language, reason) => {
+    const failed = {
+      status: "completed",
+      conclusion: "startup_failure",
+      attempt: 1,
+      runner: null,
+      ci_disabled_runners: ["worker"],
+      details: "diagnostic fallback",
+    };
+    fakeApi(
+      pullRoutes({
+        [`GET ${P}/checks`]: json(200, {
+          ...CHECKS,
+          checks: [{ ...failed, name: "test", attempt_id: "att_1" }],
+        }),
+        "GET /api/v1/repos/acme/demo/jobs/att_1": json(200, {
+          ...failed,
+          id: "att_1",
+          job: "test",
+          sha: HEAD,
+          artifact_names: [],
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/workspaces/acme/repos/demo/pulls/3", language);
+    const words = dictionaries[language];
+    const region = await screen.findByRole("region", { name: words["pull.checks"] });
+    const check = within(region).getByRole("button", {
+      name: words["ci.open"].replace("{{name}}", "test"),
+    });
+    expect(await within(region).findByText(`${words["ci.reason"]}: ${reason}`)).toBeInTheDocument();
+    await user.click(check);
+    const drawer = await screen.findByRole("dialog", { name: /test/ });
+    expect(await within(drawer).findByText(reason)).toBeInTheDocument();
+  });
+
+  it.each([
     ["en", "3m 12s", "1m 5s · about 55s left", "1m 7s · about 53s left", "1m 0s · 30s last time"],
     ["ja", "3分12秒", "1分5秒 · 残り約 55秒", "1分7秒 · 残り約 53秒", "1分0秒 · 前回 30秒"],
   ] as const)(

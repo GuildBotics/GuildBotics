@@ -10,6 +10,7 @@ import {
   Switch,
   Text,
   TextInput,
+  Title,
 } from "@mantine/core";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FolderGit2 } from "lucide-react";
@@ -42,6 +43,7 @@ const CONNECTION_TONE: Record<CiRunner["connection"], Tone> = {
 const RUNNER_TONE: Record<Settings["runner"]["state"], Tone> = {
   ready: "success",
   no_runner: "warning",
+  disabled: "neutral",
   executor_unavailable: "danger",
   stopping: "warning",
 };
@@ -69,7 +71,7 @@ export function CiSettings({ workspace }: { workspace: string | null }) {
         <ErrorMessage error={ci.error} />
       ) : (
         <Stack gap="md">
-          <Runner settings={ci.data} selected={runner?.name ?? ""} onSelect={setSelected} />
+          <Runner settings={ci.data} selected={runner} onSelect={setSelected} />
           <ResourceQueue runners={runners} />
           <Section title={t("ci.settings.executor")}>
             <dl>
@@ -97,7 +99,6 @@ export function CiSettings({ workspace }: { workspace: string | null }) {
                 <RunnerHeading name={runner.name} />
                 <Tokens name={runner.name} />
               </Section>
-              <Limits runner={runner} />
             </Fragment>
           )}
           <Section title={t("ci.settings.network")} description={t("ci.settings.networkHelp")}>
@@ -181,13 +182,12 @@ function Runner({
   onSelect,
 }: {
   settings: Settings;
-  selected: string;
+  selected: CiRunner | undefined;
   onSelect: (name: string) => void;
 }) {
   const t = useT();
   const label = useRunnerLabel();
   const { runner } = settings;
-  const setMode = useCiChange(api.admin.setRunner);
   const remove = useCiChange(api.admin.deleteRunner);
   return (
     <Section title={t("ci.settings.runner")}>
@@ -202,23 +202,21 @@ function Runner({
                   ...runner.version_mismatch,
                   name: label(runner.version_mismatch.name),
                 })
-              : runner.detail}
+              : runner.state === "disabled"
+                ? t("ci.settings.connectedRunnersDisabled")
+                : runner.detail}
           </Text>
         </Group>
-        <Switch
-          label={t("ci.settings.runHere")}
-          description={t("ci.settings.runHereHelp")}
-          checked={runner.mode === "auto"}
-          disabled={setMode.isPending}
-          onChange={(e) => setMode.mutate(e.currentTarget.checked ? "auto" : "off")}
-        />
-        {setMode.isError && <ErrorMessage error={setMode.error} />}
         {runner.runners.length === 0 ? (
           <Text size="sm" c="dimmed">
             {t("ci.settings.noRunners")}
           </Text>
         ) : (
-          <Radio.Group aria-label={t("ci.settings.runners")} value={selected} onChange={onSelect}>
+          <Radio.Group
+            aria-label={t("ci.settings.runners")}
+            value={selected?.name ?? ""}
+            onChange={onSelect}
+          >
             <Stack gap={6} role="list" aria-label={t("ci.settings.runners")}>
               {runner.runners.map((r) => (
                 <RunnerRow
@@ -239,6 +237,7 @@ function Runner({
           </Radio.Group>
         )}
         {remove.isError && <ErrorMessage error={remove.error} />}
+        {selected && <RunnerConfiguration key={selected.name} runner={selected} />}
         <Text size="sm">
           <Anchor href={t("ci.settings.forwardingUrl")} target="_blank" rel="noreferrer">
             {t("ci.settings.forwarding")}
@@ -272,6 +271,11 @@ function RunnerRow({
           <StateBadge tone={CONNECTION_TONE[r.connection]}>
             {t(`ci.settings.connection.${r.connection}`)}
           </StateBadge>
+          {r.ci_state !== "enabled" && (
+            <StateBadge tone={r.ci_state === "draining" ? "warning" : "neutral"}>
+              {t(`ci.settings.ciState.${r.ci_state}`)}
+            </StateBadge>
+          )}
           <Text size="xs" c="dimmed">
             {online && r.max_jobs !== null
               ? t("ci.settings.capacity", { running: r.running_jobs, max: r.max_jobs })
@@ -352,15 +356,29 @@ function RunnerRow({
 
 type LimitsForm = Record<keyof CiLimits, string | number>;
 
-const LIMIT_FIELDS: { key: keyof CiLimits; label: MessageKey; min: number; max: number }[] = [
-  { key: "max_cpus", label: "ci.settings.maxCpus", min: 1, max: 64 },
-  { key: "max_memory_mib", label: "ci.settings.maxMemory", min: 128, max: 65536 },
-  { key: "work_quota_mib", label: "ci.settings.workQuota", min: 1024, max: 1048576 },
-  { key: "max_timeout_secs", label: "ci.settings.maxTimeout", min: 1, max: 86400 },
-  { key: "cache_max_mib", label: "ci.settings.cacheMax", min: 0, max: 1048576 },
-  { key: "max_jobs", label: "ci.settings.maxJobs", min: 1, max: 64 },
-  { key: "memory_reserve_percent", label: "ci.settings.memoryReserve", min: 0, max: 100 },
-  { key: "cpu_multiplier_percent", label: "ci.settings.cpuMultiplier", min: 0, max: 6400 },
+type LimitField = { key: keyof CiLimits; label: MessageKey; min: number; max: number };
+
+const LIMIT_GROUPS: { title: MessageKey; help: MessageKey; fields: LimitField[] }[] = [
+  {
+    title: "ci.settings.machineLimits",
+    help: "ci.settings.machineLimitsHelp",
+    fields: [
+      { key: "max_jobs", label: "ci.settings.maxJobs", min: 1, max: 64 },
+      { key: "memory_reserve_percent", label: "ci.settings.memoryReserve", min: 0, max: 100 },
+      { key: "cpu_multiplier_percent", label: "ci.settings.cpuMultiplier", min: 0, max: 6400 },
+    ],
+  },
+  {
+    title: "ci.settings.jobLimits",
+    help: "ci.settings.jobLimitsHelp",
+    fields: [
+      { key: "max_cpus", label: "ci.settings.maxCpus", min: 1, max: 64 },
+      { key: "max_memory_mib", label: "ci.settings.maxMemory", min: 128, max: 65536 },
+      { key: "work_quota_mib", label: "ci.settings.workQuota", min: 1024, max: 1048576 },
+      { key: "max_timeout_secs", label: "ci.settings.maxTimeout", min: 1, max: 86400 },
+      { key: "cache_max_mib", label: "ci.settings.cacheMax", min: 0, max: 1048576 },
+    ],
+  },
 ];
 
 /** Which runner a section acts on, as the list names it. */
@@ -431,7 +449,7 @@ function RunnerNameForm({ name, saved }: { name: string; saved: string }) {
   );
 }
 
-function Limits({ runner }: { runner: CiRunner }) {
+function RunnerConfiguration({ runner }: { runner: CiRunner }) {
   const t = useT();
   const label = useRunnerLabel();
   const { limits } = runner;
@@ -443,17 +461,22 @@ function Limits({ runner }: { runner: CiRunner }) {
     setForm(limits);
   }
   const save = useCiChange((value: CiLimits) => api.admin.setRunnerLimits(runner.name, value));
-  const filled = LIMIT_FIELDS.every((f) => form[f.key] !== "");
+  const toggle = useCiChange((enabled: boolean) => api.admin.setRunnerCi(runner.name, enabled));
+  const filled = LIMIT_GROUPS.every(({ fields }) => fields.every(({ key }) => form[key] !== ""));
   return (
-    <Section title={t("ci.settings.limits")} description={t("ci.settings.limitsHelp")}>
-      <Group gap="xs" mb="sm">
-        <Text size="sm" fw={600}>
-          {label(runner.name, true)}
-        </Text>
-        <Text size="xs" c="dimmed">
-          {t(`ci.settings.limitsSource.${runner.limits_source}`)}
-        </Text>
-      </Group>
+    <Section title={t("ci.settings.runnerConfiguration", { name: label(runner.name, true) })}>
+      <Switch
+        label={t("ci.settings.ciSwitch")}
+        aria-label={t("ci.settings.ciSwitch")}
+        description={t("ci.settings.ciSwitchHelp")}
+        checked={runner.ci_state === "enabled"}
+        disabled={toggle.isPending}
+        onChange={(e) => toggle.mutate(e.currentTarget.checked)}
+      />
+      {toggle.isError && <ErrorMessage error={toggle.error} />}
+      <Text size="xs" c="dimmed" mt="md" mb="xs">
+        {t(`ci.settings.limitsSource.${runner.limits_source}`)}
+      </Text>
       <form
         aria-label={t("ci.settings.limits")}
         onSubmit={(e) => {
@@ -471,20 +494,28 @@ function Limits({ runner }: { runner: CiRunner }) {
         }}
       >
         <Stack gap="sm">
-          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
-            {LIMIT_FIELDS.map((f) => (
-              <NumberInput
-                key={f.key}
-                label={t(f.label)}
-                min={f.min}
-                max={f.max}
-                allowDecimal={false}
-                allowNegative={false}
-                value={form[f.key]}
-                onChange={(v) => setForm({ ...form, [f.key]: v })}
-              />
-            ))}
-          </SimpleGrid>
+          {LIMIT_GROUPS.map(({ title, help, fields }) => (
+            <Stack key={title} gap="xs" component="section" aria-label={t(title)}>
+              <Title order={5}>{t(title)}</Title>
+              <Text size="sm" c="dimmed">
+                {t(help)}
+              </Text>
+              <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                {fields.map((f) => (
+                  <NumberInput
+                    key={f.key}
+                    label={t(f.label)}
+                    min={f.min}
+                    max={f.max}
+                    allowDecimal={false}
+                    allowNegative={false}
+                    value={form[f.key]}
+                    onChange={(v) => setForm({ ...form, [f.key]: v })}
+                  />
+                ))}
+              </SimpleGrid>
+            </Stack>
+          ))}
           {save.isError && <ErrorMessage error={save.error} />}
           {save.isSuccess && <Notice>{t("settings.saved")}</Notice>}
           <Group>

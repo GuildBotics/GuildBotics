@@ -67,6 +67,7 @@ export function errorText(error: unknown, t: Translate): string {
       code === "retry_pr_head_required" ||
       code === "retry_runner_ineligible" ||
       code === "retry_runner_excluded" ||
+      code === "runner_builtin" ||
       code === "runner_online" ||
       code === "runner_holds_attempts"
     ) {

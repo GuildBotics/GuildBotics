@@ -473,7 +473,12 @@ function CheckRow({
     check.attempt_id ?? "",
     !!check.attempt_id && !isHosted(check) && failed,
   );
-  const reason = isHosted(check) ? check.details : (job.data?.details ?? check.details);
+  const disabled = job.data?.ci_disabled_runners ?? check.ci_disabled_runners;
+  const reason = disabled
+    ? t("ci.runnersDisabled", { names: disabled.map((name) => label(name)).join(", ") })
+    : isHosted(check)
+      ? check.details
+      : (job.data?.details ?? check.details);
   const runner = check.runner ? `${t("ci.runner")}: ${label(check.runner)}` : undefined;
   const content = (
     <>
@@ -951,10 +956,16 @@ function JobDetails({
             </dd>
           </>
         )}
-        {j.details && (
+        {(j.details || j.ci_disabled_runners) && (
           <>
             <dt>{t("ci.reason")}</dt>
-            <dd>{j.details}</dd>
+            <dd>
+              {j.ci_disabled_runners
+                ? t("ci.runnersDisabled", {
+                    names: j.ci_disabled_runners.map((name) => label(name)).join(", "),
+                  })
+                : j.details}
+            </dd>
           </>
         )}
         <RetryDetails repo={repo} job={j} />

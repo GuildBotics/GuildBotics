@@ -1,16 +1,9 @@
-//! `[ci] runner = "auto"`: the server starts one `guildbotics runner` child
-//! (the same executable, a separate process) and restarts it when it exits. The
-//! mode and the limits the child reads can change while the service runs
-//! (Settings → CI, `settings.rs`): the child receives its limits from the Hub on
-//! every claim, so only the mode stops it. The child authenticates as the runner
-//! member `hub-runner` with a token minted at each start (the previous
-//! automatic token is revoked), passed through the environment, never the
-//! command line.
+//! The Hub supervises one runner child. Its CI switch is enforced by the
+//! claim endpoint, so it keeps reporting and finishing work when disabled.
 
 use std::time::Duration;
 
 use crate::app::Shared;
-use crate::ci::config::RunnerMode;
 use crate::ci::queue;
 use crate::domain::members::{NewMember, insert_member};
 use crate::error::{AppError, AppResult};
@@ -65,20 +58,11 @@ async fn mint_token(app: &Shared) -> AppResult<String> {
     Ok(token)
 }
 
-/// Supervises the runner child for the lifetime of the service: runs one
-/// while the mode is `auto`, and stops it when the owner switches the mode
-/// off.
+/// Restarts the runner if its process exits, including while CI is disabled.
 pub fn start(app: Shared, url: String) {
     tokio::spawn(async move {
-        let mut desired = app.ci.settings().subscribe();
         let mut backoff = 2;
         loop {
-            if *desired.borrow_and_update() != RunnerMode::Auto {
-                if desired.changed().await.is_err() {
-                    return;
-                }
-                continue;
-            }
             let exe = match mint_token(&app).await.map_err(|e| e.message).and_then(|t| {
                 std::env::current_exe()
                     .map(|exe| (t, exe))
@@ -86,12 +70,8 @@ pub fn start(app: Shared, url: String) {
             }) {
                 Ok(v) => v,
                 Err(e) => {
-                    // Tried again after the backoff, or at once when the
-                    // owner changes the settings.
                     tracing::error!("CI: cannot start the automatic runner: {e}");
-                    if !wait(&mut desired, backoff).await {
-                        return;
-                    }
+                    tokio::time::sleep(Duration::from_secs(backoff)).await;
                     backoff = (backoff * 2).min(120);
                     continue;
                 }
@@ -115,46 +95,22 @@ pub fn start(app: Shared, url: String) {
             match cmd.spawn() {
                 Ok(mut child) => {
                     tracing::info!("CI: started the automatic runner (pid {:?})", child.id());
-                    tokio::select! {
-                        status = child.wait() => {
-                            tracing::warn!("CI: the automatic runner exited ({status:?}); restarting");
-                        }
-                        changed = desired.changed() => {
-                            let _ = child.kill().await;
-                            stopped(&app).await;
-                            if changed.is_err() {
-                                return;
-                            }
-                            tracing::info!("CI: the runner mode changed; the automatic runner stopped");
-                            backoff = 2;
-                            continue;
-                        }
-                    }
+                    let status = child.wait().await;
+                    tracing::warn!("CI: the automatic runner exited ({status:?}); restarting");
+                    stopped(&app).await;
                 }
                 Err(e) => tracing::error!("CI: cannot start the automatic runner: {e}"),
             }
             if started.elapsed() > Duration::from_secs(300) {
                 backoff = 2;
             }
-            if !wait(&mut desired, backoff).await {
-                return;
-            }
+            tokio::time::sleep(Duration::from_secs(backoff)).await;
             backoff = (backoff * 2).min(120);
         }
     });
 }
 
-/// Waits `secs`, or less when the mode changes; false when it never can
-/// any more.
-async fn wait(desired: &mut tokio::sync::watch::Receiver<RunnerMode>, secs: u64) -> bool {
-    tokio::select! {
-        _ = tokio::time::sleep(Duration::from_secs(secs)) => true,
-        changed = desired.changed() => changed.is_ok(),
-    }
-}
-
-/// After the child was killed: the microVMs of the jobs it ran are removed
-/// (the child could not), and the diagnostics stop counting it.
+/// A dead child could not remove its microVMs.
 async fn stopped(app: &Shared) {
     app.ci.runner_stopped(AUTO_RUNNER);
     app.ci
