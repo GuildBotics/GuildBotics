@@ -1,9 +1,19 @@
-import { ActionIcon, Button, Menu, Select, Stack, Text, Tooltip } from "@mantine/core";
-import { Check, Languages } from "lucide-react";
+import {
+  ActionIcon,
+  Button,
+  Menu,
+  Select,
+  Stack,
+  Text,
+  Tooltip,
+  VisuallyHidden,
+} from "@mantine/core";
+import { Check, Languages, Tag } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { normalizeLanguage, setAppLanguage } from "../../i18n";
 import { useSidebarCompact } from "../../ui/AppShell";
+import type { HubStatus } from "../../ui/HubStatus";
 import { useT } from "../i18n";
 import type { CurrentWorkspace } from "../workspace";
 import { NewWorkspaceModal } from "./NewWorkspace";
@@ -38,7 +48,6 @@ function RailMenu({
   current,
   onChoose,
   extra,
-  className,
 }: {
   label: string;
   target: ReactNode;
@@ -46,13 +55,12 @@ function RailMenu({
   current: string | null | undefined;
   onChoose: (value: string) => void;
   extra?: ReactNode;
-  className?: string;
 }) {
   return (
     <Menu position="right-start">
       <Tooltip label={label} position="right">
         <Menu.Target>
-          <ActionIcon variant="light" size="lg" aria-label={label} className={className}>
+          <ActionIcon variant="light" size="lg" aria-label={label}>
             {target}
           </ActionIcon>
         </Menu.Target>
@@ -77,11 +85,13 @@ export function WorkspaceSelect({
   current,
   available,
   onWorkspaceChange,
+  hubVersion,
   children,
 }: {
   current: CurrentWorkspace;
   available: boolean;
   onWorkspaceChange: (name: string) => void;
+  hubVersion?: HubStatus["current"];
   children: ReactNode;
 }) {
   const t = useT();
@@ -163,31 +173,71 @@ export function WorkspaceSelect({
         </Stack>
       )}
       {children}
-      {compact ? (
-        <RailMenu
-          label={t("app.language.label")}
-          target={<Languages size={18} />}
-          items={LANGUAGES}
-          current={language}
-          onChoose={chooseLanguage}
-          className="sidebar-language"
-        />
-      ) : (
-        <Stack gap={6} className="sidebar-language">
-          <Text component="label" htmlFor="language-switch" className="sidebar-field-label">
-            {t("app.language.label")}
-          </Text>
-          <Select
-            id="language-switch"
-            classNames={{ input: "sidebar-input" }}
-            value={language}
-            data={LANGUAGES}
-            onChange={chooseLanguage}
-            allowDeselect={false}
+      <Stack gap={6} align={compact ? "center" : undefined} className="sidebar-language">
+        {compact ? (
+          <RailMenu
+            label={t("app.language.label")}
+            target={<Languages size={18} />}
+            items={LANGUAGES}
+            current={language}
+            onChoose={chooseLanguage}
           />
-        </Stack>
-      )}
+        ) : (
+          <>
+            <Text component="label" htmlFor="language-switch" className="sidebar-field-label">
+              {t("app.language.label")}
+            </Text>
+            <Select
+              id="language-switch"
+              classNames={{ input: "sidebar-input" }}
+              value={language}
+              data={LANGUAGES}
+              onChange={chooseLanguage}
+              allowDeselect={false}
+            />
+          </>
+        )}
+        {hubVersion && <SidebarHubVersion version={hubVersion} compact={compact} />}
+      </Stack>
       <NewWorkspaceModal opened={creating} onClose={() => setCreating(false)} />
     </>
+  );
+}
+
+function SidebarHubVersion({
+  version,
+  compact,
+}: {
+  version: NonNullable<HubStatus["current"]>;
+  compact: boolean;
+}) {
+  const { t } = useTranslation();
+  const name = version.tag ?? version.sha.slice(0, 8);
+  const identity = t("hub.versionLabel", { sha: version.sha, subject: version.subject });
+  return (
+    <Tooltip
+      label={
+        <>
+          {compact && <div>{name}</div>}
+          {identity}
+        </>
+      }
+      position={compact ? "right" : "top"}
+      multiline
+      w={280}
+      style={{ overflowWrap: "anywhere" }}
+      events={{ hover: true, focus: true, touch: false }}
+    >
+      <Text size="xs" c="dimmed" truncate tabIndex={0}>
+        {compact ? (
+          <>
+            <Tag size={18} aria-hidden />
+            <VisuallyHidden>{name}</VisuallyHidden>
+          </>
+        ) : (
+          name
+        )}
+      </Text>
+    </Tooltip>
   );
 }

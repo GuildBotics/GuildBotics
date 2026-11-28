@@ -13,11 +13,6 @@ const en = {
   "hub.updateVersions":
     "The Hub is updating automatically and is not accepting new runs. Patrol, schedules and chat reception are stopped; manual runs and environment builds are refused. After {{runs}} running tasks and {{ci_jobs}} CI jobs finish, the Hub will switch from {{current}} to {{target}}. Services will resume afterward if they were running when the stop was accepted.",
   "hub.title": "Hub maintenance",
-  "hub.version": "Hub version",
-  "hub.pendingReleases": "Releases not applied yet: {{names}}.",
-  "hub.noPendingReleases": "No release is waiting to be applied.",
-  "hub.releasesPage": "Releases",
-  "hub.separator": ", ",
   "hub.manualRequired": "Manual work is required for {{release}}",
   "hub.confirmManual": "Manual work is complete. Update the Hub",
   "hub.manualConfirmed": "Completion recorded. Automatic update will continue on its next check.",
@@ -62,11 +57,6 @@ const ja = {
   "hub.updateVersions":
     "Hub の自動更新のため、新しい実行の受け付けを止めています。巡回・定期実行・チャットの受信は止まり、手動の実行や実行環境のビルドは断ります。実行中の作業 {{runs}} 件と CI のジョブ {{ci_jobs}} 件が終わると、{{current}} から {{target}} に切り替わります。止めた時点でサービスが動いていたら、切り替えのあとに再開します。",
   "hub.title": "Hub の作業",
-  "hub.version": "Hub の版",
-  "hub.pendingReleases": "適用待ちのリリース：{{names}}",
-  "hub.noPendingReleases": "適用待ちのリリースはありません。",
-  "hub.releasesPage": "リリースの画面",
-  "hub.separator": "、",
   "hub.manualRequired": "{{release}} への更新には手作業が必要です",
   "hub.confirmManual": "手作業を済ませたので更新する",
   "hub.manualConfirmed": "手作業の完了を記録しました。次の確認で自動更新を再開します。",

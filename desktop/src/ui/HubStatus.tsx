@@ -6,14 +6,6 @@ export interface HubVersion {
   subject: string;
   url: string | null;
 }
-export interface HubReleases {
-  /** The code host's releases page of the Hub's repository. */
-  url: string;
-  /** The release tag of the running version, when it is a release. */
-  running: string | null;
-  /** Releases newer than the running version, newest first. */
-  pending: { name: string; sha: string; subject: string }[];
-}
 export type HubUpdate =
   | {
       kind: "manual";
@@ -24,9 +16,8 @@ export type HubUpdate =
     }
   | { kind: "failed"; sha: string; stage: string; reason: string; next: string };
 export interface HubStatus {
-  current: HubVersion | null;
+  current: (HubVersion & { tag: string | null }) | null;
   target: HubVersion | null;
-  releases: HubReleases | null;
   update?: HubUpdate | null;
   operation: null | {
     kind: "update" | "restart" | "stop";
@@ -39,7 +30,7 @@ type HubTranslate = (
   key: `hub.${"versionLabel" | "dismiss" | "title" | "preparing" | "preparingVersions" | "update" | "updateVersions" | "restart" | "stop"}`,
   params?: Record<string, string | number>,
 ) => string;
-export function HubVersionLabel({ version, t }: { version: HubVersion; t: HubTranslate }) {
+function HubVersionLabel({ version, t }: { version: HubVersion; t: HubTranslate }) {
   const sha = version.sha.slice(0, 8);
   const label = t("hub.versionLabel", { sha: "__HUB_SHA__", subject: "__HUB_SUBJECT__" });
   return (

@@ -477,6 +477,12 @@ case "$action" in
             fail "No signing identity is recorded: $(reinstall_hint). See docs/hub-server.md."
         identity=$(cat "$signing")
         running_team=$(team_of "$current")
+        # Fetch releases explicitly: the commit may already have been fetched
+        # on a previous poll, before its release tag was published.
+        stage="fetching release tags"
+        if git -C "$repo" remote get-url origin >/dev/null 2>&1; then
+            git -C "$repo" fetch --no-tags origin 'refs/tags/release/*:refs/tags/release/*'
+        fi
         build_head
         previous=$(built_from "$current")
         # The candidate knows which distribution targets its version needs.

@@ -1,4 +1,4 @@
-import { useHubStatus, HubVersion, HubUpdateNotice } from "./HubStatus";
+import { useHubStatus, HubUpdateNotice } from "./HubStatus";
 import { RunFiles } from "./commands/RunFiles";
 import { HubStatusBand } from "./ui/HubStatus";
 import { AppShell, useSidebarCompact } from "./ui/AppShell";
@@ -236,6 +236,7 @@ export function App() {
           current={{ ...current, name: visibleWorkspace }}
           available={hosted}
           onWorkspaceChange={switchWorkspace}
+          hubVersion={hub.data?.current}
         >
           <nav className="nav" aria-label={repositoryT("nav.main")}>
             {configured || visibleWorkspace ? (
@@ -319,9 +320,7 @@ export function App() {
         </Alert>
       ) : null}
       <HubStatusBand status={hub.data} t={t} />
-      {page !== "/service" && hub.data?.update && (
-        <HubUpdateNotice key={hub.data.update.sha} update={hub.data.update} />
-      )}
+      {hub.data?.update && <HubUpdateNotice key={hub.data.update.sha} update={hub.data.update} />}
       {hosted ? <AlertBand hubOperating={Boolean(hub.data?.operation)} /> : null}
       {configured && !waitingForWorkspace ? <SystemAlertBand /> : null}
       {waitingForWorkspace ? null : workspaceRedirect ? (
@@ -786,10 +785,7 @@ function ServicePage() {
   return (
     <Stack gap="lg">
       <Group justify="space-between">
-        <div>
-          <Title order={2}>{t("service.title")}</Title>
-          <HubVersion />
-        </div>
+        <Title order={2}>{t("service.title")}</Title>
         {showStopAction ? (
           <Group gap="xs">
             <Button

@@ -10,6 +10,7 @@ import {
   getSchedulerStatus,
   getServiceSettings,
   getTeam,
+  request,
   resetChatReceiveState,
   startScheduler,
   stopScheduler,
@@ -36,6 +37,7 @@ vi.mock("./api/client", async (importOriginal) => {
   return {
     ...actual,
     getConfigStatus: vi.fn(),
+    request: vi.fn(actual.request),
     getTeam: vi.fn(),
     getSchedulerStatus: vi.fn(),
     getServiceSettings: vi.fn(),
@@ -90,6 +92,40 @@ beforeEach(() => {
 });
 
 describe("Service Runtime screen", () => {
+  it.each(["release/2026-11-27-1", null])(
+    "shows the running build below the language picker on the service screen: %s",
+    async (tag) => {
+      const sha = "0123456789abcdef0123456789abcdef01234567";
+      const subject = "Ship the Hub build";
+      vi.mocked(request).mockResolvedValueOnce({
+        current: { tag, sha, subject, url: null },
+        operation: null,
+        target: null,
+        releases: {
+          running: tag,
+          pending: [{ name: "release/2026-11-28-1" }],
+          url: "https://example.test/releases",
+        },
+      });
+      const user = userEvent.setup();
+      renderApp("/service");
+      await screen.findByRole("heading", { name: t("service.title") });
+      const sidebar = within(screen.getByRole("complementary"));
+      const language = sidebar.getByRole("combobox", { name: t("app.language.label") });
+      const version = await sidebar.findByText(tag ?? sha.slice(0, 8));
+      expect(
+        language.compareDocumentPosition(version) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(screen.queryByText(/Hub version|release\/2026-11-28-1/)).toBeNull();
+      expect(screen.queryByText(subject)).toBeNull();
+
+      await user.hover(version);
+      expect(await screen.findByRole("tooltip")).toHaveTextContent(
+        t("hub.versionLabel", { sha, subject }),
+      );
+    },
+  );
+
   it("keeps sidebar runtime indicators hidden while stopped", async () => {
     renderApp("/service");
     await screen.findByRole("heading", { name: t("service.title") });
