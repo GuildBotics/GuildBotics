@@ -3445,13 +3445,8 @@ async fn no_runner_means_startup_failure_not_waiting_forever() {
 
 #[tokio::test]
 async fn an_expired_lease_requeues_once_and_a_restart_handles_orphans() {
-    let mut w = World::with_config(|data| {
-        set_ci_config(
-            data,
-            &[("lease_secs", 2.into()), ("runner_absent_secs", 600.into())],
-        );
-    })
-    .await;
+    let mut w =
+        World::with_config(|data| set_ci_config(data, &[("runner_absent_secs", 600.into())])).await;
     let runner = Runner::new(&w, "runner1").await;
     land(
         &w,
@@ -3460,12 +3455,19 @@ async fn an_expired_lease_requeues_once_and_a_restart_handles_orphans() {
         None,
     )
     .await;
-    runner.drain("success").await;
-    sync_main(&w);
+    assert!(runner.drain("success").await > 0);
+
+    // Use the default lease for setup, then shorten it for the attempts that expire.
+    w.server.stop();
+    set_ci_config(&w.server.data, &[("lease_secs", 2.into())]);
+    w.restart(&[]);
+    let runner = Runner::at(&w.server.url, &runner.token);
     w.push_change("feature", "f.txt", "1\n");
     let p = w.open_pull("feature", json!([])).await;
     let n = p["number"].as_u64().unwrap();
     let first = runner.claim().await.unwrap();
+    assert_eq!(first["sha"], p["head_sha"]);
+    assert_eq!(first["lease_secs"], 2);
     // The runner goes silent; its lease expires and the job is queued again.
     eventually("re-queue", || {
         let w = &w;
@@ -3505,11 +3507,7 @@ async fn an_expired_lease_requeues_once_and_a_restart_handles_orphans() {
     })
     .await;
     w.restart(&[]);
-    let runner = Runner {
-        url: w.server.url.clone(),
-        token: runner.token.clone(),
-        http: reqwest::Client::new(),
-    };
+    let runner = Runner::at(&w.server.url, &runner.token);
     eventually("interrupted twice", || {
         let w = &w;
         async move { check(&checks(w, n).await, "test")["conclusion"] == "cancelled" }
