@@ -112,7 +112,8 @@ describe("Service Runtime screen", () => {
       await screen.findByRole("heading", { name: t("service.title") });
       const sidebar = within(screen.getByRole("complementary"));
       const language = sidebar.getByRole("combobox", { name: t("app.language.label") });
-      const version = await sidebar.findByText(tag ?? sha.slice(0, 8));
+      const name = tag ?? sha.slice(0, 8);
+      const version = await sidebar.findByText(name);
       expect(
         language.compareDocumentPosition(version) & Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
@@ -120,9 +121,20 @@ describe("Service Runtime screen", () => {
       expect(screen.queryByText(subject)).toBeNull();
 
       await user.hover(version);
-      expect(await screen.findByRole("tooltip")).toHaveTextContent(
-        t("hub.versionLabel", { sha, subject }),
-      );
+      const tooltip = await screen.findByRole("tooltip");
+      expect(within(tooltip).getByText("Running Hub")).toBeInTheDocument();
+      const identity = t("hub.versionLabel", { sha, subject });
+      expect(tooltip).toHaveTextContent(identity);
+
+      await user.unhover(version);
+      await user.click(sidebar.getByRole("button", { name: "Collapse the menu" }));
+      expect(sidebar.getByText(`Running Hub ${name}`)).toBeInTheDocument();
+      act(() => sidebar.getByRole("button", { name: t("app.language.label") }).focus());
+      await user.tab();
+      const compactTooltip = await screen.findByRole("tooltip", { name: /^Running Hub/ });
+      expect(within(compactTooltip).getByText("Running Hub")).toBeInTheDocument();
+      expect(within(compactTooltip).getByText(name)).toBeInTheDocument();
+      expect(compactTooltip).toHaveTextContent(identity);
     },
   );
 

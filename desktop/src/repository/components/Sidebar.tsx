@@ -213,11 +213,13 @@ function SidebarHubVersion({
 }) {
   const { t } = useTranslation();
   const name = version.tag ?? version.sha.slice(0, 8);
+  const label = t("hub.running");
   const identity = t("hub.versionLabel", { sha: version.sha, subject: version.subject });
   return (
     <Tooltip
       label={
         <>
+          <div>{label}</div>
           {compact && <div>{name}</div>}
           {identity}
         </>
@@ -232,7 +234,7 @@ function SidebarHubVersion({
         {compact ? (
           <>
             <Tag size={18} aria-hidden />
-            <VisuallyHidden>{name}</VisuallyHidden>
+            <VisuallyHidden>{`${label} ${name}`}</VisuallyHidden>
           </>
         ) : (
           name

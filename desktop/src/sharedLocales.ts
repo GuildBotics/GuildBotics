@@ -7,6 +7,7 @@ const en = {
   "attach.choose": "Attach images",
   "attach.placeholder": "Uploading {{name}}…",
   "attach.uploading": "Uploading images…",
+  "hub.running": "Running Hub",
   "hub.versionLabel": '{{sha}} ("{{subject}}")',
   "hub.preparingVersions":
     "Preparing an automatic Hub update from {{current}} to {{target}}. New runs will stop being accepted soon.",
@@ -51,6 +52,7 @@ const ja = {
   "attach.choose": "画像を添付",
   "attach.placeholder": "{{name}} をアップロード中…",
   "attach.uploading": "画像をアップロード中…",
+  "hub.running": "稼働中の Hub",
   "hub.versionLabel": "{{sha}}（{{subject}}）",
   "hub.preparingVersions":
     "Hub を {{current}} から {{target}} に自動更新する準備をしています。まもなく新しい実行の受け付けを止めます。",
