@@ -1286,6 +1286,8 @@ export type TicketTimelineBar = {
   ended_at: string;
   /** How the stretch ended: the run's completion, or the state it stopped in. */
   outcome: string | null;
+  /** A run still going on: its bar runs until now. */
+  running?: boolean;
 };
 
 export type TicketTimelineAttempt = {

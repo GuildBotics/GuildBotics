@@ -46,11 +46,17 @@ pub(crate) async fn read(
         let roster = team.screen_summary(&config, &identities)?["members"].clone();
         let since = from - chrono::Duration::days(LOOKBACK_DAYS);
         let history = crate::activity::read(&workspace, &identities, since, to, language)?;
+        let runs = gb_observability::runs::RunStore::open(&workspace).records_between(since, to)?;
         // What each run worked on: not every ticket it touched on the way.
-        let subjects: BTreeMap<String, String> = gb_observability::runs::RunStore::open(&workspace)
-            .records_between(since, to)?
+        let subjects: BTreeMap<String, String> = runs
+            .iter()
+            .filter_map(|r| Some((r.run_id.clone(), r.attributes.get("target.url")?.clone())))
+            .collect();
+        // The runs still going on: only their record knows, not their last event.
+        let running: BTreeSet<String> = runs
             .into_iter()
-            .filter_map(|r| Some((r.run_id, r.attributes.get("target.url")?.clone())))
+            .filter(|r| r.finished_at.is_none())
+            .map(|r| r.run_id)
             .collect();
         // What each conversation worked on, and when.
         let touched: BTreeMap<String, Vec<Value>> =
@@ -64,10 +70,10 @@ pub(crate) async fn read(
                     ))
                 })
                 .collect();
-        anyhow::Ok((roster, history, subjects, touched))
+        anyhow::Ok((roster, history, subjects, running, touched))
     })
     .await;
-    let (roster, history, subjects, touched) = match read {
+    let (roster, history, subjects, running, touched) = match read {
         Ok(Ok(read)) => read,
         Ok(Err(e)) => return crate::screens::answer(Err(e), &headers),
         Err(_) => {
@@ -105,12 +111,20 @@ pub(crate) async fn read(
             (account, text(m, "person_id").to_owned())
         })
         .collect();
+    // A workspace not registered on the code host has no pull requests or
+    // closed tickets of its own there.
+    let workspace = crate::workspace::execution_name(Some(data), &root)
+        .ok()
+        .flatten();
     let join = Join {
         data,
         owner: data.owner(),
         people,
         subjects,
+        running,
         touched,
+        workspace,
+        attempts: Default::default(),
         from,
         to,
     };
@@ -118,10 +132,9 @@ pub(crate) async fn read(
         let tickets = join
             .tickets(history["sessions"].as_array().cloned().unwrap_or_default())
             .await?;
-        // A workspace not registered on the code host has nothing it closed.
-        let summary = match crate::workspace::execution_name(Some(data), &root) {
-            Ok(Some(name)) => join.closed(&name).await?,
-            _ => Value::Null,
+        let summary = match &join.workspace {
+            Some(name) => join.closed(name).await?,
+            None => Value::Null,
         };
         AppResult::Ok((tickets, summary))
     }
@@ -151,8 +164,14 @@ struct Join<'a> {
     people: BTreeMap<String, String>,
     /// The URL each run worked on, by run id.
     subjects: BTreeMap<String, String>,
+    /// The ids of the runs still going on.
+    running: BTreeSet<String>,
+    /// Each pull request's CI attempts, read once per request.
+    attempts: std::sync::Mutex<BTreeMap<(String, u64), Vec<Value>>>,
     /// The targets of each conversation, with when it worked on them.
     touched: BTreeMap<String, Vec<Value>>,
+    /// The workspace's name on the code host.
+    workspace: Option<String>,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
 }
@@ -160,8 +179,10 @@ struct Join<'a> {
 /// The tickets and pull requests a session's links name.
 type Named = BTreeSet<(String, String)>;
 
-/// The bars of one session: one per stretch it actually ran.
-fn bars(session: &Value) -> Vec<Value> {
+/// The bars of one session: one per stretch it actually ran. A run still
+/// going on (`running`) runs until now, its last event being only what it
+/// last recorded.
+fn bars(session: &Value, running: bool) -> Vec<Value> {
     let segments = session["segments"]
         .as_array()
         .cloned()
@@ -171,16 +192,51 @@ fn bars(session: &Value) -> Vec<Value> {
         .iter()
         .enumerate()
         .map(|(i, segment)| {
-            json!({"trace_id":session["trace_id"],"person_id":session["person_id"],
+            let running = running && i == last;
+            let ended = if running {
+                json!(Utc::now().max(time(segment, "ended_at").unwrap_or_default()).to_rfc3339())
+            } else {
+                segment["ended_at"].clone()
+            };
+            let mut bar = json!({"trace_id":session["trace_id"],"person_id":session["person_id"],
                 "mode":session["mode"],"title":session["title"],
-                "started_at":segment["started_at"],"ended_at":segment["ended_at"],
+                "started_at":segment["started_at"],"ended_at":ended,
                 // Only the last stretch has the run's own outcome.
-                "outcome":if i == last {session["outcome"].clone()} else {segment["status"].clone()}})
+                "outcome":if i == last {session["outcome"].clone()} else {segment["status"].clone()}});
+            if running {
+                bar["running"] = true.into();
+            }
+            bar
         })
         .collect()
 }
 
 impl Join<'_> {
+    fn running(&self, session: &Value) -> bool {
+        session["mode"] == "workflow" && self.running.contains(text(session, "trace_id"))
+    }
+
+    fn bars(&self, session: &Value) -> Vec<Value> {
+        bars(session, self.running(session))
+    }
+
+    /// A pull request's CI attempts, read once however many rows use them.
+    async fn attempts(&self, repo: &str, number: u64) -> AppResult<Vec<Value>> {
+        let key = (repo.to_owned(), number);
+        if let Some(read) = self.attempts.lock().unwrap().get(&key) {
+            return Ok(read.clone());
+        }
+        let read: Vec<Value> = self
+            .owner
+            .pull_attempts(repo, number)
+            .await?
+            .into_iter()
+            .map(|a| serde_json::to_value(a).expect("attempts serialize"))
+            .collect();
+        self.attempts.lock().unwrap().insert(key, read.clone());
+        Ok(read)
+    }
+
     fn person(&self, account: &str) -> String {
         self.people
             .get(account)
@@ -221,7 +277,9 @@ impl Join<'_> {
                 tickets = self.data.item_of(subject, "tickets").into_iter().collect();
                 subject_pulls = self.data.item_of(subject, "pulls").into_iter().collect();
             }
-            if time(&session, "ended_at").is_some_and(|end| end < self.from) {
+            if !self.running(&session)
+                && time(&session, "ended_at").is_some_and(|end| end < self.from)
+            {
                 earlier.push((session, tickets, subject_pulls));
                 continue;
             }
@@ -243,6 +301,12 @@ impl Join<'_> {
                 }
             }
             worked.push((session, tickets, pulls));
+        }
+        // A ticket whose only movement was its CI, with no session in the window.
+        for key in self.ci_tickets().await? {
+            if !order.contains(&key) {
+                order.push(key);
+            }
         }
         let mut result = vec![];
         for key in order {
@@ -345,9 +409,9 @@ impl Join<'_> {
             }
             let session = &part(session);
             match place(session, links) {
-                Some((i, false)) => rows[i].0.extend(bars(session)),
-                Some((i, true)) => rows[i].1.extend(bars(session)),
-                None => work.extend(bars(session)),
+                Some((i, false)) => rows[i].0.extend(self.bars(session)),
+                Some((i, true)) => rows[i].1.extend(self.bars(session)),
+                None => work.extend(self.bars(session)),
             }
         }
         // The last thing of the ticket that ran before the window since its
@@ -374,7 +438,7 @@ impl Join<'_> {
             }
             let session = &part(session);
             let review = place(session, links).is_some_and(|(_, review)| review);
-            for mut bar in bars(session) {
+            for mut bar in self.bars(session) {
                 bar["kind"] = if review {
                     json!("review")
                 } else {
@@ -405,8 +469,7 @@ impl Join<'_> {
                 }
             }
             let mut jobs: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-            for a in self.owner.pull_attempts(&pull_repo, number).await? {
-                let a = serde_json::to_value(a).expect("attempts serialize");
+            for a in self.attempts(&pull_repo, number).await? {
                 let end = time(&a, "finished_at").unwrap_or_else(Utc::now);
                 if end < self.from {
                     // Only a job a runner ran was something running.
@@ -432,6 +495,93 @@ impl Join<'_> {
             "state":view.state,"created_at":view.created_at,"closed_at":view.closed_at,
             "started_at":view.started_at,"previous":previous,"work":work,"pulls":pulls,"events":events}),
         )
+    }
+
+    /// The tickets of the pull requests open in the window whose CI ran or
+    /// that merged in it: those open now and those closed since it began.
+    async fn ci_tickets(&self) -> AppResult<Vec<String>> {
+        let Some(workspace) = &self.workspace else {
+            return Ok(vec![]);
+        };
+        let prefix = format!("{workspace}/");
+        let mut candidates = vec![];
+        for repo in self
+            .all("timeline-repos", |page| self.owner.repos_list(page))
+            .await?
+            .into_iter()
+            .filter(|repo| repo.path.starts_with(&prefix))
+        {
+            let open = || branvil::api::pulls::PullQuery {
+                sort: None,
+                state: Some("open".into()),
+                head: None,
+                base: None,
+                post_merge: None,
+            };
+            candidates.extend(
+                self.all(&format!("timeline-open:{}", repo.path), |page| {
+                    self.owner.pulls_list(&repo.path, open(), page)
+                })
+                .await?,
+            );
+        }
+        let since = || branvil::api::tickets::ClosedQuery {
+            since: Some(self.from.to_rfc3339()),
+            until: None,
+        };
+        for item in self
+            .all(&format!("timeline-since:{workspace}"), |page| {
+                self.owner.tickets_closed(workspace, since(), page)
+            })
+            .await?
+            .into_iter()
+            .filter(|item| item.kind == "pull_request")
+        {
+            if let Some((repo, number)) = self.data.item_of(&item.url, "pulls")
+                && let Ok(number) = number.parse::<u64>()
+            {
+                // One pull request that cannot be read leaves out only itself.
+                match self.owner.pulls_get(&repo, number).await {
+                    Ok(pull) => candidates.push(pull),
+                    Err(e) => tracing::warn!("timeline: cannot read {}: {e}", item.url),
+                }
+            }
+        }
+        let mut keys = vec![];
+        for pull in candidates {
+            if time(&json!({"t":pull.created_at}), "t").is_some_and(|t| t > self.to) {
+                continue;
+            }
+            // A merge in the window is something that happened to it, as is a
+            // job a runner ran: a job no runner took (queued, or skipped by
+            // its paths) did not run.
+            let merged = self.within(
+                pull.merged_at
+                    .as_ref()
+                    .and_then(|m| time(&json!({"t":m}), "t")),
+            );
+            let ran = || async {
+                match self.attempts(&pull.repository, pull.number).await {
+                    Ok(attempts) => attempts.iter().any(|a| {
+                        let ended = time(a, "finished_at").unwrap_or_else(Utc::now);
+                        time(a, "started_at").is_some_and(|t| t <= self.to) && ended >= self.from
+                    }),
+                    Err(e) => {
+                        tracing::warn!("timeline: cannot read the CI of {}: {e}", pull.url);
+                        false
+                    }
+                }
+            };
+            if !merged && !ran().await {
+                continue;
+            }
+            for link in &pull.tickets {
+                if let Some((repo, number)) = self.data.item_of(&link.url, "tickets") {
+                    keys.push(format!("{repo}#{number}"));
+                }
+            }
+        }
+        Ok(keys)
     }
 
     /// What the workspace closed in the window: every ticket and pull

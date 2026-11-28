@@ -233,21 +233,33 @@ async fn pull_attempts(
 }
 
 /// Every check attempt of every commit of pull request `number`, in the
-/// order they were queued: each head pushed to it, with their retries.
+/// order they were queued: each head pushed to it, with their retries, also
+/// heads it has replaced since (`Run::pulls`).
 pub(crate) async fn data_pull_attempts(
     app: &Shared,
     caller: &Caller,
     repo: &str,
     number: u64,
 ) -> AppResult<Vec<AttemptSummary>> {
-    let (repo, commits) = crate::domain::pulls::all_commits(app, caller, repo, number).await?;
+    let (repo, pull, commits) =
+        crate::domain::pulls::all_commits(app, caller, repo, number).await?;
+    // A closed pull request that did not merge reads its commits from where
+    // its branch is now, which may be another pull request's work since.
+    let current = pull.state == "open" || pull.merged;
     let repo_id = repo.id.clone();
     let mut attempts = app
         .store
         .read(move |r| {
+            // Its commits now, and every head it asked CI of, replaced or not.
+            let mut shas: std::collections::BTreeSet<String> = commits
+                .into_iter()
+                .filter(|_| current)
+                .map(|c| c.sha)
+                .collect();
+            shas.extend(queue::pull_shas(r, &repo_id, number)?);
             let mut out = Vec::new();
-            for c in &commits {
-                out.extend(queue::attempts_of(r, &repo_id, &c.sha)?);
+            for sha in &shas {
+                out.extend(queue::attempts_of(r, &repo_id, sha)?);
             }
             Ok(out)
         })

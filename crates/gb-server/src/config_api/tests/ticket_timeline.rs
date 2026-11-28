@@ -67,6 +67,31 @@ async fn a_tickets_runs_reviews_and_attempts_are_bars_and_its_waits_are_left_ope
         )
         .await
         .unwrap();
+    // A ticket whose only movement is its CI: no session works on it.
+    let ci_only = hub
+        .ticket("acme/demo", json!({"title":"CI only"}), None, "ready")
+        .await;
+    let ci_head = hub.commit_check_pipeline("acme/demo", "ticket/4", Some(&main));
+    hub.pull(
+        &alice,
+        "acme/demo",
+        json!({"head":"ticket/4","title":"CI only","tickets":[{"url":ci_only,"closes":true}]}),
+    )
+    .await;
+    hub.check("acme/demo", "ticket/4", &ci_head, Some("success"))
+        .await;
+    // A ticket whose CI only waited in the queue: no runner ran anything.
+    let queued = hub
+        .ticket("acme/demo", json!({"title":"Queued only"}), None, "ready")
+        .await;
+    let queued_head = hub.commit_check_pipeline("acme/demo", "ticket/5", Some(&main));
+    hub.pull(
+        &alice,
+        "acme/demo",
+        json!({"head":"ticket/5","title":"Queued only","tickets":[{"url":queued,"closes":true}]}),
+    )
+    .await;
+    hub.check("acme/demo", "ticket/5", &queued_head, None).await;
     let owner = hub.data().owner();
     owner
         .tickets_add_comment("acme/demo", "1", input(json!({"body":"Go ahead"})))
@@ -155,6 +180,13 @@ async fn a_tickets_runs_reviews_and_attempts_are_bars_and_its_waits_are_left_ope
                     "timestamp":at(15),"attributes":{"target.url":touched,"target.kind":"ticket"}}),
                 &redactor,
             )?;
+            // Still going on since two days ago, with nothing recorded since:
+            // its last event is before the window, yet it runs in it.
+            runs.start(
+                w,
+                run("running", "alice", &other, "ticket", &at(-2 * 24 * 60 - 5)),
+                &redactor,
+            )?;
             // One conversation that worked on both tickets.
             let session = InteractiveSessions::open(&workspace).start_or_touch(
                 w,
@@ -199,17 +231,24 @@ async fn a_tickets_runs_reviews_and_attempts_are_bars_and_its_waits_are_left_ope
     );
     assert_eq!(
         tickets.iter().map(|t| &t["url"]).collect::<Vec<_>>(),
-        [&json!(ticket), &json!(other)],
+        // In the order their work began: the running run began first. The
+        // ticket whose CI only queued did not move.
+        [&json!(other), &json!(ticket), &json!(ci_only)],
         "{timeline}"
     );
-    let first_ticket = &tickets[0];
+    let by_url = |url: &str| tickets.iter().find(|t| t["url"] == url).unwrap();
+    let ci_ticket = by_url(&ci_only);
+    let ci_pull = &ci_ticket["pulls"][0];
+    assert_eq!(ci_pull["jobs"][0]["attempts"][0]["sha"], ci_head);
+    assert!(ci_ticket["work"].as_array().unwrap().is_empty());
+    let first_ticket = by_url(&ticket);
     assert_eq!(first_ticket["label"], "#1");
     // Its work started when it moved into progress; what ran on it before
     // that is not what its first wait follows.
     assert!(first_ticket["started_at"].is_string(), "{first_ticket}");
     assert!(first_ticket["previous"].is_null(), "{first_ticket}");
     // The other ticket was never started.
-    assert!(tickets[1]["started_at"].is_null(), "{}", tickets[1]);
+    assert!(by_url(&other)["started_at"].is_null(), "{}", by_url(&other));
     let pr = &first_ticket["pulls"][0];
     assert_eq!(pr["url"], pull);
     assert_eq!(pr["person_id"], "alice");
@@ -263,15 +302,46 @@ async fn a_tickets_runs_reviews_and_attempts_are_bars_and_its_waits_are_left_ope
     }
     // The reviewer's conversation is on both tickets, outside the pull request,
     // each for its part: the ticket from the start, the other one after it.
-    for (t, (first, last)) in tickets.iter().zip([(56, 57), (57, 59)]) {
+    for (t, (first, last)) in [(by_url(&ticket), (56, 57)), (by_url(&other), (57, 59))] {
         let work = t["work"].as_array().unwrap();
-        assert_eq!(work.len(), 1, "{t}");
-        assert_eq!(work[0]["mode"], "interactive");
+        let talk: Vec<_> = work.iter().filter(|b| b["mode"] == "interactive").collect();
+        assert_eq!(talk.len(), 1, "{t}");
         assert_eq!(
-            (parse(&work[0]["started_at"]), parse(&work[0]["ended_at"])),
+            (parse(&talk[0]["started_at"]), parse(&talk[0]["ended_at"])),
             (parse(&json!(at(first))), parse(&json!(at(last))))
         );
     }
+    // A run still going on runs until now, not until the last thing it recorded.
+    let running: Vec<_> = by_url(&other)["work"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|b| b["mode"] == "workflow")
+        .collect();
+    assert_eq!(running.len(), 1, "{}", by_url(&other));
+    assert_eq!(running[0]["running"], true);
+    assert!(
+        parse(&running[0]["ended_at"]) >= parse(&json!(at(-1))),
+        "{}",
+        running[0]
+    );
+    // Later, a window with only the merge of the CI-only ticket's pull request.
+    let late = chrono::Utc::now();
+    hub.merge("acme/demo", 2, &ci_head, &main).await;
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("start", &late.to_rfc3339())
+        .append_pair("end", &(late + chrono::Duration::days(1)).to_rfc3339())
+        .finish();
+    let later = f.get(&format!("/ticket-timeline?{query}")).await;
+    assert_eq!(later["summary"]["merged_pulls"], 1, "{later}");
+    assert!(
+        later["tickets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["url"] == ci_only && t["pulls"][0]["merged_at"].is_string()),
+        "{later}"
+    );
     hub.stop().await;
 }
 

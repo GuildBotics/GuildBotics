@@ -16,6 +16,8 @@ export type TimedBar = Span & {
   queued?: number;
   /** The other ticket it ran on, for a member's work elsewhere. */
   on?: string;
+  /** A run still going on, until now. */
+  running?: boolean;
 };
 
 export type Gap = Span & {
@@ -42,7 +44,15 @@ function workBar(bar: TicketTimelineBar, kind: TimedBar["kind"]): TimedBar | nul
     kind,
     person_id: bar.person_id,
     outcome: bar.outcome,
+    running: bar.running,
   };
+}
+
+/** Whether `span` shows in `day`: it overlaps it, or is a moment within it. */
+export function shows(span: Span, day: Span): boolean {
+  return span.start === span.end
+    ? span.start >= day.start && span.start <= day.end
+    : span.start < day.end && span.end > day.start;
 }
 
 export function sessionBars(bars: TicketTimelineBar[], review = false): TimedBar[] {

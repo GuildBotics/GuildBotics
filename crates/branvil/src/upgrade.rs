@@ -1,4 +1,5 @@
-//! 52 → 53: tickets record when their work started (`Ticket::started_at`).
+//! 52 → 53: tickets record when their work started (`Ticket::started_at`),
+//! and CI runs the pull requests that asked for them (`Run::pulls`).
 //! Every upgrade also binds the GuildBotics workspaces' execution roots.
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -37,7 +38,37 @@ pub(crate) fn upgrade_with_roots(
                 .insert("started_at".into(), serde_json::Value::Null);
             w.put(store::TICKETS, &key, &ticket)?;
         }
-        Ok("initialized when existing tickets started".into())
+        // A run keeps the pull requests its current selection still names;
+        // those it no longer names were not kept.
+        for key in w.prefix_keys(store::CI_RUNS, &[])? {
+            let mut run: serde_json::Value = w
+                .get(store::CI_RUNS, &key)?
+                .ok_or_else(|| AppError::internal("CI run disappeared during upgrade"))?;
+            let mut pulls: Vec<u64> = run["selection"]["bases"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|base| base["pull"].as_u64())
+                .collect();
+            pulls.sort_unstable();
+            pulls.dedup();
+            let (repo, sha) = (
+                run["repo"].as_str().unwrap_or_default().to_owned(),
+                run["sha"].as_str().unwrap_or_default().to_owned(),
+            );
+            for pull in &pulls {
+                w.put_raw(
+                    store::IX_CI_PULL,
+                    &crate::ci::queue::pull_run_key(&repo, *pull, &sha),
+                    &crate::ci::queue::run_key(&repo, &sha),
+                )?;
+            }
+            run.as_object_mut()
+                .ok_or_else(|| AppError::internal("invalid CI run"))?
+                .insert("pulls".into(), serde_json::json!(pulls));
+            w.put(store::CI_RUNS, &key, &run)?;
+        }
+        Ok("initialized when existing tickets started and the pull requests of CI runs".into())
     })
     .map(Some)
 }
@@ -90,16 +121,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upgrade_leaves_when_existing_tickets_started_unknown_and_binds_roots() {
+    fn upgrade_leaves_ticket_starts_unknown_keeps_run_pulls_and_binds_roots() {
         use crate::model::Workspace;
         let temporary = tempfile::tempdir().unwrap();
         let layout = Layout::new(temporary.path());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
         let ticket = serde_json::json!({"number": 3, "lane": "in_progress", "title": "Started"});
+        let run_key = crate::ci::queue::run_key("repo_1", "abc");
+        let run = serde_json::json!({"repo": "repo_1", "sha": "abc",
+            "selection": {"bases": [{"pull": 7}, {"pull": 3}, {"pull": 7}]}});
         let workspace = db
             .write_sync(|w| {
                 let workspace = crate::domain::repos::insert_workspace(w, "acme".into(), None)?;
                 w.put(store::TICKETS, b"ticket", &ticket)?;
+                w.put(store::CI_RUNS, &run_key, &run)?;
                 w.put(
                     store::META,
                     &store::Key::new().s("schema_version").bytes(),
@@ -114,7 +149,10 @@ mod tests {
         let done = upgrade_with_roots(&layout, [("acme".into(), root.clone())].into())
             .unwrap()
             .unwrap();
-        assert_eq!(done.summary, "initialized when existing tickets started");
+        assert_eq!(
+            done.summary,
+            "initialized when existing tickets started and the pull requests of CI runs"
+        );
         assert!(done.copy.is_file());
         assert!(upgrade(&layout).unwrap().is_none());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
@@ -126,6 +164,19 @@ mod tests {
         let mut expected = ticket;
         expected["started_at"] = serde_json::Value::Null;
         assert_eq!(upgraded, expected);
+        // A run keeps the pull requests its selection names, findable by each.
+        let run: serde_json::Value = db
+            .read_sync(|r| r.get(store::CI_RUNS, &run_key))
+            .unwrap()
+            .unwrap();
+        assert_eq!(run["pulls"], serde_json::json!([3, 7]));
+        for pull in [3, 7] {
+            assert_eq!(
+                db.read_sync(|r| crate::ci::queue::pull_shas(r, "repo_1", pull))
+                    .unwrap(),
+                ["abc"]
+            );
+        }
         let record: Workspace = db
             .read_sync(|r| r.get(store::WORKSPACES, &Workspace::key(&workspace)))
             .unwrap()

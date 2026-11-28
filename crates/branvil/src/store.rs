@@ -86,6 +86,9 @@ pub const IX_CI_PENDING: Tbl = TableDefinition::new("ix_ci_pending");
 pub const IX_CI_ACTIVE: Tbl = TableDefinition::new("ix_ci_active");
 pub const IX_CI_WAITING: Tbl = TableDefinition::new("ix_ci_waiting");
 pub const IX_CI_TREE: Tbl = TableDefinition::new("ix_ci_tree");
+/// `(repo id, pull number, sha)` → run key: the commits a pull request asked
+/// CI of, including heads it has since replaced.
+pub const IX_CI_PULL: Tbl = TableDefinition::new("ix_ci_pull");
 /// (repo id, job name, input digest, attempt id) → attempt id: actual,
 /// successful executions whose files are kept, by the inputs they ran on.
 pub const IX_CI_INPUTS: Tbl = TableDefinition::new("ix_ci_inputs");
@@ -144,6 +147,7 @@ pub const INDEX_TABLES: &[Tbl] = &[
     IX_CI_ACTIVE,
     IX_CI_WAITING,
     IX_CI_TREE,
+    IX_CI_PULL,
     IX_CI_INPUTS,
     IX_CI_MEMORY,
 ];

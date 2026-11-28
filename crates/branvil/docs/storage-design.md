@@ -135,7 +135,7 @@ check did not change stored records or raise the version.
 | `ref_journal` | `(journal id)` | repo, ref, expected old/new, operation | merge (before `update-ref`) | completion, startup recovery |
 | `idempotency` | `(fold(member), key)` | request hash, status, response body, time | API middleware | API middleware |
 | `ci_narrowings` | `(repo id, base sha, job name)` | failed SHA, first-parent history, observations and attempt IDs, pending probe, conclusion, boundary/reason, start and finish times | failed verification, check event, reconciler | repair hints |
-| `ci_runs` | `(repo id, sha)` | branches that want CI of the commit, tree (unset only for upgraded runs with missing commits), the commit's pipeline (absent / invalid + message / job definitions), cache scope, waiting, superseded by, protected-branch history, input digest of each job with `paths` (`inputs`: SHA-256 of `git diff-tree -r -z --no-renames --raw <empty tree> <sha> -- <the job's paths>`, replaced at every registration; kept without Git while the pipeline is the same) | ref recording (`Ci::on_ref_changes`), PR open/reopen, reconciler, queue admission | checks, claims, retries |
+| `ci_runs` | `(repo id, sha)` | branches that want CI of the commit, tree (unset only for upgraded runs with missing commits), the commit's pipeline (absent / invalid + message / job definitions), the pull requests whose head asked for CI of it (`pulls`, kept when the head moves on or lands), cache scope, waiting, superseded by, protected-branch history, input digest of each job with `paths` (`inputs`: SHA-256 of `git diff-tree -r -z --no-renames --raw <empty tree> <sha> -- <the job's paths>`, replaced at every registration; kept without Git while the pipeline is the same) | ref recording (`Ci::on_ref_changes`), PR open/reopen, reconciler, queue admission | checks, claims, retries |
 | `ci_attempts` | `(attempt id)` | kind (`check`, `probe`, or `historical`), job definition (snapshot), image configuration digest, actual source attempt if reused, cache key of an actual execution, reuse permission (manual retries execute), number, queue sequence, status, conclusion, details, SHA-256 of the lease, lease expiry, cancel requested, runner, cache scope, network, times, interrupted/superseded flags, artifact names and sizes, files pruned, the run's input digest of the job when claimed (`inputs`, none for a job without `paths`) | registration, claim, heartbeat, finish, cancel, retry, sweeps | checks, job API, runner API, artifacts |
 
 Each comment, review, and inline comment is its own record, so adding one never
@@ -191,6 +191,7 @@ Every index entry of a record comes from one function in `src/model.rs`
 | `ix_ci_waiting` | `(run sequence)` → run key, runs that did not fit the queue | admission in order when room frees up |
 | `ix_repair_unnotified` | `(repo id, ticket number)` | repair tickets with a non-null notice, including closed tickets; maintained by `model::ticket_index`, rebuilt by `admin reindex` |
 | `ix_ci_tree` | `(repo id, tree, sha)` → run key, runs with a known tree | finding successful actual executions with the same tree at claim |
+| `ix_ci_pull` | `(repo id, pull number, sha)` → run key, for each pull request in a run's `pulls` | a pull request's CI attempts, including heads it has replaced |
 | `ix_ci_inputs` | `(repo id, job, input digest, attempt id)` → attempt id, completed successful attempts that were not reused, have an input digest, and keep their files | finding the successful actual executions of a job's inputs in one range read |
 
 Cards read only the requested lanes' ranges of one workspace's `ix_cards` (the
@@ -306,7 +307,9 @@ The 51 → 52 upgrade sets `resources: null` on existing CI attempts and clears
 the attempt for diagnostics.
 
 The 52 → 53 upgrade sets `started_at: null` on existing tickets: when their
-work started was not kept.
+work started was not kept. It sets `pulls` on existing CI runs to the pull
+requests their current `selection` names, and builds `ix_ci_pull` from them;
+pull requests a run no longer names were not kept.
 
 The 35 → 36 upgrade revokes the tokens GuildBotics kept: those labelled
 `guildbotics` and those labelled `app:<client>`.

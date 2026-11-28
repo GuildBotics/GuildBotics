@@ -663,6 +663,7 @@ async fn previous_schema_upgrade_preserves_records() {
             .contains("guildbotics server hub-data upgrade")
     );
     let mut tickets = records(&db, "tickets");
+    let mut runs_before = records(&db, "ci_runs");
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
     assert!(
@@ -679,9 +680,26 @@ async fn previous_schema_upgrade_preserves_records() {
     }
     assert!(!tickets.is_empty());
     assert_eq!(records(&db, "tickets"), tickets);
+    // Old runs keep the pull requests their selection names, and nothing else.
+    for run in &mut runs_before {
+        let mut pulls: Vec<u64> = run["selection"]["bases"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|base| base["pull"].as_u64())
+            .collect();
+        pulls.sort_unstable();
+        pulls.dedup();
+        run["pulls"] = json!(pulls);
+    }
+    assert!(runs_before.iter().any(|r| r["pulls"] != json!([])));
+    assert_eq!(records(&db, "ci_runs"), runs_before);
     let upgraded = tables(&db);
+    assert!(!upgraded["ix_ci_pull"].is_empty());
     let unchanged = |mut snapshot: Tables| {
-        snapshot.retain(|name, _| !matches!(name.as_str(), "meta" | "tickets"));
+        snapshot.retain(|name, _| {
+            !matches!(name.as_str(), "meta" | "tickets" | "ci_runs" | "ix_ci_pull")
+        });
         snapshot
     };
     let after = unchanged(upgraded.clone());
@@ -987,6 +1005,74 @@ async fn a_pulls_attempts_list_every_head_in_the_order_they_were_queued() {
     assert!(list[0]["created_at"].as_str() < list[1]["created_at"].as_str());
     let missing = format!("{}/pulls/999/attempts", w.repo_path());
     assert_eq!(w.server.get(&missing, &w.aiko).await.0, 404);
+}
+
+#[tokio::test]
+async fn a_pulls_attempts_keep_a_head_it_replaced() {
+    let w = World::new().await;
+    let runner = Runner::new(&w, "runner1").await;
+    let replaced = w.push_change("feature", ".guildbotics-ci.toml", &pipeline(&["test"]));
+    let pull = w.open_pull("feature", json!([])).await;
+    let first = runner.next_claim().await;
+    assert_eq!(runner.finish(&first, "failure").await.0, 200);
+    // Amended: the first head is no longer one of the pull request's commits.
+    git_ok(&w.work, &["reset", "-q", "--hard", "HEAD~1"]);
+    let head = w.push_change(
+        "feature",
+        ".guildbotics-ci.toml",
+        &pipeline(&["test", "lint"]),
+    );
+    let commits = w
+        .server
+        .ok(
+            &format!("{}/pulls/{}/commits", w.repo_path(), pull["number"]),
+            &w.aiko,
+        )
+        .await;
+    assert!(
+        commits["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["sha"] != replaced.as_str()),
+        "{commits}"
+    );
+    let url = format!("{}/pulls/{}/attempts", w.repo_path(), pull["number"]);
+    let list = w.server.ok(&url, &w.aiko).await;
+    let shas: Vec<_> = list.as_array().unwrap().iter().map(|a| &a["sha"]).collect();
+    assert_eq!(shas[0], replaced.as_str(), "{list}");
+    assert!(shas[1..].iter().all(|sha| *sha == head.as_str()), "{list}");
+    assert_eq!(list[0]["id"], first["attempt_id"]);
+    assert_eq!(list[0]["conclusion"], "failure");
+}
+
+#[tokio::test]
+async fn a_closed_pulls_attempts_leave_out_later_work_on_its_branch() {
+    let w = World::new().await;
+    let runner = Runner::new(&w, "runner1").await;
+    let own = w.push_change("feature", ".guildbotics-ci.toml", &pipeline(&["test"]));
+    let closed = w.open_pull("feature", json!([])).await;
+    let first = runner.next_claim().await;
+    assert_eq!(runner.finish(&first, "success").await.0, 200);
+    let (status, body) = w
+        .server
+        .post(
+            &format!("{}/pulls/{}/close", w.repo_path(), closed["number"]),
+            &w.aiko,
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    // The branch goes on, as another pull request's work.
+    let later = w.push_change("feature", "later.txt", "later\n");
+    w.open_pull("feature", json!([])).await;
+    let second = runner.next_claim().await;
+    assert_eq!(second["sha"], later.as_str());
+    assert_eq!(runner.finish(&second, "success").await.0, 200);
+    let url = format!("{}/pulls/{}/attempts", w.repo_path(), closed["number"]);
+    let list = w.server.ok(&url, &w.aiko).await;
+    let shas: Vec<_> = list.as_array().unwrap().iter().map(|a| &a["sha"]).collect();
+    assert_eq!(shas, [own.as_str()], "{list}");
 }
 
 pub(crate) fn pipeline(jobs: &[&str]) -> String {

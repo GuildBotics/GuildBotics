@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getTicketTimeline, type TicketTimelineResponse } from "../api/client";
 import i18n from "../i18n";
 import { renderWithProviders } from "../test/render";
-import { TicketTimelinePage, workModes } from "./TicketTimeline";
+import { memberRows, TicketTimelinePage, workModes } from "./TicketTimeline";
 
 vi.mock("../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/client")>();
@@ -366,13 +366,57 @@ describe("TicketTimelinePage", () => {
 
   it("shows both marks for a ticket worked on both ways, and none where only CI ran", () => {
     const [first, second] = TIMELINE.tickets;
-    expect(workModes({ ...first, work: second.work.concat(TIMELINE.tickets[2].work) })).toEqual([
-      "workflow",
-      "interactive",
-    ]);
+    const day = { start: DAY.getTime(), end: new Date(2026, 6, 2).getTime() };
     expect(
-      workModes({ ...first, work: [], pulls: first.pulls.map((p) => ({ ...p, work: [] })) }),
+      workModes({ ...first, work: second.work.concat(TIMELINE.tickets[2].work) }, day),
+    ).toEqual(["workflow", "interactive"]);
+    expect(
+      workModes({ ...first, work: [], pulls: first.pulls.map((p) => ({ ...p, work: [] })) }, day),
     ).toEqual([]);
+  });
+
+  it("keeps a span that reaches now up to date, but not a past one", async () => {
+    const past = `?ticket=${encodeURIComponent(`${HUB}/tickets/446`)}&start=${at(10)}&end=${at(16)}`;
+    renderWithProviders(<TicketTimelinePage />, { router: "memory", initialPath: `/${past}` });
+    await screen.findAllByText("Other work");
+    vi.mocked(getTicketTimeline).mockClear();
+    await vi.advanceTimersByTimeAsync(61000);
+    expect(getTicketTimeline).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the day that is still going on", async () => {
+    vi.setSystemTime(new Date(2026, 6, 1, 15));
+    renderWithProviders(<TicketTimelinePage />, { router: "memory" });
+    await screen.findByText("Other work");
+    vi.mocked(getTicketTimeline).mockClear();
+    await vi.advanceTimersByTimeAsync(31000);
+    expect(getTicketTimeline).toHaveBeenCalled();
+  });
+
+  it("counts only the work shown in the span", async () => {
+    const [first, second, third] = TIMELINE.tickets;
+    // The run on #446 and the talk on #447 ended before the morning shown.
+    const morning = { start: DAY.getTime(), end: new Date(2026, 6, 1, 10, 45).getTime() };
+    expect(workModes({ ...first, work: second.work.concat(third.work) }, morning)).toEqual([
+      "workflow",
+    ]);
+    // Yuki's review is after the morning: it is not among the ticket's members then.
+    const t = i18n.getFixedT("ja");
+    expect(memberRows(t, TIMELINE, first, morning).map((row) => row.key)).toEqual([
+      "members",
+      "members:aiko",
+    ]);
+
+    const before = structuredClone(TIMELINE);
+    before.tickets[1].work[0].started_at = new Date(2026, 5, 30, 22).toISOString();
+    before.tickets[1].work[0].ended_at = new Date(2026, 5, 30, 23).toISOString();
+    vi.mocked(getTicketTimeline).mockResolvedValue(before);
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderWithProviders(<TicketTimelinePage />, { router: "memory" });
+    const row = (await screen.findByTestId(`track-${HUB}/tickets/446`)).parentElement!;
+    expect(within(row).queryAllByRole("img", { name: /で進めた$/ })).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "#446 Other work を開く" }));
+    expect(screen.queryByTestId(`track-${HUB}/tickets/446:work`)).not.toBeInTheDocument();
   });
 
   it("marks a pull request's merge on its row and its ticket's", async () => {
@@ -406,6 +450,31 @@ describe("TicketTimelinePage", () => {
     await user.click(screen.getByRole("link", { name: "#445 Timeline" }));
     await screen.findByRole("link", { name: "1 日全体へ戻る" });
     expect(screen.queryByText("動いたチケット")).not.toBeInTheDocument();
+  });
+
+  it("draws only what the day shows, and a run still going on as running", async () => {
+    const day = structuredClone(TIMELINE);
+    const yuki = day.tickets[1].work[0];
+    day.tickets[1].work.push(
+      // Ended the day before: words for a gap, not a bar of this day.
+      { ...yuki, trace_id: "before", started_at: at(-6), ended_at: at(-5) },
+      { ...yuki, trace_id: "now", started_at: at(15), ended_at: at(15, 30), running: true },
+    );
+    // Merged the next day.
+    day.tickets[0].pulls[0].merged_at = new Date(2026, 6, 2, 10).toISOString();
+    vi.mocked(getTicketTimeline).mockResolvedValue(day);
+    renderWithProviders(<TicketTimelinePage />, { router: "memory" });
+    const other = await screen.findByTestId(`track-${HUB}/tickets/446`);
+    expect(
+      within(other)
+        .getAllByRole("img")
+        .map((bar) => bar.getAttribute("aria-label")),
+    ).toEqual([
+      "Yuki のワークフロー（11:00〜12:00）",
+      "Yuki のワークフロー（15:00〜15:30、実行中）",
+    ]);
+    const ticket = screen.getByTestId(`track-${HUB}/tickets/445`);
+    expect(within(ticket).queryByRole("img", { name: /のマージ/ })).not.toBeInTheDocument();
   });
 
   it("says when no ticket moved on the day", async () => {

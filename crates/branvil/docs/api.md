@@ -1188,10 +1188,12 @@ The endpoint uses the same repository access as CI attempts.
   `finished_at` are `null` until a runner claims, and concludes, the attempt.
   `404 not_found` as for the attempt itself.
 - `GET /api/v1/repos/{repo}/pulls/{number}/attempts` → the same objects for
-  every check attempt of every commit of the pull request (`/commits`), in the
-  order they were queued: each head pushed to it and its retries. A head that
-  was force-pushed away is no longer one of its commits. `404 not_found` as for
-  the pull request.
+  every check attempt of the pull request's commits, in the order they were
+  queued: each head pushed to it and its retries. Heads it has replaced since
+  (amended or rebased away) stay listed: the CI records which pull requests
+  asked for each commit. For a pull request closed without merging, only those
+  recorded commits count, as its branch may carry other work since.
+  `404 not_found` as for the pull request.
 - `GET /api/v1/repos/{repo}/jobs/{attempt_id}/log?tail_bytes={n}` →
   `{"log": "...", "log_bytes": 12345, "truncated": true, "pruned": false}`; `log`
   is the last `tail_bytes` bytes (default 65536, at most 4194304; decoded as

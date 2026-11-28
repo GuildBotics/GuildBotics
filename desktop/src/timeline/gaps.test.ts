@@ -8,6 +8,7 @@ import {
   findGaps,
   gapAt,
   openSpan,
+  shows,
   ticketGaps,
   type TimedBar,
 } from "./gaps";
@@ -234,5 +235,18 @@ describe("the jobs that ended the CI", () => {
     // Head one: test (e2e never started); head two: e2e still runs at 60.
     expect(endingJobs(jobs, 60 * MIN)).toEqual(new Set(["test", "e2e"]));
     expect(endingJobs([], 60 * MIN)).toEqual(new Set());
+  });
+});
+
+describe("what a span shows", () => {
+  it("is what overlaps it and the moments within it", () => {
+    const span = { start: 100, end: 200 };
+    expect(shows({ start: 50, end: 150 }, span)).toBe(true);
+    expect(shows({ start: 150, end: 250 }, span)).toBe(true);
+    // Ending where the span begins, or beginning where it ends: outside.
+    expect(shows({ start: 50, end: 100 }, span)).toBe(false);
+    expect(shows({ start: 200, end: 300 }, span)).toBe(false);
+    expect(shows({ start: 200, end: 200 }, span)).toBe(true);
+    expect(shows({ start: 99, end: 99 }, span)).toBe(false);
   });
 });

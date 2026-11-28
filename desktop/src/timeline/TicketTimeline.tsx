@@ -30,6 +30,7 @@ import {
   endingJobs,
   gapAt,
   sessionBars,
+  shows,
   ticketGaps,
   type Gap,
   type Span,
@@ -84,7 +85,8 @@ export function TicketTimelinePage() {
     queryKey: ["ticket-timeline", range.start.toISOString(), range.end.toISOString()],
     queryFn: () =>
       getTicketTimeline({ start: range.start.toISOString(), end: range.end.toISOString() }),
-    refetchInterval: 30000,
+    // A past span no longer changes; only one that reaches now keeps up.
+    refetchInterval: () => (range.end.getTime() > Date.now() ? 30000 : false),
   });
   const locale = i18n.resolvedLanguage === "ja" ? "ja-JP" : "en-US";
   const span = { start: range.start.getTime(), end: range.end.getTime() };
@@ -202,7 +204,9 @@ export function barText(t: TFunction, bar: TimedBar, names: Names, day = bar.sta
   if (bar.on) details.unshift(bar.on);
   if (bar.queued !== undefined && bar.queued < bar.start)
     details.push(t("timeline.bar.queued", { time: clock(bar.queued) }));
-  if (bar.outcome) details.push(t("timeline.bar.ended", { outcome: outcomeText(t, bar.outcome) }));
+  if (bar.running) details.push(t("timeline.bar.running"));
+  else if (bar.outcome)
+    details.push(t("timeline.bar.ended", { outcome: outcomeText(t, bar.outcome) }));
   return t("timeline.bar.detail", { what, details: details.join(t("timeline.separator")) });
 }
 
@@ -339,7 +343,7 @@ function TimelineChart({
       depth: 0,
       label: (
         <>
-          <ModeIcons t={t} ticket={ticket} />
+          <ModeIcons t={t} ticket={ticket} day={day} />
           {focus ? (
             <>
               <strong>{ticket.label}</strong> {ticket.title}
@@ -357,13 +361,14 @@ function TimelineChart({
       milestones: merges,
     });
     if (!open.has(key)) return;
-    if (ticket.work.length)
+    const work = sessionBars(ticket.work);
+    if (work.some((bar) => shows(bar, day)))
       rows.push({
         key: `${key}:work`,
         ticket: index,
         depth: 1,
         label: t("timeline.rows.work"),
-        bars: sessionBars(ticket.work),
+        bars: work,
       });
     for (const pull of ticket.pulls) {
       const work = sessionBars(pull.work);
@@ -436,7 +441,7 @@ function TimelineChart({
     }
   });
 
-  if (focus && tickets.length) rows.push(...memberRows(t, data, tickets[0].ticket));
+  if (focus && tickets.length) rows.push(...memberRows(t, data, tickets[0].ticket, day));
 
   /** The gap of `gaps` under the pointer: the gap button it is on, or the one at its time. */
   const gapUnder = (event: MouseEvent<HTMLDivElement>, gaps: Gap[]) => {
@@ -542,43 +547,48 @@ function TimelineChart({
                       />
                     ))
                   : null}
-                {row.milestones?.map((milestone) => (
-                  <span
-                    key={milestone.at}
-                    className="timeline-milestone"
-                    role="img"
-                    aria-label={milestone.label}
-                    title={milestone.label}
-                    style={{ left: `${percent(milestone.at, day)}%` }}
-                  />
-                ))}
-                {row.bars.map((bar) => {
-                  const label = barText(t, bar, names, day.start);
-                  const color = colors.get(bar.person_id);
-                  return (
-                    <div
-                      key={`${bar.kind}:${bar.start}:${bar.person_id}:${bar.job ?? ""}`}
-                      className={
-                        bar.kind === "job" ? "timeline-bar timeline-bar-job" : "timeline-bar"
-                      }
-                      style={{
-                        ...spanStyle(bar, day),
-                        ...(color ? { background: `var(--mantine-color-${color}-filled)` } : {}),
-                      }}
-                      title={label}
-                      aria-label={label}
+                {row.milestones
+                  ?.filter((milestone) => shows({ start: milestone.at, end: milestone.at }, day))
+                  .map((milestone) => (
+                    <span
+                      key={milestone.at}
+                      className="timeline-milestone"
                       role="img"
-                    >
-                      {row.summary ? null : (
-                        <span>
-                          {bar.kind === "job"
-                            ? (bar.runner ?? bar.job)
-                            : (names.get(bar.person_id) ?? bar.person_id)}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
+                      aria-label={milestone.label}
+                      title={milestone.label}
+                      style={{ left: `${percent(milestone.at, day)}%` }}
+                    />
+                  ))}
+                {/* Only what the span shows: earlier work stays for the gaps' words. */}
+                {row.bars
+                  .filter((bar) => shows(bar, day))
+                  .map((bar) => {
+                    const label = barText(t, bar, names, day.start);
+                    const color = colors.get(bar.person_id);
+                    return (
+                      <div
+                        key={`${bar.kind}:${bar.start}:${bar.person_id}:${bar.job ?? ""}`}
+                        className={
+                          bar.kind === "job" ? "timeline-bar timeline-bar-job" : "timeline-bar"
+                        }
+                        style={{
+                          ...spanStyle(bar, day),
+                          ...(color ? { background: `var(--mantine-color-${color}-filled)` } : {}),
+                        }}
+                        title={label}
+                        aria-label={label}
+                        role="img"
+                      >
+                        {row.summary ? null : (
+                          <span>
+                            {bar.kind === "job"
+                              ? (bar.runner ?? bar.job)
+                              : (names.get(bar.person_id) ?? bar.person_id)}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
               </div>
             </div>
           );
@@ -605,8 +615,11 @@ export function memberRows(
   t: TFunction,
   data: TicketTimelineResponse,
   ticket: TicketTimelineTicket,
+  day: Span,
 ): Row[] {
-  const own = [ticket.work, ...ticket.pulls.flatMap((pull) => [pull.work, pull.reviews])].flat();
+  const own = sessionBars(
+    [ticket.work, ...ticket.pulls.flatMap((pull) => [pull.work, pull.reviews])].flat(),
+  ).filter((bar) => shows(bar, day));
   const people = [...new Set(own.map((bar) => bar.person_id).filter(Boolean))];
   if (!people.length) return [];
   // Only runs: a member keeps working in a conversation alongside other
@@ -643,18 +656,20 @@ function jobBars(attempts: TicketTimelineAttempt[], now: number): TimedBar[] {
 }
 
 /**
- * How the ticket's own work went on: by workflow runs, in conversations, or
- * both. Reviews are always runs, so they do not count.
+ * How the ticket's own work went on in `day`: by workflow runs, in
+ * conversations, or both. Reviews are always runs, so they do not count.
  */
-export function workModes(ticket: TicketTimelineTicket): TicketTimelineBar["mode"][] {
-  const own = [ticket.work, ...ticket.pulls.map((pull) => pull.work)].flat();
+export function workModes(ticket: TicketTimelineTicket, day: Span): TicketTimelineBar["mode"][] {
+  const own = sessionBars([ticket.work, ...ticket.pulls.map((pull) => pull.work)].flat()).filter(
+    (bar) => shows(bar, day),
+  );
   return (["workflow", "interactive"] as const).filter((mode) =>
-    own.some((bar) => bar.mode === mode),
+    own.some((bar) => bar.kind === mode),
   );
 }
 
-function ModeIcons({ t, ticket }: { t: TFunction; ticket: TicketTimelineTicket }) {
-  return workModes(ticket).map((mode) => {
+function ModeIcons({ t, ticket, day }: { t: TFunction; ticket: TicketTimelineTicket; day: Span }) {
+  return workModes(ticket, day).map((mode) => {
     const label = t(`timeline.mode.${mode}`);
     const Icon = mode === "interactive" ? MessageSquare : Bot;
     return (
