@@ -636,7 +636,10 @@ Runner availability:
   **Settings → CI** to turn CI back on. A protected branch's eligible checks
   automatically retry when a compatible runner starts taking work again,
   without spending an automatic retry. A PR head check must be retried
-  manually.
+  manually. For the first `ci.runner_absent_secs` after startup, an enabled
+  runner that has yet to report on the current Hub version can still be a
+  candidate. The Hub waits for its report or the end of that period before
+  concluding that CI is off on every candidate.
 - When no runner has contacted the service for `ci.runner_absent_secs`
   (default 120 s), queued attempts older than that are concluded
   `startup_failure` ("No CI runner has contacted Branvil …"). Its details ask
@@ -864,9 +867,9 @@ can take work, the warning names the incompatible runner even with the
 automatic runner switched off.
 
 Select a runner under **Settings → CI** to turn CI on or off and edit its
-limits. CI defaults to on. The Hub uses the existing `[ci] runner` value
-(`auto` or `off`) until its switch is saved under
-`[ci.runner_limits.hub-runner]` as `ci_enabled`. With CI off, the runner
+limits. Runners on other machines default to on. The Hub uses the existing
+`[ci] runner` value (`auto` or `off`, default `off`) until its switch is saved
+under `[ci.runner_limits.hub-runner]` as `ci_enabled`. With CI off, the runner
 continues to poll and to send heartbeats for attempts it already holds.
 Those attempts finish normally while the settings show that CI is draining.
 The connection badge separately shows whether the Hub can still reach the

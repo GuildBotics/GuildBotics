@@ -427,6 +427,12 @@ impl From<Allocation> for Resources {
 }
 
 impl Attempt {
+    pub(super) fn allows_runner(&self, name: &str) -> bool {
+        self.retry_decision
+            .as_ref()
+            .is_none_or(|retry| retry.selection.allows(name))
+    }
+
     pub fn failed(&self) -> bool {
         matches!(
             self.conclusion.as_deref(),
@@ -2867,10 +2873,7 @@ pub(super) fn fits_runner(
     if !images
         .iter()
         .any(|image| image.supports(&attempt.job.image))
-        || attempt
-            .retry_decision
-            .as_ref()
-            .is_some_and(|retry| !retry.selection.allows(name))
+        || !attempt.allows_runner(name)
     {
         return Ok(false);
     }

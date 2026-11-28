@@ -763,7 +763,8 @@ export const ja: Record<MessageKey, string> = {
   "ci.settings.machineLimits": "マシン全体",
   "ci.settings.machineLimitsHelp": "このランナーで動く CI ジョブ全体の上限です。",
   "ci.settings.jobLimits": "CI のジョブ 1 本",
-  "ci.settings.jobLimitsHelp": "新しく始める CI ジョブごとの VM リソースと上限です。",
+  "ci.settings.jobLimitsHelp":
+    "保存した VM リソースと上限は、次に始める CI ジョブから適用されます。",
   "ci.settings.connectedRunnersDisabled": ciMessages.ja.connected_runners_disabled,
   "ci.runnersDisabled": ciMessages.ja.runners_disabled,
   "ci.settings.runners": "ランナー一覧",
@@ -800,7 +801,11 @@ export const ja: Record<MessageKey, string> = {
   "ci.settings.maxCpus": "CPU 数",
   "ci.settings.maxMemory": "メモリ（MiB）",
   "ci.settings.workQuota": "作業ディレクトリの容量（MiB）",
+  "ci.settings.workQuotaHelp":
+    "チェックアウトとキャッシュの復元に使った領域に加えて、ジョブが書き込める容量です。",
   "ci.settings.maxTimeout": "制限時間（秒）",
+  "ci.settings.maxTimeoutHelp":
+    "パイプラインの timeout_secs の上限です。省略したジョブにもこの制限時間が適用されます。",
   "ci.settings.cacheMax": "キャッシュの容量（MiB）",
   "ci.settings.maxJobs": "同時実行数",
   "ci.settings.memoryReserve": "マシンのメモリの予備（%）",

@@ -356,7 +356,13 @@ function RunnerRow({
 
 type LimitsForm = Record<keyof CiLimits, string | number>;
 
-type LimitField = { key: keyof CiLimits; label: MessageKey; min: number; max: number };
+type LimitField = {
+  key: keyof CiLimits;
+  label: MessageKey;
+  description?: MessageKey;
+  min: number;
+  max: number;
+};
 
 const LIMIT_GROUPS: { title: MessageKey; help: MessageKey; fields: LimitField[] }[] = [
   {
@@ -374,8 +380,20 @@ const LIMIT_GROUPS: { title: MessageKey; help: MessageKey; fields: LimitField[] 
     fields: [
       { key: "max_cpus", label: "ci.settings.maxCpus", min: 1, max: 64 },
       { key: "max_memory_mib", label: "ci.settings.maxMemory", min: 128, max: 65536 },
-      { key: "work_quota_mib", label: "ci.settings.workQuota", min: 1024, max: 1048576 },
-      { key: "max_timeout_secs", label: "ci.settings.maxTimeout", min: 1, max: 86400 },
+      {
+        key: "work_quota_mib",
+        label: "ci.settings.workQuota",
+        description: "ci.settings.workQuotaHelp",
+        min: 1024,
+        max: 1048576,
+      },
+      {
+        key: "max_timeout_secs",
+        label: "ci.settings.maxTimeout",
+        description: "ci.settings.maxTimeoutHelp",
+        min: 1,
+        max: 86400,
+      },
       { key: "cache_max_mib", label: "ci.settings.cacheMax", min: 0, max: 1048576 },
     ],
   },
@@ -505,6 +523,7 @@ function RunnerConfiguration({ runner }: { runner: CiRunner }) {
                   <NumberInput
                     key={f.key}
                     label={t(f.label)}
+                    description={f.description && t(f.description)}
                     min={f.min}
                     max={f.max}
                     allowDecimal={false}

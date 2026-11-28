@@ -1089,8 +1089,45 @@ impl Ci {
         }
     }
 
-    async fn fail_disabled_attempts(&self) -> AppResult<()> {
-        if !self.settings().has_disabled_runner() || self.stopping() {
+    fn has_disabled_report(&self) -> bool {
+        self.inner
+            .runners
+            .lock()
+            .unwrap()
+            .values()
+            .any(|seen| seen.report.can_run() && !self.settings().ci_enabled(&seen.name))
+    }
+
+    fn awaiting_runner_reports(
+        &self,
+        r: &impl Rd,
+        reports: &BTreeMap<String, RunnerSeen>,
+    ) -> AppResult<Vec<String>> {
+        let members = r.prefix_all::<Member>(store::MEMBERS, &[])?;
+        let settings = self.settings();
+        let mut pending: Vec<_> = members
+            .iter()
+            .filter(|member| {
+                member.kind == MemberKind::Runner
+                    && settings.ci_enabled(&member.name)
+                    && reports
+                        .get(&util::fold(&member.name))
+                        .is_none_or(|seen| !seen.report.matches_hub_version())
+            })
+            .map(|member| member.name.clone())
+            .collect();
+        // The supervised runner is registered by its first start, which can
+        // follow the first sweep on a fresh Hub.
+        let hub = supervise::AUTO_RUNNER;
+        if settings.ci_enabled(hub) && !members.iter().any(|member| util::fold(&member.name) == hub)
+        {
+            pending.push(hub.into());
+        }
+        Ok(pending)
+    }
+
+    async fn fail_disabled_attempts(&self, startup_grace: bool) -> AppResult<()> {
+        if !self.has_disabled_report() || self.stopping() {
             return Ok(());
         }
         let _settings = self.inner.runner_settings.lock().await;
@@ -1102,8 +1139,14 @@ impl Ci {
                 if ci.stopping() {
                     return Ok(Vec::new());
                 }
+                let reports = ci.inner.runners.lock().unwrap().clone();
+                let pending = if startup_grace {
+                    ci.awaiting_runner_reports(w, &reports)?
+                } else {
+                    Vec::new()
+                };
                 let runners: Vec<_> = ci
-                    .reported_runners(w)?
+                    .capable_reports(w, reports.into_values())?
                     .into_iter()
                     .map(|seen| {
                         let (limits, _) = ci.settings().runner_limits(&seen.name);
@@ -1115,6 +1158,9 @@ impl Ci {
                     return Ok(Vec::new());
                 }
                 queue::fail_unavailable_attempts(w, &util::now(), |attempt| {
+                    if pending.iter().any(|name| attempt.allows_runner(name)) {
+                        return Ok(None);
+                    }
                     let mut disabled = Vec::new();
                     for (seen, limits, enabled) in &runners {
                         if queue::fits_runner(
@@ -1143,6 +1189,10 @@ impl Ci {
     /// One pass of the periodic work: expired leases and runner reports,
     /// queued work nobody takes, and waiting runs.
     pub async fn sweep(&self) -> AppResult<()> {
+        let absent = self.inner.config.runner_absent_secs;
+        let absent_duration = Duration::from_secs(absent);
+        // The disabled and absence paths must agree when a sweep straddles startup expiry.
+        let startup_grace = self.inner.started.elapsed() < absent_duration;
         let now = util::now();
         let changed = self
             .inner
@@ -1150,9 +1200,7 @@ impl Ci {
             .write(move |w| queue::expire(w, &now))
             .await?;
         self.publish(&changed);
-        self.fail_disabled_attempts().await?;
-        let absent = self.inner.config.runner_absent_secs;
-        let absent_duration = Duration::from_secs(absent);
+        self.fail_disabled_attempts(startup_grace).await?;
         let (last_contact, last_text) = {
             let mut runners = self.inner.runners.lock().unwrap();
             for runner in runners.values_mut() {
@@ -1168,7 +1216,7 @@ impl Ci {
                 runners.values().map(|r| r.last_seen_at.clone()).max(),
             )
         };
-        if last_contact.elapsed() >= absent_duration {
+        if !startup_grace && last_contact.elapsed() >= absent_duration {
             let details = format!(
                 "No CI runner has contacted the server for {absent} s (last contact: {}). Start `guildbotics runner` (docs/ci.md)",
                 last_text.unwrap_or_else(|| "none since GuildBotics started".into())
@@ -1189,7 +1237,7 @@ impl Ci {
                 .await?;
             self.publish(&changed);
         }
-        if self.inner.started.elapsed() >= absent_duration {
+        if !startup_grace {
             let live: Vec<RunnerSeen> = self
                 .inner
                 .runners
@@ -1398,8 +1446,16 @@ impl Ci {
 
     fn reported_runners(&self, r: &impl Rd) -> AppResult<Vec<RunnerSeen>> {
         let reports = self.inner.runners.lock().unwrap().clone();
+        self.capable_reports(r, reports.into_values())
+    }
+
+    fn capable_reports(
+        &self,
+        r: &impl Rd,
+        reports: impl Iterator<Item = RunnerSeen>,
+    ) -> AppResult<Vec<RunnerSeen>> {
         let mut runners = Vec::new();
-        for (_, mut seen) in reports {
+        for mut seen in reports {
             if !seen.report.can_run()
                 || !r
                     .get::<Member>(store::MEMBERS, &Member::key(&seen.name))?
@@ -1531,6 +1587,7 @@ impl Ci {
         let capability_changed = previous.is_none_or(|previous| {
             let old = &previous.report;
             old.can_run() != report.can_run()
+                || old.matches_hub_version() != report.matches_hub_version()
                 || old.images != report.images
                 || old
                     .machine
@@ -1554,7 +1611,7 @@ impl Ci {
             },
         );
         drop(runners);
-        if capability_changed && self.settings().has_disabled_runner() {
+        if capability_changed && self.has_disabled_report() {
             self.sweep_changed();
         }
         seen
@@ -1779,7 +1836,7 @@ impl Ci {
                 biased;
                 _ = tokio::time::sleep_until(deadline.into()) => return,
                 _ = self.inner.sweep_changed.notified() => {
-                    if self.settings().has_disabled_runner() {
+                    if self.has_disabled_report() {
                         return;
                     }
                 }
@@ -2291,13 +2348,23 @@ CI: runner connected runner="runner-1" runner_id=runner-1 version="older\nbuild"
     #[tokio::test]
     async fn disabled_failure_names_only_capable_runners_and_waits_for_an_enabled_runner() {
         for enabled in [
+            "unreported",
+            "unreported_timed_out",
+            "off_unreported",
+            "old_build",
+            "old_build_timed_out",
+            "hub_not_registered",
             "offline",
             "busy",
             "wrong_image",
             "small_cpu",
             "small_memory",
         ] {
-            let (_dir, ci, _) = setup();
+            let (_dir, mut ci, _) = setup();
+            if matches!(enabled, "unreported_timed_out" | "old_build_timed_out") {
+                Arc::get_mut(&mut ci.inner).unwrap().started =
+                    Instant::now() - Duration::from_secs(ci.config().runner_absent_secs + 1);
+            }
             let image = images::Image {
                 reference: "alpine".into(),
                 architecture: "arm64".into(),
@@ -2336,6 +2403,7 @@ CI: runner connected runner="runner-1" runner_id=runner-1 version="older\nbuild"
             let mut on = report;
             match enabled {
                 "wrong_image" => on.images.clear(),
+                "old_build" | "old_build_timed_out" => on.version = "old-build".into(),
                 "small_cpu" | "small_memory" | "busy" => {
                     let mut limits = ci.settings().limits();
                     limits.cpu_multiplier_percent = 100;
@@ -2349,7 +2417,21 @@ CI: runner connected runner="runner-1" runner_id=runner-1 version="older\nbuild"
                 }
                 _ => {}
             }
-            ci.report_runner("on", "", on);
+            if matches!(enabled, "off_unreported" | "hub_not_registered") {
+                ci.set_runner_ci("on", false).await.unwrap();
+            }
+            if enabled == "hub_not_registered" {
+                ci.settings()
+                    .set_ci_enabled(supervise::AUTO_RUNNER, true)
+                    .await
+                    .unwrap();
+            }
+            if !matches!(
+                enabled,
+                "unreported" | "unreported_timed_out" | "off_unreported" | "hub_not_registered"
+            ) {
+                ci.report_runner("on", "", on);
+            }
             if enabled == "offline" {
                 ci.runner_stopped("on");
             }
@@ -2363,7 +2445,10 @@ CI: runner connected runner="runner-1" runner_id=runner-1 version="older\nbuild"
                 .await
                 .unwrap();
             let attempt = &attempts[0];
-            if matches!(enabled, "offline" | "busy") {
+            if matches!(
+                enabled,
+                "unreported" | "old_build" | "hub_not_registered" | "offline" | "busy"
+            ) {
                 assert_eq!(attempt.status, "queued", "{enabled}");
             } else {
                 assert_eq!(

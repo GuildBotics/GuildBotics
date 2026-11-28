@@ -3645,11 +3645,16 @@ async fn sigint_stops_a_service_that_waits_for_its_running_jobs_at_once() {
 #[tokio::test]
 async fn the_automatic_runner_starting_again_queues_the_jobs_its_predecessor_held_in_their_place() {
     // Long leases: what follows is not their expiry.
-    let mut w = World::with_config(|data| set_ci_config(data, &[("lease_secs", 600.into())])).await;
+    let mut w = World::with_config(|data| {
+        set_ci_config(
+            data,
+            &[("lease_secs", 600.into()), ("runner", "auto".into())],
+        );
+    })
+    .await;
     // As the automatic runner, which dies with its service.
     let runner = Runner::new(&w, "hub-runner").await;
     let held = running_test_and_queued_lint(&w, &runner).await;
-    set_ci_config(&w.server.data, &[("runner", "auto".into())]);
     // A home of its own: without msb the automatic runner leaves work queued
     // for a ready runner instead of taking incompatible attempts.
     let home = w.dir.path().join("home");

@@ -1567,8 +1567,9 @@ the rest of the file, and take effect immediately. The Hub uses the shared image
   "detail", "started_at", "finished_at", "loaded": [{"reference"}]}`.
 - `PUT /api/v1/admin/ci/runners/{name}/ci` (owner) `{"enabled": boolean}`
   → the settings. Saves `ci_enabled` under `[ci.runner_limits.<name>]`. The
-  switch defaults to on. The built-in Hub runner uses the legacy `[ci] runner`
-  value (`auto` or `off`) until its own switch is explicitly saved. An unknown
+  switch defaults to on for runners on other machines. The built-in Hub
+  runner uses the legacy `[ci] runner` value (`auto` or `off`, default `off`)
+  until its own switch is explicitly saved. An unknown
   name or a member of another kind returns `404`. Turning off CI stops new
   claims while existing leases, heartbeats and claim reports continue.
 - `PUT /api/v1/admin/ci/limits` (owner) `{"max_cpus", "max_memory_mib",

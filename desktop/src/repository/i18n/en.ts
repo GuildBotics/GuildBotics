@@ -763,7 +763,7 @@ export const en = {
   "ci.settings.machineLimits": "Whole machine",
   "ci.settings.machineLimitsHelp": "Capacity shared by all CI jobs on this runner.",
   "ci.settings.jobLimits": "One CI job",
-  "ci.settings.jobLimitsHelp": "VM resources and limits applied to each new CI job.",
+  "ci.settings.jobLimitsHelp": "Each new CI job uses the saved VM resources and limits.",
   "ci.settings.connectedRunnersDisabled": ciMessages.en.connected_runners_disabled,
   "ci.runnersDisabled": ciMessages.en.runners_disabled,
   "ci.settings.runners": "Runners",
@@ -800,7 +800,11 @@ export const en = {
   "ci.settings.maxCpus": "CPUs",
   "ci.settings.maxMemory": "Memory (MiB)",
   "ci.settings.workQuota": "Work directory space (MiB)",
+  "ci.settings.workQuotaHelp":
+    "Additional space a job can write after checkout and cache restoration.",
   "ci.settings.maxTimeout": "Time limit (seconds)",
+  "ci.settings.maxTimeoutHelp":
+    "Caps the pipeline’s timeout_secs and sets the limit for jobs that omit it.",
   "ci.settings.cacheMax": "Cache size (MiB)",
   "ci.settings.maxJobs": "Parallel jobs",
   "ci.settings.memoryReserve": "Machine memory reserve (%)",

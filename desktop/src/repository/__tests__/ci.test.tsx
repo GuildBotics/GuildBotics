@@ -763,6 +763,17 @@ describe("CI settings", () => {
     const job = within(config.getByRole("region", { name: "One CI job" }));
     expect(machine.getAllByRole("textbox")).toHaveLength(3);
     expect(job.getAllByRole("textbox")).toHaveLength(5);
+    expect(
+      job.getByRole("textbox", { name: "Work directory space (MiB)" }),
+    ).toHaveAccessibleDescription(
+      "Additional space a job can write after checkout and cache restoration.",
+    );
+    expect(job.getByRole("textbox", { name: "Time limit (seconds)" })).toHaveAccessibleDescription(
+      "Caps the pipeline’s timeout_secs and sets the limit for jobs that omit it.",
+    );
+    expect(
+      job.getByText("Each new CI job uses the saved VM resources and limits."),
+    ).toBeInTheDocument();
     expect(machine.getByRole("textbox", { name: "Parallel jobs" })).toHaveValue("2");
     const cpus = job.getByRole("textbox", { name: "CPUs" });
     expect(cpus).toHaveValue("6");

@@ -85,13 +85,11 @@ pub struct Control {
 impl Control {
     pub fn new(file: PathBuf, ci: &CiConfig) -> Self {
         let mut runners = ci.runner_limits.clone();
-        if let Some(mode) = ci.runner {
-            runners
-                .entry(AUTO_RUNNER.into())
-                .or_default()
-                .ci_enabled
-                .get_or_insert(mode == RunnerMode::Auto);
-        }
+        runners
+            .entry(AUTO_RUNNER.into())
+            .or_default()
+            .ci_enabled
+            .get_or_insert(ci.runner == Some(RunnerMode::Auto));
         Self {
             file,
             microsandbox: ci.microsandbox.clone(),
@@ -115,15 +113,6 @@ impl Control {
             .get(&util::fold(name))
             .and_then(|settings| settings.ci_enabled)
             .unwrap_or(true)
-    }
-
-    pub fn has_disabled_runner(&self) -> bool {
-        self.limits
-            .lock()
-            .unwrap()
-            .1
-            .values()
-            .any(|settings| settings.ci_enabled == Some(false))
     }
 
     pub async fn set_ci_enabled(&self, name: &str, enabled: bool) -> AppResult<()> {
@@ -424,7 +413,8 @@ mod tests {
     #[test]
     fn hub_switch_uses_the_legacy_value_and_runners_default_to_on() {
         for (text, enabled) in [
-            ("", true),
+            ("", false),
+            ("[ci]\nqueue_max = 48", false),
             ("[ci]\nrunner = \"auto\"", true),
             ("[ci]\nrunner = \"off\"", false),
             (
@@ -585,7 +575,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("config.toml");
         let control = Control::new(file.clone(), &CiConfig::default());
-        control.set_ci_enabled(AUTO_RUNNER, true).await.unwrap();
+        control.set_ci_enabled(AUTO_RUNNER, false).await.unwrap();
         control
             .set_limits(None, Limits::from(&CiConfig::default().executor))
             .await
@@ -608,13 +598,13 @@ mod tests {
             let file = dir.path().join("config.toml");
             std::fs::write(&file, text).unwrap();
             let control = Control::new(file.clone(), &CiConfig::default());
-            control.set_ci_enabled(AUTO_RUNNER, false).await.unwrap();
+            control.set_ci_enabled(AUTO_RUNNER, true).await.unwrap();
             control.set_limits(None, limits()).await.unwrap();
             let parsed: crate::config::ConfigFile =
                 toml::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
             assert_eq!(
                 parsed.ci.runner_limits[AUTO_RUNNER].ci_enabled,
-                Some(false),
+                Some(true),
                 "{text}"
             );
             assert_eq!(parsed.ci.executor.max_cpus, 8, "{text}");
@@ -632,7 +622,7 @@ mod tests {
         let link = dir.path().join("config.toml");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let control = Control::new(link.clone(), &CiConfig::default());
-        control.set_ci_enabled(AUTO_RUNNER, false).await.unwrap();
+        control.set_ci_enabled(AUTO_RUNNER, true).await.unwrap();
         assert!(
             std::fs::symlink_metadata(&link)
                 .unwrap()
@@ -642,7 +632,7 @@ mod tests {
         assert!(
             std::fs::read_to_string(&real)
                 .unwrap()
-                .contains("ci_enabled = false")
+                .contains("ci_enabled = true")
         );
         let mode = std::fs::metadata(&real).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
@@ -656,7 +646,7 @@ mod tests {
         let control = Control::new(file.clone(), &CiConfig::default());
         assert_eq!(
             control
-                .set_ci_enabled(AUTO_RUNNER, false)
+                .set_ci_enabled(AUTO_RUNNER, true)
                 .await
                 .unwrap_err()
                 .code,
@@ -673,10 +663,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("config.toml");
         let control = Control::new(file.clone(), &CiConfig::default());
-        control.set_ci_enabled(AUTO_RUNNER, false).await.unwrap();
+        control.set_ci_enabled(AUTO_RUNNER, true).await.unwrap();
         let parsed: crate::config::ConfigFile =
             toml::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(parsed.ci.runner_limits[AUTO_RUNNER].ci_enabled, Some(false));
+        assert_eq!(parsed.ci.runner_limits[AUTO_RUNNER].ci_enabled, Some(true));
     }
 
     /// A job may add 16 GiB to its work directory unless the configuration
@@ -752,9 +742,9 @@ mod tests {
         let file = dir.path().join("config.toml");
         std::fs::write(&file, "listen = \n").unwrap();
         let control = Control::new(file.clone(), &CiConfig::default());
-        assert!(control.set_ci_enabled(AUTO_RUNNER, false).await.is_err());
+        assert!(control.set_ci_enabled(AUTO_RUNNER, true).await.is_err());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "listen = \n");
-        assert!(control.ci_enabled(AUTO_RUNNER));
+        assert!(!control.ci_enabled(AUTO_RUNNER));
     }
 
     #[test]
