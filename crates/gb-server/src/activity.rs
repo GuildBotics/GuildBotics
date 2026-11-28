@@ -289,11 +289,12 @@ pub(crate) fn read(
         lifecycles.push(gb_observability::timeline::lifecycle_from_session(&r));
     }
 
-    // A lifecycle's resumptions are its facts, even outside the window.
+    // A lifecycle's resumptions are its facts, even outside the window; one
+    // still going on may have resumed until now.
     let (from, to) = lifecycles.iter().fold((start, end), |(from, to), l| {
         (
             parsed(text(l, "started_at")).map_or(from, |t| t.min(from)),
-            parsed(text(l, "ended_at")).map_or(to, |t| t.max(to)),
+            parsed(text(l, "ended_at")).unwrap_or_else(Utc::now).max(to),
         )
     });
     let mut records:Vec<_>=ActivityEvents::open(workspace).list_between(from,to)?.into_iter().map(|r|json!({"kind":"event","type":r["kind"],"timestamp":r["occurred_at"],"trace_id":r["local_trace_id"],"person_id":r["member_id"],"source":r["source"],"command":r["command"],"workflow":r["workflow"],"payload":r["payload"],"attributes":r["attributes"]})).collect();

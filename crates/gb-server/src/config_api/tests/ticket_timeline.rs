@@ -180,11 +180,22 @@ async fn a_tickets_runs_reviews_and_attempts_are_bars_and_its_waits_are_left_ope
                     "timestamp":at(15),"attributes":{"target.url":touched,"target.kind":"ticket"}}),
                 &redactor,
             )?;
-            // Still going on since two days ago, with nothing recorded since:
-            // its last event is before the window, yet it runs in it.
+            // Started two days ago and stopped; resumed half an hour ago and
+            // still going on, with nothing recorded since its resumption.
             runs.start(
                 w,
                 run("running", "alice", &other, "ticket", &at(-2 * 24 * 60 - 5)),
+                &redactor,
+            )?;
+            runs.finish(
+                w,
+                "running",
+                finish(RunState::Deferred, &at(-2 * 24 * 60 + 10)),
+                &redactor,
+            )?;
+            runs.start(
+                w,
+                run("running", "alice", &other, "ticket", &at(-30)),
                 &redactor,
             )?;
             // One conversation that worked on both tickets.
@@ -311,19 +322,39 @@ async fn a_tickets_runs_reviews_and_attempts_are_bars_and_its_waits_are_left_ope
             (parse(&json!(at(first))), parse(&json!(at(last))))
         );
     }
-    // A run still going on runs until now, not until the last thing it recorded.
-    let running: Vec<_> = by_url(&other)["work"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|b| b["mode"] == "workflow")
-        .collect();
-    assert_eq!(running.len(), 1, "{}", by_url(&other));
-    assert_eq!(running[0]["running"], true);
-    assert!(
-        parse(&running[0]["ended_at"]) >= parse(&json!(at(-1))),
-        "{}",
-        running[0]
+    // A run still going on runs until now, not until the last thing it
+    // recorded; only its last stretch does.
+    let runs_on = |timeline: &Value| -> Vec<Value> {
+        let mut tickets = timeline["tickets"].as_array().unwrap().iter();
+        let on = tickets.find(|t| t["url"] == other).unwrap();
+        let work = on["work"].as_array().unwrap().iter();
+        work.filter(|b| b["mode"] == "workflow").cloned().collect()
+    };
+    let stretches = |bars: &[Value]| -> Vec<_> {
+        bars.iter()
+            .map(|b| (parse(&b["started_at"]), b["running"] == true))
+            .collect()
+    };
+    let running = runs_on(&timeline);
+    assert_eq!(
+        stretches(&running),
+        [
+            (parse(&json!(at(-2 * 24 * 60 - 5))), false),
+            (parse(&json!(at(-30))), true)
+        ],
+        "{running:?}"
+    );
+    assert!(parse(&running[1]["ended_at"]) >= parse(&json!(at(-1))));
+    // Seen in a window that ended before it resumed, its wait stays open.
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("start", &(now - chrono::Duration::days(3)).to_rfc3339())
+        .append_pair("end", &at(-2 * 24 * 60 + 60))
+        .finish();
+    let past = runs_on(&f.get(&format!("/ticket-timeline?{query}")).await);
+    assert_eq!(stretches(&past), stretches(&running), "{past:?}");
+    assert_eq!(
+        parse(&past[0]["ended_at"]),
+        parse(&json!(at(-2 * 24 * 60 + 10)))
     );
     // Later, a window with only the merge of the CI-only ticket's pull request.
     let late = chrono::Utc::now();
