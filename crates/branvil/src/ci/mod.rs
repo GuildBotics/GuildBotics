@@ -111,6 +111,8 @@ pub struct Check {
     /// runner", "waiting for room in the queue", ...).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ci_disabled_runners: Vec<String>,
     pub artifact_names: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reused_from: Option<ReusedFrom>,
@@ -355,6 +357,7 @@ impl Ci {
             retry_wait: self.retry_wait(a),
             details_url: Some(self.job_url(&a.repo_path, &a.id)),
             details: a.display_details(),
+            ci_disabled_runners: a.ci_disabled_runners.clone(),
             artifact_names: if source.files_pruned {
                 Vec::new()
             } else {
@@ -1086,9 +1089,110 @@ impl Ci {
         }
     }
 
+    fn has_disabled_report(&self) -> bool {
+        self.inner
+            .runners
+            .lock()
+            .unwrap()
+            .values()
+            .any(|seen| seen.report.can_run() && !self.settings().ci_enabled(&seen.name))
+    }
+
+    fn awaiting_runner_reports(
+        &self,
+        r: &impl Rd,
+        reports: &BTreeMap<String, RunnerSeen>,
+    ) -> AppResult<Vec<String>> {
+        let members = r.prefix_all::<Member>(store::MEMBERS, &[])?;
+        let settings = self.settings();
+        let mut pending: Vec<_> = members
+            .iter()
+            .filter(|member| {
+                member.kind == MemberKind::Runner
+                    && settings.ci_enabled(&member.name)
+                    && reports
+                        .get(&util::fold(&member.name))
+                        .is_none_or(|seen| !seen.report.matches_hub_version())
+            })
+            .map(|member| member.name.clone())
+            .collect();
+        // The supervised runner is registered by its first start, which can
+        // follow the first sweep on a fresh Hub.
+        let hub = supervise::AUTO_RUNNER;
+        if settings.ci_enabled(hub) && !members.iter().any(|member| util::fold(&member.name) == hub)
+        {
+            pending.push(hub.into());
+        }
+        Ok(pending)
+    }
+
+    async fn fail_disabled_attempts(&self, startup_grace: bool) -> AppResult<()> {
+        if !self.has_disabled_report() || self.stopping() {
+            return Ok(());
+        }
+        let _settings = self.inner.runner_settings.lock().await;
+        let ci = self.clone();
+        let changed = self
+            .inner
+            .store
+            .write(move |w| {
+                if ci.stopping() {
+                    return Ok(Vec::new());
+                }
+                let reports = ci.inner.runners.lock().unwrap().clone();
+                let pending = if startup_grace {
+                    ci.awaiting_runner_reports(w, &reports)?
+                } else {
+                    Vec::new()
+                };
+                let runners: Vec<_> = ci
+                    .capable_reports(w, reports.into_values())?
+                    .into_iter()
+                    .map(|seen| {
+                        let (limits, _) = ci.settings().runner_limits(&seen.name);
+                        let enabled = ci.settings().ci_enabled(&seen.name);
+                        (seen, limits, enabled)
+                    })
+                    .collect();
+                if runners.iter().all(|(_, _, enabled)| *enabled) {
+                    return Ok(Vec::new());
+                }
+                queue::fail_unavailable_attempts(w, &util::now(), |attempt| {
+                    if pending.iter().any(|name| attempt.allows_runner(name)) {
+                        return Ok(None);
+                    }
+                    let mut disabled = Vec::new();
+                    for (seen, limits, enabled) in &runners {
+                        if queue::fits_runner(
+                            w,
+                            attempt,
+                            &seen.name,
+                            &seen.report.images,
+                            *limits,
+                            seen.report.machine.as_ref(),
+                        )? {
+                            if *enabled {
+                                // A known but disconnected enabled runner gets the normal absence timeout.
+                                return Ok(None);
+                            }
+                            disabled.push(seen.name.clone());
+                        }
+                    }
+                    Ok((!disabled.is_empty()).then_some(queue::Unavailable::Disabled(disabled)))
+                })
+            })
+            .await?;
+        self.publish(&changed);
+        Ok(())
+    }
+
     /// One pass of the periodic work: expired leases and runner reports,
     /// queued work nobody takes, and waiting runs.
     pub async fn sweep(&self) -> AppResult<()> {
+        let absent = self.inner.config.runner_absent_secs;
+        let absent_duration = Duration::from_secs(absent);
+        // The disabled and absence paths must agree when a sweep straddles startup expiry.
+        let startup_grace = self.inner.started.elapsed() < absent_duration;
         let now = util::now();
         let changed = self
             .inner
@@ -1096,8 +1200,7 @@ impl Ci {
             .write(move |w| queue::expire(w, &now))
             .await?;
         self.publish(&changed);
-        let absent = self.inner.config.runner_absent_secs;
-        let absent_duration = Duration::from_secs(absent);
+        self.fail_disabled_attempts(startup_grace).await?;
         let (last_contact, last_text) = {
             let mut runners = self.inner.runners.lock().unwrap();
             for runner in runners.values_mut() {
@@ -1113,7 +1216,7 @@ impl Ci {
                 runners.values().map(|r| r.last_seen_at.clone()).max(),
             )
         };
-        if last_contact.elapsed() >= absent_duration {
+        if !startup_grace && last_contact.elapsed() >= absent_duration {
             let details = format!(
                 "No CI runner has contacted the server for {absent} s (last contact: {}). Start `guildbotics runner` (docs/ci.md)",
                 last_text.unwrap_or_else(|| "none since GuildBotics started".into())
@@ -1134,7 +1237,7 @@ impl Ci {
                 .await?;
             self.publish(&changed);
         }
-        if self.inner.started.elapsed() >= absent_duration {
+        if !startup_grace {
             let live: Vec<RunnerSeen> = self
                 .inner
                 .runners
@@ -1146,7 +1249,7 @@ impl Ci {
                 .collect();
             let available = live
                 .iter()
-                .filter(|r| r.report.can_run())
+                .filter(|r| r.report.can_run() && self.settings().ci_enabled(&r.name))
                 .flat_map(|r| r.report.images.clone())
                 .collect();
             let available =
@@ -1247,7 +1350,31 @@ impl Ci {
             .store
             .read(move |r| runner_member(r, &owned))
             .await?;
-        self.settings().set_limits(Some(&member.name), limits).await
+        self.settings()
+            .set_limits(Some(&member.name), limits)
+            .await?;
+        self.sweep_changed();
+        Ok(())
+    }
+
+    pub async fn set_runner_ci(&self, name: &str, enabled: bool) -> AppResult<()> {
+        let _held = self.inner.runner_settings.lock().await;
+        let owned = name.to_owned();
+        let member = self
+            .inner
+            .store
+            .read(move |r| runner_member(r, &owned))
+            .await?;
+        self.settings()
+            .set_ci_enabled(&member.name, enabled)
+            .await?;
+        if !enabled {
+            // Let claims that passed the gate before the switch committed finish
+            // their transactions before reporting how many attempts are draining.
+            self.inner.store.write(|_| Ok(())).await?;
+        }
+        self.sweep_changed();
+        Ok(())
     }
 
     /// Deletes the runner member `name` that has stopped: its tokens, its
@@ -1276,11 +1403,18 @@ impl Ci {
         });
         self.settings().remove_limits(name, delete).await?;
         self.inner.runners.lock().unwrap().remove(&util::fold(name));
+        self.sweep_changed();
         Ok(())
     }
 
     fn deletable_runner(&self, r: &impl Rd, name: &str) -> AppResult<()> {
         runner_member(r, name)?;
+        if util::fold(name) == supervise::AUTO_RUNNER {
+            return Err(AppError::conflict_code(
+                "runner_builtin",
+                ci_message("runner_builtin"),
+            ));
+        }
         let absent = Duration::from_secs(self.inner.config.runner_absent_secs);
         let key = util::fold(name);
         if self
@@ -1312,8 +1446,16 @@ impl Ci {
 
     fn reported_runners(&self, r: &impl Rd) -> AppResult<Vec<RunnerSeen>> {
         let reports = self.inner.runners.lock().unwrap().clone();
+        self.capable_reports(r, reports.into_values())
+    }
+
+    fn capable_reports(
+        &self,
+        r: &impl Rd,
+        reports: impl Iterator<Item = RunnerSeen>,
+    ) -> AppResult<Vec<RunnerSeen>> {
         let mut runners = Vec::new();
-        for (_, mut seen) in reports {
+        for mut seen in reports {
             if !seen.report.can_run()
                 || !r
                     .get::<Member>(store::MEMBERS, &Member::key(&seen.name))?
@@ -1337,17 +1479,20 @@ impl Ci {
             .into_iter()
             .filter_map(|seen| {
                 let (limits, _) = settings.runner_limits(&seen.name);
-                (util::fold(&seen.name) != own && seen.online(absent) && seen.report.accept)
-                    .then_some(queue::ClaimRunner {
-                        name: seen.name,
-                        images: seen.report.images,
-                        limits,
-                        machine: seen.report.machine,
-                        has_free_slot: seen.report.running_jobs < limits.max_jobs as usize,
-                        ram_fresh: seen.seen.elapsed() <= RAM_REPORT_MAX_AGE,
-                        cache_groups: seen.report.cache_groups,
-                        ram_unsupported_images: seen.report.ram_unsupported_images,
-                    })
+                (util::fold(&seen.name) != own
+                    && seen.online(absent)
+                    && seen.report.accept
+                    && settings.ci_enabled(&seen.name))
+                .then_some(queue::ClaimRunner {
+                    name: seen.name,
+                    images: seen.report.images,
+                    limits,
+                    machine: seen.report.machine,
+                    has_free_slot: seen.report.running_jobs < limits.max_jobs as usize,
+                    ram_fresh: seen.seen.elapsed() <= RAM_REPORT_MAX_AGE,
+                    cache_groups: seen.report.cache_groups,
+                    ram_unsupported_images: seen.report.ram_unsupported_images,
+                })
             })
             .collect())
     }
@@ -1356,7 +1501,10 @@ impl Ci {
         Ok(self
             .reported_runners(r)?
             .into_iter()
-            .filter(|seen| seen.report.images.iter().any(|i| i.supports(image)))
+            .filter(|seen| {
+                self.settings().ci_enabled(&seen.name)
+                    && seen.report.images.iter().any(|i| i.supports(image))
+            })
             .map(|seen| seen.name)
             .collect())
     }
@@ -1436,6 +1584,20 @@ impl Ci {
                 "CI: runner version changed"
             );
         }
+        let capability_changed = previous.is_none_or(|previous| {
+            let old = &previous.report;
+            old.can_run() != report.can_run()
+                || old.matches_hub_version() != report.matches_hub_version()
+                || old.images != report.images
+                || old
+                    .machine
+                    .as_ref()
+                    .map(|m| (m.logical_cpus, m.total_memory_mib))
+                    != report
+                        .machine
+                        .as_ref()
+                        .map(|m| (m.logical_cpus, m.total_memory_mib))
+        });
         runners.insert(
             key,
             RunnerSeen {
@@ -1448,6 +1610,10 @@ impl Ci {
                 disconnected: false,
             },
         );
+        drop(runners);
+        if capability_changed && self.has_disabled_report() {
+            self.sweep_changed();
+        }
         seen
     }
 
@@ -1517,6 +1683,10 @@ impl Ci {
             .filter_map(|m| runners.get(&util::fold(&m.name)))
             .filter(|r| r.online(absent))
             .collect();
+        let enabled: Vec<_> = live
+            .iter()
+            .filter(|r| self.settings().ci_enabled(&r.name))
+            .collect();
         let (state, detail, version_mismatch) = if let Some(until) = self.inner.stopping.get() {
             (
                 "stopping",
@@ -1534,13 +1704,19 @@ impl Ci {
                 ),
                 None,
             )
-        } else if live.iter().any(|r| r.report.can_run()) {
+        } else if enabled.is_empty() {
+            (
+                "disabled",
+                ci_message("connected_runners_disabled").into(),
+                None,
+            )
+        } else if enabled.iter().any(|r| r.report.can_run()) {
             (
                 "ready",
                 format!("{} runner(s) connected.", live.len()),
                 None,
             )
-        } else if let Some(runner) = live.iter().find(|r| !r.report.matches_hub_version()) {
+        } else if let Some(runner) = enabled.iter().find(|r| !r.report.matches_hub_version()) {
             (
                 "executor_unavailable",
                 format!(
@@ -1552,7 +1728,8 @@ impl Ci {
         } else {
             (
                 "executor_unavailable",
-                live.iter()
+                enabled
+                    .iter()
                     .find_map(|r| r.report.executor_detail.clone())
                     .unwrap_or_else(|| "The runner's executor is not usable.".into()),
                 None,
@@ -1587,11 +1764,19 @@ impl Ci {
                 _ => None,
             };
             let (limits, limits_source) = self.inner.settings.runner_limits(&member.name);
+            let running_jobs = running.get(&key).copied().unwrap_or(0);
+            let ci_enabled = self.settings().ci_enabled(&member.name);
+            let ci_state = match (ci_enabled, running_jobs) {
+                (true, _) => "enabled",
+                (false, 0) => "disabled",
+                (false, _) => "draining",
+            };
             rows.push(serde_json::json!({
                 "name": member.name,
+                "ci_state": ci_state,
                 "connection": connection,
                 "last_seen_at": seen.map(|r| &r.last_seen_at),
-                "running_jobs": running.get(&key).copied().unwrap_or(0),
+                "running_jobs": running_jobs,
                 "version": report.map(|r| &r.version),
                 "version_matches": report.map(RunnerReport::matches_hub_version),
                 "max_jobs": report.map(|r| r.max_jobs),
@@ -1600,7 +1785,7 @@ impl Ci {
                 "executor_detail": report.and_then(|r| r.executor_detail.as_ref()),
                 "architecture": report.map(|r| &r.architecture),
                 "machine": report.and_then(|r| r.machine.as_ref()),
-                "resource_wait": resource_waits.get(&key).filter(|_| connection == "online"),
+                "resource_wait": resource_waits.get(&key).filter(|_| connection == "online" && ci_enabled),
                 "missing_images": missing_images,
                 "limits": limits,
                 "limits_source": limits_source,
@@ -1610,7 +1795,6 @@ impl Ci {
             "state": state,
             "detail": detail,
             "version_mismatch": version_mismatch,
-            "mode": self.inner.settings.mode(),
             "runners": rows,
             "queue": {
                 "queued": queued, "in_progress": in_progress, "waiting_runs": waiting,
@@ -1651,7 +1835,11 @@ impl Ci {
             tokio::select! {
                 biased;
                 _ = tokio::time::sleep_until(deadline.into()) => return,
-                _ = self.inner.sweep_changed.notified() => {}
+                _ = self.inner.sweep_changed.notified() => {
+                    if self.has_disabled_report() {
+                        return;
+                    }
+                }
             }
         }
     }
@@ -1698,6 +1886,17 @@ impl Ci {
             }
         });
     }
+}
+
+/// English API fallback. The GUI renders its own language from the same catalog.
+fn ci_message(key: &str) -> &'static str {
+    static MESSAGES: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
+        serde_json::from_str(include_str!(
+            "../../../../guildbotics/templates/locales/integrations/branvil/ci.json"
+        ))
+        .expect("CI message catalog")
+    });
+    MESSAGES["en"][key].as_str().expect("CI message key")
 }
 
 fn check_order<'a>(c: &'a Check, positions: &BTreeMap<String, usize>) -> (u8, &'a str, usize) {
@@ -2116,6 +2315,152 @@ CI: runner connected runner="runner-1" runner_id=runner-1 version="older\nbuild"
             .unwrap();
     }
 
+    async fn queue_test_job(ci: &Ci, created_at: String) {
+        ci.inner
+            .store
+            .write(move |w| {
+                queue::register(
+                    w,
+                    Registration {
+                        order: Vec::new(),
+                        inputs: Default::default(),
+                        selection: None,
+                        repo: "repo_1".into(),
+                        repo_path: "acme/demo".into(),
+                        sha: "sha".into(),
+                        tree: None,
+                        branch: "feature".into(),
+                        protected: false,
+                        network: false,
+                        pipeline: PipelineState::Jobs {
+                            jobs: vec![job("test")],
+                        },
+                    },
+                    10,
+                    &created_at,
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn disabled_failure_names_only_capable_runners_and_waits_for_an_enabled_runner() {
+        for enabled in [
+            "unreported",
+            "unreported_timed_out",
+            "off_unreported",
+            "old_build",
+            "old_build_timed_out",
+            "hub_not_registered",
+            "offline",
+            "busy",
+            "wrong_image",
+            "small_cpu",
+            "small_memory",
+        ] {
+            let (_dir, mut ci, _) = setup();
+            if matches!(enabled, "unreported_timed_out" | "old_build_timed_out") {
+                Arc::get_mut(&mut ci.inner).unwrap().started =
+                    Instant::now() - Duration::from_secs(ci.config().runner_absent_secs + 1);
+            }
+            let image = images::Image {
+                reference: "alpine".into(),
+                architecture: "arm64".into(),
+                digest: "sha256:test".into(),
+            };
+            let report = RunnerReport {
+                images: vec![image],
+                ..runner_report()
+            };
+            ci.inner
+                .store
+                .write(|w| {
+                    for name in ["off-a", "off-b", "off-other", "on"] {
+                        crate::domain::members::insert_member(
+                            w,
+                            &crate::domain::members::NewMember {
+                                name: name.into(),
+                                display_name: None,
+                                kind: MemberKind::Runner,
+                            },
+                        )?;
+                    }
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            for name in ["off-a", "off-b", "off-other"] {
+                ci.set_runner_ci(name, false).await.unwrap();
+                if name == "off-other" {
+                    ci.report_runner(name, "", runner_report());
+                } else {
+                    ci.report_runner(name, "", report.clone());
+                }
+            }
+
+            let mut on = report;
+            match enabled {
+                "wrong_image" => on.images.clear(),
+                "old_build" | "old_build_timed_out" => on.version = "old-build".into(),
+                "small_cpu" | "small_memory" | "busy" => {
+                    let mut limits = ci.settings().limits();
+                    limits.cpu_multiplier_percent = 100;
+                    ci.set_runner_limits("on", limits).await.unwrap();
+                    on.machine = Some(gb_runner::ci::api::Machine {
+                        logical_cpus: if enabled == "small_cpu" { 1 } else { 8 },
+                        total_memory_mib: if enabled == "small_memory" { 512 } else { 8192 },
+                        available_memory_mib: 0,
+                        commit: None,
+                    });
+                }
+                _ => {}
+            }
+            if matches!(enabled, "off_unreported" | "hub_not_registered") {
+                ci.set_runner_ci("on", false).await.unwrap();
+            }
+            if enabled == "hub_not_registered" {
+                ci.settings()
+                    .set_ci_enabled(supervise::AUTO_RUNNER, true)
+                    .await
+                    .unwrap();
+            }
+            if !matches!(
+                enabled,
+                "unreported" | "unreported_timed_out" | "off_unreported" | "hub_not_registered"
+            ) {
+                ci.report_runner("on", "", on);
+            }
+            if enabled == "offline" {
+                ci.runner_stopped("on");
+            }
+
+            queue_test_job(&ci, util::now()).await;
+            ci.sweep().await.unwrap();
+            let attempts = ci
+                .inner
+                .store
+                .read(|r| queue::attempts_of(r, "repo_1", "sha"))
+                .await
+                .unwrap();
+            let attempt = &attempts[0];
+            if matches!(
+                enabled,
+                "unreported" | "old_build" | "hub_not_registered" | "offline" | "busy"
+            ) {
+                assert_eq!(attempt.status, "queued", "{enabled}");
+            } else {
+                assert_eq!(
+                    attempt.conclusion.as_deref(),
+                    Some("startup_failure"),
+                    "{enabled}"
+                );
+                assert_eq!(attempt.ci_disabled_runners, ["off-a", "off-b"], "{enabled}");
+            }
+        }
+    }
+
     #[tokio::test]
     async fn missing_images_expire_even_while_an_incompatible_runner_is_online() {
         for case in ["missing", "ready", "unavailable", "sync"] {
@@ -2123,33 +2468,7 @@ CI: runner connected runner="runner-1" runner_id=runner-1 version="older\nbuild"
             let (_dir, mut ci, _) = setup();
             Arc::get_mut(&mut ci.inner).unwrap().started =
                 Instant::now() - Duration::from_secs(121);
-            ci.inner
-                .store
-                .write(|w| {
-                    queue::register(
-                        w,
-                        Registration {
-                            order: Vec::new(),
-                            inputs: Default::default(),
-                            selection: None,
-                            repo: "repo_1".into(),
-                            repo_path: "acme/demo".into(),
-                            sha: "sha".into(),
-                            tree: None,
-                            branch: "feature".into(),
-                            protected: false,
-                            network: false,
-                            pipeline: PipelineState::Jobs {
-                                jobs: vec![job("test")],
-                            },
-                        },
-                        10,
-                        "2026-01-01T00:00:00Z",
-                    )?;
-                    Ok(())
-                })
-                .await
-                .unwrap();
+            queue_test_job(&ci, "2026-01-01T00:00:00Z".into()).await;
             ci.report_runner(
                 "r",
                 "",

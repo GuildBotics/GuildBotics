@@ -107,7 +107,7 @@ timeout_secs = 300
 [[jobs]]
 name = "desktop-quality"
 required = true
-paths = ["desktop/**", "crates/branvil/tests/fixtures/**", "package.json", "package-lock.json", ".prettierrc.json", "jscpd.config.json"]
+paths = ["desktop/**", "guildbotics/templates/locales/integrations/branvil/ci.json", "crates/branvil/tests/fixtures/**", "package.json", "package-lock.json", ".prettierrc.json", "jscpd.config.json"]
 image = "guildbotics/agent-environment:dev"
 commands = [
   "npm_config_cache=/work/.ci/npm npm ci",
@@ -229,6 +229,7 @@ paths = [
   "crates/branvil/**", "crates/gb-runner/**", "crates/gb-vm/**",
   "crates/loopback-auth/**",
   "crates/gb-base/**",
+  "guildbotics/templates/locales/integrations/branvil/ci.json",
   "Cargo.toml",
   "Cargo.lock",
   "rust-toolchain*",

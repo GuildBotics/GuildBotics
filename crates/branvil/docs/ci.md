@@ -576,7 +576,7 @@ Leases and interruptions:
   runner on another machine that keeps working through a short restart keeps
   its attempt, and attempts whose lease ran out while the service was down
   are interrupted by the first sweep after start. The automatic runner
-  (`ci.runner = "auto"`) stops with the service: the attempts it held are
+  stops with the service: the attempts it held are
   interrupted, and queued again in their place, as soon as its next process
   starts, before that one claims anything.
 - A runner that cannot renew its lease before it expires stops the job and
@@ -628,8 +628,18 @@ successfully so launchd leaves it stopped.
   startup runs any Git, so a signal during startup stops the service once
   startup has finished.
 
-No runner, no executor:
+Runner availability:
 
+- When all known runners that fit an attempt's image, CPU, and memory have CI
+  switched off, the attempt concludes `startup_failure` without waiting for
+  the absence timeout. The reason names those runners and points to
+  **Settings → CI** to turn CI back on. A protected branch's eligible checks
+  automatically retry when a compatible runner starts taking work again,
+  without spending an automatic retry. A PR head check must be retried
+  manually. For the first `ci.runner_absent_secs` after startup, an enabled
+  runner that has yet to report on the current Hub version can still be a
+  candidate. The Hub waits for its report or the end of that period before
+  concluding that CI is off on every candidate.
 - When no runner has contacted the service for `ci.runner_absent_secs`
   (default 120 s), queued attempts older than that are concluded
   `startup_failure` ("No CI runner has contacted Branvil …"). Its details ask
@@ -838,11 +848,10 @@ guildbotics runner doctor                                          # which msb, 
 GUILDBOTICS_RUNNER_TOKEN=<runner token> guildbotics runner --url http://127.0.0.1:7878
 ```
 
-Or let the service supervise one: `[ci] runner = "auto"` in `config.toml`
-makes the server start `guildbotics runner` as a child (member
-`hub-runner`, a token minted at every start and passed through the
-environment; the previous automatic token is revoked) and restart it when it
-exits. The child reads its work directory (`[ci.executor] work_dir`) and
+The Hub supervises its own `guildbotics runner` child as member
+`hub-runner` and restarts it if it exits. Each start replaces the previous
+automatic token and passes the new one through the child's environment.
+The child reads its work directory (`[ci.executor] work_dir`) and
 microsandbox settings (`[ci.microsandbox]`) from the service configuration.
 
 Settings → CI shows every runner member, including those that have not reported
@@ -857,22 +866,30 @@ runners are offline. If a connected runner has a different build and no runner
 can take work, the warning names the incompatible runner even with the
 automatic runner switched off.
 
-Select a runner under Settings → CI to save its job resources. The Hub writes
-the override to `[ci.runner_limits.<name>]` in its `config.toml` while
-preserving the rest of the file. Without an override, the Hub supplies its
-`[ci.executor]` defaults. The form shows whether it uses the defaults or
-values saved for the selected runner. Every successful claim supplies the resources for
-that attempt. Saving new values, including for an offline runner, affects the
-next claim and leaves running jobs with their original resources. Each machine
-continues to set its own `work_dir`; job resource values in a remote runner's
-local file are no longer used.
+Select a runner under **Settings → CI** to turn CI on or off and edit its
+limits. Runners on other machines default to on. The Hub uses the existing
+`[ci] runner` value (`auto` or `off`, default `off`) until its switch is saved
+under `[ci.runner_limits.hub-runner]` as `ci_enabled`. With CI off, the runner
+continues to poll and to send heartbeats for attempts it already holds.
+Those attempts finish normally while the settings show that CI is draining.
+The connection badge separately shows whether the Hub can still reach the
+runner through its reports.
+
+The selected runner's settings group its concurrency, memory reserve, and CPU
+multiplier under **Whole machine**. VM CPU and memory, work directory space,
+time limit, and cache size are under **One CI job**. The Hub saves the switch
+and any resource override together under `[ci.runner_limits.<name>]` in
+`config.toml`. A runner without a resource override inherits the
+`[ci.executor]` defaults, even if it has a saved switch. A successful claim
+snapshots the job's resources. The next claim uses the current settings.
+Remote runners set their own `work_dir`.
 
 A runner that is no longer used (a retired or replaced machine) can be
 deleted from the runner list under Settings → CI after a confirmation. The
 deletion revokes all of its tokens, removes its member record and its row,
 and removes its `[ci.runner_limits.<name>]` from `config.toml` while
-preserving the rest of the file. Only runner members can be deleted. The Hub
-refuses to delete a runner that reported within `ci.runner_absent_secs` or
+preserving the rest of the file. Deletion is available for registered
+runners on other machines. The Hub refuses to delete a runner that reported within `ci.runner_absent_secs` or
 holds an attempt and says why: stop it on its machine first and let its
 attempts finish or be queued again, so that no running attempt loses its
 runner. Past attempts and checks keep the runner's name. The same device can

@@ -148,11 +148,12 @@ export const useCiSettings = (enabled = true) =>
     queryKey: keys.ci(),
     queryFn: () => api.admin.ci(),
     enabled,
-    // Follow a running image operation, and a runner switched on until it reports.
+    // Follow image operations and runners draining confirmed attempts.
     refetchInterval: (query) => {
       const s = query.state.data;
       if (s?.operation?.state === "running") return 2_000;
-      return s?.runner.mode === "auto" && s.runner.state !== "ready" ? 3_000 : 30_000;
+      if (s?.runner.runners.some((runner) => runner.ci_state === "draining")) return 2_000;
+      return s?.runner.state === "no_runner" ? 3_000 : 30_000;
     },
   });
 

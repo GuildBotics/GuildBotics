@@ -319,8 +319,10 @@ export const jobs = {
 export const admin = {
   diagnostics: () => get<Diagnostics>("/admin/diagnostics"),
   ci: () => get<CiSettings>("/admin/ci"),
-  setRunner: (mode: CiSettings["runner"]["mode"]) =>
-    request<CiSettings>("PUT", "/admin/ci/runner", { body: { mode } }),
+  setRunnerCi: (runner: string, enabled: boolean) =>
+    request<CiSettings>("PUT", `/admin/ci/runners/${encodeURIComponent(runner)}/ci`, {
+      body: { enabled },
+    }),
   setRunnerLimits: (runner: string, limits: CiLimits) =>
     request<CiSettings>("PUT", `/admin/ci/runners/${encodeURIComponent(runner)}/limits`, {
       body: limits,

@@ -1,20 +1,16 @@
-//! What the owner changes from the GUI (Settings → CI): whether the service
-//! runs the runner, the limits the runner puts on every job, and the
-//! runner's image cache. The first two are `config.toml` settings: they are
-//! written there (keeping the rest of the file as it is) and applied at once,
-//! without restarting the service; the runner API reads the current limits
-//! for each claim. The image cache is the one of the
-//! supervised runner, on this machine (`[ci.microsandbox] home`); a runner
-//! started by hand elsewhere keeps its own, managed with `guildbotics runner pull`.
+//! Owner settings for CI runner admission, job resources, and the Hub's
+//! image cache. Config changes are persisted before applying them to claims.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tokio::sync::watch;
 
-use super::config::{CiConfig, JobLimits as Limits, MicrosandboxConfig, RunnerMode};
+use super::config::{
+    CiConfig, JobLimits as Limits, MicrosandboxConfig, RunnerMode, RunnerSettings,
+};
+use super::supervise::AUTO_RUNNER;
 use crate::error::{AppError, AppResult};
 use crate::runner::executor::{self, Microsandbox};
 use crate::util;
@@ -80,9 +76,7 @@ pub struct Control {
     microsandbox: MicrosandboxConfig,
     #[cfg(feature = "host")]
     pub(crate) vm_home: std::sync::OnceLock<PathBuf>,
-    /// The mode the supervisor follows.
-    mode: watch::Sender<RunnerMode>,
-    limits: Mutex<(Limits, BTreeMap<String, Limits>)>,
+    limits: Mutex<(Limits, BTreeMap<String, RunnerSettings>)>,
     operation: Mutex<Option<Operation>>,
     /// Serializes the writes of the configuration file.
     writing: tokio::sync::Mutex<()>,
@@ -90,53 +84,61 @@ pub struct Control {
 
 impl Control {
     pub fn new(file: PathBuf, ci: &CiConfig) -> Self {
+        let mut runners = ci.runner_limits.clone();
+        runners
+            .entry(AUTO_RUNNER.into())
+            .or_default()
+            .ci_enabled
+            .get_or_insert(ci.runner == Some(RunnerMode::Auto));
         Self {
             file,
             microsandbox: ci.microsandbox.clone(),
             #[cfg(feature = "host")]
             vm_home: Default::default(),
-            mode: watch::Sender::new(ci.runner),
-            limits: Mutex::new((Limits::from(&ci.executor), ci.runner_limits.clone())),
+            limits: Mutex::new((Limits::from(&ci.executor), runners)),
             operation: Mutex::new(None),
             writing: tokio::sync::Mutex::new(()),
         }
-    }
-
-    pub fn subscribe(&self) -> watch::Receiver<RunnerMode> {
-        self.mode.subscribe()
-    }
-
-    pub fn mode(&self) -> RunnerMode {
-        *self.mode.borrow()
     }
 
     pub fn limits(&self) -> Limits {
         self.limits.lock().unwrap().0
     }
 
-    /// Saves the mode and starts or stops the supervised runner. The mode
-    /// already in effect changes nothing (a running job goes on).
-    pub async fn set_mode(&self, mode: RunnerMode) -> AppResult<()> {
+    pub fn ci_enabled(&self, name: &str) -> bool {
+        self.limits
+            .lock()
+            .unwrap()
+            .1
+            .get(&util::fold(name))
+            .and_then(|settings| settings.ci_enabled)
+            .unwrap_or(true)
+    }
+
+    pub async fn set_ci_enabled(&self, name: &str, enabled: bool) -> AppResult<()> {
         let _w = self.writing.lock().await;
-        if self.mode() == mode {
+        let name = util::fold(name);
+        if self.ci_enabled(&name) == enabled {
             return Ok(());
         }
-        let value = match mode {
-            RunnerMode::Auto => "auto",
-            RunnerMode::Off => "off",
-        };
-        self.persist(&["ci"], |t| {
-            set(t, "runner", value);
+        self.persist(&["ci", "runner_limits", &name], |t| {
+            set(t, "ci_enabled", enabled)
         })
         .await?;
-        self.mode.send_replace(mode);
+        self.limits
+            .lock()
+            .unwrap()
+            .1
+            .entry(name)
+            .or_default()
+            .ci_enabled = Some(enabled);
         Ok(())
     }
 
     pub fn runner_limits(&self, name: &str) -> (Limits, LimitsSource) {
         let (defaults, overrides) = &*self.limits.lock().unwrap();
-        match overrides.get(&util::fold(name)) {
-            Some(limits) => (*limits, LimitsSource::Runner),
+        match overrides.get(&util::fold(name)).and_then(|r| r.limits) {
+            Some(limits) => (limits, LimitsSource::Runner),
             None => (*defaults, LimitsSource::Default),
         }
     }
@@ -149,7 +151,9 @@ impl Control {
         let path = {
             let state = self.limits.lock().unwrap();
             match &name {
-                Some(name) if state.1.get(name) == Some(&limits) => return Ok(()),
+                Some(name) if state.1.get(name).and_then(|r| r.limits) == Some(limits) => {
+                    return Ok(());
+                }
                 Some(name) => vec!["ci", "runner_limits", name],
                 None if state.0 == limits => return Ok(()),
                 None => vec!["ci", "executor"],
@@ -158,14 +162,14 @@ impl Control {
         self.persist(&path, |t| write_limits(t, limits)).await?;
         let mut state = self.limits.lock().unwrap();
         if let Some(name) = name {
-            state.1.insert(name, limits);
+            state.1.entry(name).or_default().limits = Some(limits);
         } else {
             state.0 = limits;
         }
         Ok(())
     }
 
-    /// Removes the runner's own job resources (`[ci.runner_limits.<name>]`)
+    /// Removes the runner's own settings (`[ci.runner_limits.<name>]`)
     /// with the runner, which `delete` deletes, keeping every other setting.
     /// The file goes first, so that a file that cannot be written deletes
     /// nothing; claims and health reads keep the resources until `delete` has
@@ -180,7 +184,7 @@ impl Control {
     ) -> AppResult<()> {
         let _w = self.writing.lock().await;
         let name = util::fold(runner);
-        let Some(limits) = self.limits.lock().unwrap().1.get(&name).copied() else {
+        let Some(settings) = self.limits.lock().unwrap().1.get(&name).copied() else {
             return delete.await;
         };
         self.persist(&["ci"], |ci| {
@@ -198,11 +202,21 @@ impl Control {
         .await?;
         if let Err(e) = delete.await {
             let path = ["ci", "runner_limits", name.as_str()];
-            if let Err(restore) = self.persist(&path, |t| write_limits(t, limits)).await {
+            if let Err(restore) = self
+                .persist(&path, |t| {
+                    if let Some(limits) = settings.limits {
+                        write_limits(t, limits);
+                    }
+                    if let Some(enabled) = settings.ci_enabled {
+                        set(t, "ci_enabled", enabled);
+                    }
+                })
+                .await
+            {
                 // What the file says from now on, so that saving them again
                 // writes them.
                 self.limits.lock().unwrap().1.remove(&name);
-                tracing::warn!("restoring the job resources of {runner} failed: {restore}");
+                tracing::warn!("restoring the settings of {runner} failed: {restore}");
             }
             return Err(e);
         }
@@ -232,7 +246,13 @@ impl Control {
                 )));
             }
         };
-        edit(section(&mut doc, path).map_err(refused)?);
+        let table = section(&mut doc, path).map_err(refused)?;
+        edit(table);
+        if path == ["ci", "runner_limits", AUTO_RUNNER] && table.contains_key("ci_enabled") {
+            section(&mut doc, &["ci"])
+                .map_err(refused)?
+                .remove("runner");
+        }
         let text = doc.to_string();
         toml::from_str::<crate::config::ConfigFile>(&text).map_err(|e| refused(e.to_string()))?;
         write_config(&self.file, &text)
@@ -390,43 +410,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn hub_switch_uses_the_legacy_value_and_runners_default_to_on() {
+        for (text, enabled) in [
+            ("", false),
+            ("[ci]\nqueue_max = 48", false),
+            ("[ci]\nrunner = \"auto\"", true),
+            ("[ci]\nrunner = \"off\"", false),
+            (
+                "[ci]\nrunner = \"off\"\n[ci.runner_limits.hub-runner]\nci_enabled = true",
+                true,
+            ),
+        ] {
+            let parsed: crate::config::ConfigFile = toml::from_str(text).unwrap();
+            let control = Control::new("config.toml".into(), &parsed.ci);
+            assert_eq!(control.ci_enabled(AUTO_RUNNER), enabled, "{text}");
+            assert!(control.ci_enabled("other"), "{text}");
+        }
+    }
+
     #[tokio::test]
     async fn settings_are_saved_keeping_the_rest_of_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("config.toml");
-        std::fs::write(
-            &file,
-            "# Branvil\n[storage]\ncache_size_mib = 16\n\n[ci]\n# who runs jobs\nrunner = \"off\"\nqueue_max = 9\n",
-        )
-        .unwrap();
-        let control = Control::new(file.clone(), &CiConfig::default());
-        let mut seen = control.subscribe();
-        control.set_mode(RunnerMode::Auto).await.unwrap();
+        let before = "# Branvil\n[storage]\ncache_size_mib = 16\n\n[ci]\nrunner = \"off\"\n# queue size\nqueue_max = 9\n";
+        std::fs::write(&file, before).unwrap();
+        let parsed: crate::config::ConfigFile = toml::from_str(before).unwrap();
+        let control = Control::new(file.clone(), &parsed.ci);
+        control.set_ci_enabled(AUTO_RUNNER, true).await.unwrap();
+        control.set_ci_enabled("remote", false).await.unwrap();
         control.set_limits(None, limits()).await.unwrap();
-        let text = std::fs::read_to_string(&file).unwrap();
-        assert!(
-            text.contains("# Branvil") && text.contains("# who runs jobs"),
-            "{text}"
-        );
-        let parsed: crate::config::ConfigFile = toml::from_str(&text).unwrap();
-        assert_eq!(parsed.ci.runner, RunnerMode::Auto);
-        assert_eq!(parsed.ci.queue_max, 9);
-        assert_eq!(parsed.storage.cache_size_mib, 16);
-        assert_eq!(parsed.ci.executor.max_cpus, 8);
-        assert_eq!(parsed.ci.executor.max_memory_mib, 8192);
-        assert_eq!(parsed.ci.executor.work_quota_mib, 32768);
-        assert_eq!(parsed.ci.executor.max_timeout_secs, 5400);
-        assert_eq!(parsed.ci.executor.cache_max_mib, 4096);
-        assert_eq!(parsed.ci.executor.max_jobs, 3);
-        assert_eq!(parsed.ci.executor.memory_reserve_percent, 15);
-        assert_eq!(parsed.ci.executor.cpu_multiplier_percent, 125);
-        assert_eq!(control.limits(), limits());
-        assert_eq!(*seen.borrow_and_update(), RunnerMode::Auto);
-        // New limits do not stop the runner: it reads them before its next
-        // claim, and the jobs it runs keep theirs.
+        assert!(matches!(
+            control.runner_limits("remote"),
+            (_, LimitsSource::Default)
+        ));
         control
             .set_limits(
-                None,
+                Some("remote"),
                 Limits {
                     max_jobs: 2,
                     ..limits()
@@ -434,7 +454,21 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(!seen.has_changed().unwrap(), "a running job would stop");
+
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            text.contains("# Branvil") && text.contains("# queue size"),
+            "{text}"
+        );
+        let parsed: crate::config::ConfigFile = toml::from_str(&text).unwrap();
+        assert!(parsed.ci.runner.is_none());
+        assert_eq!(parsed.ci.queue_max, 9);
+        assert_eq!(parsed.storage.cache_size_mib, 16);
+        let restored = Control::new(file, &parsed.ci);
+        assert!(restored.ci_enabled(AUTO_RUNNER));
+        assert!(!restored.ci_enabled("remote"));
+        assert_eq!(restored.limits(), limits());
+        assert_eq!(restored.runner_limits("remote").0.max_jobs, 2);
     }
 
     /// A deleted runner's own job resources leave the file, and nothing else
@@ -456,6 +490,7 @@ mod tests {
             .set_limits(Some("Old-Runner"), limits())
             .await
             .unwrap();
+        control.set_ci_enabled("old-runner", false).await.unwrap();
         control.set_limits(Some("kept"), limits()).await.unwrap();
         let before = std::fs::read_to_string(&file).unwrap();
         let own = |name: &str| match control.runner_limits(name) {
@@ -540,13 +575,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("config.toml");
         let control = Control::new(file.clone(), &CiConfig::default());
-        let seen = control.subscribe();
-        control.set_mode(RunnerMode::Off).await.unwrap();
+        control.set_ci_enabled(AUTO_RUNNER, false).await.unwrap();
         control
             .set_limits(None, Limits::from(&CiConfig::default().executor))
             .await
             .unwrap();
-        assert!(!seen.has_changed().unwrap(), "a running job would stop");
         assert!(!file.exists());
         control.set_limits(None, limits()).await.unwrap();
         std::fs::remove_file(&file).unwrap();
@@ -565,11 +598,15 @@ mod tests {
             let file = dir.path().join("config.toml");
             std::fs::write(&file, text).unwrap();
             let control = Control::new(file.clone(), &CiConfig::default());
-            control.set_mode(RunnerMode::Auto).await.unwrap();
+            control.set_ci_enabled(AUTO_RUNNER, true).await.unwrap();
             control.set_limits(None, limits()).await.unwrap();
             let parsed: crate::config::ConfigFile =
                 toml::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-            assert_eq!(parsed.ci.runner, RunnerMode::Auto, "{text}");
+            assert_eq!(
+                parsed.ci.runner_limits[AUTO_RUNNER].ci_enabled,
+                Some(true),
+                "{text}"
+            );
             assert_eq!(parsed.ci.executor.max_cpus, 8, "{text}");
         }
     }
@@ -585,7 +622,7 @@ mod tests {
         let link = dir.path().join("config.toml");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let control = Control::new(link.clone(), &CiConfig::default());
-        control.set_mode(RunnerMode::Auto).await.unwrap();
+        control.set_ci_enabled(AUTO_RUNNER, true).await.unwrap();
         assert!(
             std::fs::symlink_metadata(&link)
                 .unwrap()
@@ -595,7 +632,7 @@ mod tests {
         assert!(
             std::fs::read_to_string(&real)
                 .unwrap()
-                .contains("runner = \"auto\"")
+                .contains("ci_enabled = true")
         );
         let mode = std::fs::metadata(&real).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
@@ -608,7 +645,11 @@ mod tests {
         std::fs::write(&file, "unknown_setting = 1\n").unwrap();
         let control = Control::new(file.clone(), &CiConfig::default());
         assert_eq!(
-            control.set_mode(RunnerMode::Auto).await.unwrap_err().code,
+            control
+                .set_ci_enabled(AUTO_RUNNER, true)
+                .await
+                .unwrap_err()
+                .code,
             "conflict"
         );
         assert_eq!(
@@ -622,10 +663,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("config.toml");
         let control = Control::new(file.clone(), &CiConfig::default());
-        control.set_mode(RunnerMode::Auto).await.unwrap();
+        control.set_ci_enabled(AUTO_RUNNER, true).await.unwrap();
         let parsed: crate::config::ConfigFile =
             toml::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(parsed.ci.runner, RunnerMode::Auto);
+        assert_eq!(parsed.ci.runner_limits[AUTO_RUNNER].ci_enabled, Some(true));
     }
 
     /// A job may add 16 GiB to its work directory unless the configuration
@@ -701,9 +742,9 @@ mod tests {
         let file = dir.path().join("config.toml");
         std::fs::write(&file, "listen = \n").unwrap();
         let control = Control::new(file.clone(), &CiConfig::default());
-        assert!(control.set_mode(RunnerMode::Auto).await.is_err());
+        assert!(control.set_ci_enabled(AUTO_RUNNER, true).await.is_err());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "listen = \n");
-        assert_eq!(control.mode(), RunnerMode::Off);
+        assert!(!control.ci_enabled(AUTO_RUNNER));
     }
 
     #[test]

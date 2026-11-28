@@ -60,7 +60,7 @@ to remain unchanged when the version stays at the verified version. It runs
 only on default-branch verification and skips the comparison when no verified
 commit exists.
 
-`meta["schema_version"]` is written on creation (currently `47`). The current
+`meta["schema_version"]` is written on creation (currently `54`). The current
 format includes per-pull landing conditions, each merged pull request's original
 reviewed head distinct from its merge commit, and per-head notification and
 automatic failure state. Workspaces record the execution root they are bound
@@ -310,6 +310,9 @@ The 52 → 53 upgrade sets `started_at: null` on existing tickets: when their
 work started was not kept. It sets `pulls` on existing CI runs to the pull
 requests their current `selection` names, and builds `ix_ci_pull` from them;
 pull requests a run no longer names were not kept.
+
+The 53 → 54 upgrade initializes `ci_disabled_runners` to an empty list on
+existing CI attempts.
 
 The 35 → 36 upgrade revokes the tokens GuildBotics kept: those labelled
 `guildbotics` and those labelled `app:<client>`.

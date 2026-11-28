@@ -308,6 +308,7 @@ pub struct Attempt {
     pub status: String,
     pub conclusion: Option<String>,
     pub details: Option<String>,
+    pub ci_disabled_runners: Vec<String>,
     /// SHA-256 of the current lease (the lease itself is only given to the
     /// runner that claimed the attempt).
     pub lease_hash: Option<String>,
@@ -426,6 +427,12 @@ impl From<Allocation> for Resources {
 }
 
 impl Attempt {
+    pub(super) fn allows_runner(&self, name: &str) -> bool {
+        self.retry_decision
+            .as_ref()
+            .is_none_or(|retry| retry.selection.allows(name))
+    }
+
     pub fn failed(&self) -> bool {
         matches!(
             self.conclusion.as_deref(),
@@ -934,6 +941,7 @@ fn new_job(
         status: "queued".into(),
         conclusion: None,
         details: None,
+        ci_disabled_runners: Vec::new(),
         lease_hash: None,
         lease_expires_at: None,
         cancel_requested: false,
@@ -2369,7 +2377,7 @@ pub fn finish(
         a.reused_from = info.reused_from;
     }
     let next = if a.failed() {
-        prepare_auto_retry(w, &a, false, now)?
+        prepare_auto_retry(w, &a, RetryBudget::Normal, now)?
     } else {
         None
     };
@@ -2383,10 +2391,17 @@ pub fn finish(
 /// Prepare the replacement before choosing the finished attempt's guidance.
 /// Save the finished attempt first: both use its old queue position, even
 /// when new admissions have filled the queue.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RetryBudget {
+    Normal,
+    Absent,
+    Disabled,
+}
+
 fn prepare_auto_retry(
     w: &Wtx,
     old: &Attempt,
-    wait_for_runner: bool,
+    budget: RetryBudget,
     now: &str,
 ) -> AppResult<Option<Attempt>> {
     if old.purpose != Purpose::Check || old.cancel_requested || old.superseded {
@@ -2396,7 +2411,10 @@ fn prepare_auto_retry(
         return Ok(None);
     };
     let number = old.auto_retry.as_ref().map_or(1, |r| r.number + 1);
-    if run.cache_scope != "protected" || run.superseded_by.is_some() || number > MAX_AUTO_RETRIES {
+    if run.cache_scope != "protected"
+        || run.superseded_by.is_some()
+        || (budget != RetryBudget::Disabled && number > MAX_AUTO_RETRIES)
+    {
         return Ok(None);
     }
     if w.get::<crate::model::Repo>(store::REPOS, &crate::model::Repo::key(&old.repo))?
@@ -2415,13 +2433,17 @@ fn prepare_auto_retry(
     }
     let mut next = new_attempt(w, &run, &old.job, old.network, now)?;
     next.seq = old.seq;
-    next.auto_retry = Some(AutoRetry {
-        root_attempt: old
-            .auto_retry
-            .as_ref()
-            .map_or_else(|| old.id.clone(), |r| r.root_attempt.clone()),
-        number,
-    });
+    next.auto_retry = if budget == RetryBudget::Disabled {
+        old.auto_retry.clone()
+    } else {
+        Some(AutoRetry {
+            root_attempt: old
+                .auto_retry
+                .as_ref()
+                .map_or_else(|| old.id.clone(), |r| r.root_attempt.clone()),
+            number,
+        })
+    };
     let mut decision = RetryDecision::of(old, None, RunnerSelection::default());
     decision.after_failure |= old
         .retry_decision
@@ -2432,7 +2454,7 @@ fn prepare_auto_retry(
     }
     next.retry_decision = Some(decision);
     next.allow_reuse = false;
-    next.wait_for_runner = wait_for_runner;
+    next.wait_for_runner = budget != RetryBudget::Normal;
     Ok(Some(next))
 }
 
@@ -2759,7 +2781,7 @@ fn interrupt(w: &Wtx, old: &Attempt, why: &str, now: &str) -> AppResult<()> {
         next.after_interrupt = true;
         Some(next)
     } else if old.after_interrupt {
-        prepare_auto_retry(w, old, false, now)?
+        prepare_auto_retry(w, old, RetryBudget::Normal, now)?
     } else {
         None
     };
@@ -2797,7 +2819,6 @@ pub fn fail_queued(
 }
 
 fn can_fail_without_runner(attempt: &Attempt) -> bool {
-    // Automatic retries can wait for a runner without exhausting the budget.
     !attempt.wait_for_runner
         && attempt
             .retry_decision
@@ -2811,25 +2832,85 @@ pub fn fail_unavailable(
     now: &str,
     reason: impl Fn(&Attempt) -> Option<String>,
 ) -> AppResult<Vec<(String, String)>> {
+    fail_unavailable_attempts(w, now, |a| {
+        Ok(
+            if a.created_at.as_str() < before && can_fail_without_runner(a) {
+                reason(a).map(Unavailable::Absent)
+            } else {
+                None
+            },
+        )
+    })
+}
+
+pub(super) enum Unavailable {
+    Absent(String),
+    Disabled(Vec<String>),
+}
+
+impl Unavailable {
+    fn apply(self, attempt: &mut Attempt) -> (String, RetryBudget) {
+        match self {
+            Self::Absent(details) => (details, RetryBudget::Absent),
+            Self::Disabled(names) => {
+                let details =
+                    super::ci_message("runners_disabled").replace("{{names}}", &names.join(", "));
+                attempt.ci_disabled_runners = names;
+                (details, RetryBudget::Disabled)
+            }
+        }
+    }
+}
+
+pub(super) fn fits_runner(
+    r: &impl Rd,
+    attempt: &Attempt,
+    name: &str,
+    images: &[super::images::Image],
+    limits: JobLimits,
+    machine: Option<&Machine>,
+) -> AppResult<bool> {
+    if !images
+        .iter()
+        .any(|image| image.supports(&attempt.job.image))
+        || !attempt.allows_runner(name)
+    {
+        return Ok(false);
+    }
+    let Some(machine) = machine else {
+        return Ok(true);
+    };
+    let need = Resources::from(allocation(r, attempt, limits)?.0);
+    Ok(need.minus(capacity(machine, limits, &[]).0) == Resources::default())
+}
+
+pub(super) fn fail_unavailable_attempts(
+    w: &Wtx,
+    now: &str,
+    reason: impl Fn(&Attempt) -> AppResult<Option<Unavailable>>,
+) -> AppResult<Vec<(String, String)>> {
     let mut changed = Vec::new();
     for (_, id) in w.prefix_raw(store::IX_CI_PENDING, &[], None, usize::MAX)? {
         let id = String::from_utf8_lossy(&id).into_owned();
         let Some(old) = get_attempt(w, &id)? else {
             continue;
         };
-        if !can_fail_without_runner(&old) || old.created_at.as_str() >= before {
+        // An automatic recovery is already queued and waiting for a claim.
+        if old.wait_for_runner {
             continue;
         }
-        let Some(details) = reason(&old) else {
+        let Some(reason) = reason(&old)? else {
             continue;
         };
         let mut a = old.clone();
         conclude(&mut a, "startup_failure", None, now);
-        let next = prepare_auto_retry(w, &a, true, now)?;
-        a.details = Some(cut(&format!(
-            "{details}; {}.",
-            old.recovery_hint(next.as_ref())
-        )));
+        let (details, budget) = reason.apply(&mut a);
+        let next = prepare_auto_retry(w, &a, budget, now)?;
+        a.details = Some(if budget == RetryBudget::Disabled {
+            details
+        } else {
+            cut(&format!("{details}; {}.", old.recovery_hint(next.as_ref())))
+        });
         put_attempt(w, Some(&old), &a)?;
         if let Some(next) = next {
             put_attempt(w, None, &next)?;
@@ -4128,6 +4209,54 @@ mod tests {
             })
             .unwrap();
         }
+    }
+
+    #[test]
+    fn disabled_runner_recovery_preserves_the_protected_retry_budget() {
+        let (_dir, s) = store();
+        s.write_sync(|w| {
+            require_test(w)?;
+            register(w, reg("sha", "main", &["test"]), 10, T0)?;
+            for number in 0..=MAX_AUTO_RETRIES {
+                let now = later(T0, 100 * (number + 1));
+                let before = latest_attempts(w, "repo_1", "sha")?.remove(0);
+                let disabled = || Unavailable::Disabled(vec!["worker".into()]);
+                fail_unavailable_attempts(w, T0, |_| Ok(Some(disabled())))?;
+                fail_unavailable_attempts(w, T0, |_| Ok(Some(disabled())))?;
+                let failed = get_attempt(w, &before.id)?.unwrap();
+                assert_eq!(failed.conclusion.as_deref(), Some("startup_failure"));
+                assert_eq!(failed.ci_disabled_runners, ["worker"]);
+                let waiting = latest_attempts(w, "repo_1", "sha")?.remove(0);
+                assert_eq!(waiting.number, before.number + 1);
+                assert!(waiting.wait_for_runner);
+                assert_eq!(waiting.auto_retry, before.auto_retry);
+                let claimed = claim(w, "worker", 60, &now)?.unwrap();
+                assert_eq!(waiting.id, claimed.attempt.id);
+                assert!(!claimed.attempt.wait_for_runner);
+                assert_eq!(
+                    claimed
+                        .attempt
+                        .auto_retry
+                        .as_ref()
+                        .map_or(0, |retry| retry.number),
+                    number
+                );
+                finish(
+                    w,
+                    &claimed.attempt.id,
+                    &claimed.lease,
+                    "startup_failure",
+                    None,
+                    ResultInfo::default(),
+                    &now,
+                )?;
+            }
+            let exhausted = latest_attempts(w, "repo_1", "sha")?.remove(0);
+            assert_eq!(exhausted.status, "completed");
+            assert_eq!(exhausted.auto_retry.unwrap().number, MAX_AUTO_RETRIES);
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

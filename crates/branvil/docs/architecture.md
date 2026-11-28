@@ -53,7 +53,7 @@ The pieces of the authentication that do not depend on Branvil's records (single
 | `smart_http.rs` | `git http-backend` as CGI with Basic auth and streaming bodies |
 | `hooks.rs` | Branvil-owned hook scripts and the `guildbotics server git-hook` entry point they exec |
 | `refs.rs` | the ref-change boundary: snapshot recording, journal, startup recovery, push policy |
-| `ci/` | CI in the service (see below and `docs/ci.md`): `pipeline` (schema), `queue` (runs, attempts, every state change), `files` (logs, artifacts, retention), `api` (job and runner endpoints), `supervise` (`[ci] runner = "auto"`) |
+| `ci/` | CI in the service (see below and `docs/ci.md`): `pipeline` (schema), `queue` (runs, attempts, every state change), `files` (logs, artifacts, retention), `api` (job and runner endpoints), `supervise` (the Hub runner process) |
 | `runner/` | `guildbotics runner`: the claim/heartbeat/finish loop, `executor` (the `Executor` trait and the microsandbox implementation over the `msb` CLI), `workspace` (source checkout, artifacts without links, dependency cache), `zip` |
 | `upstream/` | the upstream code host: the provider boundary (`host.rs`, `github.rs`), members' accounts, following the default branch, publishing pull requests, carrying changes both ways, the host's check runs (see below) |
 | `landing.rs` | per-pull landing conditions, pair checks and conflict/host failure comments |

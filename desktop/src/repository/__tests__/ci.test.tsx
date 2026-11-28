@@ -39,6 +39,7 @@ const LIMITS = {
 };
 const HUB_RUNNER: CiRunner = {
   name: "hub-runner",
+  ci_state: "enabled",
   connection: "online",
   last_seen_at: "2026-10-18T05:00:00.000Z",
   executor: "microsandbox",
@@ -69,6 +70,7 @@ const REMOTE_RUNNER: CiRunner = {
 };
 const NEW_RUNNER: CiRunner = {
   name: "new-runner",
+  ci_state: "enabled",
   connection: "never_seen",
   last_seen_at: null,
   executor: null,
@@ -88,7 +90,6 @@ const NEW_RUNNER: CiRunner = {
 
 const CI = {
   runner: {
-    mode: "auto",
     state: "ready",
     detail: "1 runner(s) connected.",
     runners: [HUB_RUNNER],
@@ -222,9 +223,8 @@ describe("CI settings", () => {
     const runner = await screen.findByRole("region", { name: "Runner" });
     expect(within(runner).getByText("Ready")).toBeInTheDocument();
     expect(within(runner).getByText("1 runner(s) connected.")).toBeInTheDocument();
-    expect(
-      within(runner).getByRole("switch", { name: /^Run the runner on the Hub/ }),
-    ).toBeChecked();
+    const configuration = within(runner).getByRole("region", { name: "hub-runner settings" });
+    expect(within(configuration).getByRole("switch", { name: "CI" })).toBeChecked();
     expect(
       within(within(runner).getByRole("list", { name: "Runners" })).getByText("hub-runner"),
     ).toBeInTheDocument();
@@ -238,18 +238,13 @@ describe("CI settings", () => {
     ).toHaveAttribute("href", "/workspaces/acme/setup?section=environment#agent-environment-image");
     expect(screen.queryByRole("region", { name: "Images" })).not.toBeInTheDocument();
 
-    // The Save buttons are the selected runner's display name's and job resources', each inside its card.
-    const limits = screen.getByRole("region", { name: "Job resources" });
+    const limits = within(configuration).getByRole("form", { name: "Job resources" });
     const naming = screen.getByRole("region", { name: "Display name" });
     expect(await within(naming).findByRole("button", { name: "Save" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Save" })).toEqual([
-      within(naming).getByRole("button", { name: "Save" }),
       within(limits).getByRole("button", { name: "Save" }),
+      within(naming).getByRole("button", { name: "Save" }),
     ]);
-    for (const other of ["Runner", "Executor", "Network"])
-      expect(screen.getByRole("region", { name: other })).not.toContainElement(
-        within(limits).getByRole("form"),
-      );
 
     // Each repository links to its editor on the CI tab.
     const network = within(screen.getByRole("region", { name: "Network" })).getByRole("list", {
@@ -528,31 +523,43 @@ describe("CI settings", () => {
     expect(screen.getByRole("switch", { name: /^Network for jobs/ })).not.toBeChecked();
   });
 
-  it("turns the automatic runner off and keeps its last report", async () => {
-    const stopped = {
-      ...CI.runner,
-      mode: "off",
-      state: "no_runner",
-      detail: "No runner.",
-      runners: [{ ...HUB_RUNNER, connection: "offline" }],
-    };
+  it("switches CI for the selected runner and shows draining separately from contact", async () => {
+    const path = "/api/v1/admin/ci/runners/desktop-runner/ci";
+    const remote = { ...REMOTE_RUNNER, connection: "online", running_jobs: 1 };
+    const draining = { ...remote, ci_state: "draining" };
+    const stopped = { ...draining, connection: "offline", ci_state: "disabled", running_jobs: 0 };
+    const settings = (runner: typeof remote | typeof draining | typeof stopped) => ({
+      ...CI,
+      runner: { ...CI.runner, runners: [HUB_RUNNER, runner] },
+    });
     const fake = fakeApi({
       ...SHELL,
-      "GET /api/v1/admin/ci": json(200, CI),
-      "PUT /api/v1/admin/ci/runner": json(200, { ...CI, runner: stopped }),
+      "GET /api/v1/admin/ci": [json(200, settings(remote)), json(200, settings(stopped))],
+      [`PUT ${path}`]: [json(200, settings(draining)), json(200, settings(remote))],
     });
     const user = userEvent.setup();
     renderApp("/settings/repositories/ci");
-    await user.click(await screen.findByRole("switch", { name: /^Run the runner on the Hub/ }));
-    expect(await screen.findByText("Contact lost")).toBeInTheDocument();
-    expect(fake.calls("PUT", "/api/v1/admin/ci/runner")[0]?.body).toEqual({ mode: "off" });
-    expect(screen.getByRole("switch", { name: /^Run the runner on the Hub/ })).not.toBeChecked();
+    const list = await screen.findByRole("list", { name: "Runners" });
+    const panel = (name: string) =>
+      within(screen.getByRole("region", { name: `${name} settings` }));
+    expect(panel(HUB_RUNNER.name).getByRole("switch", { name: "CI" })).toBeChecked();
+    await user.click(within(list).getByRole("radio", { name: remote.name }));
+    const toggle = panel(remote.name).getByRole("switch", { name: "CI" });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    expect(fake.calls("PUT", path)[0]?.body).toEqual({ enabled: false });
+    expect(await within(list).findByText("Waiting for CI to stop")).toBeInTheDocument();
+    expect(toggle).not.toBeChecked();
+    expect(await within(list).findByText("CI stopped")).toBeInTheDocument();
+    expect(within(list).getByText("Contact lost")).toBeInTheDocument();
+    await user.click(toggle);
+    expect(fake.calls("PUT", path)[1]?.body).toEqual({ enabled: true });
+    await waitFor(() => expect(toggle).toBeChecked());
   });
 
   it("shows a version mismatch warning for the only online runner when the automatic runner is off", async () => {
     const runner = {
       ...CI.runner,
-      mode: "off",
       state: "executor_unavailable",
       detail: "runner build differs",
       version_mismatch: { name: REMOTE_RUNNER.name, version: REMOTE_RUNNER.version },
@@ -580,7 +587,6 @@ describe("CI settings", () => {
     };
     const runner = {
       ...CI.runner,
-      mode: "off",
       state: "executor_unavailable",
       detail: "runner build differs",
       version_mismatch: { name: REMOTE_RUNNER.name, version: REMOTE_RUNNER.version },
@@ -629,9 +635,7 @@ describe("CI settings", () => {
       "Mac mini has a vCPU shortfall of 2",
     );
     expect(
-      within(screen.getByRole("region", { name: "Job resources" })).getByText(
-        "Mac mini (hub-runner)",
-      ),
+      screen.getByRole("region", { name: "Mac mini (hub-runner) settings" }),
     ).toBeInTheDocument();
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Gaming PC reported version older-build, which differs from the Hub.",
@@ -754,10 +758,26 @@ describe("CI settings", () => {
     expect(within(limits()).getByRole("textbox", { name: "CPUs" })).toHaveValue("4");
     expect(screen.getByText("Hub defaults")).toBeInTheDocument();
     await user.click(within(list).getByRole("radio", { name: "desktop-runner" }));
-    const cpus = within(limits()).getByRole("textbox", { name: "CPUs" });
+    const config = within(screen.getByRole("region", { name: "desktop-runner settings" }));
+    const machine = within(config.getByRole("region", { name: "Whole machine" }));
+    const job = within(config.getByRole("region", { name: "One CI job" }));
+    expect(machine.getAllByRole("textbox")).toHaveLength(3);
+    expect(job.getAllByRole("textbox")).toHaveLength(5);
+    expect(
+      job.getByRole("textbox", { name: "Work directory space (MiB)" }),
+    ).toHaveAccessibleDescription(
+      "Additional space a job can write after checkout and cache restoration.",
+    );
+    expect(job.getByRole("textbox", { name: "Time limit (seconds)" })).toHaveAccessibleDescription(
+      "Caps the pipeline’s timeout_secs and sets the limit for jobs that omit it.",
+    );
+    expect(
+      job.getByText("Each new CI job uses the saved VM resources and limits."),
+    ).toBeInTheDocument();
+    expect(machine.getByRole("textbox", { name: "Parallel jobs" })).toHaveValue("2");
+    const cpus = job.getByRole("textbox", { name: "CPUs" });
     expect(cpus).toHaveValue("6");
     expect(screen.getByText("Saved for this runner")).toBeInTheDocument();
-    expect(within(limits()).getByRole("textbox", { name: "Parallel jobs" })).toHaveValue("2");
     await user.clear(cpus);
     await user.type(cpus, "8");
     await user.click(within(limits()).getByRole("button", { name: "Save" }));
@@ -833,7 +853,7 @@ describe("CI settings", () => {
       ).not.toBeInTheDocument(),
     );
     expect(fake.calls("DELETE", path("desktop-runner"))).toHaveLength(1);
-    for (const panel of ["Display name", "Tokens", "Job resources"]) {
+    for (const panel of ["Display name", "Tokens", "hub-runner settings"]) {
       expect(screen.getAllByRole("region", { name: panel })).toHaveLength(1);
     }
     expect(screen.getByRole("textbox", { name: "Display name" })).toHaveValue("hub-runner");

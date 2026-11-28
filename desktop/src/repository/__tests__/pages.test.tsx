@@ -953,7 +953,7 @@ describe("pages", () => {
       ...SHELL,
       "GET /api/v1/repos": page([]),
       "GET /api/v1/admin/diagnostics": json(200, {
-        runner: { state: "no_runner", detail: "No runner has contacted Branvil.", mode: "auto" },
+        runner: { state: "no_runner", detail: "No runner has contacted Branvil." },
         upstream: {
           state: "problems",
           problems: [{ repository: "acme/demo", problem: "The reader's token was refused." }],
@@ -984,7 +984,7 @@ describe("pages", () => {
       ...SHELL,
       "GET /api/v1/members": page([]),
       "GET /api/v1/admin/diagnostics": json(200, {
-        runner: { state: "stopping", detail: "Branvil is stopping.", mode: "off" },
+        runner: { state: "stopping", detail: "Branvil is stopping." },
         upstream: { state: "following", problems: [] },
       }),
     });
@@ -1003,7 +1003,7 @@ describe("pages", () => {
       // Native AbortSignal.timeout uses a clock that fake timers do not advance.
       await new Promise((resolve) => setTimeout(resolve, 1_100));
       return json(200, {
-        runner: { state: "stopping", detail: "Branvil is stopping.", mode: "off" },
+        runner: { state: "stopping", detail: "Branvil is stopping." },
       });
     });
     fakeApi({ ...SHELL, "GET /api/v1/admin/diagnostics": diagnostics });
@@ -1023,7 +1023,7 @@ describe("pages", () => {
       ...SHELL,
       "GET /api/v1/members": page([]),
       "GET /api/v1/admin/diagnostics": json(200, {
-        runner: { state: "no_runner", detail: "", mode: "off" },
+        runner: { state: "disabled", detail: "" },
         upstream: { state: "following", problems: [] },
       }),
     });

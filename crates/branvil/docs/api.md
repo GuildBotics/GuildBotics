@@ -173,7 +173,7 @@ repository, and upstream events, including changes in another repository.
 | 409 | `children_open` | A ticket is closed as completed while one of its children is open. |
 | 409 | `blocked` | A ticket is moved into `in_progress` while one of its blockers is open. |
 | 409 | `delete_has_children`, `delete_blocks_tickets`, `delete_linked_pull`, `delete_upstream_issue` | Ticket deletion is refused because it has children, is named as a blocker, links a PR, or links an upstream issue, respectively. Closed children, dependents, and PRs count too. |
-| 409 | `runner_online`, `runner_holds_attempts` | Runner deletion is refused because the runner reported within `ci.runner_absent_secs` or holds attempts ("CI settings"). Nothing was written. |
+| 409 | `runner_builtin`, `runner_online`, `runner_holds_attempts` | Runner deletion is refused because the runner reported within `ci.runner_absent_secs` or holds attempts ("CI settings"). Nothing was written. |
 | 409 | `no_account` | The member whose account the upstream host needs has none there, or its credential is not on this machine ("Upstream"). |
 | 409 | `upstream_refused` | The upstream host refused what Branvil sent or asked for (the message says why). |
 | 409 | `idempotency_conflict` | See conventions. |
@@ -343,7 +343,7 @@ A failure is never an empty list:
 | HTTP | `code` | When |
 | --- | --- | --- |
 | 422 | `unsupported` | The repository has no upstream. |
-| 409 | `runner_online`, `runner_holds_attempts` | Runner deletion is refused because the runner reported within `ci.runner_absent_secs` or holds attempts ("CI settings"). Nothing was written. |
+| 409 | `runner_builtin`, `runner_online`, `runner_holds_attempts` | Runner deletion is refused because the runner reported within `ci.runner_absent_secs` or holds attempts ("CI settings"). Nothing was written. |
 | 409 | `no_account` | The reader has no account on the host, or its credential is not on this machine. |
 | 404 | `not_found` | No alert of that `id`, or the host answered "not found" for the repository: the reader's account cannot see it, or the host keeps no alerts of it. |
 | 409 | `upstream_refused` | The host refused the reader's request (its token, its permissions, or the request itself). |
@@ -1565,8 +1565,13 @@ the rest of the file, and take effect immediately. The Hub uses the shared image
   latest image pull or load:
   `{"kind": "pull"|"load", "target", "state": "running"|"succeeded"|"failed",
   "detail", "started_at", "finished_at", "loaded": [{"reference"}]}`.
-- `PUT /api/v1/admin/ci/runner` (owner) `{"mode": "auto"|"off"}` → the settings.
-  `auto` starts the supervised runner, `off` stops it.
+- `PUT /api/v1/admin/ci/runners/{name}/ci` (owner) `{"enabled": boolean}`
+  → the settings. Saves `ci_enabled` under `[ci.runner_limits.<name>]`. The
+  switch defaults to on for runners on other machines. The built-in Hub
+  runner uses the legacy `[ci] runner` value (`auto` or `off`, default `off`)
+  until its own switch is explicitly saved. An unknown
+  name or a member of another kind returns `404`. Turning off CI stops new
+  claims while existing leases, heartbeats and claim reports continue.
 - `PUT /api/v1/admin/ci/limits` (owner) `{"max_cpus", "max_memory_mib",
   "work_quota_mib", "max_timeout_secs", "cache_max_mib", "max_jobs",
   "memory_reserve_percent", "cpu_multiplier_percent"}` → the
@@ -1593,7 +1598,8 @@ the rest of the file, and take effect immediately. The Hub uses the shared image
   gets `401` from then on), its record and its row in `runner.runners` go,
   and `[ci.runner_limits.<name>]` is removed from `config.toml`, keeping the
   rest of the file. An unknown name or a member of another kind returns `404`.
-  A runner that reported within `ci.runner_absent_secs` is `409 runner_online`,
+  The built-in Hub runner is `409 runner_builtin`. A runner that reported
+  within `ci.runner_absent_secs` is `409 runner_online`,
   and one that holds attempts `409 runner_holds_attempts`; nothing is deleted.
   Attempts and checks keep the runner's name in `runner`. A runner that joins
   again under the same name (`guildbotics runner join` from the same device)
@@ -1666,13 +1672,14 @@ the rest of the file, and take effect immediately. The Hub uses the shared image
   `ci.runner_absent_secs`), `executor_unavailable` (no connected runner has
   both a ready executor and the Hub build), or `stopping` (the service got
   SIGTERM: it gives out no job and waits for the running ones, `detail` says
-  until when; `docs/ci.md`); `mode` is the `[ci] runner` setting. The list is
-  built from runner members. A runner is `online` until
-  `ci.runner_absent_secs` elapses without a report, `offline` after that or
-  when the Hub stops its runner, and `never_seen` if it has not reported
-  since the Hub started. A stopped runner retains its last report during the
-  current Hub process. Only online runners with a ready executor and the Hub
-  build make the aggregate state `ready`. When the state is `executor_unavailable`,
+  until when; `docs/ci.md`), or `disabled` (all connected runners have CI off).
+  The list is built from runner members. Each row reports `ci_state` as
+  `enabled`, `draining` (CI is off but attempts are still in progress), or
+  `disabled`. The separate `connection` is `online` up to
+  `ci.runner_absent_secs` without a report, `offline` after that, and
+  `never_seen` before the first report. An offline runner retains its last
+  report during the current Hub process. The aggregate state is `ready`
+  when an online runner has CI enabled, a ready executor and the Hub build. When the state is `executor_unavailable`,
   `detail` says why. If a connected runner reported a different build,
   `version_mismatch` is its `{name, version}`; otherwise it is `null`.
   `running_jobs` is the number of attempts marked in progress for that member.
@@ -1689,6 +1696,11 @@ the rest of the file, and take effect immediately. The Hub uses the shared image
   ```
 
   (`state` is `following` without problems).
+
+Attempts that end in `startup_failure` because every compatible runner has
+CI off include `ci_disabled_runners` (runner names) in job and check
+responses, along with `details` explaining how to re-enable CI. The absence
+timeout still governs a runner that is enabled and has stopped reporting.
 
 ### Yield a PR head's running checks
 

@@ -1,5 +1,7 @@
 // English messages. `ja.ts` must have exactly the same keys.
 
+import ciMessages from "../../../../guildbotics/templates/locales/integrations/branvil/ci.json";
+
 export const en = {
   "verification.verified": "verified",
   "verification.verifying": "verifying",
@@ -374,6 +376,7 @@ export const en = {
     "Runner selection requires a current, unprotected pull request head.",
   "ci.error.retry_runner_ineligible": "Select a runner with the job's image and the Hub version.",
   "ci.error.retry_runner_excluded": "The selected runner is also excluded.",
+  "ci.error.runner_builtin": ciMessages.en.runner_builtin,
   "ci.error.runner_online":
     "This runner is running (it reported recently). Stop it on its machine before deleting it.",
   "ci.error.runner_holds_attempts":
@@ -750,9 +753,19 @@ export const en = {
   "ci.settings.state.no_runner": "No runner",
   "ci.settings.state.executor_unavailable": "Executor unavailable",
   "ci.settings.state.stopping": "Stopping",
-  "ci.settings.runHere": "Run the runner on the Hub",
-  "ci.settings.runHereHelp":
-    "The Hub starts the runner with the service. Switching it off interrupts the running job.",
+  "ci.settings.state.disabled": "CI off",
+  "ci.settings.runnerConfiguration": "{{name}} settings",
+  "ci.settings.ciSwitch": "CI",
+  "ci.settings.ciSwitchHelp":
+    "Turning off CI lets running attempts finish and stops new assignments.",
+  "ci.settings.ciState.draining": "Waiting for CI to stop",
+  "ci.settings.ciState.disabled": "CI stopped",
+  "ci.settings.machineLimits": "Whole machine",
+  "ci.settings.machineLimitsHelp": "Capacity shared by all CI jobs on this runner.",
+  "ci.settings.jobLimits": "One CI job",
+  "ci.settings.jobLimitsHelp": "Each new CI job uses the saved VM resources and limits.",
+  "ci.settings.connectedRunnersDisabled": ciMessages.en.connected_runners_disabled,
+  "ci.runnersDisabled": ciMessages.en.runners_disabled,
   "ci.settings.runners": "Runners",
   "ci.settings.noRunners": "No runner members.",
   "ci.settings.deleteRunner": "Delete",
@@ -784,12 +797,14 @@ export const en = {
   "ci.settings.limits": "Job resources",
   "ci.settings.limitsSource.default": "Hub defaults",
   "ci.settings.limitsSource.runner": "Saved for this runner",
-  "ci.settings.limitsHelp":
-    "Every job runs with these CPUs and this memory, in a microVM of its own. Up to the number of parallel jobs run at once, using that many times the CPUs and memory. Work directory space is what a job may write to /work beyond the checkout and the restored cache. The time limit caps a pipeline's timeout_secs and is the limit of a job that gives none. Saved values apply from the next job the runner starts (running jobs go on).",
   "ci.settings.maxCpus": "CPUs",
   "ci.settings.maxMemory": "Memory (MiB)",
   "ci.settings.workQuota": "Work directory space (MiB)",
+  "ci.settings.workQuotaHelp":
+    "Additional space a job can write after checkout and cache restoration.",
   "ci.settings.maxTimeout": "Time limit (seconds)",
+  "ci.settings.maxTimeoutHelp":
+    "Caps the pipeline’s timeout_secs and sets the limit for jobs that omit it.",
   "ci.settings.cacheMax": "Cache size (MiB)",
   "ci.settings.maxJobs": "Parallel jobs",
   "ci.settings.memoryReserve": "Machine memory reserve (%)",

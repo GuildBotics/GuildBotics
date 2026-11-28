@@ -468,6 +468,7 @@ export interface Check {
   runner: string | null;
   details_url?: string;
   details?: string;
+  ci_disabled_runners?: string[];
   artifact_names?: string[];
   reused_from?: ReusedFrom;
   started_at?: string;
@@ -592,6 +593,7 @@ export interface Job {
   started_at: string | null;
   finished_at: string | null;
   details: string | null;
+  ci_disabled_runners?: string[];
   artifact_names: string[];
   reused_from: ReusedFrom | null;
 }
@@ -615,7 +617,6 @@ export interface Diagnostics {
   runner?: {
     state: "ready" | "no_runner" | "executor_unavailable" | "stopping" | string;
     detail: string;
-    mode: string;
     version_mismatch?: RunnerVersionMismatch | null;
   };
   upstream?: { state: string; problems?: { repository: string; problem: string }[] };
@@ -624,9 +625,7 @@ export interface Diagnostics {
 /** The CI runner, its executor, job limits, and image cache, as `/admin/ci` shows them to the owner. */
 export interface CiSettings {
   runner: {
-    /** The `[ci] runner` setting as it applies now. */
-    mode: "auto" | "off";
-    state: "ready" | "no_runner" | "executor_unavailable" | "stopping";
+    state: "ready" | "no_runner" | "executor_unavailable" | "stopping" | "disabled";
     detail: string;
     version_mismatch?: RunnerVersionMismatch | null;
     runners: CiRunner[];
@@ -652,6 +651,7 @@ export interface CiSettings {
 
 export interface CiRunner {
   name: string;
+  ci_state: "enabled" | "draining" | "disabled";
   connection: "online" | "offline" | "never_seen";
   last_seen_at: string | null;
   running_jobs: number;

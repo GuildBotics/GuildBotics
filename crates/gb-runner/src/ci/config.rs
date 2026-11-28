@@ -1,26 +1,23 @@
-//! The `[ci]` section of `config.toml`: service-side limits, the supervised
-//! runner, and the runner's executor settings (read by `guildbotics runner` when it
-//! runs with the same configuration).
+//! The `[ci]` section of `config.toml`: service-side limits, runner settings,
+//! and the executor settings read by `guildbotics runner`.
 
 use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RunnerMode {
-    /// No runner is started by the service (run `guildbotics runner` yourself).
-    #[default]
     Off,
-    /// The server starts one `guildbotics runner` child and restarts it when
-    /// it exits.
     Auto,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(deny_unknown_fields, default)]
 pub struct CiConfig {
-    pub runner: RunnerMode,
+    /// Legacy Hub switch, used until a per-runner value is saved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runner: Option<RunnerMode>,
     /// Admission limit: classes 1–3 count only their queued attempts; 4a/4b
     /// count all queued attempts. Waiting runs enter in class then seq order.
     /// Total queued work can approach twice this limit, excluding bypasses.
@@ -41,14 +38,14 @@ pub struct CiConfig {
     /// Logs and artifacts of attempts finished longer ago are deleted.
     pub retention_days: u64,
     pub executor: ExecutorConfig,
-    pub runner_limits: BTreeMap<String, JobLimits>,
+    pub runner_limits: BTreeMap<String, RunnerSettings>,
     pub microsandbox: MicrosandboxConfig,
 }
 
 impl Default for CiConfig {
     fn default() -> Self {
         Self {
-            runner: RunnerMode::Off,
+            runner: None,
             queue_max: 256,
             lease_secs: 60,
             runner_absent_secs: 120,
@@ -60,6 +57,36 @@ impl Default for CiConfig {
             runner_limits: BTreeMap::new(),
             microsandbox: MicrosandboxConfig::default(),
         }
+    }
+}
+
+/// A switch-only entry keeps inheriting the default job resources.
+#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RunnerSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ci_enabled: Option<bool>,
+    #[serde(flatten)]
+    pub limits: Option<JobLimits>,
+}
+
+impl<'de> Deserialize<'de> for RunnerSettings {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut table = toml::Table::deserialize(deserializer)?;
+        let ci_enabled = table
+            .remove("ci_enabled")
+            .map(|value| value.try_into())
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+        let limits = if table.is_empty() {
+            None
+        } else {
+            Some(
+                toml::Value::Table(table)
+                    .try_into()
+                    .map_err(serde::de::Error::custom)?,
+            )
+        };
+        Ok(Self { ci_enabled, limits })
     }
 }
 

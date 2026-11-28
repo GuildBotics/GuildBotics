@@ -114,7 +114,7 @@ function renderCard(focusElement?: string, cachedImage?: CachedImage) {
   if (cachedImage) {
     client.setQueryDefaults(keys.ci(), { staleTime: Infinity });
     client.setQueryData(keys.ci(), {
-      runner: { mode: "off" },
+      runner: { state: "disabled", runners: [] },
       images: { cached: [cachedImage], missing: [], error: null },
       operation: null,
     });

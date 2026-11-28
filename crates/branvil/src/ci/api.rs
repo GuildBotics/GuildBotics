@@ -78,6 +78,8 @@ pub struct AttemptView {
     pub status: String,
     pub conclusion: Option<String>,
     pub details: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ci_disabled_runners: Vec<String>,
     pub cancel_requested: bool,
     pub created_at: String,
     pub started_at: Option<String>,
@@ -139,6 +141,7 @@ pub(crate) async fn view(app: &Shared, a: &Attempt) -> AppResult<AttemptView> {
         status: a.status.clone(),
         conclusion: a.conclusion.clone(),
         details,
+        ci_disabled_runners: a.ci_disabled_runners.clone(),
         cancel_requested: a.cancel_requested,
         created_at: a.created_at.clone(),
         started_at: a.started_at.clone(),
@@ -684,7 +687,7 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
     let reported_at = app
         .ci
         .report_runner(c.name(), &c.member.display_name, report);
-    let Some(held) = held else {
+    let Some(held) = held.filter(|_| app.ci.settings().ci_enabled(c.name())) else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
     let images = super::images::current(&app.layout.root, held).map_err(AppError::internal)?;
@@ -704,7 +707,10 @@ async fn claim(State(app): State<Shared>, c: Caller, body: axum::body::Bytes) ->
             let selection = app
                 .store
                 .write(move |w| {
-                    if ci.stopping() || !w.exists(store::MEMBERS, &Member::key(&runner))? {
+                    if ci.stopping()
+                        || !ci.settings().ci_enabled(&runner)
+                        || !w.exists(store::MEMBERS, &Member::key(&runner))?
+                    {
                         return Ok((None, None, false));
                     }
                     let (claimed, waiting) = queue::claim_images(
