@@ -2,7 +2,7 @@ use chrono::{DateTime, Duration, Utc};
 use gb_base::{files::SHARED_RECORD_SCHEMA_VERSION, shared_writes::SharedWrites};
 use gb_observability::{
     activity::ActivityEvents,
-    interactive::{InteractiveSession, InteractiveSessions, SessionCommand},
+    interactive::{InteractiveSession, InteractiveSessions, SessionCommand, idle_limit},
     redaction::Redactor,
     runs::{RunFinish, RunRecord, RunState, RunStore},
 };
@@ -726,4 +726,153 @@ fn shared_redaction_preserves_short_values_at_the_eight_character_boundary() {
         redactor.local(json!({"field": input})),
         json!({"field": expected})
     );
+}
+
+#[test]
+fn a_resumed_run_records_when_it_stood_still_and_a_fresh_or_finished_one_does_not() {
+    let root = tempfile::tempdir().unwrap();
+    let writes = SharedWrites::new(root.path().into(), None);
+    let runs = RunStore::open(root.path());
+    let events = ActivityEvents::open(root.path());
+    let start = |w: &mut gb_base::shared_writes::Writer<'_>, id: &str, at: &str| {
+        let mut r = seed(id);
+        r.started_at = at.into();
+        runs.start(w, r, &Redactor::default()).map(|_| ())
+    };
+    let finish = |state| RunFinish {
+        state,
+        summary: "",
+        attributes: BTreeMap::new(),
+        now: "2026-11-03T10:10:00Z",
+    };
+    writes
+        .transaction(|w| {
+            for id in ["undone", "done"] {
+                start(w, id, "2026-11-03T10:00:00Z")?;
+            }
+            runs.finish(
+                w,
+                "undone",
+                finish(RunState::Interrupted),
+                &Redactor::default(),
+            )?;
+            runs.finish(w, "done", finish(RunState::Succeeded), &Redactor::default())?;
+            for id in ["undone", "done"] {
+                start(w, id, "2026-11-03T11:00:00Z")?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    let all = events
+        .list_between(DateTime::<Utc>::MIN_UTC, DateTime::<Utc>::MAX_UTC)
+        .unwrap();
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert_eq!(all[0]["kind"], gb_observability::runs::RESUMED_EVENT);
+    assert_eq!(all[0]["local_trace_id"], "undone");
+    assert_eq!(all[0]["occurred_at"], "2026-11-03T11:00:00Z");
+    assert_eq!(
+        all[0]["payload"],
+        json!({"stopped_at":"2026-11-03T10:10:00Z","stopped_status":"interrupted"})
+    );
+    // The record keeps its first start; the fact holds the stillness.
+    assert_eq!(
+        runs.read("undone").unwrap().unwrap().started_at,
+        "2026-11-03T10:00:00Z"
+    );
+}
+
+#[test]
+fn a_conversation_keeps_every_target_it_worked_on_once_with_when() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = InteractiveSessions::open(root.path());
+    let record = |url: &str, action: &str, now: &str| {
+        SharedWrites::new(root.path().into(), None)
+            .transaction(|w| {
+                sessions.record(
+                    w,
+                    &session(),
+                    SessionCommand {
+                        command: "member ticket comment",
+                        status: "succeeded",
+                        attributes: attributes(&[
+                            ("target.url", url),
+                            ("target.kind", "ticket"),
+                            ("target.action", action),
+                        ]),
+                        now,
+                    },
+                    &redactor(),
+                )
+            })
+            .unwrap()
+    };
+    record(
+        "http://hub.test/tickets/1",
+        "commented",
+        "2026-11-03T10:05:00+00:00",
+    );
+    record(
+        "http://hub.test/tickets/2",
+        "commented",
+        "2026-11-03T10:10:00+00:00",
+    );
+    // Only read: not a ticket it worked on.
+    record(
+        "http://hub.test/tickets/3",
+        "inspected",
+        "2026-11-03T10:15:00+00:00",
+    );
+    let saved = record(
+        "http://hub.test/tickets/1",
+        "commented",
+        "2026-11-03T10:20:00+00:00",
+    );
+    assert_eq!(
+        saved["attributes"]["target.url"],
+        "http://hub.test/tickets/1"
+    );
+    assert_eq!(
+        saved["targets"],
+        json!([
+            {"target.action":"commented","target.kind":"ticket","target.url":"http://hub.test/tickets/1",
+                "first_at":"2026-11-03T10:05:00+00:00","last_at":"2026-11-03T10:20:00+00:00"},
+            {"target.action":"commented","target.kind":"ticket","target.url":"http://hub.test/tickets/2",
+                "first_at":"2026-11-03T10:10:00+00:00","last_at":"2026-11-03T10:10:00+00:00"},
+        ])
+    );
+}
+
+#[test]
+fn a_named_conversation_stays_one_session_until_a_long_break() {
+    let root = tempfile::tempdir().unwrap();
+    let writes = SharedWrites::new(root.path().into(), None);
+    let sessions = InteractiveSessions::open(root.path());
+    let start = DateTime::parse_from_rfc3339("2026-11-27T08:42:00Z")
+        .unwrap()
+        .to_utc();
+    let touch = |thread: &str, minutes: i64| {
+        writes
+            .transaction(|w| {
+                sessions.start_or_touch(
+                    w,
+                    "p1",
+                    "claude_code",
+                    thread,
+                    start + Duration::minutes(minutes),
+                    idle_limit(thread),
+                )
+            })
+            .unwrap()
+            .trace_id
+    };
+    let conversation = touch("conversation", 0);
+    // Half an hour of edits and tests without a member command: still the same.
+    assert_eq!(touch("conversation", 37), conversation);
+    assert_eq!(touch("conversation", 37 + 170), conversation);
+    // More than three hours away: the conversation was left, and resumes anew.
+    assert_ne!(touch("conversation", 37 + 170 + 181), conversation);
+    // A client that does not name its conversation is cut after half an hour.
+    let unnamed = touch("", 0);
+    assert_eq!(touch("", 29), unnamed);
+    assert_ne!(touch("", 29 + 31), unnamed);
 }

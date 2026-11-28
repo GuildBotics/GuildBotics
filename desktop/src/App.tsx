@@ -37,6 +37,7 @@ import {
 import type { TFunction } from "i18next";
 import {
   Activity,
+  ChartGantt,
   CheckCircle2,
   Copy,
   ExternalLink,
@@ -76,6 +77,7 @@ import {
 } from "react-router";
 
 import { ActivityHistoryPage } from "./activity/ActivityHistory";
+import { TicketTimelinePage } from "./timeline/TicketTimeline";
 import { CommandsPage } from "./commands/CommandsPage";
 import { TroubleshootingDrawer } from "./diagnostics/TroubleshootingDrawer";
 import { requestNavigation } from "./navigationGuard";
@@ -135,7 +137,14 @@ import { isTerminalTraceStatus, traceStatusColor } from "./traceStatus";
 const EXECUTION_LIMIT = 200;
 const MEMORY_EVENT_LIMIT = 500;
 const MEMORY_FILTER_ALL = "__all__";
-const WORKSPACE_PAGES = new Set(["/activity", "/service", "/commands", "/diagnostics", "/setup"]);
+const WORKSPACE_PAGES = new Set([
+  "/activity",
+  "/timeline",
+  "/service",
+  "/commands",
+  "/diagnostics",
+  "/setup",
+]);
 type DiagnosticsTab = "executions" | "memory" | "settings";
 const DIAGNOSTICS_TABS = new Set<DiagnosticsTab>(["executions", "memory", "settings"]);
 type NavRuntimeState = "running" | "stopping" | "stopped";
@@ -254,6 +263,11 @@ export function App() {
                   label={repositoryT("nav.relations")}
                 />
                 <GuardedNavLink
+                  to={scope + "/timeline"}
+                  icon={<ChartGantt size={18} />}
+                  label={t("app.nav.timeline")}
+                />
+                <GuardedNavLink
                   to={href.pulls(visibleWorkspace)}
                   active={["repo", "pull", "commit", "job", "test_failures"].includes(route.name)}
                   icon={<GitPullRequest size={18} />}
@@ -366,6 +380,7 @@ function desktopRoutes(configured: boolean, loading: boolean, scope: string, not
         path="activity"
         element={<ConfiguredRoute configured={configured} loading={loading} scope={scope} />}
       />
+      <Route path="timeline" element={<TicketTimelinePage />} />
       <Route path="service" element={<ServicePage />} />
       <Route path="overview" element={<Navigate replace to={scope + "/service"} />} />
       <Route path="commands" element={<CommandsPage />} />

@@ -532,6 +532,14 @@
     "source": "interactive",
     "started_at": "2026-11-03T10:00:00+00:00",
     "status": "failed",
+    "targets": [
+      {
+        "first_at": "2026-11-03T10:00:00+00:00",
+        "last_at": "2026-11-03T10:00:00+00:00",
+        "target.title": "later",
+        "target.url": "ticket/1"
+      }
+    ],
     "trace_id": "trace-1"
   },
   "presentations": [

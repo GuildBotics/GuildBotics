@@ -727,7 +727,7 @@ impl<'a> Lifecycle<'a> {
                     &request.interactive_host,
                     &request.interactive_thread_key,
                     chrono::Utc::now(),
-                    chrono::Duration::minutes(30),
+                    gb_observability::interactive::idle_limit(&request.interactive_thread_key),
                 )
             })
             .ok()?;

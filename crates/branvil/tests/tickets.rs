@@ -2277,3 +2277,36 @@ async fn a_repair_ticket_stays_in_the_repository_it_repairs() {
         (&json!(REPO), &repair["key"])
     );
 }
+
+#[tokio::test]
+async fn a_ticket_records_when_its_work_first_started() {
+    let w = World::new().await;
+    let ticket = w.ticket("Work").await;
+    assert!(ticket["started_at"].is_null(), "{ticket}");
+    let board = format!(
+        "{}/tickets/{}/board",
+        w.repo_path(),
+        ticket["key"].as_str().unwrap()
+    );
+    let mut started = Value::Null;
+    for (lane, expect_started) in [
+        ("ready", false),
+        ("in_progress", true),
+        ("ready", true),
+        ("in_progress", true),
+    ] {
+        let (status, moved) = w.server.put(&board, &w.aiko, json!({"lane": lane})).await;
+        assert_eq!(status, 200, "{moved}");
+        assert_eq!(
+            moved["started_at"].is_string(),
+            expect_started,
+            "{lane}: {moved}"
+        );
+        // Moving back and forth keeps the first start.
+        if started.is_null() {
+            started = moved["started_at"].clone();
+        } else {
+            assert_eq!(moved["started_at"], started, "{lane}");
+        }
+    }
+}

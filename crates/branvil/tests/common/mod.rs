@@ -821,18 +821,18 @@ pub fn edit_records(db: &Path, table: &str, mut f: impl FnMut(&mut Value)) {
     txn.commit().unwrap();
 }
 
-pub const PREVIOUS_SCHEMA_VERSION: u64 = 51;
+pub const PREVIOUS_SCHEMA_VERSION: u64 = 52;
 
 /// Makes the database look written by the previous schema version: its
-/// version, and attempts without the resource measurements it did not keep.
+/// version, and tickets without the start of their work it did not keep.
 pub fn as_previous_schema(db: &Path) {
     edit_records(db, "meta", |v| {
         if v.is_u64() {
             *v = json!(PREVIOUS_SCHEMA_VERSION);
         }
     });
-    edit_records(db, "ci_attempts", |v| {
-        v.as_object_mut().unwrap().remove("resources");
+    edit_records(db, "tickets", |v| {
+        v.as_object_mut().unwrap().remove("started_at");
     });
 }
 

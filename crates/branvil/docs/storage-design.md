@@ -122,7 +122,7 @@ check did not change stored records or raise the version.
 | `tokens` | `(token id)` | member, label, SHA-256 of the secret, last use | token API | auth (by id, constant-time hash compare) |
 | `workspaces` | `(workspace id)` | name, execution root (optional) | workspace API, execution registration, upgrade | repository creation, cards, closed |
 | `repos` | `(repo id)` | path, workspace id, default branch, protected branches, required approvals, `auto_land`, `hold_while_failing` (boolean, defaults to false on creation and upgrade), `review_rounds` (1–20, 3 on creation and upgrade), `ci_network`, `responder` (explicit agent name or null for automatic), labels, upstream (provider, repository), revision | repo API | everything under a repository |
-| `tickets` | `(repo id, n)` | ticket incl. its workspace id, its one assignee with `assigned_at` (or none), labels, whether it is interactive, upstream issue (or none), lane/rank on the workspace's board, its parent (or none) and the tickets it is blocked by, as (repo id, n), state, revision | ticket API, merge | `read(tickets)`, candidates |
+| `tickets` | `(repo id, n)` | ticket incl. its workspace id, its one assignee with `assigned_at` (or none), labels, whether it is interactive, upstream issue (or none), lane/rank on the workspace's board, when it first moved into `in_progress` (`started_at`), its parent (or none) and the tickets it is blocked by, as (repo id, n), state, revision | ticket API, merge | `read(tickets)`, candidates |
 | `ticket_moves` | `(repo id, n)` of a ticket moved to another repository | the `(repo id, n)` it moved to | ticket move | ticket lookups by number or URL, which follow each move (numbers are never reused, so the chain ends) |
 | `comments` | `("ticket", repo id, n, seq)` / `("pull", repo id, n, seq)` | comment with its reactions | comment and reaction API, landing conflicts and failed host checks | comments, cards, activity |
 | `attachments` | `(repo id, attachment id)` | an image of the tickets of the repository's workspace (a moved ticket keeps the ones of its old repository): name, media type read from its bytes, size, uploader, time (the bytes are a file) | upload API, the attachment sweep | delivery, a ticket's attachments, the sweep |
@@ -304,6 +304,9 @@ The 50 → 51 upgrade creates the empty `ci_test_failures` table.
 The 51 → 52 upgrade sets `resources: null` on existing CI attempts and clears
 `ix_ci_memory`. The index now stores guest memory peaks. Host RSS stays on
 the attempt for diagnostics.
+
+The 52 → 53 upgrade sets `started_at: null` on existing tickets: when their
+work started was not kept.
 
 The 35 → 36 upgrade revokes the tokens GuildBotics kept: those labelled
 `guildbotics` and those labelled `app:<client>`.

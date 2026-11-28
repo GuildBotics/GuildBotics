@@ -241,6 +241,9 @@ pub struct Ticket {
     pub created_at: String,
     pub updated_at: String,
     pub closed_at: Option<String>,
+    /// When it first moved into the `in_progress` lane: its work started.
+    /// Patrol and a person working interactively both move it there first.
+    pub started_at: Option<String>,
     pub revision: u64,
 }
 

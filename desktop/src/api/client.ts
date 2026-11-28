@@ -1276,6 +1276,98 @@ export async function getActivityHistory(params: {
   return request(`/activity/history?${search.toString()}`);
 }
 
+/** One stretch a run or a conversation actually ran. */
+export type TicketTimelineBar = {
+  trace_id: string;
+  person_id: string;
+  mode: "workflow" | "interactive";
+  title: string;
+  started_at: string;
+  ended_at: string;
+  /** How the stretch ended: the run's completion, or the state it stopped in. */
+  outcome: string | null;
+};
+
+export type TicketTimelineAttempt = {
+  id: string;
+  job: string;
+  sha: string;
+  attempt: number;
+  runner: string | null;
+  status: string;
+  conclusion: string | null;
+  /** When it was queued: it waited for a runner until `started_at`. */
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  url: string;
+};
+
+export type TicketTimelineEvent = {
+  kind: "comment" | "review" | "pull_created" | "pull_merged";
+  at: string;
+  person_id: string;
+  url: string;
+  verdict?: string;
+};
+
+export type TicketTimelinePull = {
+  url: string;
+  label: string;
+  title: string;
+  state: string;
+  merged: boolean;
+  person_id: string;
+  created_at: string;
+  merged_at: string | null;
+  closed_at: string | null;
+  work: TicketTimelineBar[];
+  reviews: TicketTimelineBar[];
+  jobs: { name: string; attempts: TicketTimelineAttempt[] }[];
+};
+
+export type TicketTimelineTicket = {
+  url: string;
+  label: string;
+  title: string;
+  state: string;
+  created_at: string;
+  closed_at: string | null;
+  /** When it first moved into progress: its work, and its waits, began. */
+  started_at: string | null;
+  /** What ran last on the ticket since its start, before the day: the day's first wait follows it. */
+  previous: {
+    kind: "workflow" | "interactive" | "review" | "job";
+    person_id?: string;
+    job?: string;
+    runner?: string | null;
+    outcome: string | null;
+    started_at: string;
+    ended_at: string;
+  } | null;
+  /** Work on the ticket that belongs to none of its pull requests. */
+  work: TicketTimelineBar[];
+  pulls: TicketTimelinePull[];
+  events: TicketTimelineEvent[];
+};
+
+export type TicketTimelineResponse = {
+  start: string;
+  end: string;
+  /** What the workspace closed in the span; null when it is not on the code host. */
+  summary: { closed_tickets: number; merged_pulls: number } | null;
+  members: { person_id: string; name: string; person_type: string }[];
+  tickets: TicketTimelineTicket[];
+};
+
+export async function getTicketTimeline(params: {
+  start: string;
+  end: string;
+}): Promise<TicketTimelineResponse> {
+  const search = new URLSearchParams({ start: params.start, end: params.end });
+  return request(`/ticket-timeline?${search.toString()}`);
+}
+
 export async function getMemoryEvents(params?: {
   personId?: string;
   docId?: string;

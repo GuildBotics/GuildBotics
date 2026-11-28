@@ -127,9 +127,9 @@ pub(crate) struct Window {
     sync_start: Option<String>,
     sync_end: Option<String>,
 }
-struct ParsedWindow {
-    start: DateTime<FixedOffset>,
-    end: DateTime<FixedOffset>,
+pub(crate) struct ParsedWindow {
+    pub(crate) start: DateTime<FixedOffset>,
+    pub(crate) end: DateTime<FixedOffset>,
     sync_start: DateTime<FixedOffset>,
     sync_end: DateTime<FixedOffset>,
 }
@@ -177,44 +177,37 @@ fn window(q: &Window, headers: &HeaderMap) -> Result<ParsedWindow, ApiError> {
         sync_end: sync.1,
     })
 }
-pub(crate) async fn history(
-    State(api): State<Shared>,
-    headers: HeaderMap,
+/// The window, workspace and language of a read of the shared activity.
+pub(crate) async fn prepare(
+    api: &Shared,
+    headers: &HeaderMap,
     query: Result<Query<Window>, axum::extract::rejection::QueryRejection>,
-) -> Response {
-    let q = match query {
-        Ok(Query(q)) => q,
-        Err(_) => {
-            return ApiError::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "validation_error",
-                &headers,
-            )
-            .into_response();
-        }
+) -> Result<(Window, ParsedWindow, std::path::PathBuf, &'static str), Response> {
+    let Ok(Query(q)) = query else {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_error",
+            headers,
+        )
+        .into_response());
     };
-    let ParsedWindow {
-        start,
-        end,
-        sync_start,
-        sync_end,
-    } = match window(&q, &headers) {
-        Ok(w) => w,
-        Err(e) => return e.into_response(),
-    };
-    let workspace = match crate::workspace::for_request(&api, &headers).await {
+    let parsed = window(&q, headers).map_err(IntoResponse::into_response)?;
+    let workspace = match crate::workspace::for_request(api, headers).await {
         Ok(Some(workspace)) => workspace,
         Ok(None) => {
-            return ApiError::new(StatusCode::BAD_REQUEST, "config_not_found", &headers)
-                .into_response();
+            return Err(
+                ApiError::new(StatusCode::BAD_REQUEST, "config_not_found", headers).into_response(),
+            );
         }
-        Err(refused) => return refused,
+        Err(refused) => return Err(refused),
     };
     let project = workspace.join(".guildbotics/config/team/project.yml");
     if !project.exists() {
-        return ApiError::new(StatusCode::BAD_REQUEST, "config_not_found", &headers)
-            .context(json!({"path":project}))
-            .into_response();
+        return Err(
+            ApiError::new(StatusCode::BAD_REQUEST, "config_not_found", headers)
+                .context(json!({"path":project}))
+                .into_response(),
+        );
     }
     let language = crate::i18n::language(
         headers
@@ -222,6 +215,23 @@ pub(crate) async fn history(
             .and_then(|v| v.to_str().ok())
             .unwrap_or(""),
     );
+    Ok((q, parsed, workspace, language))
+}
+pub(crate) async fn history(
+    State(api): State<Shared>,
+    headers: HeaderMap,
+    query: Result<Query<Window>, axum::extract::rejection::QueryRejection>,
+) -> Response {
+    let (q, window, workspace, language) = match prepare(&api, &headers, query).await {
+        Ok(prepared) => prepared,
+        Err(refused) => return refused,
+    };
+    let ParsedWindow {
+        start,
+        end,
+        sync_start,
+        sync_end,
+    } = window;
     // A stopping server starts no sync for its drain to wait for; the
     // screen shows what is already recorded.
     if !api.shutdown.stopping() {
@@ -255,7 +265,7 @@ pub(crate) async fn history(
         .into_response(),
     }
 }
-fn read(
+pub(crate) fn read(
     workspace: &Path,
     identities: &Path,
     start: DateTime<Utc>,
@@ -269,13 +279,24 @@ fn read(
     let store = Diagnostics::open(workspace);
     let mut lifecycles = Vec::new();
     for r in RunStore::open(workspace).records_between(start, end)? {
-        lifecycles.push(gb_observability::timeline::lifecycle_from_run(&r));
+        let mut lifecycle = gb_observability::timeline::lifecycle_from_run(&r);
+        if let Some(result) = &r.result {
+            lifecycle["outcome"] = json!(result.status);
+        }
+        lifecycles.push(lifecycle);
     }
     for r in InteractiveSessions::open(workspace).list_between(start, end)? {
         lifecycles.push(gb_observability::timeline::lifecycle_from_session(&r));
     }
 
-    let mut records:Vec<_>=ActivityEvents::open(workspace).list_between(start,end)?.into_iter().map(|r|json!({"kind":"event","type":r["kind"],"timestamp":r["occurred_at"],"trace_id":r["local_trace_id"],"person_id":r["member_id"],"source":r["source"],"command":r["command"],"workflow":r["workflow"],"payload":r["payload"],"attributes":r["attributes"]})).collect();
+    // A lifecycle's resumptions are its facts, even outside the window.
+    let (from, to) = lifecycles.iter().fold((start, end), |(from, to), l| {
+        (
+            parsed(text(l, "started_at")).map_or(from, |t| t.min(from)),
+            parsed(text(l, "ended_at")).map_or(to, |t| t.max(to)),
+        )
+    });
+    let mut records:Vec<_>=ActivityEvents::open(workspace).list_between(from,to)?.into_iter().map(|r|json!({"kind":"event","type":r["kind"],"timestamp":r["occurred_at"],"trace_id":r["local_trace_id"],"person_id":r["member_id"],"source":r["source"],"command":r["command"],"workflow":r["workflow"],"payload":r["payload"],"attributes":r["attributes"]})).collect();
     records.extend(
         store
             .activity_targets()?
@@ -283,7 +304,10 @@ fn read(
             .filter(|r| parsed(text(r, "timestamp")).is_some_and(|t| t >= start && t < end)),
     );
     records.extend(crate::diagnostics::memory_records(workspace));
-    records.retain(|r| parsed(text(r, "timestamp")).is_some_and(|t| t >= start && t <= end));
+    records.retain(|r| {
+        r["type"] == gb_observability::runs::RESUMED_EVENT
+            || parsed(text(r, "timestamp")).is_some_and(|t| t >= start && t <= end)
+    });
     let mut result = gb_observability::timeline::build(
         members,
         lifecycles,

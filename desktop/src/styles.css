@@ -1850,6 +1850,246 @@ pre {
     transform: translateX(-50%);
   }
 
+  .timeline-loading {
+    align-items: center;
+    display: flex;
+    gap: 8px;
+  }
+
+  /* The chart scrolls sideways by itself, so the card never scrolls and
+     the gap detail can stay in view. */
+  .timeline-card {
+    min-width: 0;
+    overflow: visible;
+  }
+
+  .timeline-chart {
+    background: var(--color-bg-panel);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    overflow-x: auto;
+  }
+
+  .timeline-row {
+    border-top: 1px solid var(--color-border-subtle);
+    display: grid;
+    grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+    min-height: 32px;
+    min-width: 720px;
+  }
+
+  .timeline-row-head {
+    border-top: 0;
+    color: var(--color-text-subtle);
+    font-size: 12px;
+    min-height: 28px;
+  }
+
+  .timeline-row-ticket {
+    background: var(--color-bg-panel-subtle);
+  }
+
+  .timeline-label {
+    align-items: center;
+    border-right: 1px solid var(--color-border-subtle);
+    display: flex;
+    font-size: 13px;
+    gap: 4px;
+    min-width: 0;
+    padding-right: 8px;
+  }
+
+  .timeline-label-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* How a ticket's work went on, in the colours of the activity screen's modes. */
+  .timeline-mode {
+    display: inline-flex;
+    margin-right: 4px;
+    vertical-align: -2px;
+  }
+
+  .timeline-mode-workflow {
+    color: var(--color-info);
+  }
+
+  .timeline-mode-interactive {
+    color: var(--mantine-color-teal-filled);
+  }
+
+  .timeline-label-text a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .timeline-label-text a:hover {
+    text-decoration: underline;
+  }
+
+  .timeline-toggle,
+  .timeline-toggle-space {
+    flex-shrink: 0;
+    height: 20px;
+    width: 20px;
+  }
+
+  .timeline-toggle {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    color: var(--color-text-subtle);
+    cursor: pointer;
+    display: inline-flex;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .timeline-toggle:hover {
+    background: var(--color-bg-hover);
+  }
+
+  .timeline-track {
+    min-width: 0;
+    position: relative;
+  }
+
+  /* A line under each tick of the head. */
+  .timeline-grid {
+    border-left: 1px solid var(--color-border-subtle);
+    bottom: 0;
+    position: absolute;
+    top: 0;
+  }
+
+  /* The day in numbers, beside its date. */
+  .timeline-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    margin: 0;
+  }
+
+  .timeline-summary div {
+    align-items: baseline;
+    display: flex;
+    gap: 6px;
+  }
+
+  .timeline-summary dt {
+    color: var(--color-text-subtle);
+    font-size: 13px;
+  }
+
+  .timeline-summary dd {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0;
+  }
+
+  .timeline-back {
+    align-items: center;
+    color: inherit;
+    display: inline-flex;
+    font-size: 13px;
+    gap: 2px;
+  }
+
+  .timeline-focus-title {
+    font-size: 15px;
+  }
+
+  .timeline-focus-title a {
+    color: inherit;
+  }
+
+  .timeline-bar {
+    align-items: center;
+    background: var(--color-brand);
+    border-radius: 4px;
+    bottom: 6px;
+    color: var(--mantine-color-white);
+    display: flex;
+    font-size: 11px;
+    min-width: 2px;
+    overflow: hidden;
+    padding: 0 4px;
+    position: absolute;
+    top: 6px;
+    white-space: nowrap;
+    z-index: 2;
+  }
+
+  .timeline-bar span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .timeline-bar-job {
+    background: var(--mantine-color-gray-filled);
+  }
+
+  /* A moment without length, such as a merge: a diamond on its time. */
+  .timeline-milestone {
+    background: var(--color-success);
+    border: 1px solid var(--color-bg-panel);
+    height: 11px;
+    margin-left: -5.5px;
+    position: absolute;
+    top: calc(50% - 5.5px);
+    transform: rotate(45deg);
+    width: 11px;
+    z-index: 3;
+  }
+
+  /* A gap is plain blank until it is selected. */
+  .timeline-gap {
+    background: transparent;
+    border: 0;
+    bottom: 0;
+    cursor: pointer;
+    padding: 0;
+    position: absolute;
+    top: 0;
+    z-index: 1;
+  }
+
+  .timeline-gap:focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: -2px;
+  }
+
+  .timeline-gap-band {
+    background: var(--color-warning-bg);
+    bottom: 0;
+    opacity: 0.5;
+    pointer-events: none;
+    position: absolute;
+    top: 0;
+  }
+
+  .timeline-gap-band-strong {
+    box-shadow: inset 0 0 0 1px var(--color-warning);
+    opacity: 1;
+  }
+
+  /* Kept in view at the bottom: a day of many tickets is longer than the screen. */
+  .timeline-gap-detail {
+    background: var(--color-bg-panel);
+    border-top: 1px solid var(--color-border-subtle);
+    /* Down over the `.workspace` bottom padding, which rows would show through. */
+    bottom: -24px;
+    margin-bottom: -24px;
+    min-height: 4.5em;
+    padding: 10px 12px 24px;
+    position: sticky;
+    z-index: 3;
+  }
+
   .activity-timeline-head span:last-child {
     border-right: 0;
   }

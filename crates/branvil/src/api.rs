@@ -69,6 +69,11 @@ impl DataApi {
     pub fn base_url(&self) -> &str {
         &self.app.base_url
     }
+    /// The repository path and the item of one of this service's `kind`
+    /// URLs (`tickets` or `pulls`), or None for any other URL.
+    pub fn item_of(&self, url: &str, kind: &str) -> Option<(String, String)> {
+        crate::util::parse_item_url(&self.app.base_url, url, kind)
+    }
     /// Send an embedding host notice through the owner's shared webhook.
     pub async fn notify_owner(&self, text: &str) -> bool {
         self.app.autoland.send(&self.app.secrets, text).await
@@ -262,6 +267,15 @@ impl MemberApi {
     ) -> AppResult<Vec<crate::ci::api::AttemptSummary>> {
         let _open = self.api.guard()?;
         crate::ci::api::data_job_attempts(&self.api.app, &self.caller().await?, repo, id).await
+    }
+    /// Every check attempt of every commit of a pull request.
+    pub async fn pull_attempts(
+        &self,
+        repo: &str,
+        number: u64,
+    ) -> AppResult<Vec<crate::ci::api::AttemptSummary>> {
+        let _open = self.api.guard()?;
+        crate::ci::api::data_pull_attempts(&self.api.app, &self.caller().await?, repo, number).await
     }
     /// Recent failed CI attempts for the exact JUnit testcase name.
     pub async fn test_failures(

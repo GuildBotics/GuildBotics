@@ -16,6 +16,7 @@ import {
   createCommandFile,
   dismissSystemAlert,
   getActivityHistory,
+  getTicketTimeline,
   getCommandFile,
   getCommandFileExecutionStatus,
   getCommandOptions,
@@ -544,6 +545,22 @@ describe("GET query parameter encoding", () => {
     expect(url.searchParams.get("refresh")).toBe("true");
     expect(url.searchParams.get("sync_start")).toBe("2026-06-30T00:00:00+09:00");
     expect(url.searchParams.get("sync_end")).toBe("2026-07-07T00:00:00+09:00");
+  });
+
+  it("asks the ticket timeline for the day's range", async () => {
+    const { calls } = captureFetch(jsonResponse({ members: [], tickets: [] }));
+    await getTicketTimeline({
+      start: "2026-07-01T00:00:00+09:00",
+      end: "2026-07-02T00:00:00+09:00",
+    });
+
+    const url = new URL(calls[0].url, window.location.href);
+    expect(url.pathname).toBe("/-/guildbotics/api/ticket-timeline");
+    expect([...url.searchParams]).toEqual([
+      ["start", "2026-07-01T00:00:00+09:00"],
+      ["end", "2026-07-02T00:00:00+09:00"],
+    ]);
+    expect(calls[0].init?.method ?? "GET").toBe("GET");
   });
 
   it("omits the query when runScenarioDiagnostics has no person id", async () => {

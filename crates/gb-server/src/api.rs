@@ -421,6 +421,12 @@ routes!(
         "/activity/history",
         crate::activity::history
     ),
+    (
+        OwnerSession,
+        get,
+        "/ticket-timeline",
+        crate::ticket_timeline::read
+    ),
     (OwnerSession, post, "/shutdown", crate::server::shutdown),
     (OwnerSession, get, "/hub-status", crate::hub_status::read),
     (OwnerSession, post, "/hub-status", crate::hub_status::set),

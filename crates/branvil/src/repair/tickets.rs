@@ -616,6 +616,7 @@ fn create(
         created_at: now.clone(),
         updated_at: now,
         closed_at: None,
+        started_at: None,
         revision: 1,
     };
     tickets::write_ticket(w, None, &t)?;

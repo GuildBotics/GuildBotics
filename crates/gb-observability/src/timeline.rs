@@ -6,7 +6,11 @@ pub fn lifecycle_from_run(r: &crate::runs::RunRecord) -> Value {
     json!({"trace_id":r.run_id,"person_id":r.member_id,"source":r.source,"command":r.work_kind,"status":r.status,"started_at":r.started_at,"ended_at":r.finished_at.as_deref().unwrap_or(""),"attributes":r.attributes,"summary":if r.result.is_some(){r.safe_summary.as_str()}else{""},"has_evidence":r.result.is_some()||!r.provider_evidence.is_empty()})
 }
 pub fn lifecycle_from_session(r: &Value) -> Value {
-    json!({"trace_id":text(r,"trace_id"),"person_id":text(r,"person_id"),"source":"interactive","command":text(r,"command"),"status":text(r,"status"),"started_at":text(r,"started_at"),"ended_at":text(r,"last_seen_at"),"attributes":r.get("attributes").filter(|v|v.is_object()).cloned().unwrap_or(json!({})),"summary":"","has_evidence":true})
+    let mut lifecycle = json!({"trace_id":text(r,"trace_id"),"person_id":text(r,"person_id"),"source":"interactive","command":text(r,"command"),"status":text(r,"status"),"started_at":text(r,"started_at"),"ended_at":text(r,"last_seen_at"),"attributes":r.get("attributes").filter(|v|v.is_object()).cloned().unwrap_or(json!({})),"summary":"","has_evidence":true});
+    if let Some(targets) = r.get("targets").filter(|v| v.is_array()) {
+        lifecycle["targets"] = targets.clone();
+    }
+    lifecycle
 }
 
 fn text<'a>(v: &'a Value, key: &str) -> &'a str {
@@ -217,6 +221,9 @@ pub fn build(
         let mut session_links =
             attribute_links(&Value::Object(crate::first_seen_attributes(&worked)), "");
         session_links.extend(worked.iter().flat_map(links));
+        for target in lifecycle["targets"].as_array().into_iter().flatten() {
+            session_links.extend(attribute_links(target, ""));
+        }
         let session_links = dedupe(session_links);
         let mut status = crate::TraceStatus::default();
         status.observe(text(&lifecycle, "status"));
@@ -271,11 +278,20 @@ pub fn build(
                 )
             },
         );
+        let segments = segments(&facts, start, end, status.resolve());
         // Python's datetime year range fits in an i64 count of microseconds.
         let duration = (end - start)
             .num_microseconds()
             .expect("bounded datetime range");
         sessions.push(json!({"trace_id":id,"person_id":lifecycle["person_id"],"source":lifecycle["source"],"command":lifecycle["command"],"workflow":"","title":title,"mode":if interactive {"interactive"} else {"workflow"},"status":status.resolve(),"started_at":iso_timestamp(start),"ended_at":iso_timestamp(end),"duration_seconds":(duration as f64/1_000_000.0).max(0.0),"links":session_links,"rate_limit":rate,"detail_available":detail(id)}));
+        let session = sessions.last_mut().expect("just pushed");
+        // Only a resumed run has more than one stretch to tell apart.
+        if segments.len() > 1 {
+            session["segments"] = segments.into();
+        }
+        if let Some(outcome) = lifecycle.get("outcome") {
+            session["outcome"] = outcome.clone();
+        }
     }
     sessions.sort_by_key(|r| time(r, "started_at"));
     let mut events = vec![];
@@ -400,6 +416,36 @@ pub fn build(
         events.push(json!({"id":id,"timestamp":r["timestamp"],"person_id":text(r,"person_id"),"type":kind,"title":title,"detail":detail,"url":url,"links":event_links}));
     }
     json!({"members":members,"sessions":sessions,"events":events,"unsupported_event_sources":[]})
+}
+/// The stretches a lifecycle actually ran: a run resumed under the same
+/// record stood still from each `stopped_at` until its resumption.
+fn segments(
+    facts: &[Value],
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
+    status: &str,
+) -> Vec<Value> {
+    let mut result = vec![];
+    let mut from = start;
+    for fact in facts
+        .iter()
+        .filter(|r| r["type"] == crate::runs::RESUMED_EVENT)
+    {
+        let p = &fact["payload"];
+        let (Some(stopped), Some(resumed)) = (time(p, "stopped_at"), time(fact, "timestamp"))
+        else {
+            continue;
+        };
+        if stopped < from || resumed < stopped || resumed > end {
+            continue;
+        }
+        result.push(json!({"started_at":iso_timestamp(from),"ended_at":iso_timestamp(stopped),"status":p["stopped_status"]}));
+        from = resumed;
+    }
+    result.push(
+        json!({"started_at":iso_timestamp(from),"ended_at":iso_timestamp(end),"status":status}),
+    );
+    result
 }
 fn classify(r: &Value) -> Option<&'static str> {
     let event = text(r, "type");
