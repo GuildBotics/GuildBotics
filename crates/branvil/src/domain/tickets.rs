@@ -56,6 +56,8 @@ pub struct TicketView {
     pub created_at: String,
     pub updated_at: String,
     pub closed_at: Option<String>,
+    /// When it first moved into the `in_progress` lane.
+    pub started_at: Option<String>,
     pub revision: u64,
 }
 
@@ -286,6 +288,7 @@ pub fn ticket_view(r: &impl Rd, base_url: &str, repo: &Repo, t: &Ticket) -> AppR
         created_at: t.created_at.clone(),
         updated_at: t.updated_at.clone(),
         closed_at: t.closed_at.clone(),
+        started_at: t.started_at.clone(),
         revision: t.revision,
     })
 }
@@ -470,6 +473,8 @@ pub async fn create_ticket(
                 interactive: input.interactive,
                 upstream_issue,
                 rank: rank_in(w, &repo.workspace, (&repo.id, number), &lane, None, None)?,
+                // Created to be worked on now, in the conversation.
+                started_at: (lane == "in_progress").then(|| now.clone()),
                 lane,
                 parent,
                 blocked_by,
@@ -1349,7 +1354,8 @@ pub(crate) fn rank_first(r: &impl Rd, board: &str, lane: &str) -> AppResult<Stri
     Ok(rank::between(None, rank.as_deref()))
 }
 
-/// Moves a ticket to a lane of its workspace's board (see `rank_in`).
+/// Moves a ticket to a lane of its workspace's board (see `rank_in`). The
+/// first move into `in_progress` records when its work started.
 pub fn place(
     r: &impl Rd,
     ticket: &Ticket,
@@ -1358,9 +1364,15 @@ pub fn place(
     after: Option<&str>,
 ) -> AppResult<Ticket> {
     let own = (ticket.repo.as_str(), ticket.number);
+    let started = lane == "in_progress" && ticket.started_at.is_none();
     Ok(Ticket {
         rank: rank_in(r, &ticket.workspace, own, lane, before, after)?,
         lane: lane.to_string(),
+        started_at: if started {
+            Some(util::now())
+        } else {
+            ticket.started_at.clone()
+        },
         ..ticket.clone()
     })
 }
@@ -2123,6 +2135,7 @@ mod tests {
             created_at: util::now(),
             updated_at: util::now(),
             closed_at: None,
+            started_at: None,
             revision: 1,
         }
     }

@@ -26,6 +26,20 @@ pub struct InteractiveSession {
     pub expires_at: String,
 }
 
+/// How long a conversation may go without a member command and still be the
+/// same session. A client that names its conversation (`thread`) keeps it
+/// while the conversation goes on: its work between member commands (edits,
+/// tests, reviews) runs for an hour or two, while a break of more than three
+/// hours (lunch, overnight) is time it was left. A client that does not name
+/// it is cut after half an hour.
+pub fn idle_limit(thread: &str) -> Duration {
+    if thread.is_empty() {
+        Duration::minutes(30)
+    } else {
+        Duration::hours(3)
+    }
+}
+
 pub struct InteractiveSessions {
     root: PathBuf,
 }
@@ -117,14 +131,31 @@ impl InteractiveSessions {
         }
         let mut merged: BTreeMap<String, String> =
             serde_json::from_value(record["attributes"].clone()).unwrap_or_default();
-        first_seen(
-            &mut merged,
-            attributes
-                .into_iter()
-                .filter(|(k, _)| k.starts_with("target."))
-                .collect(),
-            redactor,
-        );
+        let target: BTreeMap<String, String> = attributes
+            .into_iter()
+            .filter(|(k, _)| k.starts_with("target."))
+            .collect();
+        first_seen(&mut merged, target.clone(), redactor);
+        // A conversation may work on several tickets and pull requests: each
+        // one it worked on (not only read) is kept once in `targets`, with
+        // when it was first and last worked on, so each gets only its part.
+        let mut targets = record["targets"].as_array().cloned().unwrap_or_default();
+        let url = target.get("target.url").map(|url| redactor.text(url));
+        let read_only = target
+            .get("target.action")
+            .is_some_and(|a| a == "inspected");
+        if let Some(url) = url.filter(|url| !url.is_empty() && !read_only) {
+            match targets.iter_mut().find(|t| t["target.url"] == url.as_str()) {
+                Some(entry) => entry["last_at"] = now.into(),
+                None => {
+                    let mut entry: BTreeMap<String, String> = BTreeMap::new();
+                    first_seen(&mut entry, target, redactor);
+                    entry.insert("first_at".into(), now.into());
+                    entry.insert("last_at".into(), now.into());
+                    targets.push(serde_json::to_value(entry)?);
+                }
+            }
+        }
         if record["command"].as_str().is_none_or(str::is_empty) {
             record["command"] = command.into();
         }
@@ -138,6 +169,9 @@ impl InteractiveSessions {
         record["last_seen_at"] = now.into();
         record["status"] = status.into();
         record["attributes"] = serde_json::to_value(merged)?;
+        if !targets.is_empty() {
+            record["targets"] = targets.into();
+        }
         writer.write_json(&path, &record)?;
         Ok(record)
     }

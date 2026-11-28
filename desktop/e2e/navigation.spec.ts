@@ -13,6 +13,7 @@ test("uses one sidebar and session when changing screens and workspaces", async 
   await expect(nav.getByRole("link")).toHaveText([
     "Activity",
     "Task flow",
+    "Timeline",
     "Pull requests",
     "Releases",
     "Service",

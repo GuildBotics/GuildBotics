@@ -1,4 +1,5 @@
 import { WorkspaceLink } from "../ui/workspaceLinks";
+import { DateNav, addDays, startOfLocalDay } from "./DateNav";
 import {
   Alert,
   Avatar,
@@ -22,8 +23,6 @@ import { useTranslation } from "react-i18next";
 
 import {
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   CircleAlert,
   Hourglass,
   CircleDot,
@@ -171,13 +170,6 @@ export function ActivityHistoryPage() {
   const shiftRange = (direction: -1 | 1) => {
     setBaseDate((current) => addDays(current, direction * (view === "day" ? 1 : 7)));
   };
-  const selectDate = (value: string) => {
-    if (!value) {
-      return;
-    }
-    const [year, month, day] = value.split("-").map(Number);
-    setBaseDate(startOfLocalDay(new Date(year, month - 1, day)));
-  };
 
   return (
     <Stack className="activity-page" gap="lg">
@@ -196,33 +188,12 @@ export function ActivityHistoryPage() {
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
           />
-          <div className="activity-date-nav">
-            <button
-              type="button"
-              className="activity-icon-button"
-              aria-label={t("activity.previous")}
-              onClick={() => shiftRange(-1)}
-            >
-              <ChevronLeft size={16} />
-            </button>
-            <label className="activity-date-label">
-              <span>{formatRangeLabel(range.start, range.end, view, locale)}</span>
-              <input
-                aria-label={t("activity.date")}
-                type="date"
-                value={toDateInputValue(baseDate)}
-                onChange={(event) => selectDate(event.currentTarget.value)}
-              />
-            </label>
-            <button
-              type="button"
-              className="activity-icon-button"
-              aria-label={t("activity.next")}
-              onClick={() => shiftRange(1)}
-            >
-              <ChevronRight size={16} />
-            </button>
-          </div>
+          <DateNav
+            label={formatRangeLabel(range.start, range.end, view, locale)}
+            value={baseDate}
+            onShift={shiftRange}
+            onSelect={(day) => setBaseDate(startOfLocalDay(day))}
+          />
           <SegmentedControl
             value={view}
             onChange={(value) => setView(value as ActivityView)}
@@ -1471,32 +1442,16 @@ function groupBy<T>(items: T[], key: (item: T) => string): Map<string, T[]> {
   return grouped;
 }
 
-function startOfLocalDay(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
 function startOfWeek(date: Date): Date {
   const start = startOfLocalDay(date);
   const offset = start.getDay() === 0 ? -6 : 1 - start.getDay();
   return addDays(start, offset);
 }
 
-function addDays(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
 function addMinutes(date: Date, minutes: number): Date {
   const next = new Date(date);
   next.setMinutes(next.getMinutes() + minutes);
   return next;
-}
-
-function toDateInputValue(date: Date): string {
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 function formatRangeLabel(start: Date, end: Date, view: ActivityView, locale: string): string {

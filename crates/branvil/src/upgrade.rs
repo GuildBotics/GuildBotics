@@ -1,4 +1,5 @@
-//! 51 → 52: CI attempts record resources and estimate memory from guest samples.
+//! 52 → 53: tickets record when their work started (`Ticket::started_at`),
+//! and CI runs the pull requests that asked for them (`Run::pulls`).
 //! Every upgrade also binds the GuildBotics workspaces' execution roots.
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -6,7 +7,7 @@ use crate::config::Layout;
 use crate::error::AppError;
 use crate::store::{self, Rd, Store, Upgraded, Upgrading, Wtx};
 
-pub const FROM: u64 = 51;
+pub const FROM: u64 = 52;
 const _: () = assert!(FROM + 1 == store::SCHEMA_VERSION);
 
 pub fn upgrade(layout: &Layout) -> anyhow::Result<Option<Upgraded>> {
@@ -26,19 +27,48 @@ pub(crate) fn upgrade_with_roots(
     };
     db.finish(|w| {
         execution_roots(w, roots)?;
-        // The old index contains host RSS and cannot seed guest memory estimates.
-        w.clear(store::IX_CI_MEMORY)?;
-        for key in w.prefix_keys(store::CI_ATTEMPTS, &[])? {
-            let mut attempt: serde_json::Value = w
-                .get(store::CI_ATTEMPTS, &key)?
-                .ok_or_else(|| AppError::internal("CI attempt disappeared during upgrade"))?;
-            let record = attempt
+        // When an existing ticket's work started was not kept: it is unknown.
+        for key in w.prefix_keys(store::TICKETS, &[])? {
+            let mut ticket: serde_json::Value = w
+                .get(store::TICKETS, &key)?
+                .ok_or_else(|| AppError::internal("ticket disappeared during upgrade"))?;
+            ticket
                 .as_object_mut()
-                .ok_or_else(|| AppError::internal("invalid CI attempt"))?;
-            record.insert("resources".into(), serde_json::Value::Null);
-            w.put(store::CI_ATTEMPTS, &key, &attempt)?;
+                .ok_or_else(|| AppError::internal("invalid ticket"))?
+                .insert("started_at".into(), serde_json::Value::Null);
+            w.put(store::TICKETS, &key, &ticket)?;
         }
-        Ok("initialized CI attempt resources and cleared host memory samples".into())
+        // A run keeps the pull requests its current selection still names;
+        // those it no longer names were not kept.
+        for key in w.prefix_keys(store::CI_RUNS, &[])? {
+            let mut run: serde_json::Value = w
+                .get(store::CI_RUNS, &key)?
+                .ok_or_else(|| AppError::internal("CI run disappeared during upgrade"))?;
+            let mut pulls: Vec<u64> = run["selection"]["bases"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|base| base["pull"].as_u64())
+                .collect();
+            pulls.sort_unstable();
+            pulls.dedup();
+            let (repo, sha) = (
+                run["repo"].as_str().unwrap_or_default().to_owned(),
+                run["sha"].as_str().unwrap_or_default().to_owned(),
+            );
+            for pull in &pulls {
+                w.put_raw(
+                    store::IX_CI_PULL,
+                    &crate::ci::queue::pull_run_key(&repo, *pull, &sha),
+                    &crate::ci::queue::run_key(&repo, &sha),
+                )?;
+            }
+            run.as_object_mut()
+                .ok_or_else(|| AppError::internal("invalid CI run"))?
+                .insert("pulls".into(), serde_json::json!(pulls));
+            w.put(store::CI_RUNS, &key, &run)?;
+        }
+        Ok("initialized when existing tickets started and the pull requests of CI runs".into())
     })
     .map(Some)
 }
@@ -91,29 +121,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upgrade_preserves_runner_evidence_and_junit_history_and_clears_host_samples() {
+    fn upgrade_leaves_ticket_starts_unknown_keeps_run_pulls_and_binds_roots() {
         use crate::model::Workspace;
         let temporary = tempfile::tempdir().unwrap();
         let layout = Layout::new(temporary.path());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
-        let junit_key = store::Key::new().s("acme/demo").s("test::fails").bytes();
-        let junit_history = serde_json::json!([{
-            "attempt_id": "att_1",
-            "job": "test",
-            "sha": "a".repeat(40),
-            "runner": "linux",
-            "finished_at": "2026-11-26T10:00:00Z"
-        }]);
+        let ticket = serde_json::json!({"number": 3, "lane": "in_progress", "title": "Started"});
+        let run_key = crate::ci::queue::run_key("repo_1", "abc");
+        let run = serde_json::json!({"repo": "repo_1", "sha": "abc",
+            "selection": {"bases": [{"pull": 7}, {"pull": 3}, {"pull": 7}]}});
         let workspace = db
             .write_sync(|w| {
                 let workspace = crate::domain::repos::insert_workspace(w, "acme".into(), None)?;
-                w.put(
-                    store::CI_ATTEMPTS,
-                    b"attempt",
-                    &serde_json::json!({"peak_memory_mib": 8192, "runner_claim": {"memory_samples": 1}}),
-                )?;
-                w.put_raw(store::IX_CI_MEMORY, b"old", &8192_u64.to_be_bytes())?;
-                w.put(store::CI_TEST_FAILURES, &junit_key, &junit_history)?;
+                w.put(store::TICKETS, b"ticket", &ticket)?;
+                w.put(store::CI_RUNS, &run_key, &run)?;
                 w.put(
                     store::META,
                     &store::Key::new().s("schema_version").bytes(),
@@ -130,28 +151,32 @@ mod tests {
             .unwrap();
         assert_eq!(
             done.summary,
-            "initialized CI attempt resources and cleared host memory samples"
+            "initialized when existing tickets started and the pull requests of CI runs"
         );
         assert!(done.copy.is_file());
         assert!(upgrade(&layout).unwrap().is_none());
         let db = Store::open(&layout.db(), 1 << 20, 1).unwrap();
-        let attempt: serde_json::Value = db
-            .read_sync(|r| r.get(store::CI_ATTEMPTS, b"attempt"))
+        let upgraded: serde_json::Value = db
+            .read_sync(|r| r.get(store::TICKETS, b"ticket"))
             .unwrap()
             .unwrap();
-        assert_eq!(attempt.get("resources"), Some(&serde_json::Value::Null));
-        assert_eq!(attempt["peak_memory_mib"], 8192);
-        assert_eq!(attempt["runner_claim"]["memory_samples"], 1);
-        assert_eq!(
-            db.read_sync(|r| r.get(store::CI_TEST_FAILURES, &junit_key))
-                .unwrap(),
-            Some(junit_history)
-        );
-        assert!(
-            db.read_sync(|r| r.prefix_keys(store::IX_CI_MEMORY, &[]))
-                .unwrap()
-                .is_empty()
-        );
+        // Even a ticket in progress gets no invented start.
+        let mut expected = ticket;
+        expected["started_at"] = serde_json::Value::Null;
+        assert_eq!(upgraded, expected);
+        // A run keeps the pull requests its selection names, findable by each.
+        let run: serde_json::Value = db
+            .read_sync(|r| r.get(store::CI_RUNS, &run_key))
+            .unwrap()
+            .unwrap();
+        assert_eq!(run["pulls"], serde_json::json!([3, 7]));
+        for pull in [3, 7] {
+            assert_eq!(
+                db.read_sync(|r| crate::ci::queue::pull_shas(r, "repo_1", pull))
+                    .unwrap(),
+                ["abc"]
+            );
+        }
         let record: Workspace = db
             .read_sync(|r| r.get(store::WORKSPACES, &Workspace::key(&workspace)))
             .unwrap()

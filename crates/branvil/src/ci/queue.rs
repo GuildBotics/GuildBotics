@@ -161,6 +161,10 @@ pub struct Run {
     /// The input digest of every job of the pipeline with paths, by job
     /// name, as of the latest registration (`Ci::job_inputs`).
     pub inputs: BTreeMap<String, String>,
+    /// The pull requests whose head asked for CI of this commit, ascending.
+    /// Unlike `selection`, kept when the head moves on or the commit lands,
+    /// so a pull request's CI history includes heads replaced since.
+    pub pulls: Vec<u64>,
 }
 
 impl Run {
@@ -495,8 +499,48 @@ pub fn run_key(repo: &str, sha: &str) -> Vec<u8> {
     Key::new().s(repo).s(sha).bytes()
 }
 
+/// The `IX_CI_PULL` key of a commit pull request `pull` asked CI of.
+pub fn pull_run_key(repo: &str, pull: u64, sha: &str) -> Vec<u8> {
+    Key::new().s(repo).u(pull).s(sha).bytes()
+}
+
+/// Every commit pull request `pull` of `repo` asked CI of.
+pub fn pull_shas(r: &impl Rd, repo: &str, pull: u64) -> AppResult<Vec<String>> {
+    let prefix = Key::new().s(repo).u(pull).bytes();
+    let mut shas = Vec::new();
+    for (k, _) in r.prefix_raw(store::IX_CI_PULL, &prefix, None, usize::MAX)? {
+        let parts =
+            store::decode_key(&k, "sus").ok_or_else(|| AppError::internal("bad pull run index"))?;
+        shas.push(parts[2].s().to_string());
+    }
+    Ok(shas)
+}
+
+/// The open pull requests of `repo` whose head is `branch`.
+fn open_pulls_of(r: &impl Rd, repo: &str, branch: &str) -> AppResult<Vec<u64>> {
+    let prefix = Key::new().s(repo).s(branch).bytes();
+    let mut pulls = Vec::new();
+    for (_, number) in r.prefix_raw(store::IX_OPEN_PULLS, &prefix, None, usize::MAX)? {
+        if let Some(number) = std::str::from_utf8(&number)
+            .ok()
+            .and_then(|n| n.parse().ok())
+        {
+            pulls.push(number);
+        }
+    }
+    Ok(pulls)
+}
+
 pub fn run_index(r: &Run) -> Vec<IxEntry> {
-    let mut out = Vec::new();
+    let mut out: Vec<IxEntry> = r
+        .pulls
+        .iter()
+        .map(|pull| IxEntry {
+            table: store::IX_CI_PULL,
+            key: pull_run_key(&r.repo, *pull, &r.sha),
+            value: run_key(&r.repo, &r.sha),
+        })
+        .collect();
     if let Some(tree) = &r.tree {
         out.push(IxEntry {
             table: store::IX_CI_TREE,
@@ -988,6 +1032,12 @@ pub fn register(w: &Wtx, reg: Registration, queue_max: usize, now: &str) -> AppR
         format!("branch:{}", reg.branch)
     };
     let old = get_run(w, &reg.repo, &reg.sha)?;
+    // The pull requests whose head this registration is for.
+    let asking = if reg.protected {
+        Vec::new()
+    } else {
+        open_pulls_of(w, &reg.repo, &reg.branch)?
+    };
     let mut run = match &old {
         Some(old) => {
             let mut run = old.clone();
@@ -1040,9 +1090,15 @@ pub fn register(w: &Wtx, reg: Registration, queue_max: usize, now: &str) -> AppR
             waiting: false,
             superseded_by: None,
             inputs: BTreeMap::new(),
+            pulls: Vec::new(),
         },
     };
     run.inputs = reg.inputs;
+    for pull in asking {
+        if let Err(at) = run.pulls.binary_search(&pull) {
+            run.pulls.insert(at, pull);
+        }
+    }
     run.selection = if run.cache_scope == "protected" {
         None
     } else {

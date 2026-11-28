@@ -410,6 +410,7 @@ every ticket is on it, in a lane.
   "created_at": "...",
   "updated_at": "...",
   "closed_at": null,
+  "started_at": "...",
   "revision": 7
 }
 ```
@@ -426,7 +427,10 @@ complete a repair ticket.
 `closed`; `state_reason` is `completed`, `not_planned`, or `null`. A ticket has at most one assignee, the agent that works on it
 (`assignee` is `null` when nobody is assigned). `lane` is the lane of its workspace's board the
 ticket is in: `new`, `ready`, `in_progress`, or `done` (every ticket is a card
-of that board), and `rank` orders it within the lane. `upstream_issue` is the issue the
+of that board), and `rank` orders it within the lane. `started_at` is when the
+ticket first moved into `in_progress`, by any move or by creating it there; it
+stays when the ticket moves back, and it is `null` for a ticket never started
+and for one started before the 52 → 53 upgrade. `upstream_issue` is the issue the
 ticket stands for on its repository's upstream host, or `null`; publishing a
 pull request that links the ticket writes a line about it there.
 `interactive` says that a person works on the ticket interactively, with an
@@ -1176,12 +1180,20 @@ The endpoint uses the same repository access as CI attempts.
   and non-queued attempts keep their existing details.
   `404 not_found` for an id of another repository.
 - `GET /api/v1/repos/{repo}/jobs/{attempt_id}/attempts` → an array of
-  `{"id","attempt","runner","status","conclusion","started_at","finished_at","url"}`:
+  `{"id","job","sha","attempt","runner","status","conclusion","created_at","started_at","finished_at","url"}`:
   every attempt of the same commit and job as `attempt_id`, including that
   one, by `attempt` ascending. Retries, automatic retries and the narrowing's
   probes of that commit share the job's numbering, so all of them are listed.
-  `runner`, `started_at` and `finished_at` are `null` until a runner claims,
-  and concludes, the attempt. `404 not_found` as for the attempt itself.
+  `created_at` is when the attempt was queued. `runner`, `started_at` and
+  `finished_at` are `null` until a runner claims, and concludes, the attempt.
+  `404 not_found` as for the attempt itself.
+- `GET /api/v1/repos/{repo}/pulls/{number}/attempts` → the same objects for
+  every check attempt of the pull request's commits, in the order they were
+  queued: each head pushed to it and its retries. Heads it has replaced since
+  (amended or rebased away) stay listed: the CI records which pull requests
+  asked for each commit. For a pull request closed without merging, only those
+  recorded commits count, as its branch may carry other work since.
+  `404 not_found` as for the pull request.
 - `GET /api/v1/repos/{repo}/jobs/{attempt_id}/log?tail_bytes={n}` →
   `{"log": "...", "log_bytes": 12345, "truncated": true, "pruned": false}`; `log`
   is the last `tail_bytes` bytes (default 65536, at most 4194304; decoded as

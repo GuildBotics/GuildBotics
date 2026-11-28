@@ -611,6 +611,19 @@ async fn previous_schema_upgrade_preserves_records() {
     w.push_change("docs-upgrade", "notes.md", "documentation");
     w.open_pull("docs-upgrade", json!([])).await;
     let merge_checks = checks(&w, 1).await["merge_checks"].clone();
+    // A ticket whose work started before the upgrade.
+    let started = w.ticket("Started").await;
+    let board = format!(
+        "{}/tickets/{}/board",
+        w.repo_path(),
+        started["key"].as_str().unwrap()
+    );
+    let (status, moved) = w
+        .server
+        .put(&board, &w.aiko, json!({"lane": "in_progress"}))
+        .await;
+    assert_eq!(status, 200, "{moved}");
+    assert!(moved["started_at"].is_string(), "{moved}");
     w.server.stop();
     let data = w.server.data.clone();
     let db = data.join("branvil.redb");
@@ -640,18 +653,17 @@ async fn previous_schema_upgrade_preserves_records() {
             .iter()
             .any(|a| a["inputs"].is_string())
     );
-    let indexed_memory = tables(&db)["ix_ci_memory"].clone();
     as_previous_schema(&db);
     let before = tables(&db);
     assert!(before.contains_key("ticket_moves"));
     assert!(before.contains_key("ci_test_failures"));
-    assert_eq!(before["ix_ci_memory"], indexed_memory);
     assert!(
         admin("check")
             .1
             .contains("guildbotics server hub-data upgrade")
     );
-    let mut attempts = records(&db, "ci_attempts");
+    let mut tickets = records(&db, "tickets");
+    let mut runs_before = records(&db, "ci_runs");
     let (code, output) = admin("upgrade");
     assert_eq!(code, 0, "{output}");
     assert!(
@@ -661,17 +673,33 @@ async fn previous_schema_upgrade_preserves_records() {
         )),
         "{output}"
     );
-    // Old attempts gain an empty resource field without fabricating a report.
-    for a in &mut attempts {
-        a["resources"] = Value::Null;
+    // Old tickets gain an unknown start, even one already in progress:
+    // nothing invents when its work started.
+    for t in &mut tickets {
+        t["started_at"] = Value::Null;
     }
-    assert!(!attempts.is_empty());
-    assert_eq!(records(&db, "ci_attempts"), attempts);
+    assert!(!tickets.is_empty());
+    assert_eq!(records(&db, "tickets"), tickets);
+    // Old runs keep the pull requests their selection names, and nothing else.
+    for run in &mut runs_before {
+        let mut pulls: Vec<u64> = run["selection"]["bases"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|base| base["pull"].as_u64())
+            .collect();
+        pulls.sort_unstable();
+        pulls.dedup();
+        run["pulls"] = json!(pulls);
+    }
+    assert!(runs_before.iter().any(|r| r["pulls"] != json!([])));
+    assert_eq!(records(&db, "ci_runs"), runs_before);
     let upgraded = tables(&db);
-    assert!(upgraded["ix_ci_memory"].is_empty());
+    assert!(!upgraded["ix_ci_pull"].is_empty());
     let unchanged = |mut snapshot: Tables| {
-        snapshot
-            .retain(|name, _| !matches!(name.as_str(), "meta" | "ci_attempts" | "ix_ci_memory"));
+        snapshot.retain(|name, _| {
+            !matches!(name.as_str(), "meta" | "tickets" | "ci_runs" | "ix_ci_pull")
+        });
         snapshot
     };
     let after = unchanged(upgraded.clone());
@@ -944,6 +972,107 @@ async fn a_jobs_attempts_list_every_try_of_that_job_on_the_commit() {
         w.repo_path()
     );
     assert_eq!(w.server.get(&missing, &w.aiko).await.0, 404);
+}
+
+#[tokio::test]
+async fn a_pulls_attempts_list_every_head_in_the_order_they_were_queued() {
+    let w = World::new().await;
+    let runner = Runner::new(&w, "runner1").await;
+    let first_head = w.push_change("feature", ".guildbotics-ci.toml", &pipeline(&["test"]));
+    let pull = w.open_pull("feature", json!([])).await;
+    let first = runner.next_claim().await;
+    assert_eq!(runner.finish(&first, "failure").await.0, 200);
+    let second_head = w.push_change("feature", "second.txt", "second\n");
+    let second = runner.next_claim().await;
+    assert_eq!(runner.finish(&second, "success").await.0, 200);
+
+    let url = format!("{}/pulls/{}/attempts", w.repo_path(), pull["number"]);
+    let list = w.server.ok(&url, &w.aiko).await;
+    let list = list.as_array().unwrap();
+    assert_eq!(list.len(), 2, "{list:?}");
+    for (item, (claim, sha, conclusion)) in list.iter().zip([
+        (&first, &first_head, "failure"),
+        (&second, &second_head, "success"),
+    ]) {
+        assert_eq!(item["id"], claim["attempt_id"]);
+        assert_eq!(item["job"], "test");
+        assert_eq!(&item["sha"], sha.as_str());
+        assert_eq!(item["runner"], "runner1");
+        assert_eq!(item["conclusion"], conclusion);
+        let queued = item["created_at"].as_str().unwrap();
+        assert!(queued <= item["started_at"].as_str().unwrap(), "{item}");
+    }
+    assert!(list[0]["created_at"].as_str() < list[1]["created_at"].as_str());
+    let missing = format!("{}/pulls/999/attempts", w.repo_path());
+    assert_eq!(w.server.get(&missing, &w.aiko).await.0, 404);
+}
+
+#[tokio::test]
+async fn a_pulls_attempts_keep_a_head_it_replaced() {
+    let w = World::new().await;
+    let runner = Runner::new(&w, "runner1").await;
+    let replaced = w.push_change("feature", ".guildbotics-ci.toml", &pipeline(&["test"]));
+    let pull = w.open_pull("feature", json!([])).await;
+    let first = runner.next_claim().await;
+    assert_eq!(runner.finish(&first, "failure").await.0, 200);
+    // Amended: the first head is no longer one of the pull request's commits.
+    git_ok(&w.work, &["reset", "-q", "--hard", "HEAD~1"]);
+    let head = w.push_change(
+        "feature",
+        ".guildbotics-ci.toml",
+        &pipeline(&["test", "lint"]),
+    );
+    let commits = w
+        .server
+        .ok(
+            &format!("{}/pulls/{}/commits", w.repo_path(), pull["number"]),
+            &w.aiko,
+        )
+        .await;
+    assert!(
+        commits["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["sha"] != replaced.as_str()),
+        "{commits}"
+    );
+    let url = format!("{}/pulls/{}/attempts", w.repo_path(), pull["number"]);
+    let list = w.server.ok(&url, &w.aiko).await;
+    let shas: Vec<_> = list.as_array().unwrap().iter().map(|a| &a["sha"]).collect();
+    assert_eq!(shas[0], replaced.as_str(), "{list}");
+    assert!(shas[1..].iter().all(|sha| *sha == head.as_str()), "{list}");
+    assert_eq!(list[0]["id"], first["attempt_id"]);
+    assert_eq!(list[0]["conclusion"], "failure");
+}
+
+#[tokio::test]
+async fn a_closed_pulls_attempts_leave_out_later_work_on_its_branch() {
+    let w = World::new().await;
+    let runner = Runner::new(&w, "runner1").await;
+    let own = w.push_change("feature", ".guildbotics-ci.toml", &pipeline(&["test"]));
+    let closed = w.open_pull("feature", json!([])).await;
+    let first = runner.next_claim().await;
+    assert_eq!(runner.finish(&first, "success").await.0, 200);
+    let (status, body) = w
+        .server
+        .post(
+            &format!("{}/pulls/{}/close", w.repo_path(), closed["number"]),
+            &w.aiko,
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    // The branch goes on, as another pull request's work.
+    let later = w.push_change("feature", "later.txt", "later\n");
+    w.open_pull("feature", json!([])).await;
+    let second = runner.next_claim().await;
+    assert_eq!(second["sha"], later.as_str());
+    assert_eq!(runner.finish(&second, "success").await.0, 200);
+    let url = format!("{}/pulls/{}/attempts", w.repo_path(), closed["number"]);
+    let list = w.server.ok(&url, &w.aiko).await;
+    let shas: Vec<_> = list.as_array().unwrap().iter().map(|a| &a["sha"]).collect();
+    assert_eq!(shas, [own.as_str()], "{list}");
 }
 
 pub(crate) fn pipeline(jobs: &[&str]) -> String {

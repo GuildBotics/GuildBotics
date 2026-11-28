@@ -194,13 +194,82 @@ async fn job_get(
 #[derive(Serialize, Debug)]
 pub struct AttemptSummary {
     pub id: String,
+    pub job: String,
+    pub sha: String,
     pub attempt: u64,
     pub runner: Option<String>,
     pub status: String,
     pub conclusion: Option<String>,
+    /// When the attempt was queued: it waited for a runner until `started_at`.
+    pub created_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub url: String,
+}
+
+fn summary(app: &Shared, repo_path: &str, a: Attempt) -> AttemptSummary {
+    AttemptSummary {
+        url: util::item_url(&app.base_url, repo_path, "jobs", &a.id),
+        id: a.id,
+        job: a.job.name,
+        sha: a.sha,
+        attempt: a.number,
+        runner: a.runner,
+        status: a.status,
+        conclusion: a.conclusion,
+        created_at: a.created_at,
+        started_at: a.started_at,
+        finished_at: a.finished_at,
+    }
+}
+
+async fn pull_attempts(
+    State(app): State<Shared>,
+    c: Caller,
+    Path((repo, n)): Path<(String, String)>,
+) -> R {
+    let number = crate::http::number(&n)?;
+    Ok(ok(data_pull_attempts(&app, &c, &repo, number).await?))
+}
+
+/// Every check attempt of every commit of pull request `number`, in the
+/// order they were queued: each head pushed to it, with their retries, also
+/// heads it has replaced since (`Run::pulls`).
+pub(crate) async fn data_pull_attempts(
+    app: &Shared,
+    caller: &Caller,
+    repo: &str,
+    number: u64,
+) -> AppResult<Vec<AttemptSummary>> {
+    let (repo, pull, commits) =
+        crate::domain::pulls::all_commits(app, caller, repo, number).await?;
+    // A closed pull request that did not merge reads its commits from where
+    // its branch is now, which may be another pull request's work since.
+    let current = pull.state == "open" || pull.merged;
+    let repo_id = repo.id.clone();
+    let mut attempts = app
+        .store
+        .read(move |r| {
+            // Its commits now, and every head it asked CI of, replaced or not.
+            let mut shas: std::collections::BTreeSet<String> = commits
+                .into_iter()
+                .filter(|_| current)
+                .map(|c| c.sha)
+                .collect();
+            shas.extend(queue::pull_shas(r, &repo_id, number)?);
+            let mut out = Vec::new();
+            for sha in &shas {
+                out.extend(queue::attempts_of(r, &repo_id, sha)?);
+            }
+            Ok(out)
+        })
+        .await?;
+    attempts.retain(|a| a.purpose == queue::Purpose::Check);
+    attempts.sort_by(|a, b| (&a.created_at, a.seq).cmp(&(&b.created_at, b.seq)));
+    Ok(attempts
+        .into_iter()
+        .map(|a| summary(app, &repo.path, a))
+        .collect())
 }
 
 async fn job_attempts(
@@ -227,16 +296,7 @@ pub(crate) async fn data_job_attempts(
     Ok(attempts
         .into_iter()
         .filter(|b| b.job.name == a.job.name)
-        .map(|b| AttemptSummary {
-            url: util::item_url(&app.base_url, &repo.path, "jobs", &b.id),
-            id: b.id,
-            attempt: b.number,
-            runner: b.runner,
-            status: b.status,
-            conclusion: b.conclusion,
-            started_at: b.started_at,
-            finished_at: b.finished_at,
-        })
+        .map(|b| summary(app, &repo.path, b))
         .collect())
 }
 
@@ -1077,6 +1137,7 @@ loopback_auth::classified_routes!(pub fn routes() -> Router<Shared>, ROUTES,
     ("/repos/{repo}/test-failures", (get, test_failures, MemberSession)),
     ("/repos/{repo}/jobs/{id}", (get, job_get, MemberSession)),
     ("/repos/{repo}/jobs/{id}/attempts", (get, job_attempts, MemberSession)),
+    ("/repos/{repo}/pulls/{number}/attempts", (get, pull_attempts, MemberSession)),
     ("/repos/{repo}/jobs/{id}/log", (get, job_log, MemberSession)),
     ("/repos/{repo}/jobs/{id}/retry", (post, job_retry, MemberSession)),
     ("/repos/{repo}/jobs/{id}/cancel", (post, job_cancel, MemberSession)),

@@ -1909,6 +1909,23 @@ pub async fn commits(
     number: u64,
     page: PageReq,
 ) -> AppResult<Page<CommitSummary>> {
+    let (_, _, all) = all_commits(app, caller, repo_path, number).await?;
+    let positioned = all
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| (Key::new().u(i as u64).bytes(), c))
+        .collect();
+    let (items, next_cursor) = page.slice(positioned);
+    Ok(Page { items, next_cursor })
+}
+
+/// The repository, the pull request, and every commit of `commits`, oldest first.
+pub(crate) async fn all_commits(
+    app: &App,
+    caller: &Caller,
+    repo_path: &str,
+    number: u64,
+) -> AppResult<(Repo, Pull, Vec<CommitSummary>)> {
     let (repo, p) = visible(app, caller, repo_path, number).await?;
     let tips = tips(app, &repo).await?;
     let all = match base_of(&p, &tips).zip(head_of(&p, &tips)) {
@@ -1919,13 +1936,7 @@ pub async fn commits(
         }
         None => Vec::new(),
     };
-    let positioned = all
-        .into_iter()
-        .enumerate()
-        .map(|(i, c)| (Key::new().u(i as u64).bytes(), c))
-        .collect();
-    let (items, next_cursor) = page.slice(positioned);
-    Ok(Page { items, next_cursor })
+    Ok((repo, p, all))
 }
 
 #[derive(Serialize, Debug, Clone)]

@@ -1304,6 +1304,7 @@ fn typed_card(v: &Value) -> tickets::CardView {
             created_at: strv("created_at"),
             updated_at: strv("updated_at"),
             closed_at: None,
+            started_at: None,
             revision: 1,
         },
         comments: v["comments"]

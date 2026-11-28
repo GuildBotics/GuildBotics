@@ -17,6 +17,7 @@ mod activity;
 mod activity_feedback;
 mod health;
 mod intelligences;
+mod ticket_timeline;
 
 /// Every route that writes the shared config: each compares what its screen
 /// read before writing, and answers a lock held elsewhere with 503.

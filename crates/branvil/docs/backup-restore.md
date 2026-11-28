@@ -215,11 +215,11 @@ new data directory; when the upgrade fails, the restored directory is left
 at the previous version, and `guildbotics server hub-data upgrade --data-dir <it>` finishes
 it once the cause is fixed).
 
-The 51 → 52 upgrade in `src/upgrade.rs` adds an empty resource report to
-existing CI attempts. It clears the historical RSS samples from the memory
-estimate index and preserves the RSS on each attempt along with JUnit test
-failure history. Every upgrade also binds the GuildBotics workspaces'
-execution roots.
+The 52 → 53 upgrade in `src/upgrade.rs` sets an unknown start of work
+(`started_at: null`) on existing tickets, including those already in
+progress, and gives existing CI runs the pull requests their selection still
+names (`pulls`, indexed by `ix_ci_pull`). Every upgrade also binds the GuildBotics workspaces' execution
+roots.
 
 ### The integrated Hub service
 

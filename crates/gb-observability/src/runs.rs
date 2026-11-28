@@ -99,7 +99,13 @@ impl RunRecord {
 
 pub struct RunStore {
     root: PathBuf,
+    events: crate::activity::ActivityEvents,
 }
+
+/// The fact that a run which left work undone started again under the same
+/// record: its `started_at` stays the first start, so the time it stood
+/// still between `stopped_at` and this fact is known only from here.
+pub const RESUMED_EVENT: &str = "workflow.resumed";
 pub struct RunFinish<'a> {
     pub state: RunState,
     pub summary: &'a str,
@@ -158,6 +164,7 @@ impl RunStore {
     pub fn open(workspace: &Path) -> Self {
         Self {
             root: workspace.join(".guildbotics/state/task-runs"),
+            events: crate::activity::ActivityEvents::open(workspace),
         }
     }
     fn path(&self, run_id: &str) -> anyhow::Result<PathBuf> {
@@ -191,6 +198,12 @@ impl RunStore {
         };
         if record.finished_at.is_some() && !record.left_work_undone() {
             return self.save(writer, record);
+        }
+        if let Some(stopped_at) = &record.finished_at {
+            let fact = json!({"type": RESUMED_EVENT, "trace_id": record.run_id,
+                "person_id": incoming.member_id, "timestamp": incoming.started_at,
+                "payload": {"stopped_at": stopped_at, "stopped_status": record.status}});
+            self.events.record(writer, &fact, redactor)?;
         }
         record.work_kind = incoming.work_kind;
         record.execution_mode = incoming.execution_mode;
