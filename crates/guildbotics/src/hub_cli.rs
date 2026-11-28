@@ -162,7 +162,16 @@ pub fn build_info(checkout: &std::path::Path, to: &std::path::Path) -> anyhow::R
         Ok(String::from_utf8(out.stdout)?.trim().to_owned())
     };
     let sha = git(&["rev-parse", "HEAD"])?;
-    let subject = git(&["show", "-s", "--format=%s", "HEAD"])?;
+    let subject = git(&["show", "-s", "--format=%s", &sha])?;
+    let tags = git(&[
+        "tag",
+        "--list",
+        "--points-at",
+        &sha,
+        "--sort=-version:refname",
+        "release/*",
+    ])?;
+    let tag = tags.lines().next();
     let remote = if git(&["remote"])?.lines().any(|name| name == "origin") {
         Some(git(&["remote", "get-url", "origin"])?)
     } else {
@@ -184,7 +193,9 @@ pub fn build_info(checkout: &std::path::Path, to: &std::path::Path) -> anyhow::R
     });
     gb_base::files::atomic_write(
         &to.join("hub-build.json"),
-        &serde_json::to_vec(&serde_json::json!({"sha":sha,"subject":subject,"remote":remote}))?,
+        &serde_json::to_vec(
+            &serde_json::json!({"sha":sha,"subject":subject,"tag":tag,"remote":remote}),
+        )?,
     )?;
     Ok(())
 }

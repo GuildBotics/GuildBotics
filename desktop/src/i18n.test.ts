@@ -87,6 +87,7 @@ describe("app language storage", () => {
     expect(i18n.t("app.nav.setup")).toBe("設定");
     expect(i18n.t("nav.main", { ns: "repository" })).toBe("メイン");
     for (const ns of ["desktop", "repository"]) {
+      expect(i18n.t("hub.running", { ns })).toBe("稼働中の Hub");
       expect(i18n.t("hub.versionLabel", { ns, sha: "abc123", subject: "更新" })).toBe(
         "abc123（更新）",
       );

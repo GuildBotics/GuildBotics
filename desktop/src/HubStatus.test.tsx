@@ -4,8 +4,8 @@ import { HubStatusBand, type HubStatus } from "./ui/HubStatus";
 import { TestMantineProvider } from "./test/TestMantineProvider";
 import i18n from "./i18n";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, waitFor } from "@testing-library/react";
-import { HubUpdateNotice, HubVersion } from "./HubStatus";
+import { act, renderHook } from "@testing-library/react";
+import { HubUpdateNotice, useHubStatus } from "./HubStatus";
 import { request } from "./api/client";
 vi.mock("./api/client", async (original) => ({
   ...(await original<typeof import("./api/client")>()),
@@ -14,11 +14,11 @@ vi.mock("./api/client", async (original) => ({
 const status: HubStatus = {
   current: {
     sha: "1234567890",
+    tag: null,
     subject: "Current title",
     url: "https://example.com/commit/1234567890",
   },
   target: { sha: "abcdef0123", subject: "Next title", url: null },
-  releases: null,
   operation: { kind: "update", phase: "preparing", since: "one", waiting: { runs: 3, ci_jobs: 2 } },
 };
 describe("Hub maintenance banner", () => {
@@ -66,56 +66,6 @@ describe("Hub maintenance banner", () => {
   }
 });
 
-it.each([true, false])(
-  "shows the current build on the service screen only when known: %s",
-  async (known) => {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    vi.mocked(request).mockResolvedValue({ ...status, current: known ? status.current : null });
-    render(
-      <QueryClientProvider client={client}>
-        <TestMantineProvider>
-          <HubVersion />
-        </TestMantineProvider>
-      </QueryClientProvider>,
-    );
-    await waitFor(() => expect(client.getQueryState(["hub-status"])?.status).toBe("success"));
-    expect(screen.queryByRole("link", { name: "12345678" }) !== null).toBe(known);
-    client.clear();
-  },
-);
-
-it.each([
-  [
-    ["release/2026-11-27-1", "release/2026-11-28-1"],
-    /Releases not applied yet: release\/2026-11-28-1, release\/2026-11-27-1\./,
-  ],
-  [[], /No release is waiting to be applied\./],
-] as const)("names the running and pending releases: %s", async (pending, text) => {
-  await i18n.changeLanguage("en");
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  vi.mocked(request).mockResolvedValue({
-    ...status,
-    releases: {
-      url: "https://example.com/releases",
-      running: "release/2026-11-26-1",
-      pending: [...pending].reverse().map((name) => ({ name, sha: "a".repeat(40), subject: "s" })),
-    },
-  });
-  render(
-    <QueryClientProvider client={client}>
-      <TestMantineProvider>
-        <HubVersion />
-      </TestMantineProvider>
-    </QueryClientProvider>,
-  );
-  expect(await screen.findByText(text)).toBeTruthy();
-  expect(screen.getByText(/· release\/2026-11-26-1/)).toBeTruthy();
-  expect(screen.getByRole("link", { name: "Releases" }).getAttribute("href")).toBe(
-    "https://example.com/releases",
-  );
-  client.clear();
-});
-
 it.each(["en", "ja"])("delimits version subjects inside the banner in %s", (language) => {
   render(
     <TestMantineProvider>
@@ -137,13 +87,11 @@ it("polls Hub status slowly when idle and quickly only during maintenance", asyn
   let value: HubStatus = { ...status, operation: null };
   vi.mocked(request).mockReset().mockResolvedValue(value);
   try {
-    render(
-      <QueryClientProvider client={client}>
-        <TestMantineProvider>
-          <HubVersion />
-        </TestMantineProvider>
-      </QueryClientProvider>,
-    );
+    renderHook(useHubStatus, {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
     });
@@ -185,16 +133,11 @@ it("links every manual step and records completion for the displayed release", a
     })),
     confirmed: false,
   } as const;
-  vi.mocked(request)
-    .mockReset()
-    .mockImplementation(async (_, options) => {
-      if (options?.method === "POST") return {};
-      return { ...status, update };
-    });
+  vi.mocked(request).mockReset().mockResolvedValue({});
   render(
     <QueryClientProvider client={client}>
       <TestMantineProvider>
-        <HubVersion />
+        <HubUpdateNotice update={update} />
       </TestMantineProvider>
     </QueryClientProvider>,
   );
@@ -212,18 +155,12 @@ it("links every manual step and records completion for the displayed release", a
 });
 
 it.each([
-  ["banner", "en", "update", "Automatic Hub update failed", "Stage: Applying the update"],
-  ["service", "ja", "update", "Hub の自動更新に失敗しました", "止まった段階：更新の適用"],
-  [
-    "service",
-    "ja",
-    "requirements",
-    "Hub の自動更新に失敗しました",
-    "止まった段階：保存形式と手作業の確認",
-  ],
+  ["en", "update", "Automatic Hub update failed", "Stage: Applying the update"],
+  ["ja", "update", "Hub の自動更新に失敗しました", "止まった段階：更新の適用"],
+  ["ja", "requirements", "Hub の自動更新に失敗しました", "止まった段階：保存形式と手作業の確認"],
 ] as const)(
-  "shows the translated stage and log details for a failed update in the %s",
-  async (placement, language, stageCode, title, stage) => {
+  "shows the translated stage and log details for a failed update in %s",
+  async (language, stageCode, title, stage) => {
     await i18n.changeLanguage(language);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const update = {
@@ -233,11 +170,10 @@ it.each([
       reason: "The new build did not start.",
       next: "Run recover.",
     } as const;
-    vi.mocked(request).mockResolvedValue({ ...status, operation: null, update });
     render(
       <QueryClientProvider client={client}>
         <TestMantineProvider>
-          {placement === "banner" ? <HubUpdateNotice update={update} /> : <HubVersion />}
+          <HubUpdateNotice update={update} />
         </TestMantineProvider>
       </QueryClientProvider>,
     );
