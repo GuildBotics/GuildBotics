@@ -60,6 +60,8 @@ pub struct Api {
     pub auth: Arc<ServerAuth>,
     /// This run of the server, so a screen sees a restart.
     pub instance_id: String,
+    /// The directory from which the server serves the built desktop UI.
+    ui_directory: PathBuf,
     /// The machine's own records: `<machine root>/data`.
     pub data: PathBuf,
     /// The work the server started, which outlives the request that started
@@ -133,6 +135,7 @@ impl Api {
             inputs,
             auth: Arc::new(auth),
             instance_id,
+            ui_directory: crate::ui::directory(),
             work: tokio_util::task::TaskTracker::new(),
             member_work: tokio_util::task::TaskTracker::new(),
             cancelled: tokio_util::sync::CancellationToken::new(),
@@ -161,13 +164,15 @@ impl Api {
         port: u16,
         instance_id: &str,
     ) -> Self {
-        Self::new(
+        let mut api = Self::new(
             selected,
             crate::input_files::InputFileStore::deferred(&root.join("inputs")),
             ServerAuth::open(data, port).unwrap(),
             instance_id.into(),
             data.to_owned(),
-        )
+        );
+        api.ui_directory = root.join("unbuilt-ui");
+        api
     }
 
     /// Admits work for the selected workspace: a command, a member run or the
@@ -887,7 +892,7 @@ pub(crate) fn router_with_host(api: Shared, host: Option<Router>) -> Router {
     let host = host.unwrap_or_default();
     outer_routes()
         .nest("/-/guildbotics/api", owners.merge(anyone))
-        .merge(crate::ui::router(crate::ui::directory()))
+        .merge(crate::ui::router(api.ui_directory.clone()))
         .with_state(api.clone())
         .merge(host)
         .layer(axum::Extension(EmbeddedHost(integrated)))
